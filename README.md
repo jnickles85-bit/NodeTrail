@@ -5,6 +5,7 @@ MightiePack is an umbrella addon for WoW Forever Classic (Interface 16001). It c
 ## Install
 1. Remove any old standalone `NodeTrail` AddOns folder first, because both define the NodeTrail global and /nt.
 2. Copy the `MightiePack` folder into the client's AddOns folder.
+3. GatherMate2 is optional.
 
 ## Modules
 | Module | Description | Default |
@@ -16,10 +17,13 @@ MightiePack is an umbrella addon for WoW Forever Classic (Interface 16001). It c
 | Command | Description |
 |---------|-------------|
 | `/mpack` | Open options panel |
+| `/mpack options` | Open options panel |
 | `/mpack status` | Print module on/off status |
-| `/nt start` | Build the density path for the current zone from your recorded herbs |
-| `/nt stop` | Stop NodeTrail route |
-| `/nt reload` | Rebuild the active route from current data |
+| `/nt help` | Print NodeTrail help (only while NodeTrail is enabled) |
+| `/nt start` | Build the density path for the current zone from your recorded herbs (only while NodeTrail is enabled) |
+| `/nt stop` | Stop NodeTrail route (only while NodeTrail is enabled) |
+| `/nt reload` | Rebuild the active route from current data (only while NodeTrail is enabled) |
+| `/nt status` | Print route source, herb counts, active route, tooltip state, Alchemy state, module state (only while NodeTrail is enabled) |
 
 ## Options
 - Open with `/mpack` or `/mightiepack`.
@@ -62,6 +66,7 @@ tests/recorder_spec.lua
 tests/umbrella_spec.lua
 tests/density_spec.lua
 tests/tooltip_spec.lua
+tests/slash_spec.lua
 ```
 
 ## NodeTrail details
@@ -88,6 +93,7 @@ Run from repo root with lua5.1:
 - `tests/recorder_spec.lua`
 - `tests/density_spec.lua`
 - `tests/tooltip_spec.lua`
+- `tests/slash_spec.lua`
 
 ## Handoff
 See `HANDOFF.md` for agent handoff details.

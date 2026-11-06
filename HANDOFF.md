@@ -1,18 +1,20 @@
 # NodeTrail Handoff
 
 ## Status
-Base A (umbrella shell) was squash-merged to main as 852c15f.
+Base A (umbrella shell) was squash-merged to main as 852c15f (PR #2).
 Base B (own herb recorder) was squash-merged to main as f1606d3 (PR #3).
-Base C (density white path from our own herb data) is on branch `mp/base-c-density`, PR #4 now targets main (main merged in as b6163bd, no rebase).
-Base D (live herb tooltip) is on branch `mp/base-d-tooltip`, stacked on `mp/base-c-density` (its PR targets `mp/base-c-density`; merge #4 first).
+Base C (density white path from our own herb data) was squash-merged to main as 3c0b012 (PR #4).
+Base D (live herb tooltip) is on branch `mp/base-d-tooltip` @ b7d682b, PR #5 targets main (main merged in, no rebase), MERGEABLE/CLEAN.
+Base E (slash polish) is on branch `mp/base-e-slash`, stacked on `mp/base-d-tooltip` (targets it; merge #5 first, then retarget #6 to main or merge main in; never rebase/force-push), PR #6.
 Date: 2026-11-06.
 The repo now ships one installable addon folder: `MightiePack/`.
+Evening slice (Bases A-E) is code-complete. Next step is Mightie's in-game test on Forever; nothing has been deployed.
 
 ## Rules
 - Locally (orchestrator) + local Qwen write code.
 - Tinker leads the addon.
 - Ask Mightie via Finkle before deploys, merge freezes, or renaming the umbrella.
-- NO deploy to the Forever client until Mightie says so.
+- NO deploy to the Forever client (no deploy script, no copying into any AddOns folder) until Mightie says so.
 - No force-push.
 - Design source of truth: Mightie's vault note "Umbrella Gather Addon - Layout and Guidelines - 2026-11-06.md" (WoW Forever folder).
 
@@ -52,6 +54,7 @@ tests/recorder_spec.lua
 tests/umbrella_spec.lua
 tests/density_spec.lua
 tests/tooltip_spec.lua
+tests/slash_spec.lua
 ```
 
 ## How modules load
@@ -115,7 +118,8 @@ Run from repo root with lua5.1:
 - `tests/recorder_spec.lua` (SV preserved, record shape, rounding, node id, LOOT_READY+LOOT_OPENED dedupe, custom spell id by name, non-herb/other unit/too late/fishing/no position/no cast ignored, empty loot still recorded, fresh DB)
 - `tests/density_spec.lua` (empty/one-spot/two-spot/three-spot data, dense ring with cold outliers, no self-crossing, 2-opt crossing removal, anchor count scaling, maxStops cap, determinism, map wiring and errors, routeSource switch, old profile without new keys)
 - `tests/tooltip_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched)
-All six specs pass with lua5.1.
+- `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
+All seven specs pass with lua5.1.
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -148,8 +152,33 @@ All six specs pass with lua5.1.
 - Alchemy recipe uses: best-effort Classic API. When the Alchemy trade skill window is open (TRADE_SKILL_SHOW / TRADE_SKILL_UPDATE and GetTradeSkillLine() equals the localized Alchemy name), it scans learned recipes (GetNumTradeSkills, GetTradeSkillInfo, skipping headers, GetTradeSkillReagentItemLink) and stores itemID -> sorted recipe names. Each scan replaces the old map. The player has to open the Alchemy window once (per character) before uses show.
 - Limitations: herb node names are matched in English only (non-English clients show no lines until localized names are added); Forever custom herbs/rare mats are not in the stub; recipe list is per character and only after opening Alchemy; tooltip not yet seen in-game on Forever (assumes the client puts the node name on line 1 of GameTooltip).
 
+## Slash commands (Base E)
+- `/nt` or `/nt help` prints a multi-line help (start, stop, reload, status, plus a note that herbs are recorded automatically, hovering a herb shows drop % and Alchemy uses, module on/off is in /mpack).
+- `/nt status` prints: route source (density = your recorded herbs, or gm2), herbs recorded on the current map and on all maps, active route (points + source, or none), herb tooltip on/off, Alchemy recipes scanned or "open your Alchemy window once", module on/off.
+- `/nt reload` with no active route now says "no active route. Use /nt start first." instead of the help.
+- Unknown words print the help.
+- `/mpack` with an unknown word prints "/mpack [options|status]" and, when NodeTrail is on, "NodeTrail: /nt help".
+- The /nt slash commands are still registered only inside ns.Enable(), so they do not exist while the module is off.
+- Module notes text updated.
+
+## Install (when Mightie says so)
+- Install only the `MightiePack/` folder into the client's AddOns folder.
+- Remove (or disable) the old standalone `NodeTrail` addon folder first so the two do not both load.
+- GatherMate2 is optional.
+- Old NodeTrailDB settings do not carry over (SavedVariables are per addon folder).
+- Do not do this without Mightie's say-so.
+
+## In-game smoke test (from the vault test script)
+1. Install (only after say-so; see Install).
+2. `/reload`, `/mpack` opens options; confirm both checkboxes (NodeTrail on, Touchstone greyed "coming soon"); untick NodeTrail -> OK reloads -> `/nt` does nothing -> tick it back on.
+3. `/mpack status` shows NodeTrail on.
+4. Gather 5-10 herbs in one starter zone; `/nt status` count goes up (after logout/`/reload`, SavedVariables NodeTrailDB.herbs grew).
+5. `/nt start` -> white density corridor on world map and minimap (rough OK); `/nt reload` after more picks; `/nt stop` clears.
+6. Hover a herb node -> NodeTrail block with drop % (base), Your picks, and Alchemy uses after opening the Alchemy window once (`/nt status` then shows "scanned").
+7. Note bugs (with `/nt status` output) for the morning pass.
+
 ## Next
-Base E slash wiring / smoke notes (e.g. `/nt status`, `/nt tooltip on|off`, in-game smoke checklist for Forever), then out-for-tonight list unchanged.
+Morning pass: fix bugs from Mightie's in-game test.
 Out for tonight: mining/fishing/skinning, full rare-mat research, arrow/TomTom, folding in the real Touchstone repo, sharing/import.
 
 ## Known gaps
