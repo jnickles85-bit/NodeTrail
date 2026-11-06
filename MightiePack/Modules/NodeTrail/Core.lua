@@ -16,6 +16,15 @@ local function printL(key, ...)
   DEFAULT_CHAT_FRAME:AddMessage(msg)
 end
 
+local function printHelp()
+  printL("HELP")
+  printL("HELP_START")
+  printL("HELP_STOP")
+  printL("HELP_RELOAD")
+  printL("HELP_STATUS")
+  printL("HELP_NOTES")
+end
+
 function ns.StopRoute()
   ns.activeRoute = nil
   if ns.MapOverlay then ns.MapOverlay:Clear() end
@@ -37,11 +46,30 @@ function ns.StartRoute()
   printL("ROUTE_STARTED", stops, route.picks or stops)
 end
 
+function ns.PrintStatus()
+  printL("STATUS_HEADER")
+  local source = (ns.GetDB().routeSource or "density")
+  printL("STATUS_SOURCE", source == "gm2" and "gm2 (GatherMate2 nodes)" or "density (your recorded herbs)")
+  local mapID = ns.GetPlayerMapID and ns.GetPlayerMapID()
+  local herbs = ns.GetHerbDB and ns.GetHerbDB()
+  local here = (mapID and herbs and herbs.maps and herbs.maps[mapID]) and #herbs.maps[mapID] or 0
+  printL("STATUS_HERBS", mapID and tostring(mapID) or "unknown", here, (herbs and herbs.total) or 0)
+  printL("STATUS_ROUTE", ns.activeRoute and (#(ns.activeRoute.path or {}) .. " points, " .. (ns.activeRoute.source or "?")) or "none")
+  printL("STATUS_TOOLTIP", (ns.Tooltip and ns.Tooltip._enabled) and "on" or "off")
+  local scanned = type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" and NodeTrailDB.recipes.alchemyScanned
+  printL("STATUS_ALCHEMY", scanned and "scanned" or "open your Alchemy window once")
+  local on = true
+  if pkg and type(pkg.IsModuleEnabled) == "function" then
+    on = pkg.IsModuleEnabled("NodeTrail") and true or false
+  end
+  printL("STATUS_MODULE", on and "on" or "off")
+end
+
 local function handleSlash(msg)
   msg = (msg or ""):match("^%s*(.-)%s*$") or ""
   msg = msg:lower()
   if msg == "" or msg == "help" then
-    printL("HELP")
+    printHelp()
   elseif msg == "start" then
     ns.StartRoute()
   elseif msg == "stop" then
@@ -50,10 +78,12 @@ local function handleSlash(msg)
     if ns.activeRoute then
       ns.StartRoute()
     else
-      printL("HELP")
+      printL("NO_ROUTE")
     end
+  elseif msg == "status" then
+    ns.PrintStatus()
   else
-    printL("HELP")
+    printHelp()
   end
 end
 
@@ -80,7 +110,7 @@ end
 if type(pkg.RegisterModule) == "function" then
   pkg.RegisterModule("NodeTrail", {
     title = "NodeTrail",
-    notes = "Herb routes: white path on the world map and minimap (/nt start | stop | reload).",
+    notes = "Herb routes from your own gathers (white path on world map + minimap), herb tooltip. /nt start | stop | reload | status",
     Enable = function() ns.Enable() end,
   })
 end

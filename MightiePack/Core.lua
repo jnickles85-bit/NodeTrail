@@ -66,5 +66,8 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     end
   else
     pkg.Print("/mpack [options|status]")
+    if pkg.IsModuleEnabled("NodeTrail") then
+      pkg.Print("NodeTrail: /nt help")
+    end
   end
 end
