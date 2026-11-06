@@ -15,6 +15,11 @@ ns.defaults = {
     pathWidth = 2,
     showWorldMap = true,
     showMinimap = true,
+    routeSource = "density", -- "density" (our recorded herbs) or "gm2" (GatherMate2 nodes, optional fallback)
+    densityCell = 0.02,
+    densityWarm = 0.4,
+    densityAnchorCell = 0.06,
+    densitySmooth = 2,
   },
 }
 

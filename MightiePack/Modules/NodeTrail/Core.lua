@@ -25,7 +25,7 @@ end
 
 function ns.StartRoute()
   local mapID = ns.GetPlayerMapID()
-  local route, err = ns.BuildHerbRouteForMap(mapID)
+  local route, err = ns.BuildRouteForMap(mapID)
   if not route then
     printL(err or "ROUTE_EMPTY")
     return
@@ -33,8 +33,8 @@ function ns.StartRoute()
   ns.activeRoute = route
   if ns.MapOverlay then ns.MapOverlay:SetRoute(route) end
   if ns.MinimapPath then ns.MinimapPath:SetRoute(route) end
-  local stops = math.max(0, #route.path - 1) -- exclude close duplicate
-  printL("ROUTE_STARTED", stops)
+  local stops = route.stops or math.max(0, #route.path - 1)
+  printL("ROUTE_STARTED", stops, route.picks or stops)
 end
 
 local function handleSlash(msg)

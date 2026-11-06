@@ -246,6 +246,8 @@ local function loadAll()
   loadAddon("locale/enUS.lua")
   loadAddon("Config.lua")
   loadAddon("Data/GM2.lua")
+  loadAddon("Data/Recorder.lua")
+  loadAddon("Data/Density.lua")
   loadAddon("Route/Cluster.lua")
   loadAddon("Route/Build.lua")
   loadAddon("UI/PathGeom.lua")
@@ -511,7 +513,7 @@ SlashCmdList.NODETRAIL("stop")
 SlashCmdList.NODETRAIL("reload")
 local joined = table.concat(chat, "\n")
 check(joined:find("start", 1, true) ~= nil, "help mentions start")
-check(joined:find("GatherMate2", 1, true) ~= nil, "start without nodes explains GatherMate2")
+check(joined:find("no herbs recorded", 1, true) ~= nil, "start without recorded herbs explains how to record")
 check(joined:find("route cleared", 1, true) ~= nil, "stop clears")
 check(ns.MapOverlay.path == nil and ns.MinimapPath.path == nil, "stop releases both overlays")
 check(not ns.MapOverlay.host.shown and not ns.MinimapPath.host.shown, "stop hides both hosts")
@@ -520,6 +522,24 @@ check(ns.MinimapPath._driver.scripts.OnUpdate == nil, "stop removes the minimap 
 ns.MapOverlay:Clear()
 ns.MinimapPath:Clear()
 check(true, "clear is repeatable")
+-- Base C: /nt start draws the density path from recorded herbs (no GatherMate2 nodes needed).
+time = time or os.time -- WoW global used by ns.RecordHerb
+WorldMapFrame.mapID = 12
+for i = 0, 11 do
+  ns.RecordHerb(12, 0.3 + (i % 3) * 0.005, 0.3 + math.floor(i / 3) * 0.005, {})
+  ns.RecordHerb(12, 0.7 + (i % 3) * 0.005, 0.6 + math.floor(i / 3) * 0.005, {})
+end
+chat = {}
+SlashCmdList.NODETRAIL("start")
+check(table.concat(chat, "\n"):find("route started", 1, true) ~= nil, "density start announces route")
+check(ns.activeRoute and ns.activeRoute.source == "density", "default route source is density")
+check(ns.MapOverlay.path ~= nil and #ns.MapOverlay.path >= 3, "density path handed to world map")
+check(#shown(ns.MapOverlay.host) >= 2, "density path drawn on world map")
+check(ns.MinimapPath.path ~= nil, "density path handed to minimap")
+SlashCmdList.NODETRAIL("reload")
+check(ns.activeRoute and ns.activeRoute.source == "density", "reload rebuilds density route")
+SlashCmdList.NODETRAIL("stop")
+check(ns.MapOverlay.path == nil and ns.MinimapPath.path == nil, "stop clears density route")
 
 if failed > 0 then
   io.stderr:write(failed .. " draw smoke check(s) failed\n")
