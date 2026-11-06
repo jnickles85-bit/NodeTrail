@@ -17,7 +17,7 @@ MightiePack is an umbrella addon for WoW Forever Classic (Interface 16001). It c
 |---------|-------------|
 | `/mpack` | Open options panel |
 | `/mpack status` | Print module on/off status |
-| `/nt start` | Start NodeTrail route |
+| `/nt start` | Build the density path for the current zone from your recorded herbs |
 | `/nt stop` | Stop NodeTrail route |
 | `/nt reload` | Rebuild the active route from current data |
 
@@ -38,6 +38,8 @@ MightiePack/Modules/NodeTrail/Config.lua
 MightiePack/Modules/NodeTrail/Core.lua
 MightiePack/Modules/NodeTrail/Data
 MightiePack/Modules/NodeTrail/Data/GM2.lua
+MightiePack/Modules/NodeTrail/Data/Recorder.lua
+MightiePack/Modules/NodeTrail/Data/Density.lua
 MightiePack/Modules/NodeTrail/Route
 MightiePack/Modules/NodeTrail/Route/Build.lua
 MightiePack/Modules/NodeTrail/Route/Cluster.lua
@@ -53,16 +55,21 @@ MightiePack/Options.lua
 
 ## NodeTrail details
 - Herb-only.
-- GatherMate2 soft-dep for now — needs herb nodes in GatherMate2.
-- GM2 adapter uses `GatherMate2:GetNodesForZone(mapID, "Herb Gathering", true)` and `DecodeLoc`, never scrape GatherMateData2HerbDB or hardcode zone names.
+- Routes come from your own recorded herb gathers (Base B recorder) drawn as a density corridor.
+- GatherMate2 optional (routeSource = "gm2" fallback).
 - White polyline pathColor `{1,1,1,0.9}`, pathWidth 2 on world map and minimap.
 - `/nt stop` releases both overlays.
+
+### Optional GatherMate2 fallback
+- GM2 adapter uses `GatherMate2:GetNodesForZone(mapID, "Herb Gathering", true)` and `DecodeLoc`, never scrape GatherMateData2HerbDB or hardcode zone names.
 
 ## Tests
 Run from repo root with lua5.1:
 - `tests/pathgeom_spec.lua`
 - `tests/draw_smoke.lua`
 - `tests/umbrella_spec.lua`
+- `tests/recorder_spec.lua`
+- `tests/density_spec.lua`
 
 ## Handoff
 See `HANDOFF.md` for agent handoff details.
