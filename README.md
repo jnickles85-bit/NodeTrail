@@ -40,6 +40,8 @@ MightiePack/Modules/NodeTrail/Data
 MightiePack/Modules/NodeTrail/Data/GM2.lua
 MightiePack/Modules/NodeTrail/Data/Recorder.lua
 MightiePack/Modules/NodeTrail/Data/Density.lua
+MightiePack/Modules/NodeTrail/Data/HerbData.lua
+MightiePack/Modules/NodeTrail/Data/Recipes.lua
 MightiePack/Modules/NodeTrail/Route
 MightiePack/Modules/NodeTrail/Route/Build.lua
 MightiePack/Modules/NodeTrail/Route/Cluster.lua
@@ -48,9 +50,18 @@ MightiePack/Modules/NodeTrail/UI/LineDraw.lua
 MightiePack/Modules/NodeTrail/UI/MapOverlay.lua
 MightiePack/Modules/NodeTrail/UI/MinimapPath.lua
 MightiePack/Modules/NodeTrail/UI/PathGeom.lua
+MightiePack/Modules/NodeTrail/UI/Tooltip.lua
 MightiePack/Modules/NodeTrail/locale
 MightiePack/Modules/NodeTrail/locale/enUS.lua
 MightiePack/Options.lua
+README.md
+tests
+tests/draw_smoke.lua
+tests/pathgeom_spec.lua
+tests/recorder_spec.lua
+tests/umbrella_spec.lua
+tests/density_spec.lua
+tests/tooltip_spec.lua
 ```
 
 ## NodeTrail details
@@ -63,6 +74,12 @@ MightiePack/Options.lua
 ### Optional GatherMate2 fallback
 - GM2 adapter uses `GatherMate2:GetNodesForZone(mapID, "Herb Gathering", true)` and `DecodeLoc`, never scrape GatherMateData2HerbDB or hardcode zone names.
 
+### Herb tooltip
+- Hover an in-world herb node to see drop percentages and your personal pick counts.
+- Baseline drop rates are shown for the 28 Classic herb nodes.
+- After 10 or more recorded gathers of a herb, your personal drop rates replace the baseline.
+- Open the Alchemy trade skill window once to see which learned recipes use the herb.
+
 ## Tests
 Run from repo root with lua5.1:
 - `tests/pathgeom_spec.lua`
@@ -70,6 +87,7 @@ Run from repo root with lua5.1:
 - `tests/umbrella_spec.lua`
 - `tests/recorder_spec.lua`
 - `tests/density_spec.lua`
+- `tests/tooltip_spec.lua`
 
 ## Handoff
 See `HANDOFF.md` for agent handoff details.

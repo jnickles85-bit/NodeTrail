@@ -2,8 +2,9 @@
 
 ## Status
 Base A (umbrella shell) was squash-merged to main as 852c15f.
-Base B (own herb recorder) is on branch `mp/base-b-recorder`, now targeting main (main was merged into it, merge commit 4b17991, no rebase).
-Base C (density white path from our own herb data) is on branch `mp/base-c-density`, stacked on `mp/base-b-recorder` (its PR targets `mp/base-b-recorder`; merge #3 first).
+Base B (own herb recorder) was squash-merged to main as f1606d3 (PR #3).
+Base C (density white path from our own herb data) is on branch `mp/base-c-density`, PR #4 now targets main (main merged in as b6163bd, no rebase).
+Base D (live herb tooltip) is on branch `mp/base-d-tooltip`, stacked on `mp/base-c-density` (its PR targets `mp/base-c-density`; merge #4 first).
 Date: 2026-11-06.
 The repo now ships one installable addon folder: `MightiePack/`.
 
@@ -29,6 +30,8 @@ MightiePack/Modules/NodeTrail/Data
 MightiePack/Modules/NodeTrail/Data/GM2.lua
 MightiePack/Modules/NodeTrail/Data/Recorder.lua
 MightiePack/Modules/NodeTrail/Data/Density.lua
+MightiePack/Modules/NodeTrail/Data/HerbData.lua
+MightiePack/Modules/NodeTrail/Data/Recipes.lua
 MightiePack/Modules/NodeTrail/Route
 MightiePack/Modules/NodeTrail/Route/Build.lua
 MightiePack/Modules/NodeTrail/Route/Cluster.lua
@@ -37,6 +40,7 @@ MightiePack/Modules/NodeTrail/UI/LineDraw.lua
 MightiePack/Modules/NodeTrail/UI/MapOverlay.lua
 MightiePack/Modules/NodeTrail/UI/MinimapPath.lua
 MightiePack/Modules/NodeTrail/UI/PathGeom.lua
+MightiePack/Modules/NodeTrail/UI/Tooltip.lua
 MightiePack/Modules/NodeTrail/locale
 MightiePack/Modules/NodeTrail/locale/enUS.lua
 MightiePack/Options.lua
@@ -47,6 +51,7 @@ tests/pathgeom_spec.lua
 tests/recorder_spec.lua
 tests/umbrella_spec.lua
 tests/density_spec.lua
+tests/tooltip_spec.lua
 ```
 
 ## How modules load
@@ -54,7 +59,7 @@ tests/density_spec.lua
 - Umbrella code lives on `pkg` (global `MightiePack`).
 - NodeTrail lives on the sub-table `pkg.NodeTrail` (global `NodeTrail`).
 - Each NodeTrail file starts with `local addonName, pkg = ...` / `pkg.NodeTrail = pkg.NodeTrail or {}` / `local ns = pkg.NodeTrail`.
-- Load order (MightiePack.toc): Core.lua, Modules.lua, the 12 NodeTrail files (locale, Config, Data/GM2, Data/Recorder, Data/Density, Route/Cluster, Route/Build, UI/PathGeom, UI/LineDraw, UI/MapOverlay, UI/MinimapPath, Core), Options.lua.
+- Load order (MightiePack.toc): Core.lua, Modules.lua, the 15 NodeTrail files (locale, Config, Data/GM2, Data/Recorder, Data/Density, Data/HerbData, Data/Recipes, Route/Cluster, Route/Build, UI/PathGeom, UI/LineDraw, UI/MapOverlay, UI/MinimapPath, UI/Tooltip, Core), Options.lua.
 - Module registry (Modules.lua): `pkg.RegisterModule(name, {title, notes, stub, Enable})`, `pkg.IsModuleEnabled`, `pkg.SetModuleEnabled`, `pkg.EnableModules` (runs each enabled module's Enable once, pcall-wrapped, on ADDON_LOADED of MightiePack).
 - Touchstone is registered as a stub (always off, checkbox greyed out, label "Touchstone (coming soon)").
 - Adding a module: create `Modules/<Name>/` files, add them to the TOC before Options.lua, call `pkg.RegisterModule` with an Enable function, add a default to `pkg.moduleDefaults` in Core.lua.
@@ -90,6 +95,17 @@ tests/density_spec.lua
   }
   ```
   API: `ns.GetHerbDB()` returns `NodeTrailDB.herbs`; `ns.RecordHerb(mapID, x, y, items, nodeID)` appends one entry.
+- `NodeTrailDB` now also has `recipes` (Base D; other keys untouched):
+  ```lua
+  NodeTrailDB.recipes = {
+    alchemy = {
+      [reagentItemID] = { "Recipe A", "Recipe B" },
+      ...
+    },
+    alchemyScanned = <time() of last scan>,
+  }
+  ```
+  API: `ns.GetRecipeDB()`, `ns.Recipes:GetUses(itemID)`, `ns.Recipes:Scan()`, `ns.HerbData.GetDropLines(name)`, `ns.Tooltip.BuildLines(name)`.
 
 ## Tests
 Run from repo root with lua5.1:
@@ -98,7 +114,8 @@ Run from repo root with lua5.1:
 - `tests/umbrella_spec.lua` (TOC order and files, defaults, slash registration, options checkboxes, untick/cancel/escape/OK reload, disabled-after-reload state, live re-enable, stub never enabled)
 - `tests/recorder_spec.lua` (SV preserved, record shape, rounding, node id, LOOT_READY+LOOT_OPENED dedupe, custom spell id by name, non-herb/other unit/too late/fishing/no position/no cast ignored, empty loot still recorded, fresh DB)
 - `tests/density_spec.lua` (empty/one-spot/two-spot/three-spot data, dense ring with cold outliers, no self-crossing, 2-opt crossing removal, anchor count scaling, maxStops cap, determinism, map wiring and errors, routeSource switch, old profile without new keys)
-All five specs pass with lua5.1.
+- `tests/tooltip_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched)
+All six specs pass with lua5.1.
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -122,8 +139,17 @@ All five specs pass with lua5.1.
 - Tunables in `NodeTrailDB.profile` (new defaults; existing profiles without them fall back to the same defaults): `routeSource`, `densityCell`, `densityWarm`, `densityAnchorCell`, `densitySmooth`; `maxStops` (existing) caps anchors.
 - Chat on start: "NodeTrail: route started (<belt points> belt points from <picks> herb picks)."
 
+## Herb tooltip (Base D)
+- New files: `MightiePack/Modules/NodeTrail/Data/HerbData.lua`, `Data/Recipes.lua`, `UI/Tooltip.lua`.
+- `ns.Enable()` now also calls `ns.Recipes:Enable()` and `ns.Tooltip:Enable()`. Loading the files hooks nothing and registers no events; a disabled module adds no tooltip lines.
+- Hover detection: hooks GameTooltip OnShow. Only when no unit is moused over, the tooltip owner is UIParent/WorldFrame (world object), and tooltip line 1 is a known herb node name from the HerbData table (English names). OnTooltipCleared resets a flag so lines are added once per tooltip.
+- Lines added (light blue): header "NodeTrail"; one row per drop "<item> <pct>%" (suffix "(base)" when from the baseline stub); "Your picks: N" or "Your picks: none yet"; "Alchemy: <recipe>, <recipe>, ..." (first 4, then "+N more"), or "Open Alchemy once to list recipe uses" if Alchemy was never scanned.
+- Drop % source: baseline stub table in HerbData.lua (primary herb 100% for the 28 Classic herb nodes Peacebloom..Black Lotus; rough placeholder secondaries: Swiftthistle 10% from Mageroyal and Briarthorn, Wildvine 5% from Purple Lotus; NOT researched Forever data). Personal data from NodeTrailDB.herbs: a gather of a herb = any recorded gather whose items include that herb's item id. Once there are 10 or more gathers (H.PERSONAL_MIN) the personal % replaces the baseline (each item counted once per gather). Items you looted that are not in the stub are shown from personal data.
+- Alchemy recipe uses: best-effort Classic API. When the Alchemy trade skill window is open (TRADE_SKILL_SHOW / TRADE_SKILL_UPDATE and GetTradeSkillLine() equals the localized Alchemy name), it scans learned recipes (GetNumTradeSkills, GetTradeSkillInfo, skipping headers, GetTradeSkillReagentItemLink) and stores itemID -> sorted recipe names. Each scan replaces the old map. The player has to open the Alchemy window once (per character) before uses show.
+- Limitations: herb node names are matched in English only (non-English clients show no lines until localized names are added); Forever custom herbs/rare mats are not in the stub; recipe list is per character and only after opening Alchemy; tooltip not yet seen in-game on Forever (assumes the client puts the node name on line 1 of GameTooltip).
+
 ## Next
-Base D live herb tooltip (hover an in-world herb: stub drop % table + personal counts from NodeTrailDB.herbs + learned Alchemy recipes that use it), then Base E slash wiring/smoke notes.
+Base E slash wiring / smoke notes (e.g. `/nt status`, `/nt tooltip on|off`, in-game smoke checklist for Forever), then out-for-tonight list unchanged.
 Out for tonight: mining/fishing/skinning, full rare-mat research, arrow/TomTom, folding in the real Touchstone repo, sharing/import.
 
 ## Known gaps
@@ -133,3 +159,6 @@ Out for tonight: mining/fishing/skinning, full rare-mat research, arrow/TomTom, 
 - Recorder not yet verified in-game on Forever (spell IDs/names, loot events).
 - Without GatherMate2 loaded the minimap path has no HereBeDragons yard data, so it falls back to C_Map player position with an approximate fixed view radius (fraction of the map); scale on the minimap may be off until a yard source is added. The world map path is unaffected.
 - Density path not yet seen in-game; tunables may need adjusting after the first real run.
+- Herb tooltip node names are matched in English only; non-English clients show no lines until localized names are added.
+- Herb tooltip recipe uses require the Alchemy window to be opened once per character.
+- Herb tooltip not yet seen in-game on Forever.
