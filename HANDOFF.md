@@ -1,8 +1,9 @@
 # NodeTrail Handoff
 
 ## Status
-Base A (umbrella shell) is on branch `mp/base-a-umbrella` (PR #2).
-Base B (own herb recorder) is on branch `mp/base-b-recorder`, stacked on `mp/base-a-umbrella` (its PR targets `mp/base-a-umbrella`; merge #2 first).
+Base A (umbrella shell) was squash-merged to main as 852c15f.
+Base B (own herb recorder) is on branch `mp/base-b-recorder`, now targeting main (main was merged into it, merge commit 4b17991, no rebase).
+Base C (density white path from our own herb data) is on branch `mp/base-c-density`, stacked on `mp/base-b-recorder` (its PR targets `mp/base-b-recorder`; merge #3 first).
 Date: 2026-11-06.
 The repo now ships one installable addon folder: `MightiePack/`.
 
@@ -27,6 +28,7 @@ MightiePack/Modules/NodeTrail/Core.lua
 MightiePack/Modules/NodeTrail/Data
 MightiePack/Modules/NodeTrail/Data/GM2.lua
 MightiePack/Modules/NodeTrail/Data/Recorder.lua
+MightiePack/Modules/NodeTrail/Data/Density.lua
 MightiePack/Modules/NodeTrail/Route
 MightiePack/Modules/NodeTrail/Route/Build.lua
 MightiePack/Modules/NodeTrail/Route/Cluster.lua
@@ -44,6 +46,7 @@ tests/draw_smoke.lua
 tests/pathgeom_spec.lua
 tests/recorder_spec.lua
 tests/umbrella_spec.lua
+tests/density_spec.lua
 ```
 
 ## How modules load
@@ -51,13 +54,12 @@ tests/umbrella_spec.lua
 - Umbrella code lives on `pkg` (global `MightiePack`).
 - NodeTrail lives on the sub-table `pkg.NodeTrail` (global `NodeTrail`).
 - Each NodeTrail file starts with `local addonName, pkg = ...` / `pkg.NodeTrail = pkg.NodeTrail or {}` / `local ns = pkg.NodeTrail`.
-- Load order (MightiePack.toc): Core.lua, Modules.lua, the 11 NodeTrail files (locale, Config, Data/GM2, Data/Recorder, Route/Cluster, Route/Build, UI/PathGeom, UI/LineDraw, UI/MapOverlay, UI/MinimapPath, Core), Options.lua.
+- Load order (MightiePack.toc): Core.lua, Modules.lua, the 12 NodeTrail files (locale, Config, Data/GM2, Data/Recorder, Data/Density, Route/Cluster, Route/Build, UI/PathGeom, UI/LineDraw, UI/MapOverlay, UI/MinimapPath, Core), Options.lua.
 - Module registry (Modules.lua): `pkg.RegisterModule(name, {title, notes, stub, Enable})`, `pkg.IsModuleEnabled`, `pkg.SetModuleEnabled`, `pkg.EnableModules` (runs each enabled module's Enable once, pcall-wrapped, on ADDON_LOADED of MightiePack).
 - Touchstone is registered as a stub (always off, checkbox greyed out, label "Touchstone (coming soon)").
 - Adding a module: create `Modules/<Name>/` files, add them to the TOC before Options.lua, call `pkg.RegisterModule` with an Enable function, add a default to `pkg.moduleDefaults` in Core.lua.
 - NodeTrail as a module: its slash commands (`/nt`, `/nodetrail`: start | stop | reload | help) are registered inside `ns.Enable()`, so a disabled module registers no slash command and does not touch NodeTrailDB.
 - MapOverlay/MinimapPath still create their idle event frames at file load (they do nothing without a route).
-- Route data is still GatherMate2-backed in Base A.
 
 ## Options and reload confirm
 - Interface Options / Settings panel "MightiePack" (uses Settings.RegisterCanvasLayoutCategory when present, else InterfaceOptions_AddCategory).
@@ -95,7 +97,8 @@ Run from repo root with lua5.1:
 - `tests/draw_smoke.lua` (NodeTrail drawing, now loads from MightiePack/Modules/NodeTrail and calls ns.Enable())
 - `tests/umbrella_spec.lua` (TOC order and files, defaults, slash registration, options checkboxes, untick/cancel/escape/OK reload, disabled-after-reload state, live re-enable, stub never enabled)
 - `tests/recorder_spec.lua` (SV preserved, record shape, rounding, node id, LOOT_READY+LOOT_OPENED dedupe, custom spell id by name, non-herb/other unit/too late/fishing/no position/no cast ignored, empty loot still recorded, fresh DB)
-All four specs pass with lua5.1.
+- `tests/density_spec.lua` (empty/one-spot/two-spot/three-spot data, dense ring with cold outliers, no self-crossing, 2-opt crossing removal, anchor count scaling, maxStops cap, determinism, map wiring and errors, routeSource switch, old profile without new keys)
+All five specs pass with lua5.1.
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -104,8 +107,23 @@ All four specs pass with lua5.1.
 - Skipped: casts by other units, non-herb spells, loot more than 5 s after the cast, fishing loot (IsFishingLoot), unknown position (nil or 0,0, e.g. instances). A gather whose loot list is empty still records the position.
 - Limitations (best-effort): relies on the client firing UNIT_SPELLCAST_SUCCEEDED for Herb Gathering and on the spell name if Forever uses custom IDs; the position is the player's, not the node's (the player stands next to the node, within a few yards); a loot window opened from another source within 5 s of an interrupted-then-succeeded herb cast could be attributed to the herb; not yet verified in-game on Forever.
 
+## Density path (Base C)
+- `/nt start` and `/nt reload` now build from OUR recorded herbs by default (`ns.BuildRouteForMap` -> `ns.BuildDensityRouteForMap(mapID)` reading `NodeTrailDB.herbs.maps[mapID]`).
+- GatherMate2 is no longer needed for routes. The old GM2 builder (Route/Build.lua, Route/Cluster.lua, Data/GM2.lua) is kept as an optional fallback: set `NodeTrailDB.profile.routeSource = "gm2"` (default "density"; a missing key also means density).
+- GM2 is still an OptionalDeps soft-dep and is used, if loaded, only for HereBeDragons yard positions on the minimap and for the player zone id.
+- Algorithm (`ns.Density.Build(points, opts)`):
+  1. Heat grid with cells of 0.02 map width (`densityCell`). Each pick adds a 3x3 kernel: 1.0 own cell, 0.5 edge neighbours, 0.25 diagonals, so nearby picks stack into heat belts.
+  2. Warm threshold = 0.4 (`densityWarm`) x the hottest cell. A pick counts only if its own cell is at least that warm, so isolated cold picks drop out once belts exist.
+  3. Warm picks are grouped on a coarser 0.06 grid (`densityAnchorCell`); each group becomes one anchor at the heat-weighted centroid. The heaviest `maxStops` (default 40) anchors are kept. This is why the path does not connect every pick.
+  4. Anchors are ordered into a loop: nearest-neighbour from the heaviest, then 2-opt until no improvement (removes crossings so the loop follows belts instead of zigzagging).
+  5. Two passes of Chaikin corner cutting (`densitySmooth`) on the closed loop give the smooth corridor; the last point repeats the first (close = true), the same shape the drawing code already used.
+- The route (`{ mapID, path, anchors, stops = #anchors, picks, source = "density" }`) is drawn by the unchanged MapOverlay/MinimapPath/LineDraw/PathGeom.
+- Sparse data behaviour: 0 picks in the zone -> chat "NodeTrail: no herbs recorded in this zone yet. Gather a few herbs here, then /nt start." (no error). Picks that all fall in one 0.06 spot -> one anchor -> "not enough herb nodes to build a loop" (gather somewhere else in the zone). 2 spots -> a thin out-and-back line. 3+ spots -> a smoothed loop through all of them (with little data every pick has the same heat, so nothing is dropped). As data grows, belts get hotter and lone picks stop pulling the path.
+- Tunables in `NodeTrailDB.profile` (new defaults; existing profiles without them fall back to the same defaults): `routeSource`, `densityCell`, `densityWarm`, `densityAnchorCell`, `densitySmooth`; `maxStops` (existing) caps anchors.
+- Chat on start: "NodeTrail: route started (<belt points> belt points from <picks> herb picks)."
+
 ## Next
-Base C density builder is next: read NodeTrailDB.herbs.maps[mapID], weight map cells, trace a smooth white corridor through warm belts (not connect-every-dot), feed it to MapOverlay/MinimapPath, and switch /nt start to our DB by default (GM2 path off the default). Then Base D tooltip and Base E slash/smoke notes.
+Base D live herb tooltip (hover an in-world herb: stub drop % table + personal counts from NodeTrailDB.herbs + learned Alchemy recipes that use it), then Base E slash wiring/smoke notes.
 Out for tonight: mining/fishing/skinning, full rare-mat research, arrow/TomTom, folding in the real Touchstone repo, sharing/import.
 
 ## Known gaps
@@ -113,3 +131,5 @@ Out for tonight: mining/fishing/skinning, full rare-mat research, arrow/TomTom, 
 - Old NodeTrailDB does not migrate.
 - In-game test not yet run, nothing deployed.
 - Recorder not yet verified in-game on Forever (spell IDs/names, loot events).
+- Without GatherMate2 loaded the minimap path has no HereBeDragons yard data, so it falls back to C_Map player position with an approximate fixed view radius (fraction of the map); scale on the minimap may be off until a yard source is added. The world map path is unaffected.
+- Density path not yet seen in-game; tunables may need adjusting after the first real run.
