@@ -228,19 +228,20 @@ GatherMate2 = {
 }
 
 local function loadAddon(path)
-  local chunk, err = loadfile(root .. "/" .. path)
+  local chunk, err = loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. path)
   assert(chunk, err)
-  chunk("NodeTrail", ns)
+  chunk("MightiePack", { NodeTrail = ns })
 end
 
 local ns = {}
 -- Files share one namespace, matching the WoW addon loader.
 local function loadAll()
   local saved = ns
+  local pkg = { NodeTrail = saved }
   loadAddon = function(path)
-    local chunk, err = loadfile(root .. "/" .. path)
+    local chunk, err = loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. path)
     assert(chunk, err)
-    chunk("NodeTrail", saved)
+    chunk("MightiePack", pkg)
   end
   loadAddon("locale/enUS.lua")
   loadAddon("Config.lua")
@@ -256,6 +257,8 @@ local function loadAll()
 end
 
 ns = loadAll()
+-- Slash commands are registered when the umbrella enables the module.
+ns.Enable()
 
 local function shown(frame, kind)
   local list = {}

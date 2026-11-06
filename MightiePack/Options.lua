@@ -11,56 +11,67 @@ local subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"
 subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
 subtitle:SetText("Tick a module to turn it on. Turning one off needs a UI reload.")
 
+local boxes = {}
+pkg.optionsBoxes = boxes
+
 local function syncCheckboxes()
-  local y = -48
-  for _, name in ipairs(pkg.moduleOrder or {}) do
+  for index, name in ipairs(pkg.moduleOrder or {}) do
     local def = pkg.modules and pkg.modules[name]
     if def then
-      local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-      cb:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-      y = y - 32
+      local y = -48 - (index - 1) * 32
+      local cb = boxes[name]
+      if not cb then
+        cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
 
-      local label
-      if cb.Text or cb.text then
-        label = cb.Text or cb.text
-      else
-        label = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        label:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+        local label
+        if cb.Text or cb.text then
+          label = cb.Text or cb.text
+        else
+          label = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+          label:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+        end
+        local labelText = def.title or name
+        if def.stub then
+          labelText = labelText .. " (coming soon)"
+        end
+        label:SetText(labelText)
+
+        if def.stub then
+          cb:Disable()
+        else
+          cb:SetScript("OnClick", function(self)
+            local on = self:GetChecked() and true or false
+            if on then
+              pkg.SetModuleEnabled(name, true)
+              pkg.EnableModules()
+              pkg.Print((def.title or name) .. " enabled.")
+            else
+              StaticPopup_Show("MIGHTIEPACK_DISABLE_MODULE", def.title or name, nil, { name = name, checkbox = self })
+            end
+          end)
+        end
+
+        cb:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          GameTooltip:SetText(def.title or name)
+          if def.notes then
+            GameTooltip:AddLine(def.notes, 1, 1, 1, true)
+          end
+          GameTooltip:Show()
+        end)
+        cb:SetScript("OnLeave", function()
+          GameTooltip:Hide()
+        end)
+
+        boxes[name] = cb
       end
-      local labelText = def.title or name
-      if def.stub then
-        labelText = labelText .. " (coming soon)"
-      end
-      label:SetText(labelText)
 
       if def.stub then
         cb:SetChecked(false)
-        cb:Disable()
       else
         cb:SetChecked(pkg.IsModuleEnabled(name))
-        cb:SetScript("OnClick", function(self)
-          local on = self:GetChecked() and true or false
-          if on then
-            pkg.SetModuleEnabled(name, true)
-            pkg.EnableModules()
-            pkg.Print((def.title or name) .. " enabled.")
-          else
-            StaticPopup_Show("MIGHTIEPACK_DISABLE_MODULE", def.title or name, nil, { name = name, checkbox = self })
-          end
-        end)
       end
-
-      cb:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(def.title or name)
-        if def.notes then
-          GameTooltip:AddLine(def.notes, 1, 1, 1, true)
-        end
-        GameTooltip:Show()
-      end)
-      cb:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-      end)
     end
   end
 end
