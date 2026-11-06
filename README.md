@@ -1,68 +1,68 @@
-# NodeTrail
+# MightiePack (working name) — NodeTrail and friends
 
-WoW: Forever Classic **herb** gathering routes driven by your [GatherMate2](https://www.curseforge.com/wow/addons/gathermate2) nodes. Zygor-style **white path** on the world map and minimap. Separate from Touchstone.
+MightiePack is an umbrella addon for WoW Forever Classic (Interface 16001). It currently ships NodeTrail for herb route drawing.
 
-## MVP scope
+## Install
+1. Remove any old standalone `NodeTrail` AddOns folder first, because both define the NodeTrail global and /nt.
+2. Copy the `MightiePack` folder into the client's AddOns folder.
 
-- Soft-dep GatherMate2 (`OptionalDeps`)
-- Herbalism only (`"Herb Gathering"`)
-- One zone at a time: cluster nodes → greedy short loop
-- World map + minimap white path overlay
-- Arrow / TomTom: **later**
-- `## Interface: 16001` (Forever)
+## Modules
+| Module | Description | Default |
+|--------|-------------|---------|
+| NodeTrail | Herb routes | On |
+| Touchstone | Coming soon | Off (stub) |
 
-## Requirements
+## Slash Commands
+| Command | Description |
+|---------|-------------|
+| `/mpack` | Open options panel |
+| `/mpack status` | Print module on/off status |
+| `/nt start` | Start NodeTrail route |
+| `/nt stop` | Stop NodeTrail route |
+| `/nt reload` | Rebuild the active route from current data |
 
-1. GatherMate2 loaded (Forever flavor preferred; Classic works if APIs match)
-2. Herb nodes in `GatherMate2HerbDB` — gather in-world or import Wowhead Classic data via `/gathermate`
-
-If GM2 is missing or the zone has no herbs, NodeTrail stays quiet / tells you why. No bundled node DB.
-
-## Slash
-
-| Command | Action |
-|---------|--------|
-| `/nodetrail` or `/nt` | Status / help |
-| `/nt start` | Build + show route for current zone (all herbs) |
-| `/nt stop` | Clear route overlays |
-| `/nt reload` | Rebuild from current GM2 snapshot |
+## Options
+- Open with `/mpack` or `/mightiepack`.
+- Tick a module: turns on immediately, no reload.
+- Untick: confirm popup "Turn off <module>? This needs a UI reload." OK saves it off and runs ReloadUI(); Cancel (or Escape) keeps it on and re-ticks the box.
 
 ## Layout
-
 ```
-NodeTrail.toc
-Core.lua              # load, slash, route session
-Config.lua            # defaults / SavedVariables
-Data/GM2.lua          # soft-dep adapter
-Route/Cluster.lua     # grid bucketing
-Route/Build.lua       # greedy nearest-neighbor loop
-UI/PathGeom.lua       # segment clipping (no WoW calls)
-UI/LineDraw.lua       # white line segments (CreateLine, else rotated texture)
-UI/MapOverlay.lua     # world map white path
-UI/MinimapPath.lua    # minimap white path
-locale/enUS.lua
+MightiePack
+MightiePack/Core.lua
+MightiePack/MightiePack.toc
+MightiePack/Modules
+MightiePack/Modules.lua
+MightiePack/Modules/NodeTrail
+MightiePack/Modules/NodeTrail/Config.lua
+MightiePack/Modules/NodeTrail/Core.lua
+MightiePack/Modules/NodeTrail/Data
+MightiePack/Modules/NodeTrail/Data/GM2.lua
+MightiePack/Modules/NodeTrail/Route
+MightiePack/Modules/NodeTrail/Route/Build.lua
+MightiePack/Modules/NodeTrail/Route/Cluster.lua
+MightiePack/Modules/NodeTrail/UI
+MightiePack/Modules/NodeTrail/UI/LineDraw.lua
+MightiePack/Modules/NodeTrail/UI/MapOverlay.lua
+MightiePack/Modules/NodeTrail/UI/MinimapPath.lua
+MightiePack/Modules/NodeTrail/UI/PathGeom.lua
+MightiePack/Modules/NodeTrail/locale
+MightiePack/Modules/NodeTrail/locale/enUS.lua
+MightiePack/Options.lua
 ```
 
-## GM2 adapter (canonical)
+## NodeTrail details
+- Herb-only.
+- GatherMate2 soft-dep for now — needs herb nodes in GatherMate2.
+- GM2 adapter uses `GatherMate2:GetNodesForZone(mapID, "Herb Gathering", true)` and `DecodeLoc`, never scrape GatherMateData2HerbDB or hardcode zone names.
+- White polyline pathColor `{1,1,1,0.9}`, pathWidth 2 on world map and minimap.
+- `/nt stop` releases both overlays.
 
-```lua
-local mapID = GatherMate2.HBD:GetPlayerZone()
-for coord, nodeID in GatherMate2:GetNodesForZone(mapID, "Herb Gathering", true) do
-  local x, y = GatherMate2:DecodeLoc(coord)  -- 0..1
-end
-```
+## Tests
+Run from repo root with lua5.1:
+- `tests/pathgeom_spec.lua`
+- `tests/draw_smoke.lua`
+- `tests/umbrella_spec.lua`
 
-Do **not** scrape `GatherMateData2HerbDB` or hardcode English zone names.
-
-## Path drawing
-
-`/nt start` draws the herb loop as a white polyline (`pathColor` defaults to `{1, 1, 1, 0.9}`, `pathWidth` defaults to `2`).
-
-- **World map:** segments join `route.path` points (map fractions) on that zone's map canvas. The line is hidden when the map is showing a different map, and when the route is cleared.
-- **Minimap:** segments that pass near the player are drawn in white. Yard positions use GatherMate2's embedded HereBeDragons when it is loaded. The minimap updates on a short timer, and immediately on movement, zoom, and zone changes.
-
-`/nt stop` releases both overlays.
-
-## Status
-
-Path drawing is implemented. Gather in-game or import herb nodes through GatherMate2, then `/nt start`.
+## Handoff
+See `HANDOFF.md` for agent handoff details.
