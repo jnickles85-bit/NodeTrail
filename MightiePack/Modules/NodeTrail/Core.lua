@@ -66,6 +66,12 @@ function ns.Enable()
   if ns.Recorder then
     ns.Recorder:Enable()
   end
+  if ns.Recipes then
+    ns.Recipes:Enable()
+  end
+  if ns.Tooltip then
+    ns.Tooltip:Enable()
+  end
   SLASH_NODETRAIL1 = "/nodetrail"
   SLASH_NODETRAIL2 = "/nt"
   SlashCmdList.NODETRAIL = handleSlash
