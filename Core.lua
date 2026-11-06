@@ -1,7 +1,7 @@
 local addonName, ns = ...
 
 NodeTrail = ns
-ns.version = "0.1.0-mvp"
+ns.version = "0.2.0"
 ns.activeRoute = nil
 
 local L = ns.L

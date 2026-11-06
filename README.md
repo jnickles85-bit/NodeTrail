@@ -36,6 +36,8 @@ Config.lua            # defaults / SavedVariables
 Data/GM2.lua          # soft-dep adapter
 Route/Cluster.lua     # grid bucketing
 Route/Build.lua       # greedy nearest-neighbor loop
+UI/PathGeom.lua       # segment clipping (no WoW calls)
+UI/LineDraw.lua       # white line segments (CreateLine, else rotated texture)
 UI/MapOverlay.lua     # world map white path
 UI/MinimapPath.lua    # minimap white path
 locale/enUS.lua
@@ -52,6 +54,15 @@ end
 
 Do **not** scrape `GatherMateData2HerbDB` or hardcode English zone names.
 
+## Path drawing
+
+`/nt start` draws the herb loop as a white polyline (`pathColor` defaults to `{1, 1, 1, 0.9}`, `pathWidth` defaults to `2`).
+
+- **World map:** segments join `route.path` points (map fractions) on that zone's map canvas. The line is hidden when the map is showing a different map, and when the route is cleared.
+- **Minimap:** segments that pass near the player are drawn in white. Yard positions use GatherMate2's embedded HereBeDragons when it is loaded. The minimap updates on a short timer, and immediately on movement, zoom, and zone changes.
+
+`/nt stop` releases both overlays.
+
 ## Status
 
-Skeleton only — not installed to Forever yet. Approve an install when ready to smoke-test.
+Path drawing is implemented. Gather in-game or import herb nodes through GatherMate2, then `/nt start`.
