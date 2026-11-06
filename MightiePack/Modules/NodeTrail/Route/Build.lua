@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 local function dist2(a, b)
   local dx, dy = a.x - b.x, a.y - b.y

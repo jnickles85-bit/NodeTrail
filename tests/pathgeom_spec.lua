@@ -1,9 +1,9 @@
 local src = debug.getinfo(1, "S").source:gsub("^@", "")
 local root = src:match("^(.*)/tests/[^/]+$") or "."
 local ns = {}
-local chunk, err = loadfile(root .. "/UI/PathGeom.lua")
+local chunk, err = loadfile(root .. "/MightiePack/Modules/NodeTrail/UI/PathGeom.lua")
 assert(chunk, err)
-chunk("NodeTrail", ns)
+chunk("MightiePack", { NodeTrail = ns })
 local G = ns.PathGeom
 
 local failed = 0

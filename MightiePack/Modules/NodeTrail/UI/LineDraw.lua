@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 -- White polyline segments.
 -- Prefer Frame:CreateLine (Classic canvas clients and Forever).

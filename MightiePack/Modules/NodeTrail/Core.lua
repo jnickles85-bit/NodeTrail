@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 NodeTrail = ns
 ns.version = "0.2.0"
@@ -35,9 +37,7 @@ function ns.StartRoute()
   printL("ROUTE_STARTED", stops)
 end
 
-SLASH_NODETRAIL1 = "/nodetrail"
-SLASH_NODETRAIL2 = "/nt"
-SlashCmdList.NODETRAIL = function(msg)
+local function handleSlash(msg)
   msg = (msg or ""):match("^%s*(.-)%s*$") or ""
   msg = msg:lower()
   if msg == "" or msg == "help" then
@@ -57,16 +57,21 @@ SlashCmdList.NODETRAIL = function(msg)
   end
 end
 
-local f = CreateFrame("Frame")
-f:RegisterEvent("ADDON_LOADED")
-f:RegisterEvent("PLAYER_LOGIN")
-f:SetScript("OnEvent", function(_, event, arg1)
-  if event == "ADDON_LOADED" and arg1 == addonName then
-    ns.GetDB()
-  elseif event == "PLAYER_LOGIN" then
-    if not ns.GetGatherMate2() then
-      -- Soft notice once; do not error
-      -- printL("NEED_GM2")  -- uncomment if we want a login nag
-    end
+function ns.Enable()
+  if ns.enabled then
+    return
   end
-end)
+  ns.enabled = true
+  ns.GetDB()
+  SLASH_NODETRAIL1 = "/nodetrail"
+  SLASH_NODETRAIL2 = "/nt"
+  SlashCmdList.NODETRAIL = handleSlash
+end
+
+if type(pkg.RegisterModule) == "function" then
+  pkg.RegisterModule("NodeTrail", {
+    title = "NodeTrail",
+    notes = "Herb routes: white path on the world map and minimap (/nt start | stop | reload).",
+    Enable = function() ns.Enable() end,
+  })
+end

@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 -- World-map white polyline for the active herb route.
 -- Points are map fractions (0..1). The line is parented to the map canvas so

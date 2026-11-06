@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 -- Pure map geometry. No WoW calls, so the clipping rules can be checked
 -- outside the client. Coordinates are in the same pixel space the caller
