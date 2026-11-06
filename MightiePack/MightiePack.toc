@@ -12,6 +12,7 @@ Modules.lua
 Modules/NodeTrail/locale/enUS.lua
 Modules/NodeTrail/Config.lua
 Modules/NodeTrail/Data/GM2.lua
+Modules/NodeTrail/Data/Recorder.lua
 Modules/NodeTrail/Route/Cluster.lua
 Modules/NodeTrail/Route/Build.lua
 Modules/NodeTrail/UI/PathGeom.lua

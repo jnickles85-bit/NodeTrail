@@ -63,6 +63,9 @@ function ns.Enable()
   end
   ns.enabled = true
   ns.GetDB()
+  if ns.Recorder then
+    ns.Recorder:Enable()
+  end
   SLASH_NODETRAIL1 = "/nodetrail"
   SLASH_NODETRAIL2 = "/nt"
   SlashCmdList.NODETRAIL = handleSlash

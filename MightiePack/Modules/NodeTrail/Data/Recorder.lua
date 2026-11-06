@@ -1,0 +1,158 @@
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
+
+local R = {}
+ns.Recorder = R
+
+R.HERB_SPELL_IDS = { [2366] = true, [2368] = true, [3570] = true, [11993] = true }
+R.PENDING_WINDOW = 5
+R.SCHEMA = 1
+
+function ns.GetHerbDB()
+  if type(NodeTrailDB) ~= "table" then
+    ns.GetDB()
+  end
+  if type(NodeTrailDB.herbs) ~= "table" then
+    NodeTrailDB.herbs = { schema = R.SCHEMA, total = 0, maps = {} }
+  end
+  if type(NodeTrailDB.herbs.maps) ~= "table" then
+    NodeTrailDB.herbs.maps = {}
+  end
+  if type(NodeTrailDB.herbs.total) ~= "number" then
+    NodeTrailDB.herbs.total = 0
+  end
+  return NodeTrailDB.herbs
+end
+
+local function round4(v)
+  return math.floor(v * 10000 + 0.5) / 10000
+end
+
+function R:IsHerbSpell(spellID)
+  if R.HERB_SPELL_IDS[spellID] then
+    return true
+  end
+  if type(GetSpellInfo) == "function" and spellID then
+    local herbName = GetSpellInfo(2366)
+    local name = GetSpellInfo(spellID)
+    return herbName ~= nil and name == herbName
+  end
+  return false
+end
+
+function R:GetPlayerPosition()
+  if type(C_Map) ~= "table" then return nil end
+  if type(C_Map.GetBestMapForUnit) ~= "function" then return nil end
+  if type(C_Map.GetPlayerMapPosition) ~= "function" then return nil end
+  local mapID = C_Map.GetBestMapForUnit("player")
+  if not mapID then return nil end
+  local pos = C_Map.GetPlayerMapPosition(mapID, "player")
+  if not pos then return nil end
+  if type(pos.GetXY) ~= "function" then return nil end
+  local x, y = pos:GetXY()
+  if type(x) ~= "number" or type(y) ~= "number" then return nil end
+  if x == 0 and y == 0 then return nil end
+  if x < 0 or x > 1 or y < 0 or y > 1 then return nil end
+  return mapID, x, y
+end
+
+function R:OnSpellSucceeded(unit, castGUID, spellID)
+  if unit ~= "player" then return end
+  if not self:IsHerbSpell(spellID) then return end
+  local mapID, x, y = self:GetPlayerPosition()
+  if not mapID then
+    self.pending = nil
+    return
+  end
+  self.pending = { mapID = mapID, x = x, y = y, at = GetTime(), spellID = spellID }
+end
+
+function R:ReadLoot()
+  local items = {}
+  local nodeID = nil
+  local n = 0
+  if type(GetNumLootItems) == "function" then
+    n = GetNumLootItems()
+  end
+  for i = 1, n do
+    local link = nil
+    if type(GetLootSlotLink) == "function" then
+      link = GetLootSlotLink(i)
+    end
+    local name = nil
+    local qty = 1
+    if type(GetLootSlotInfo) == "function" then
+      local icon, nm, q = GetLootSlotInfo(i)
+      name = nm
+      if type(q) == "number" then qty = q end
+    end
+    if link or name then
+      local id = nil
+      if link then
+        local m = link:match("item:(%d+)")
+        if m then id = tonumber(m) end
+      end
+      items[#items + 1] = { id = id, name = name, count = qty }
+    end
+    if nodeID == nil and type(GetLootSourceInfo) == "function" then
+      local guid = GetLootSourceInfo(i)
+      if type(guid) == "string" and guid:match("^GameObject%-") then
+        local m = guid:match("^GameObject%-[^%-]*%-[^%-]*%-[^%-]*%-[^%-]*%-(%d+)")
+        if m then nodeID = tonumber(m) end
+      end
+    end
+  end
+  return items, nodeID
+end
+
+function ns.RecordHerb(mapID, x, y, items, nodeID)
+  local db = ns.GetHerbDB()
+  local list = db.maps[mapID]
+  if not list then
+    list = {}
+    db.maps[mapID] = list
+  end
+  local entry = { x = round4(x), y = round4(y), t = time(), items = items or {} }
+  if nodeID then
+    entry.node = nodeID
+  end
+  list[#list + 1] = entry
+  db.total = db.total + 1
+  return entry
+end
+
+function R:OnLoot()
+  local p = self.pending
+  if not p then return end
+  self.pending = nil
+  if GetTime() - p.at > self.PENDING_WINDOW then return end
+  if type(IsFishingLoot) == "function" and IsFishingLoot() then return end
+  local items, nodeID = self:ReadLoot()
+  self.lastRecord = ns.RecordHerb(p.mapID, p.x, p.y, items, nodeID)
+  return self.lastRecord
+end
+
+function R:Enable()
+  if self.enabled then return end
+  self.enabled = true
+  ns.GetHerbDB()
+  local frame = CreateFrame("Frame")
+  self.frame = frame
+  local function dispatch(event, ...)
+    if event == "UNIT_SPELLCAST_SUCCEEDED" then
+      R:OnSpellSucceeded(...)
+    elseif event == "LOOT_READY" or event == "LOOT_OPENED" then
+      R:OnLoot()
+    end
+  end
+  frame:SetScript("OnEvent", function(_, event, ...)
+    local ok, err = pcall(dispatch, event, ...)
+    if not ok then
+      R._error = tostring(err)
+    end
+  end)
+  pcall(frame.RegisterEvent, frame, "UNIT_SPELLCAST_SUCCEEDED")
+  pcall(frame.RegisterEvent, frame, "LOOT_OPENED")
+  pcall(frame.RegisterEvent, frame, "LOOT_READY")
+end
