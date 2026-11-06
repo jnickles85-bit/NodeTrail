@@ -1,0 +1,22 @@
+## Interface: 16001
+## Title: MightiePack
+## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone coming soon.
+## Author: Mightie
+## Version: 0.3.0
+## SavedVariables: MightiePackDB, NodeTrailDB
+## OptionalDeps: GatherMate2
+## DefaultState: enabled
+
+Core.lua
+Modules.lua
+Modules/NodeTrail/locale/enUS.lua
+Modules/NodeTrail/Config.lua
+Modules/NodeTrail/Data/GM2.lua
+Modules/NodeTrail/Route/Cluster.lua
+Modules/NodeTrail/Route/Build.lua
+Modules/NodeTrail/UI/PathGeom.lua
+Modules/NodeTrail/UI/LineDraw.lua
+Modules/NodeTrail/UI/MapOverlay.lua
+Modules/NodeTrail/UI/MinimapPath.lua
+Modules/NodeTrail/Core.lua
+Options.lua

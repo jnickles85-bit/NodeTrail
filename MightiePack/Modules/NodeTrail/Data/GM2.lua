@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 -- Soft-dep GatherMate2. Public API (Nevcairiel/GatherMate2):
 --   GetNodesForZone(uiMapID, "Herb Gathering", ignoreFilter) → (coord, nodeID)

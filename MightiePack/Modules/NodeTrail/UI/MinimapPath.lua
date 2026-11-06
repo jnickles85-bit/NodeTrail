@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 -- Minimap white polyline for the part of the active route near the player.
 -- Yard offsets match HereBeDragons-Pins (GatherMate2.HBD) when that library

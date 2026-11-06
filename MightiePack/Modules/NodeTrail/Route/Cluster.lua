@@ -1,4 +1,6 @@
-local addonName, ns = ...
+local addonName, pkg = ...
+pkg.NodeTrail = pkg.NodeTrail or {}
+local ns = pkg.NodeTrail
 
 --- Bucket nodes into grid cells, return centroids.
 --- @param nodes { {x,y,...} }
