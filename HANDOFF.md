@@ -4,11 +4,11 @@
 Base A (umbrella shell) was squash-merged to main as 852c15f (PR #2).
 Base B (own herb recorder) was squash-merged to main as f1606d3 (PR #3).
 Base C (density white path from our own herb data) was squash-merged to main as 3c0b012 (PR #4).
-Base D (live herb tooltip) is on branch `mp/base-d-tooltip` @ b7d682b, PR #5 targets main (main merged in, no rebase), MERGEABLE/CLEAN.
-Base E (slash polish) is on branch `mp/base-e-slash`, stacked on `mp/base-d-tooltip` (targets it; merge #5 first, then retarget #6 to main or merge main in; never rebase/force-push), PR #6.
+Base D (live herb tooltip) was squash-merged to main as 72916d0 (PR #5).
+Base E (slash polish + this HANDOFF) was squash-merged to main as 74eb4da (PR #6).
 Date: 2026-11-06.
 The repo now ships one installable addon folder: `MightiePack/`.
-Evening slice (Bases A-E) is code-complete. Next step is Mightie's in-game test on Forever; nothing has been deployed.
+Evening slice (Bases A-E) is all on main. Next step is Mightie's in-game test on Forever; nothing has been deployed.
 
 ## Rules
 - Locally (orchestrator) + local Qwen write code.
