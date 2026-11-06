@@ -1,0 +1,17 @@
+## Interface: 16001
+## Title: NodeTrail
+## Notes: Herb gathering routes from GatherMate2 nodes — white path on world map and minimap.
+## Author: Mightie
+## Version: 0.1.0-mvp
+## SavedVariables: NodeTrailDB
+## OptionalDeps: GatherMate2
+## DefaultState: enabled
+
+locale/enUS.lua
+Config.lua
+Data/GM2.lua
+Route/Cluster.lua
+Route/Build.lua
+UI/MapOverlay.lua
+UI/MinimapPath.lua
+Core.lua
