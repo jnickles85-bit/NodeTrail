@@ -110,6 +110,13 @@ check(s:find("Module: off", 1, true) ~= nil, "module off")
 s = run("  STATUS  ")
 check(s:find("NodeTrail status:", 1, true) ~= nil, "case whitespace status")
 
+-- /nt ttdiag: layout diagnostic. The slash spec's Tooltip stub has no
+-- Diag implementation, so the branch must fall back cleanly (the branch
+-- is only reachable after Enable — module gating already proven above).
+local d = run("ttdiag")
+check(d:find("ttdiag", 1, true) ~= nil, "ttdiag prints")
+check(d:find("unavailable", 1, true) ~= nil, "ttdiag falls back when the tooltip stub has no Diag")
+
 if failed == 0 then
   print("slash_spec: ok")
 else

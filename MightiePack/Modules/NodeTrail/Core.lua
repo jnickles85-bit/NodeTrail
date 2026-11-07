@@ -82,6 +82,12 @@ local function handleSlash(msg)
     end
   elseif msg == "status" then
     ns.PrintStatus()
+  elseif msg == "ttdiag" then
+    if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
+      ns.Tooltip:Diag()
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: ttdiag unavailable (tooltip module not loaded)")
+    end
   else
     printHelp()
   end

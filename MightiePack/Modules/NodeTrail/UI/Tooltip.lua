@@ -119,6 +119,146 @@ local function blockIntact(tooltip, title)
   return tooltip:NumLines() >= T.last.after and headerPresent(tooltip)
 end
 
+-- ── Layout (backdrop + on-screen clamp) ────────────────────────────────
+-- The client sizes the tooltip's backdrop and anchors the frame when it
+-- populates/shows an item, and it does not redo either while we are
+-- appending late — that is why the in-game block sat on no background
+-- and ran off the right/bottom edge. Late appends therefore have to
+-- re-layout themselves: `Layout()` (the client's own re-layout) re-sizes
+-- the backdrop, and we clamp the anchor once so the frame fits
+-- UIParent. We do not own subsequent client repositioning — the clamp
+-- happens on append, not on a clock. Re-entrancy: a Layout that re-fires
+-- a hook (re-entering Refresh) is dropped by the lock below; the
+-- content guard above (since 14c1c30) already stops duplicate appends.
+
+local MARGIN = 10 -- clamp inset; kept in sync with NT_MARGIN in tests/tooltip_refresh_spec.lua
+
+-- Screen-space rect {left, bottom, right, top} (y-up, bottom-left origin)
+-- of the frame's first anchor point, or nil when unanchored/unsized.
+local function screenRect(g, relW, relH)
+  if type(g.GetPoint) ~= "function" then return nil end
+  -- GetPoint returns (relX, relY, xOfs, yOfs, relativeTo, point1, point2)
+  local _, _, xOfs, yOfs, relativeTo, point1, point2 = g:GetPoint(1)
+  if xOfs == nil or yOfs == nil or type(point1) ~= "string" or type(point2) ~= "string" then
+    return nil
+  end
+  local w = type(g.GetWidth) == "function" and g:GetWidth() or nil
+  local h = type(g.GetHeight) == "function" and g:GetHeight() or nil
+  if type(w) ~= "number" or type(h) ~= "number" then return nil end
+  local ox = point2:find("RIGHT") and relW or (point2:find("CENTER") and relW * 0.5 or 0)
+  local oy = point2:find("TOP") and relH or (point2:find("CENTER") and relH * 0.5 or 0)
+  local cx, cy = ox + xOfs, oy + yOfs
+  return {
+    left = cx - (point1:find("RIGHT") and w or (point1:find("CENTER") and w * 0.5 or 0)),
+    right = cx + (point1:find("LEFT") and w or (point1:find("CENTER") and w * 0.5 or 0)),
+    bottom = cy - (point1:find("TOP") and h or (point1:find("CENTER") and h * 0.5 or 0)),
+    top = cy + (point1:find("BOTTOM") and h or (point1:find("CENTER") and h * 0.5 or 0)),
+  }
+end
+
+function T:Relayout(tooltip)
+  if T._relaying then
+    return
+  end
+  T._relaying = true
+  local ok, err = pcall(function()
+    if type(tooltip.Layout) == "function" then
+      tooltip:Layout()
+    end
+    if type(UIParent) == "table" and type(UIParent.GetWidth) == "function"
+      and type(UIParent.GetHeight) == "function" then
+      local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
+      local rect = screenRect(tooltip, sw, sh)
+      if rect and type(tooltip.SetPoint) == "function" then
+        local dx = 0
+        if rect.left < MARGIN then dx = dx + (MARGIN - rect.left) end
+        if rect.right > sw - MARGIN then dx = dx - (rect.right - (sw - MARGIN)) end
+        local dy = 0
+        if rect.bottom < MARGIN then dy = dy + (MARGIN - rect.bottom) end
+        if rect.top > sh - MARGIN then dy = dy - (rect.top - (sh - MARGIN)) end
+        if dx ~= 0 or dy ~= 0 then
+          local _, _, xOfs, yOfs, relativeTo, point1, point2 = tooltip:GetPoint(1)
+          tooltip:SetPoint(point1, relativeTo, point2, xOfs + dx, yOfs + dy)
+        end
+      end
+    end
+  end)
+  T._relaying = false
+  if not ok then
+    T._error = tostring(err)
+  end
+end
+
+-- /nt ttdiag — the in-client evidence channel for tooltip layout. Prints
+-- only what is live: NumLines and frame size, every anchor point, the
+-- computed screen rect vs UIParent, and whether the current block was
+-- added pre- or post-Show. Cheap: a few API calls, no loops beyond
+-- GetNumPoints.
+function T:Diag()
+  local function say(msg)
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail ttdiag: " .. msg)
+  end
+  local gt = GameTooltip
+  if type(gt) ~= "table" then
+    say("GameTooltip unavailable")
+    return
+  end
+  local last = T.last
+  local function blockState()
+    if last then
+      return ("block: title=%s after=%d added=%s"):format(
+        tostring(last.title),
+        last.after or -1,
+        last.shown and "post-Show (late path, relayout ran)" or "pre-Show (populate path)")
+    end
+    return "block: none (no append recorded for the current title)"
+  end
+  if T._error then
+    say("error: " .. tostring(T._error))
+  end
+  local shown = type(gt.IsShown) == "function" and gt:IsShown() or false
+  if not shown then
+    say("tooltip hidden; " .. blockState())
+    return
+  end
+  local n = type(gt.NumLines) == "function" and gt:NumLines() or -1
+  local w = type(gt.GetWidth) == "function" and gt:GetWidth()
+  local h = type(gt.GetHeight) == "function" and gt:GetHeight()
+  say(("NumLines=%d W=%s H=%s"):format(
+    n,
+    type(w) == "number" and string.format("%.0f", w) or "?",
+    type(h) == "number" and string.format("%.0f", h) or "?"))
+  local npts = type(gt.GetNumPoints) == "function" and gt:GetNumPoints() or 0
+  for i = 1, npts do
+    local xOfs, yOfs, relTo, p1, p2 = select(3, gt:GetPoint(i))
+    say(("point %d: %s of %s (%s) xOfs=%s yOfs=%s"):format(
+      i,
+      p1 or "?",
+      type(relTo) == "table" and (type(relTo.GetName) == "function" and tostring(relTo:GetName()) or "frame") or "?",
+      p2 or "?",
+      tostring(xOfs),
+      tostring(yOfs)))
+  end
+  if type(UIParent) == "table" and type(UIParent.GetWidth) == "function"
+    and type(UIParent.GetHeight) == "function" then
+    local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
+    local rect = screenRect(gt, sw, sh)
+    if rect then
+      local outside = rect.left < 0 or rect.right > sw or rect.bottom < 0 or rect.top > sh
+      local offMargin = rect.left < MARGIN or rect.right > sw - MARGIN
+        or rect.bottom < MARGIN or rect.top > sh - MARGIN
+      say(("screen %.0fx%.0f rect L=%.1f B=%.1f R=%.1f T=%.1f (%s, %s)"):format(
+        sw, sh,
+        rect.left, rect.bottom, rect.right, rect.top,
+        outside and "OFF-SCREEN" or "on screen",
+        offMargin and "OUTSIDE MARGIN" or "within margin"))
+    else
+      say(("screen %.0fx%.0f rect = unanchored or unsized frame"):format(sw, sh))
+    end
+  end
+  say(blockState())
+end
+
 -- Re-ensure the NodeTrail block for the tooltip's current content. Appends
 -- at most one fresh block, and only when it is actually due:
 --   * the title is a known herb node, otherwise own nothing;
@@ -150,8 +290,17 @@ function T:Refresh(tooltip)
       tooltip:AddLine(line.left, 0.6, 0.8, 1)
     end
   end
-  self.last = { title = name, after = tooltip:NumLines() }
+  local shown = type(tooltip.IsShown) == "function" and tooltip:IsShown() or false
+  self.last = { title = name, after = tooltip:NumLines(), shown = shown }
   self.dirty = false
+  if shown then
+    -- Late append: the client sized and anchored the tooltip BEFORE our
+    -- lines existed, so its layout decisions don't account for them.
+    -- Re-layout once (backdrop grows to cover us) and clamp the frame
+    -- into the screen; the client keeps ownership of any subsequent
+    -- repositioning.
+    self:Relayout(tooltip)
+  end
 end
 
 function T:Enable()
