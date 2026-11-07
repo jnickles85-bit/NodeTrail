@@ -55,6 +55,12 @@ local MODERN_ENUM = {
 }
 local MODERN_INDEX = { "GetRecipeID", "GetRecipeIDAt", "GetRecipeIDByIndex" }
 local MODERN_PROF = {
+  -- The likely-live mainline calls for the OPEN profession window come
+  -- first: on a current client these are the usual calls and they return
+  -- a table (not a bare string). The older name-style calls stay as
+  -- fallbacks for a client that still carries them (t_217033d4).
+  "GetChildProfessionInfo",
+  "GetBaseProfessionInfo",
   "GetOpenTradeSkillLine",
   "GetOpenTradeSkillTab",
   "GetCurrentTradeSkillLine",
@@ -238,17 +244,34 @@ local function nameFrom(t)
   return nil
 end
 
+-- A profession call may answer as a bare name string, or as a table that
+-- carries the name under any of the usual keys (the live
+-- GetChildProfessionInfo / GetBaseProfessionInfo call returns a table).
+-- Anything else — no recognisable name — is nil, never an error.
+local function profName(r)
+  if type(r) == "string" and r ~= "" then
+    return r
+  end
+  if type(r) == "table" then
+    for _, k in ipairs({ "skillLineName", "professionName", "name" }) do
+      local v = r[k]
+      if type(v) == "string" and v ~= "" then
+        return v
+      end
+    end
+  end
+  return nil
+end
+
 local function openProfession(mod)
   for _, n in ipairs(MODERN_PROF) do
     local f = mod[n]
     if type(f) == "function" then
       local ok, r = pcall(f)
       if ok then
-        if type(r) == "string" and r ~= "" then
-          return r
-        end
-        if type(r) == "table" and type(r.name) == "string" and r.name ~= "" then
-          return r.name
+        local name = profName(r)
+        if name ~= nil then
+          return name
         end
       end
     end
@@ -398,17 +421,35 @@ function Rc:ScanModern()
   end
   local prof = openProfession(mod)
   local alchName = Rc:AlchName()
-  if prof ~= nil and prof ~= alchName and prof ~= "Alchemy" then
-    -- Open window is a different profession: no alchemy to read. Same
-    -- contract as the legacy gate; the scan can still run when the
-    -- player opens Alchemy.
-    Rc._diag = {
-      path = "modern",
-      gated = "profession",
-      profession = prof,
-      recipeCount = 0,
-      error = nil,
-    }
+  local isAlchemy = (prof ~= nil) and (prof == alchName or prof == "Alchemy")
+  if not isAlchemy then
+    if prof ~= nil then
+      -- The open window is a DIFFERENT, identifiable profession (Cooking,
+      -- Enchanting, …). Its recipes are not alchemy, so persisting them
+      -- would mislabel every reagent's tooltip. Same contract as the
+      -- legacy gate; the scan can still run when the player opens Alchemy.
+      Rc._diag = {
+        path = "modern",
+        gated = "profession",
+        profession = prof,
+        recipeCount = #ids,
+        error = nil,
+      }
+    else
+      -- The client reports no profession name at all: we cannot
+      -- POSITIVELY confirm this is the Alchemy window, so whatever the
+      -- open window enumerated is unverified. Persisting it would make
+      -- every herb tooltip claim "Alchemy: <a recipe that is not
+      -- Alchemy>" — silent wrong data is worse than a missing feature, so
+      -- refuse to write and say why (t_217033d4).
+      Rc._diag = {
+        path = "modern",
+        gated = "unknown-profession",
+        profession = nil,
+        recipeCount = #ids,
+        error = "client reports no open profession name; the enumerated recipes cannot be verified as Alchemy, so they were not saved",
+      }
+    end
     return false
   end
   local newMap = {}

@@ -432,6 +432,168 @@ check(stOut16:find("no trade skill API", 1, true) ~= nil, "Test 16: status says 
 check(stOut16:find("open your Alchemy window once", 1, true) == nil,
   "Test 16: status does not promise an impossible step")
 
+-- ── Tests 17–19 (t_217033d4): never persist the recipe map without a
+-- POSITIVE Alchemy identification ───────────────────────────────────────
+-- The C_TradeSkillUI port (f5030c5) only refused to write when the open
+-- profession was identifiable as a NON-alchemy name. When the live client
+-- reports NO profession name at all — its probed calls all miss — the gate
+-- was quietly skipped and whatever window was open (Cooking, Enchanting, …)
+-- got written straight into the alchemy map, so every herb tooltip then
+-- claimed "Alchemy: <a recipe that is not Alchemy>". Silent wrong data is
+-- worse than a missing feature.
+--   Test 17 and Test 18 MUST fail on f5030c5 (they pin the hole).
+--   Test 19 is the positive path and must keep working (and passes because
+--   the old code happened to write on a nil prof — the fix must not regress it).
+
+local function countAlchKeys(t)
+  local n = 0
+  for _ in pairs(t) do
+    n = n + 1
+  end
+  return n
+end
+
+-- Test 17: modern client, GetChildProfessionInfo reports the open window is
+-- COOKING. The scan must NOT write the map (it is not alchemy), must record
+-- gated=profession, and the tooltip must keep the honest "open Alchemy" hint
+-- — not claim a Cooking recipe as an Alchemy one.
+C_TradeSkillUI = {
+  GetAllRecipeIDs = function() return { 501, 502 } end,
+  GetRecipeInfo = function(id)
+    if id == 501 then
+      return { name = "Spiced Wolf Meat", reagents = { { itemID = 765 } } }
+    end
+    if id == 502 then
+      return { name = "Bread", reagents = { { itemID = 2447 } } }
+    end
+    return nil
+  end,
+  GetChildProfessionInfo = function() return { skillLineName = "Cooking" } end,
+}
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan17, r17 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan17, "Test 17: scan does not error (Cooking open)")
+check(r17 == false, "Test 17: scan reports nothing (not alchemy)")
+check(countAlchKeys(NodeTrailDB.recipes.alchemy) == 0,
+  "Test 17: NO alchemy map written for a Cooking window")
+check(NodeTrailDB.recipes.alchemyScanned == nil, "Test 17: alchemyScanned stays nil")
+local d17 = ns.Recipes._diag
+check(d17 ~= nil and d17.gated == "profession", "Test 17: _diag.gated == 'profession'")
+check(d17 ~= nil and d17.profession == "Cooking", "Test 17: _diag.profession == 'Cooking'")
+hover("Silverleaf")
+local hint17, wrong17 = false, false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Open Alchemy once to list recipe uses" then
+    hint17 = true
+  end
+  if type(l) == "string" and l:find("Alchemy: ", 1, true) ~= nil then
+    wrong17 = true
+  end
+end
+check(hint17, "Test 17: tooltip keeps the honest 'open Alchemy' hint")
+check(not wrong17, "Test 17: tooltip does NOT claim a Cooking recipe as Alchemy")
+
+-- Test 18: modern client where the open window CANNOT be identified at all —
+-- no profession-naming call exists, but the recipe enumeration works. Must
+-- NOT write, must record gated=unknown-profession, and /nt status must say
+-- the profession could not be verified — not "open Alchemy once" forever and
+-- not a false "API absent".
+C_TradeSkillUI = {
+  GetAllRecipeIDs = function() return { 601 } end,
+  GetRecipeInfo = function(id)
+    if id == 601 then
+      return { name = "Mystery Brew", reagents = { { itemID = 765 } } }
+    end
+    return nil
+  end,
+  -- deliberately NO GetChildProfessionInfo / GetBaseProfessionInfo /
+  -- GetOpenTradeSkillLine / any other profession-naming call.
+}
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan18, r18 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan18, "Test 18: scan does not error (unknown profession)")
+check(r18 == false, "Test 18: scan reports nothing (unverified)")
+check(countAlchKeys(NodeTrailDB.recipes.alchemy) == 0,
+  "Test 18: NO alchemy map written when the profession is unidentifiable")
+check(NodeTrailDB.recipes.alchemyScanned == nil, "Test 18: alchemyScanned stays nil")
+local d18 = ns.Recipes._diag
+check(d18 ~= nil and d18.gated == "unknown-profession", "Test 18: _diag.gated == 'unknown-profession'")
+check(d18 ~= nil and d18.path == "modern", "Test 18: _diag.path == 'modern'")
+check(d18 ~= nil and (d18.recipeCount or 0) == 1,
+  "Test 18: _diag records the recipe count it refused to persist")
+local okSt18, stOut18 = captureStatus()
+check(okSt18, "Test 18: status runs")
+check(stOut18:find("could not be verified as Alchemy", 1, true) ~= nil,
+  "Test 18: status says the profession could not be verified as Alchemy")
+check(stOut18:find("reports no profession name", 1, true) ~= nil,
+  "Test 18: status says the client reports no profession name")
+check(stOut18:find("open your Alchemy window once", 1, true) == nil,
+  "Test 18: status does NOT promise a step that no longer applies")
+check(stOut18:find("unavailable on this client", 1, true) == nil,
+  "Test 18: status does NOT falsely report the API as absent")
+
+-- Test 19: modern client where GetChildProfessionInfo positively reports
+-- ALCHEMY. The scan must write the map — EXACTLY as the legacy stub's same
+-- two recipes do (Test 10/Test 14) — set alchemyScanned, and leave no gated
+-- diag. This is the fallback-prof vs primary-prof parity check.
+C_TradeSkillUI = {
+  GetAllRecipeIDs = function() return { 101, 102 } end,
+  GetRecipeInfo = function(id)
+    if id == 101 then
+      return {
+        name = "Minor Healing Potion",
+        reagents = {
+          { itemID = 2447 },
+          { itemID = 765 },
+          { itemID = 3371 },
+        },
+      }
+    end
+    if id == 102 then
+      return {
+        name = "Elixir of Lion's Strength",
+        reagents = {
+          { itemID = 2449 },
+          { itemID = 765 },
+          { itemID = 3371 },
+        },
+      }
+    end
+    return nil
+  end,
+  GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+}
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan19, r19 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan19, "Test 19: scan does not error (Alchemy identified)")
+check(r19 == true, "Test 19: scan reports success (positive Alchemy identification)")
+local alch19 = NodeTrailDB.recipes.alchemy
+check(alch19[2447] ~= nil and alch19[2447][1] == "Minor Healing Potion" and #alch19[2447] == 1,
+  "Test 19: 2447 (Peacebloom) → Minor Healing Potion only")
+check(alch19[765] ~= nil and #alch19[765] == 2
+  and alch19[765][1] == "Elixir of Lion's Strength"
+  and alch19[765][2] == "Minor Healing Potion",
+  "Test 19: 765 (Silverleaf) → both recipes, sorted (same map as the legacy stub)")
+check(alch19[2449] ~= nil and alch19[2449][1] == "Elixir of Lion's Strength",
+  "Test 19: 2449 (Earthroot) → Elixir")
+check(alch19[3371] ~= nil and #alch19[3371] == 2, "Test 19: 3371 → both recipes")
+check(countAlchKeys(alch19) == 4, "Test 19: map has exactly the 4 reagents (same as the legacy stub)")
+check(NodeTrailDB.recipes.alchemyScanned ~= nil, "Test 19: alchemyScanned set")
+local d19 = ns.Recipes._diag
+check(d19 ~= nil and d19.gated == nil and d19.profession == "Alchemy",
+  "Test 19: diag records the positive Alchemy identification, not a gate")
+hover("Peacebloom")
+local line19 = false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Alchemy: Minor Healing Potion" then
+    line19 = true
+  end
+end
+check(line19, "Test 19: tooltip shows the correct Alchemy line")
+
 if failed > 0 then
   os.exit(1)
 else

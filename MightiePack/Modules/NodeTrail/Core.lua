@@ -67,24 +67,38 @@ function ns.PrintStatus()
     end
     printL("STATUS_ALCHEMY", "scanned" .. detail)
   else
-    -- "Open Alchemy once" is only offered while a scan can actually run.
-    -- A client with neither the legacy trade-skill globals nor
-    -- C_TradeSkillUI can never complete that step — saying why is the
-    -- truthful status (t_0d5badc3).
-    local avail = false
-    if ns.Recipes and type(ns.Recipes.APIInfo) == "function" then
-      local okA, a = pcall(ns.Recipes.APIInfo, ns.Recipes)
-      if okA and type(a) == "table" then
-        avail = a.available == true
-      end
+    -- A scan that DID run on this client but could not positively confirm
+    -- the open window is Alchemy must not be reported as "open your
+    -- Alchemy window once" (a step that was already taken and yielded
+    -- nothing verifiable) and not as a success — it says what actually
+    -- happened: the client reported no profession name (t_217033d4).
+    local gated = nil
+    if ns.Recipes and type(ns.Recipes._diag) == "table" then
+      gated = ns.Recipes._diag.gated
     end
-    if avail then
-      printL("STATUS_ALCHEMY", "open your Alchemy window once")
-    elseif ns.Recipes then
+    if gated == "unknown-profession" then
       printL("STATUS_ALCHEMY",
-        "unavailable on this client (no trade skill API found: C_TradeSkillUI and the legacy trade-skill globals are both absent)")
+        "a scan ran, but this client reports no profession name — the open window could not be verified as Alchemy, so its recipes were not saved")
     else
-      printL("STATUS_ALCHEMY", "recipe module not loaded")
+      -- "Open Alchemy once" is only offered while a scan can actually run.
+      -- A client with neither the legacy trade-skill globals nor
+      -- C_TradeSkillUI can never complete that step — saying why is the
+      -- truthful status (t_0d5badc3).
+      local avail = false
+      if ns.Recipes and type(ns.Recipes.APIInfo) == "function" then
+        local okA, a = pcall(ns.Recipes.APIInfo, ns.Recipes)
+        if okA and type(a) == "table" then
+          avail = a.available == true
+        end
+      end
+      if avail then
+        printL("STATUS_ALCHEMY", "open your Alchemy window once")
+      elseif ns.Recipes then
+        printL("STATUS_ALCHEMY",
+          "unavailable on this client (no trade skill API found: C_TradeSkillUI and the legacy trade-skill globals are both absent)")
+      else
+        printL("STATUS_ALCHEMY", "recipe module not loaded")
+      end
     end
   end
   local on = true
