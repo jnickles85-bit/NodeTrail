@@ -65,7 +65,11 @@ check(r:find("no active route", 1, true) ~= nil, "reload no route")
 check(r:find("route started", 1, true) == nil, "reload no route started")
 
 local s = run("status")
-for _, needle in ipairs({ "Route source: density", "on this map (1429): 0 (all maps: 0)", "Active route: none", "Herb tooltip: on", "open your Alchemy window once", "Module: on" }) do
+-- This spec's client stubs no trade-skill API at all (neither the legacy
+-- globals nor C_TradeSkillUI), so the alchemy line must not promise the
+-- "open your Alchemy window once" step — it must say the feature is
+-- unavailable (t_0d5badc3).
+for _, needle in ipairs({ "Route source: density", "on this map (1429): 0 (all maps: 0)", "Active route: none", "Herb tooltip: on", "Alchemy recipes: unavailable on this client (no trade skill API found", "Module: on" }) do
   check(s:find(needle, 1, true) ~= nil, "status contains " .. needle)
 end
 

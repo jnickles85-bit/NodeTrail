@@ -57,7 +57,36 @@ function ns.PrintStatus()
   printL("STATUS_ROUTE", ns.activeRoute and (#(ns.activeRoute.path or {}) .. " points, " .. (ns.activeRoute.source or "?")) or "none")
   printL("STATUS_TOOLTIP", (ns.Tooltip and ns.Tooltip._enabled) and "on" or "off")
   local scanned = type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" and NodeTrailDB.recipes.alchemyScanned
-  printL("STATUS_ALCHEMY", scanned and "scanned" or "open your Alchemy window once")
+  if scanned then
+    local detail = ""
+    if ns.Recipes and type(ns.Recipes._diag) == "table" then
+      local d = ns.Recipes._diag
+      detail = (" (%d recipes, via %s)"):format(
+        tonumber(d.recipeCount) or 0,
+        tostring(d.path or "unknown"))
+    end
+    printL("STATUS_ALCHEMY", "scanned" .. detail)
+  else
+    -- "Open Alchemy once" is only offered while a scan can actually run.
+    -- A client with neither the legacy trade-skill globals nor
+    -- C_TradeSkillUI can never complete that step — saying why is the
+    -- truthful status (t_0d5badc3).
+    local avail = false
+    if ns.Recipes and type(ns.Recipes.APIInfo) == "function" then
+      local okA, a = pcall(ns.Recipes.APIInfo, ns.Recipes)
+      if okA and type(a) == "table" then
+        avail = a.available == true
+      end
+    end
+    if avail then
+      printL("STATUS_ALCHEMY", "open your Alchemy window once")
+    elseif ns.Recipes then
+      printL("STATUS_ALCHEMY",
+        "unavailable on this client (no trade skill API found: C_TradeSkillUI and the legacy trade-skill globals are both absent)")
+    else
+      printL("STATUS_ALCHEMY", "recipe module not loaded")
+    end
+  end
   local on = true
   if pkg and type(pkg.IsModuleEnabled) == "function" then
     on = pkg.IsModuleEnabled("NodeTrail") and true or false
@@ -87,6 +116,15 @@ local function handleSlash(msg)
       ns.Tooltip:Diag()
     else
       DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: ttdiag unavailable (tooltip module not loaded)")
+    end
+    -- Recipes half: which trade-skill API exists and what the last scan
+    -- saw (t_0d5badc3) — printed after the tooltip half so its lines
+    -- don't split the block.
+    if type(ns.Recipes) == "table" and type(ns.Recipes.Diag) == "function" then
+      local okR, errR = pcall(ns.Recipes.Diag, ns.Recipes)
+      if not okR then
+        DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: recipes diag failed: " .. tostring(errR))
+      end
     end
   else
     printHelp()

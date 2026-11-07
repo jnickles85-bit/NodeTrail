@@ -21,6 +21,7 @@ loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
 loadFile("Data/Recipes.lua")
 loadFile("UI/Tooltip.lua")
+loadFile("Core.lua")
 
 local ns = pkg.NodeTrail
 
@@ -238,6 +239,198 @@ check(NodeTrailDB.herbs.total == 10, "Test 12: herbs total 10")
 -- Test 13
 check(ns.Tooltip._error == nil, "Test 13: Tooltip no error")
 check(ns.Recipes._error == nil, "Test 13: Recipes no error")
+
+-- ── Tests 14–16 (t_0d5badc3): C_TradeSkillUI port + impossible-instruction guard ──
+-- A mainline client (Forever 16001) does not have the pre-Dragonflight
+-- trade-skill globals, so the scan must run through the client's live
+-- C_TradeSkillUI API when it exists — with every call pcall'd and
+-- unexpected shapes skipped — and when NO trade-skill API exists at all,
+-- the tooltip must not promise a step that can never succeed.
+-- Tests 14 and 16 MUST fail on the parent commit.
+
+local origAdd = DEFAULT_CHAT_FRAME.AddMessage
+local function captureStatus()
+  local cap = {}
+  DEFAULT_CHAT_FRAME.AddMessage = function(_, m) cap[#cap + 1] = tostring(m) end
+  local ok, err = pcall(ns.PrintStatus)
+  DEFAULT_CHAT_FRAME.AddMessage = origAdd
+  return ok, table.concat(cap, "\n"), err
+end
+
+-- Test 14 (part a): the "open Alchemy once" status line stays while a
+-- usable API exists and the scan has not run (the step IS possible).
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okStA, stOutA = captureStatus()
+check(okStA, "Test 14a: PrintStatus runs (API available, unscanned)")
+check(stOutA:find("open your Alchemy window once", 1, true) ~= nil,
+  "Test 14a: usable API present → the instruction stays (it is possible)")
+
+-- Test 14 (part b): a modern client stubs C_TradeSkillUI and loses the
+-- legacy globals; the same two recipes through that API must produce the
+-- same NodeTrailDB.recipes.alchemy map and tooltip lines as Test 10 did
+-- through the legacy stub.
+GetTradeSkillLine = nil
+GetNumTradeSkills = nil
+GetTradeSkillInfo = nil
+GetTradeSkillNumReagents = nil
+GetTradeSkillReagentItemLink = nil
+
+C_TradeSkillUI = {
+  GetNumRecipeIDs = function() return 2 end,
+  GetRecipeID = function(i) return i == 1 and 101 or 102 end,
+  GetRecipeInfo = function(id)
+    if id == 101 then
+      return {
+        name = "Minor Healing Potion",
+        reagents = {
+          { itemID = 2447, quantity = 1 },
+          { itemID = 765, quantity = 2 },
+          { itemID = 3371, quantity = 1 },
+        },
+      }
+    end
+    if id == 102 then
+      return {
+        name = "Elixir of Lion's Strength",
+        reagents = {
+          { itemID = 2449, quantity = 1 },
+          { itemID = 765, quantity = 2 },
+          { itemID = 3371, quantity = 1 },
+        },
+      }
+    end
+    return nil
+  end,
+  GetOpenTradeSkillLine = function() return "Alchemy" end,
+}
+
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+
+local recipesFrame = frames[1]
+local okEv, evErr = pcall(recipesFrame.scripts.OnEvent, recipesFrame, "TRADE_SKILLS_SHOW")
+check(okEv, "Test 14: modern trade-skill event handler ran: " .. tostring(evErr))
+
+local alch = NodeTrailDB.recipes.alchemy
+check(alch[2447] ~= nil, "Test 14: Peacebloom (2447) in modern map")
+if alch[2447] then
+  check(#alch[2447] == 1 and alch[2447][1] == "Minor Healing Potion",
+    "Test 14: 2447 → Minor Healing Potion only")
+end
+check(alch[765] ~= nil, "Test 14: Silverleaf (765) in modern map")
+if alch[765] then
+  local hasElixir, hasMinor = false, false
+  for _, n in ipairs(alch[765]) do
+    if n == "Elixir of Lion's Strength" then hasElixir = true end
+    if n == "Minor Healing Potion" then hasMinor = true end
+  end
+  check(hasElixir and hasMinor, "Test 14: 765 → both recipes (same map as legacy stub)")
+  check(alch[765][1] == "Elixir of Lion's Strength", "Test 14: 765 sorted")
+end
+check(alch[2449] ~= nil and alch[2449][1] == "Elixir of Lion's Strength", "Test 14: 2449 → Elixir")
+check(alch[3371] ~= nil, "Test 14: 3371 present")
+check(alch[2452] == nil, "Test 14: stale legacy entries are replaced")
+local nk = 0
+for _ in pairs(alch) do nk = nk + 1 end
+check(nk == 4, "Test 14: map has exactly the modern reagent set (got " .. nk .. ")")
+check(NodeTrailDB.recipes.alchemyScanned ~= nil, "Test 14: alchemyScanned set")
+
+local okAp14, ap14 = pcall(function() return ns.Recipes:APIInfo() end)
+check(okAp14 and ap14.modern.exists == true, "Test 14: APIInfo sees C_TradeSkillUI")
+check(okAp14 and ap14.available == true, "Test 14: APIInfo reports available (modern path)")
+local okD14, d14 = pcall(function()
+  local d = ns.Recipes._diag
+  return d and d.path == "modern" and (d.recipeCount or 0) == 2
+end)
+check(okD14 and d14 == true, "Test 14: scan diag records the modern path + 2 recipes")
+check(ns.Recipes._error == nil, "Test 14: Recipes no error")
+
+hover("Peacebloom")
+local foundP14 = false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Alchemy: Minor Healing Potion" then foundP14 = true end
+end
+check(foundP14, "Test 14: Peacebloom tooltip line (same as legacy stub)")
+hover("Silverleaf")
+local foundS14 = false
+local foundHint14 = false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Alchemy: Elixir of Lion's Strength, Minor Healing Potion" then foundS14 = true end
+  if l == "Open Alchemy once to list recipe uses" then foundHint14 = true end
+end
+check(foundS14, "Test 14: Silverleaf tooltip line (same as legacy stub)")
+check(not foundHint14, "Test 14: hint gone after modern scan")
+local okStB, stOutB = captureStatus()
+check(okStB and stOutB:find("Alchemy recipes: scanned", 1, true) ~= nil,
+  "Test 14: status reports the scan (modern)")
+
+-- Test 15: malformed modern returns (nil info, table without a name,
+-- junk reagent slots, recipe without reagents) are skipped without an
+-- error, and the valid pieces still land in the map.
+C_TradeSkillUI = {
+  GetNumRecipeIDs = function() return 4 end,
+  GetRecipeID = function(i) return i end,
+  GetRecipeInfo = function(id)
+    if id == 1 then return nil end
+    if id == 2 then return { reagents = { { itemID = 2447 } } } end
+    if id == 3 then
+      return {
+        name = "Solid Extract",
+        reagents = { 1337, "junk", { itemID = 77 }, { name = "no id field" } },
+      }
+    end
+    if id == 4 then return { name = "Sparse Tincture" } end
+    return nil
+  end,
+  GetOpenTradeSkillLine = function() return "Alchemy" end,
+}
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan15, r15 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan15, "Test 15: scan does not error on malformed returns")
+check(r15 == true, "Test 15: scan reports success on partial data")
+local alch15 = NodeTrailDB.recipes.alchemy
+check(alch15[1337] ~= nil and alch15[1337][1] == "Solid Extract", "Test 15: number reagent kept")
+check(alch15[77] ~= nil and alch15[77][1] == "Solid Extract", "Test 15: itemID-table reagent kept")
+check(alch15[2447] == nil, "Test 15: nameless recipe skipped (its reagent not mapped)")
+local nk15 = 0
+for _ in pairs(alch15) do nk15 = nk15 + 1 end
+check(nk15 == 2, "Test 15: exactly two valid reagent slots (got " .. nk15 .. ")")
+check(NodeTrailDB.recipes.alchemyScanned ~= nil, "Test 15: alchemyScanned set")
+check(ns.Recipes._error == nil, "Test 15: Recipes no error field")
+
+-- Test 16: a client with NEITHER API — the scan must fail cleanly, the
+-- tooltip must drop the impossible instruction, and /nt status must say
+-- why. (Must fail on the parent commit.)
+C_TradeSkillUI = nil
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan16, r16 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan16, "Test 16: scan on an API-less client does not error")
+check(r16 == false, "Test 16: scan returns false (nothing to scan)")
+check(ns.Recipes._error == nil, "Test 16: no module error")
+local okAp16, ap16 = pcall(function() return ns.Recipes:APIInfo() end)
+check(okAp16 and ap16.available == false, "Test 16: APIInfo reports unavailable (truthful field)")
+check(okAp16 and ap16.modern.exists == false and #ap16.legacy.calls == 0,
+  "Test 16: APIInfo sees no modern module and no legacy globals")
+local d16 = ns.Recipes._diag
+check(d16 ~= nil and d16.path == "none", "Test 16: scan diag records path=none")
+hover("Peacebloom")
+local foundHint16 = false
+local foundNT16 = false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Open Alchemy once to list recipe uses" then foundHint16 = true end
+  if l == "NodeTrail" then foundNT16 = true end
+end
+check(not foundHint16, "Test 16: tooltip drops the impossible instruction without an API")
+check(foundNT16, "Test 16: the rest of the NodeTrail block is still there")
+local okSt16, stOut16 = captureStatus()
+check(okSt16, "Test 16: status runs on an API-less client")
+check(stOut16:find("unavailable", 1, true) ~= nil, "Test 16: status says the feature is unavailable")
+check(stOut16:find("no trade skill API", 1, true) ~= nil, "Test 16: status says why")
+check(stOut16:find("open your Alchemy window once", 1, true) == nil,
+  "Test 16: status does not promise an impossible step")
 
 if failed > 0 then
   os.exit(1)

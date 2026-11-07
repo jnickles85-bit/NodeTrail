@@ -8,6 +8,23 @@ ns.Tooltip = T
 local HEADER = "NodeTrail"
 local POLL_INTERVAL = 0.2 -- at most ~5 refresh evaluations per second
 
+-- "Open Alchemy once to list recipe uses" is only truthful while a scan
+-- is actually POSSIBLE. On a client with no trade-skill API at all (both
+-- the legacy globals and C_TradeSkillUI absent — the Forever 16001
+-- report: the hint sat up forever with no way to clear it), printing it
+-- promises a step the player can never complete, so the line is dropped;
+-- `/nt status` carries the explanation instead (t_0d5badc3).
+local function recipeAPIAvailable()
+  if type(ns.Recipes) ~= "table" or type(ns.Recipes.APIInfo) ~= "function" then
+    return false
+  end
+  local ok, info = pcall(ns.Recipes.APIInfo, ns.Recipes)
+  if not ok or type(info) ~= "table" then
+    return false
+  end
+  return info.available == true
+end
+
 function T.BuildLines(name)
   local node = ns.HerbData.GetNode(name)
   if not node then return nil end
@@ -37,7 +54,8 @@ function T.BuildLines(name)
       table.insert(display, "+" .. (#uses - 4) .. " more")
     end
     table.insert(lines, { left = "Alchemy: " .. table.concat(display, ", ") })
-  elseif NodeTrailDB and NodeTrailDB.recipes and NodeTrailDB.recipes.alchemyScanned == nil then
+  elseif NodeTrailDB and NodeTrailDB.recipes and NodeTrailDB.recipes.alchemyScanned == nil
+    and recipeAPIAvailable() then
     table.insert(lines, { left = "Open Alchemy once to list recipe uses" })
   end
   return lines
