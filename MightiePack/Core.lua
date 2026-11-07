@@ -125,7 +125,11 @@ SlashCmdList.MIGHTIEPACK = function(msg)
         if def.stub then
           line = line .. " (coming soon)"
         end
-        if def.loaded then
+        if def.inert then
+          -- EnableModules marks a refusing module as loaded; without this the
+          -- status line would claim a module is running while it is inert.
+          line = line .. " (inert - standalone Touchstone installed)"
+        elseif def.loaded then
           line = line .. " (loaded)"
         end
         pkg.Print(line)

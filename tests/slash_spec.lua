@@ -219,6 +219,19 @@ if okN then
   check(stN:find("NodeTrail: on", 1, true) ~= nil, "all absent: module lines still printed")
 end
 
+-- A module that refused to run (Touchstone while the standalone folder exists)
+-- is marked loaded by EnableModules; the status line must not claim it is
+-- running. It has to say it is inert, next to the reason.
+mpkg.RegisterModule("TouchTest", { title = "TouchTest", Enable = function() end })
+mpkg.GetSettings().modules.TouchTest = true
+mpkg.modules.TouchTest.inert = true
+mpkg.modules.TouchTest.loaded = true
+local stI = runMp("status")
+check(stI:find("TouchTest: on (inert", 1, true) ~= nil,
+  "mpack status: an inert module says inert, not loaded")
+check(stI:find("TouchTest: on (loaded)", 1, true) == nil,
+  "mpack status: an inert module never claims to be loaded")
+
 if failed == 0 then
   print("slash_spec: ok")
 else
