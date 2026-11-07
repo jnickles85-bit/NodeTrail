@@ -10,6 +10,10 @@ end
 
 pkg.moduleDefaults = {
   NodeTrail = true,
+  -- t_a5f41944: OFF until the probe has verified the event surface on
+  -- this client (the card's first rule: do not guess it). The options
+  -- checkbox turns it on immediately — no reload needed to enable.
+  Skinning = false,
   Touchstone = false,
 }
 
@@ -42,6 +46,11 @@ end)
 
 SLASH_MIGHTIEPACK1 = "/mightiepack"
 SLASH_MIGHTIEPACK2 = "/mpack"
+-- t_a5f41944: the card's evidence channel is literally "/mp skindiag".
+-- The card's own wording, honored: /mp works, and /mpack skindiag works
+-- too (the client matches the longest registered slash first, so /mpack
+-- is never shadowed by /mp).
+SLASH_MIGHTIEPACK3 = "/mp"
 SlashCmdList.MIGHTIEPACK = function(msg)
   local raw = (msg or ""):match("^%s*(.-)%s*$") or ""
   -- `rest` is the SECOND capture: `local x = s:match(...)` takes only
@@ -131,11 +140,50 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     else
       pkg.Print("bug report form unavailable (BugReport module did not load)")
     end
+  elseif first == "skindiag" then
+    -- t_a5f41944: the Skinning event probe (/mp skindiag, /mp skindiag
+    -- dump). Module-gated like /nt ttdiag: the command answers honestly
+    -- when the module is off or failed to load, and delegates to
+    -- pkg.Skinning.Probe when it is live.
+    local restL = (rest or ""):lower()
+    local def = pkg.modules and pkg.modules.Skinning
+    if type(def) ~= "table" or not def.loaded then
+      pkg.Print("skindiag: the Skinning module is off or did not load — tick Skinning in /mpack options (turning it on is immediate)")
+      pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
+      pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
+    else
+      local S = pkg.Skinning
+      local P = S and S.Probe
+      if type(P) ~= "table" then
+        pkg.Print("skindiag: probe did not load"
+          .. (S and S._error and (" (" .. S._error .. ")") or ""))
+      elseif restL == "" then
+        local okT, on = pcall(P.Toggle, P)
+        if okT then
+          if on then
+            pkg.Print("skindiag: capture ON — kill + loot, cast Skinning, then loot again and dump")
+          else
+            pkg.Print("skindiag: capture off")
+          end
+        else
+          pkg.Print("skindiag: toggle failed: " .. tostring(on))
+        end
+      elseif restL == "dump" then
+        local okD, errD = pcall(P.Diag, P)
+        if not okD then
+          pkg.Print("skindiag: dump failed: " .. tostring(errD))
+        end
+      else
+        pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
+        pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
+      end
+    end
   else
     -- keep the historical usage line verbatim (existing callers/tests
     -- rely on it); the new subcommand gets its own line.
     pkg.Print("/mpack [options|status]")
     pkg.Print("/mpack bug [module] — open the bug report form (no upload — copy and paste into Discord)")
+    pkg.Print("/mp skindiag (toggle) | /mp skindiag dump (skinning event probe)")
     if pkg.IsModuleEnabled("NodeTrail") then
       pkg.Print("NodeTrail: /nt help")
     end
