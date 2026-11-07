@@ -106,6 +106,29 @@ local function nodeTrailDiagLines()
       all[#all + 1] = "recipe diagnostics unavailable (builder errored: " .. err .. ")"
     end
   end
+  -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature now, so its
+  -- state travels with the NodeTrail report. There is no "Skinning" module
+  -- to select in the picker any more, and without this line the probe would
+  -- be the only NodeTrail feature with no diagnostics in a report.
+  local sk = pkg.Skinning
+  if type(sk) == "table" then
+    local skinOn = false
+    if type(pkg.NodeTrail) == "table" and type(pkg.NodeTrail.IsSkinningEnabled) == "function" then
+      local okS, s = pcall(pkg.NodeTrail.IsSkinningEnabled)
+      skinOn = okS and s == true
+    end
+    local line = "skinning (NodeTrailDB.skinning.enabled): " .. (skinOn and "on" or "off")
+    local P = sk.Probe
+    if type(P) == "table" then
+      line = line .. ", probe " .. (P.enabled and "armed" or "not started")
+        .. ", capture " .. (P.capturing and "on" or "off")
+        .. ", steps " .. tostring(#(P.steps or {}))
+    end
+    if sk._error then
+      line = line .. ", error: " .. tostring(sk._error):gsub("[%c]", " ")
+    end
+    all[#all + 1] = line
+  end
   if #all == 0 then
     return { "none" }
   end
@@ -186,13 +209,17 @@ function pkg.BuildBugReportHeader(selectedName)
   end
   add("MightiePack bug report — " .. ts)
 
+  -- t_5507a0ba: same provider chain as /mpack status (pkg.GetAddOnMeta:
+  -- C_AddOns.GetAddOnMetadata first, then the legacy global). This client
+  -- has no global GetAddOnMetadata, so reading only the global here would
+  -- have filled every report with "version unknown".
   local version, iface
-  if type(GetAddOnMetadata) == "function" then
-    local okV, v = pcall(GetAddOnMetadata, addonName, "Version")
+  if type(pkg.GetAddOnMeta) == "function" then
+    local okV, v = pcall(pkg.GetAddOnMeta, addonName, "Version")
     if okV and type(v) == "string" and v ~= "" then
       version = v
     end
-    local okI, i = pcall(GetAddOnMetadata, addonName, "Interface")
+    local okI, i = pcall(pkg.GetAddOnMeta, addonName, "Interface")
     if okI and type(i) == "string" and i ~= "" then
       iface = i
     end

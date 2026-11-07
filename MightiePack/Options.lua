@@ -14,11 +14,108 @@ subtitle:SetText("Tick a module to turn it on. Turning one off needs a UI reload
 local boxes = {}
 pkg.optionsBoxes = boxes
 
+-- ── Row layout ──────────────────────────────────────────────────────
+-- Modules are 32px apart. NodeTrail — the only gathering module — also
+-- owns a 22px indented sub-row for its skinning probe (t_5507a0ba), so
+-- NodeTrail + its sub-option occupy one and a half rows and the recipe /
+-- bug-report blocks below start after that, not after a fixed module
+-- count. moduleOrder is complete by the time this file loads (the TOC
+-- lists every module before Options.lua).
+local ROW_H = 32
+local SUB_ROW_H = 22
+local SUB_INDENT = 36
+local FIRST_ROW_Y = -48
+
+local moduleY, skinY, lastRowY = {}, nil, FIRST_ROW_Y
+do
+  local y = FIRST_ROW_Y
+  for _, name in ipairs(pkg.moduleOrder or {}) do
+    moduleY[name] = y
+    lastRowY = y
+    y = y - ROW_H
+    if name == "NodeTrail" then
+      skinY = y + (ROW_H - SUB_ROW_H)
+      lastRowY = skinY
+      y = y - SUB_ROW_H
+    end
+  end
+end
+
+-- ── Skinning sub-option helpers (t_5507a0ba) ────────────────────────
+-- The probe is NodeTrail's, so the toggle is NodeTrail's too: it lives at
+-- NodeTrailDB.skinning.enabled (not MightiePackDB.modules.Skinning) and is
+-- owned by the NodeTrail namespace. Every lookup is guarded so the panel
+-- still renders when NodeTrail (or the probe files) did not load.
+local function ntModule()
+  local nt = pkg.NodeTrail
+  if type(nt) == "table" then
+    return nt
+  end
+  return nil
+end
+
+local function nodeTrailOn()
+  if type(pkg.IsModuleEnabled) ~= "function" then
+    return false
+  end
+  local ok, on = pcall(pkg.IsModuleEnabled, "NodeTrail")
+  return ok and on == true
+end
+
+local function skinningOn()
+  local nt = ntModule()
+  if nt and type(nt.IsSkinningEnabled) == "function" then
+    local ok, on = pcall(nt.IsSkinningEnabled)
+    if ok then
+      return on == true
+    end
+  end
+  return false
+end
+
+-- Apply the sub-toggle: persist it, then start/stop the probe immediately.
+-- No reload is needed — switching off unregisters the probe's events and
+-- drops its session buffer (P:Disable) — so this deliberately does NOT
+-- raise MIGHTIEPACK_DISABLE_MODULE. That popup exists to warn about a
+-- reload; there is nothing to warn about here, and the chat line says so.
+local function applySkinning(on)
+  local nt = ntModule()
+  if not nt then
+    pkg.Print("skinning: NodeTrail is not loaded — the sub-option was not saved")
+    return false
+  end
+  if type(nt.SetSkinningEnabled) ~= "function" then
+    pkg.Print("skinning: NodeTrail has no sub-option setter — the sub-option was not saved")
+    return false
+  end
+  local okS, errS = pcall(nt.SetSkinningEnabled, on)
+  if not okS then
+    pkg.Print("skinning: could not save the sub-option: " .. tostring(errS))
+    return false
+  end
+  if on then
+    if type(nt.EnableSkinning) == "function" then
+      local okE, errE = nt.EnableSkinning()
+      if okE == false then
+        pkg.Print("skinning: probe did not start: " .. tostring(errE))
+        return false
+      end
+    end
+    pkg.Print("Skinning (experimental) on — /mp skindiag captures the kill -> loot -> skin chain.")
+  else
+    if type(nt.DisableSkinning) == "function" then
+      nt.DisableSkinning()
+    end
+    pkg.Print("Skinning (experimental) off — the probe stopped now; no UI reload needed.")
+  end
+  return true
+end
+
 local function syncCheckboxes()
   for index, name in ipairs(pkg.moduleOrder or {}) do
     local def = pkg.modules and pkg.modules[name]
     if def then
-      local y = -48 - (index - 1) * 32
+      local y = moduleY[name] or (FIRST_ROW_Y - (index - 1) * ROW_H)
       local cb = boxes[name]
       if not cb then
         cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
@@ -51,6 +148,9 @@ local function syncCheckboxes()
               if not def.inert then
                 pkg.Print((def.title or name) .. " enabled.")
               end
+              -- The skinning sub-option is greyed out while NodeTrail is
+              -- off; re-sync so it becomes usable the moment it is on.
+              syncCheckboxes()
             else
               StaticPopup_Show("MIGHTIEPACK_DISABLE_MODULE", def.title or name, nil, { name = name, checkbox = self })
             end
@@ -79,6 +179,59 @@ local function syncCheckboxes()
       end
     end
   end
+
+  -- ── Skinning sub-option (t_5507a0ba) ──────────────────────────────
+  -- Indented under the NodeTrail checkbox, its own checkbox, and NOT a
+  -- module row: Mightie's "Skinning should be inside NodeTrail." Greyed out
+  -- and inert while NodeTrail is off (the probe is NodeTrail's), persisted
+  -- in NodeTrailDB.skinning.enabled, applied immediately in both
+  -- directions — no reload, so no MIGHTIEPACK_DISABLE_MODULE popup here.
+  if skinY then
+    local sb = boxes.Skinning
+    if not sb then
+      sb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+      sb:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT, skinY)
+
+      local skinLabel
+      if sb.Text or sb.text then
+        skinLabel = sb.Text or sb.text
+      else
+        skinLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        skinLabel:SetPoint("LEFT", sb, "RIGHT", 4, 0)
+      end
+      skinLabel:SetText("Skinning (experimental)")
+
+      sb:SetScript("OnClick", function(self)
+        if not nodeTrailOn() then
+          -- inert: NodeTrail owns the probe, so it cannot be on without it
+          self:SetChecked(skinningOn())
+          return
+        end
+        applySkinning(self:GetChecked() and true or false)
+        syncCheckboxes()
+      end)
+      sb:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Skinning (experimental)")
+        GameTooltip:AddLine("NodeTrail's skinning probe: kill -> loot -> skin -> skin-loot capture for "
+          .. "/mp skindiag and /mp skindiag dump. Off by default while this client's event surface "
+          .. "is still unverified. Turn it off at any time — no UI reload needed.", 1, 1, 1, true)
+        GameTooltip:Show()
+      end)
+      sb:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+      end)
+
+      boxes.Skinning = sb
+    end
+
+    sb:SetChecked(skinningOn())
+    if nodeTrailOn() then
+      sb:Enable()
+    else
+      sb:Disable()
+    end
+  end
 end
 
 -- ── Recipes block (NodeTrail's Alchemy recipe scan) ─────────────────
@@ -95,15 +248,8 @@ local function ntRecipes()
   return nil
 end
 
-local moduleCount = 0
-for _ in pairs(pkg.moduleOrder or {}) do
-  moduleCount = moduleCount + 1
-end
-if moduleCount < 1 then
-  moduleCount = 1
-end
-local lastBoxY = -48 - (moduleCount - 1) * 32
-local recHeaderY = lastBoxY - 36
+-- The recipe block starts under the last module/sub-option row.
+local recHeaderY = lastRowY - 36
 local recStatusY = recHeaderY - 18
 local recErrorY = recStatusY - 16
 local recButtonY = recErrorY - 22

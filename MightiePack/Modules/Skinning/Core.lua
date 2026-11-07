@@ -1,25 +1,28 @@
--- Core.lua — t_a5f41944 (Skinning 1/3)
+-- Core.lua — the skinning probe's namespace (t_a5f41944, re-homed by
+-- t_5507a0ba).
 --
--- The Skinning module for the umbrella. Two things and nothing else at
--- this stage (the implementation card builds on the probe's evidence):
+-- Skinning is NOT a module of its own any more: it is NodeTrail's
+-- sub-feature. There is no pkg.RegisterModule here, so it never appears in
+-- pkg.moduleOrder / pkg.moduleDefaults and the options panel shows it as
+-- an indented sub-option under NodeTrail instead of a sibling module.
+-- The files stay where they are on disk (Modules/Skinning/, still listed in
+-- the TOC) and are loaded by the addon; NodeTrail's Enable() (and the
+-- /mp skindiag diagnostic) drive this namespace:
 --
---   * registers the module with the umbrella (Options gets its checkbox
---     automatically; /mpack status lists it)
---   * runs the probe — the in-client event capture with /mp skindiag
---     and /mp skindiag dump. The slash dispatch itself lives in the
---     umbrella Core.lua (the /mpack + /mp handler), which calls back in
---     here through pkg.modules.Skinning / pkg.Skinning.Probe
+--   * pkg.Skinning        the namespace (this table) — not a module
+--   * pkg.Skinning.Probe  the in-client event capture (/mp skindiag)
 --
--- The module is OFF by default: on this client the event surface is
--- unverified, and the card is explicit — do not guess it. Turning it on
--- is immediate (no UI reload); turning it off needs the standard reload
--- the umbrella already documents.
+-- The sub-toggle is persisted by NodeTrail in NodeTrailDB.skinning.enabled
+-- (default false: the event surface is still unverified on this client).
+-- Nothing in this file reads that toggle — NodeTrail owns the policy, this
+-- file owns the probe — so /mp skindiag can run the diagnostic while the
+-- toggle is off.
 
 local addonName, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
 local ns = pkg.Skinning
 Skinning = ns
-ns.version = "0.1.0"
+ns.version = "0.2.0"
 
 function ns.Enable()
   if ns.enabled then return end
@@ -28,19 +31,23 @@ function ns.Enable()
   if type(P) == "table" and type(P.Enable) == "function" then
     local ok, err = pcall(P.Enable, P)
     if not ok then
-      -- the module stays registered and honestly reports its error in
-      -- the diag instead of half-enabling
+      -- the namespace stays loaded and honestly reports its error in the
+      -- diag instead of half-enabling
       ns._error = tostring(err)
     end
   end
 end
 
-if type(pkg.RegisterModule) == "function" then
-  pkg.RegisterModule("Skinning", {
-    title = "Skinning",
-    notes = "Kill -> loot -> skin -> skin-loot event probe (the data model is SKINNING-DATA-MODEL.md). "
-      .. "/mp skindiag toggles capture; /mp skindiag dump prints the captured chain — "
-      .. "Forever has no /run or /dump, so the chat lines are the only evidence channel.",
-    Enable = function() ns.Enable() end,
-  })
+-- Turning the sub-option off takes effect immediately: the probe stops
+-- capturing and unregisters its events. No UI reload is required, which is
+-- why the options panel does not raise MIGHTIEPACK_DISABLE_MODULE for it.
+function ns.Disable()
+  ns.enabled = false
+  local P = ns.Probe
+  if type(P) == "table" and type(P.Disable) == "function" then
+    local ok, err = pcall(P.Disable, P)
+    if not ok then
+      ns._error = tostring(err)
+    end
+  end
 end

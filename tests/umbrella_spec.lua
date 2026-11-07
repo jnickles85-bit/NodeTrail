@@ -139,7 +139,14 @@ local function makeFrame(kind, name, parent, template)
   f.GetScript = function(_, k) return f.scripts[k] end
   f.RegisterEvent = function(_, e) f.events[e] = true end
   f.UnregisterEvent = function(_, e) f.events[e] = nil end
-  f.SetPoint = function() end
+  f.SetPoint = function(_, a, b, c, d, e)
+    local pts = rawget(f, "pointArgs")
+    if not pts then
+      pts = {}
+      rawset(f, "pointArgs", pts)
+    end
+    pts[#pts + 1] = { a, b, c, d, e }
+  end
   f.ClearAllPoints = function() end
   f.SetSize = function() end
   f.SetWidth = function() end
@@ -170,11 +177,11 @@ local function makeFrame(kind, name, parent, template)
 end
 CreateFrame = makeFrame
 
-local function loadPackage(savedDB)
+local function loadPackage(savedDB, savedNT)
   SlashCmdList = {}
   StaticPopupDialogs = {}
   MightiePackDB = savedDB
-  NodeTrailDB = nil
+  NodeTrailDB = savedNT
   MightiePack = nil
   NodeTrail = nil
   SLASH_NODETRAIL1 = nil
@@ -205,13 +212,20 @@ check(MightiePack == pkg, "MightiePack global == pkg")
 check(MightiePackDB and MightiePackDB.modules and MightiePackDB.modules.NodeTrail == true, "NodeTrail default true")
 check(MightiePackDB and MightiePackDB.modules and MightiePackDB.modules.Touchstone == false, "Touchstone default false")
 local order = pkg.moduleOrder or {}
-local hasNT, hasTS = false, false
+local hasNT, hasTS, hasSkinModule = false, false, false
 for _, n in ipairs(order) do
   if n == "NodeTrail" then hasNT = true end
   if n == "Touchstone" then hasTS = true end
+  if n == "Skinning" then hasSkinModule = true end
 end
 check(hasNT, "moduleOrder has NodeTrail")
 check(hasTS, "moduleOrder has Touchstone")
+check(not hasSkinModule, "moduleOrder has NO Skinning entry (nested under NodeTrail, t_5507a0ba)")
+check(pkg.modules.Skinning == nil, "Skinning is not a registered module")
+check(pkg.moduleDefaults.Skinning == nil, "moduleDefaults has no Skinning entry")
+check(MightiePackDB.modules.Skinning == nil, "no MightiePackDB.modules.Skinning key is written")
+check(type(pkg.Skinning) == "table" and type(pkg.Skinning.Probe) == "table",
+  "the skinning probe still loads (owned by NodeTrail)")
 check(pkg.IsModuleEnabled("NodeTrail") == true, "NodeTrail enabled")
 check(pkg.IsModuleEnabled("Touchstone") == false, "Touchstone disabled")
 check(pkg.modules and pkg.modules.NodeTrail and pkg.modules.NodeTrail.loaded == true, "NodeTrail loaded")
@@ -221,6 +235,14 @@ check(type(SlashCmdList.MIGHTIEPACK) == "function", "MIGHTIEPACK slash registere
 check(registeredCategory ~= nil, "settings category registered")
 check(registeredCategory and registeredCategory.frame == pkg.optionsPanel, "category frame is optionsPanel")
 check(type(NodeTrailDB) == "table", "NodeTrailDB is table")
+check(type(pkg.NodeTrail) == "table" and type(pkg.NodeTrail.GetSkinDB) == "function",
+  "NodeTrail owns the skinning sub-toggle accessors")
+check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
+  and pkg.NodeTrail.IsSkinningEnabled() == false,
+  "skinning sub-toggle defaults OFF")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == false,
+  "sub-toggle persisted at NodeTrailDB.skinning.enabled (default false)")
+check(pkg.Skinning.Probe.enabled ~= true, "probe stays unarmed while the sub-toggle is off")
 
 local before = #chat
 SlashCmdList.NODETRAIL("help")
@@ -232,14 +254,18 @@ check(found, "help mentions /nt start")
 
 before = #chat
 SlashCmdList.MIGHTIEPACK("status")
-local foundOn, foundOff = false, false
+local foundOn, foundOff, foundSkinLine, foundSkinOnNT = false, false, false, false
 for i = before + 1, #chat do
   local m = tostring(chat[i])
   if m:find("NodeTrail: on", 1, true) then foundOn = true end
   if m:find("Touchstone: off", 1, true) then foundOff = true end
+  if m:find("Skinning:", 1, true) then foundSkinLine = true end
+  if m:find("NodeTrail: on (loaded) - skinning off", 1, true) then foundSkinOnNT = true end
 end
 check(foundOn, "status shows NodeTrail on")
 check(foundOff, "status shows Touchstone off")
+check(not foundSkinLine, "status prints NO separate 'Skinning:' module line")
+check(foundSkinOnNT, "status reports skinning on the NodeTrail line: 'NodeTrail: on (loaded) - skinning off'")
 
 openedId = nil
 SlashCmdList.MIGHTIEPACK("")
@@ -254,12 +280,43 @@ local cbCount = 0
 for _, f in ipairs(frames) do
   if f.template == "UICheckButtonTemplate" then cbCount = cbCount + 1 end
 end
-check(cbCount == #pkg.moduleOrder, "checkbox count matches moduleOrder, got " .. cbCount .. " expected " .. #pkg.moduleOrder)
+check(cbCount == #pkg.moduleOrder + 1,
+  "checkbox count = moduleOrder + 1 skinning sub-option, got " .. cbCount
+  .. " expected " .. (#pkg.moduleOrder + 1))
 local boxes = pkg.optionsBoxes
 check(boxes ~= nil, "optionsBoxes exists")
 check(boxes.NodeTrail and boxes.NodeTrail:GetChecked() == true, "NodeTrail box checked")
 check(boxes.Touchstone and boxes.Touchstone:GetChecked() == false, "Touchstone box unchecked")
 check(boxes.Touchstone and boxes.Touchstone:IsEnabled() == true, "Touchstone box enabled (no longer a stub)")
+
+-- The skinning sub-option is a row of its own under NodeTrail, indented and
+-- not a sibling module (t_5507a0ba).
+local skinBox = boxes.Skinning
+check(skinBox ~= nil, "a skinning sub-option checkbox exists")
+check(skinBox and skinBox.template == "UICheckButtonTemplate",
+  "the sub-option is a real checkbutton")
+if skinBox then
+  check(skinBox:GetChecked() == false, "skinning sub-option unchecked (default off)")
+  check(skinBox:IsEnabled() == true, "skinning sub-option is usable while NodeTrail is on")
+  local function point1(box)
+    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
+  end
+  local ntPt, skPt = point1(boxes.NodeTrail), point1(skinBox)
+  check(skPt ~= nil, "the sub-option was positioned")
+  if ntPt and skPt then
+    check(skPt[4] == 36, "sub-option is indented to x=36, got " .. tostring(skPt[4]))
+    check(ntPt[4] == 16, "module rows sit at x=16, got " .. tostring(ntPt[4]))
+    check(skPt[4] > ntPt[4], "sub-option is indented relative to NodeTrail")
+    check(skPt[5] < ntPt[5], "sub-option sits below the NodeTrail box")
+  end
+  -- moduleOrder is Touchstone then NodeTrail (Touchstone is registered by
+  -- Modules.lua, NodeTrail by its own Core), so the sub-row is the last row.
+  local touchPt = point1(boxes.Touchstone)
+  check(touchPt ~= nil and ntPt ~= nil and ntPt[5] == touchPt[5] - 32,
+    "module rows keep the 32px pitch")
+  check(skPt ~= nil and ntPt ~= nil and skPt[5] == ntPt[5] - 22,
+    "the sub-option row sits 22px under the NodeTrail row")
+end
 
 local popup
 boxes.NodeTrail:SetChecked(false)
@@ -298,6 +355,24 @@ local onShow3 = panel3:GetScript("OnShow")
 onShow3(panel3)
 local boxes3 = pkg.optionsBoxes
 check(boxes3.NodeTrail:GetChecked() == false, "NodeTrail box unchecked after disable")
+
+-- The skinning sub-option is greyed out / inert while NodeTrail is off.
+local skin3 = boxes3.Skinning
+check(skin3 ~= nil, "the skinning sub-option exists when NodeTrail is off")
+check(skin3 and skin3:IsEnabled() == false, "sub-option is greyed out (disabled) while NodeTrail is off")
+if skin3 then
+  skin3:SetChecked(true)
+  local skinClick = skin3:GetScript("OnClick")
+  check(type(skinClick) == "function", "the sub-option has an OnClick handler")
+  if type(skinClick) == "function" then skinClick(skin3) end
+  check(type(pkg.NodeTrail.GetSkinDB) == "function"
+    and pkg.NodeTrail.GetSkinDB().enabled == false,
+    "clicking the greyed sub-option saves nothing")
+  check(skin3:GetChecked() == false, "clicking the greyed sub-option snaps back to off")
+  check(pkg.Skinning.Probe.enabled ~= true, "probe stays off while NodeTrail is off")
+end
+check(#shownPopups == 1, "the inert sub-option raises no popup")
+
 boxes3.NodeTrail:SetChecked(true)
 local onClick3 = boxes3.NodeTrail:GetScript("OnClick")
 onClick3(boxes3.NodeTrail)
@@ -306,6 +381,35 @@ check(pkg.modules.NodeTrail.loaded == true, "NodeTrail loaded after re-tick")
 check(type(SlashCmdList.NODETRAIL) == "function", "NodeTrail slash registered after re-tick")
 check(reloads == 1, "no extra reload on re-tick")
 check(#shownPopups == 1, "no new popup on re-tick")
+check(boxes3.Skinning:IsEnabled() == true, "sub-option becomes usable when NodeTrail is re-ticked")
+
+-- Turning the sub-option ON: persisted at NodeTrailDB.skinning.enabled,
+-- probe armed immediately, no reload popup (a reload is NOT required).
+boxes3.Skinning:SetChecked(true)
+boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
+check(type(NodeTrailDB.skinning) == "table" and NodeTrailDB.skinning.enabled == true,
+  "sub-option persists in NodeTrailDB.skinning.enabled")
+check(MightiePackDB.modules.Skinning == nil, "the sub-toggle is NOT written to MightiePackDB.modules")
+check(pkg.Skinning.Probe.enabled == true, "ticking the sub-option arms the probe immediately")
+check(#shownPopups == 1, "no reload popup for the sub-option")
+check(reloads == 1, "no reload for the sub-option")
+
+local stBefore = #chat
+SlashCmdList.MIGHTIEPACK("status")
+local foundSkinOn = false
+for i = stBefore + 1, #chat do
+  if tostring(chat[i]):find("NodeTrail: on (loaded) - skinning on", 1, true) then foundSkinOn = true end
+end
+check(foundSkinOn, "status shows 'NodeTrail: on (loaded) - skinning on'")
+
+-- Turning it OFF: immediate (probe events unregistered), still no popup.
+boxes3.Skinning:SetChecked(false)
+boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == false,
+  "sub-option off persists")
+check(pkg.Skinning.Probe.enabled == false, "unticking stops the probe immediately (no reload)")
+check(#shownPopups == 1, "no popup when the sub-option is turned off")
+check(reloads == 1, "no reload when the sub-option is turned off")
 
 -- Test 4
 pkg = loadPackage({ modules = { NodeTrail = false, Touchstone = true } })
@@ -313,6 +417,40 @@ check(MightiePackDB.modules.NodeTrail == false, "saved NodeTrail false preserved
 check(pkg.IsModuleEnabled("Touchstone") == true, "saved Touchstone true preserved")
 check(pkg.modules.Touchstone.loaded ~= true,
   "Touchstone stays inert: no detector in this stub means unknown, not absent")
+
+-- Test 5: a stale MightiePackDB.modules.Skinning (written by the previous
+-- build) is kept but inert — the sub-toggle lives in NodeTrailDB.
+pkg = loadPackage({ modules = { NodeTrail = true, Skinning = true } })
+check(MightiePackDB.modules.Skinning == true, "the stale modules.Skinning key is not lost")
+check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
+  and pkg.NodeTrail.IsSkinningEnabled() == false,
+  "the stale modules.Skinning key does not turn the probe on")
+check(NodeTrailDB.skinning == nil or NodeTrailDB.skinning.enabled == false,
+  "it is not copied into NodeTrailDB.skinning")
+check(pkg.Skinning.Probe.enabled ~= true, "probe stays unarmed from the stale key")
+
+-- Test 6: the sub-toggle round-trips through NodeTrailDB and arms the probe
+-- at boot, without losing the keys that were already there.
+pkg = loadPackage({ modules = { NodeTrail = true } },
+  { profile = { routeSource = "gm2" }, skinning = { enabled = true } })
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
+  "saved sub-toggle survives the reload")
+check(NodeTrailDB.profile.routeSource == "gm2", "existing NodeTrailDB keys are not lost")
+check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
+  and pkg.NodeTrail.IsSkinningEnabled() == true,
+  "NodeTrail reads the saved sub-toggle")
+check(pkg.Skinning.Probe.enabled == true, "the probe is armed at boot when the sub-toggle is on")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
+  "and the saved value is not rewritten to false")
+
+-- Test 7: a pre-t_5507a0ba NodeTrailDB (no skinning table) gains the key
+-- without losing anything.
+pkg = loadPackage({ modules = { NodeTrail = true } }, { profile = { routeSource = "gm2" } })
+check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
+  and pkg.NodeTrail.IsSkinningEnabled() == false,
+  "an old NodeTrailDB defaults the sub-toggle off")
+check(NodeTrailDB.profile.routeSource == "gm2", "the old profile is untouched")
+check(type(NodeTrailDB.skinning) == "table", "the sub-toggle key is added lazily")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")

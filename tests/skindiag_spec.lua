@@ -68,6 +68,7 @@ end
 
 -- ── chat capture ────────────────────────────────────────────────────
 local chat = {}
+local reloads = 0
 DEFAULT_CHAT_FRAME = {
   AddMessage = function(_, m) chat[#chat + 1] = tostring(m) end,
 }
@@ -84,7 +85,7 @@ StaticPopupDialogs = {}
 StaticPopup_Show = function() end
 OKAY = "Okay"
 CANCEL = "Cancel"
-ReloadUI = function() end
+ReloadUI = function() reloads = reloads + 1 end
 GameTooltip = {
   SetOwner = function() end, SetText = function() end,
   AddLine = function() end, Show = function() end, Hide = function() end,
@@ -197,40 +198,48 @@ loadPackage(pkg, "MightiePack")
 boot(pkg, "MightiePack")
 
 -- ════════════════════════════════════════════════════════════════════
--- Section A: module gate
+-- Section A: the probe is NodeTrail's sub-feature, not a module
+-- (t_5507a0ba: "Skinning should be inside NodeTrail")
 -- ════════════════════════════════════════════════════════════════════
-local def = pkg.modules and pkg.modules.Skinning
-check(type(def) == "table", "Skinning module registered with the umbrella")
-check(pkg.moduleDefaults and pkg.moduleDefaults.Skinning == false,
-  "Skinning defaults OFF (event surface unverified — the card forbids guessing)")
-check(MightiePackDB and MightiePackDB.modules
-  and MightiePackDB.modules.Skinning == false, "saved default Skinning=false")
-check(pkg.IsModuleEnabled("Skinning") == false, "module off after boot")
-
-clearChat()
-local okOff = pcall(SlashCmdList.MIGHTIEPACK, "skindiag")
-check(okOff, "/mp skindiag with the module off does not error")
-local offText = chatText()
-check(offText:find("off", 1, true) ~= nil,
-  "module-off message says the module is off (got: " .. offText:gsub("\n", " | ") .. ")")
-check(offText:find("options", 1, true) ~= nil,
-  "module-off message points at the options panel")
-
--- enable exactly like the options checkbox does (immediate, no reload)
-pkg.SetModuleEnabled("Skinning", true)
-pkg.EnableModules()
-check(pkg.modules and pkg.modules.Skinning and pkg.modules.Skinning.loaded == true,
-  "Enable ran and the module is marked loaded")
+check(type(pkg.modules) == "table" and pkg.modules.Skinning == nil,
+  "Skinning is NOT a registered module (no sibling checkbox)")
+check(pkg.moduleDefaults and pkg.moduleDefaults.Skinning == nil,
+  "moduleDefaults has no Skinning entry any more")
+local orderHasSkinning = false
+for _, n in ipairs(pkg.moduleOrder or {}) do
+  if n == "Skinning" then orderHasSkinning = true end
+end
+check(not orderHasSkinning, "moduleOrder has no Skinning entry")
+check(type(pkg.Skinning) == "table", "the skinning namespace still loads from the TOC")
 
 local ns = pkg.Skinning
 local P = ns and ns.Probe
+check(type(P) == "table", "pkg.Skinning.Probe loaded")
+check(P.enabled ~= true, "probe is not armed until NodeTrail or a diagnostic asks")
+
+-- CHOICE (also stated in the completion summary): a diagnostic is allowed
+-- to run while the sub-toggle is off. This spec never loads NodeTrail, so
+-- the sub-toggle reads off here — exactly the "diagnostics with skinning
+-- off" case.
+clearChat()
+local okOff = pcall(SlashCmdList.MIGHTIEPACK, "skindiag dump")
+check(okOff, "/mp skindiag dump while skinning is off does not error")
+local offText = chatText()
+check(offText:find("skinning is off", 1, true) ~= nil,
+  "off-state line says skinning is off (got: " .. offText:gsub("\n", " | ") .. ")")
+check(offText:find("NodeTrail", 1, true) ~= nil,
+  "off-state line names the NodeTrail sub-option it lives under")
+check(offText:find("nothing recorded", 1, true) ~= nil,
+  "off-state line says nothing is recorded")
+check(P.enabled == true, "the diagnostic armed the probe (registration only, no DB write)")
+
 local haveProbe = type(P) == "table" and type(P.frame) == "table"
 check(haveProbe, "pkg.Skinning.Probe is live with an event frame")
 
 onlyIf(haveProbe,
   "probe absent at this commit — registration/capture/dump checks skipped", function()
 local frame = P.frame
-check(P.enabled == true, "probe enabled with the module")
+check(P.enabled == true, "probe armed (the diagnostic started it)")
 local before = #frames
 P:Enable()
 check(#frames == before, "Probe:Enable is idempotent (no second frame)")
@@ -499,10 +508,12 @@ local pkg2 = {}
 local framesBefore = #frames
 loadPackage(pkg2, "MightiePack2")
 boot(pkg2, "MightiePack2")
-if pkg2.modules and pkg2.modules.Skinning then
-  pkg2.SetModuleEnabled("Skinning", true)
-  pkg2.EnableModules()
-  local P2 = pkg2.Skinning and pkg2.Skinning.Probe
+check(pkg2.modules == nil or pkg2.modules.Skinning == nil,
+  "no C_EventUtils: still no Skinning module entry")
+check(type(pkg2.Skinning) == "table", "no C_EventUtils: skinning namespace loads")
+if type(pkg2.Skinning) == "table" then
+  pkg2.Skinning.Enable()
+  local P2 = pkg2.Skinning.Probe
   check(P2 and P2.enabled == true, "no C_EventUtils: probe still enables")
   if P2 and P2.frame then
     check(#frames > framesBefore, "no C_EventUtils: a frame was created")
@@ -518,9 +529,52 @@ if pkg2.modules and pkg2.modules.Skinning then
     check(ok2, "no C_EventUtils: /mp skindiag still does not error")
   end
 else
-  check(false, "no C_EventUtils: Skinning module not registered")
+  check(false, "no C_EventUtils: Skinning namespace missing")
 end
 C_EventUtils = savedCEU
+
+-- ════════════════════════════════════════════════════════════════════
+-- Section I: turning the sub-option off is immediate — no UI reload
+-- (t_5507a0ba: the card asks whether the reload confirmation is genuinely
+-- required; it is not, because P:Disable unregisters the probe's events)
+-- Section H re-registered /mp for its second package, so this section
+-- drives the LIVE dispatcher's package (MightiePack) — the same
+-- namespace /mp skindiag resolves to.
+-- ════════════════════════════════════════════════════════════════════
+onlyIf(type(MightiePack and MightiePack.Skinning and MightiePack.Skinning.Disable) == "function",
+  "ns.Disable absent at this commit — the no-reload-off checks are skipped", function()
+  local reloadsBefore = reloads
+  local livePkg = MightiePack
+  check(type(livePkg) == "table" and type(livePkg.Skinning) == "table",
+    "the live package exposes the skinning namespace")
+  local liveNs = livePkg.Skinning
+  local liveP = liveNs.Probe
+  liveNs.Enable()
+  check(liveP.enabled == true, "Enable arms the probe")
+  if not liveP.capturing then liveP:Toggle() end
+  check(liveP.capturing == true, "capture on before the disable")
+  local offFrame = liveP.frame
+  liveNs.Disable()
+  check(liveP.enabled == false, "Disable turns the probe off")
+  check(liveP.capturing == false, "Disable stops capture")
+  check(#(liveP.steps or {}) == 0, "Disable drops the session buffer")
+  local stillRegistered = false
+  if offFrame and offFrame.events then
+    for _, e in ipairs(liveP.EVENTS) do
+      if offFrame.events[e] == true then stillRegistered = true end
+    end
+  end
+  check(not stillRegistered, "Disable unregisters every event on the probe frame")
+  check(reloads == reloadsBefore, "Disable does not ask for a reload")
+  liveNs.Disable()
+  check(liveP.enabled == false, "Disable is idempotent")
+  -- and the diagnostic must still work after a disable
+  clearChat()
+  local okAfter = pcall(SlashCmdList.MIGHTIEPACK, "skindiag")
+  check(okAfter, "skindiag still runs after the probe was disabled")
+  check(liveP.enabled == true, "skindiag re-arms the probe after a disable")
+  liveNs.Disable()
+end)
 
 -- ════════════════════════════════════════════════════════════════════
 if failed > 0 then

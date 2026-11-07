@@ -21,6 +21,13 @@ ns.defaults = {
     densityAnchorCell = 0.06,
     densitySmooth = 2,
   },
+  -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature, so its
+  -- sub-toggle lives in NodeTrail's own saved variable (top level, NOT
+  -- inside profile and NOT in MightiePackDB.modules). OFF by default: the
+  -- event surface is still unverified on this client.
+  skinning = {
+    enabled = false,
+  },
 }
 
 function ns.GetDB()
@@ -31,4 +38,30 @@ function ns.GetDB()
     NodeTrailDB.profile = CopyTable(ns.defaults.profile)
   end
   return NodeTrailDB.profile
+end
+
+-- ── Skinning sub-toggle (t_5507a0ba) ────────────────────────────────
+-- Persisted at NodeTrailDB.skinning.enabled, default false. Filled in
+-- lazily so a NodeTrailDB written before this key existed keeps every
+-- other key it already has (a saved profile is never replaced).
+function ns.GetSkinDB()
+  if type(NodeTrailDB) ~= "table" then
+    NodeTrailDB = CopyTable(ns.defaults)
+  end
+  if type(NodeTrailDB.skinning) ~= "table" then
+    NodeTrailDB.skinning = { enabled = false }
+  end
+  if type(NodeTrailDB.skinning.enabled) ~= "boolean" then
+    NodeTrailDB.skinning.enabled = false
+  end
+  return NodeTrailDB.skinning
+end
+
+function ns.IsSkinningEnabled()
+  return ns.GetSkinDB().enabled == true
+end
+
+function ns.SetSkinningEnabled(on)
+  ns.GetSkinDB().enabled = on and true or false
+  return NodeTrailDB.skinning.enabled
 end

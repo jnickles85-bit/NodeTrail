@@ -8,12 +8,37 @@ function pkg.Print(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99MightiePack|r: " .. tostring(msg or ""))
 end
 
+-- TOC metadata, provider chain (t_5507a0ba).
+--
+-- On the Forever 16001 client the global GetAddOnMetadata does not exist,
+-- so /mpack status printed "version unknown / interface unknown" for a
+-- perfectly good TOC. The modern surface is C_AddOns.GetAddOnMetadata;
+-- the legacy global is the fallback. Both are pcall'd and both must
+-- return a non-empty string, and the provider is resolved at CALL time —
+-- a client (or a test stub) that adds or removes either one after load
+-- must be honoured, never cached.
+function pkg.GetAddOnMeta(addon, field)
+  if type(C_AddOns) == "table" and type(C_AddOns.GetAddOnMetadata) == "function" then
+    local ok, val = pcall(C_AddOns.GetAddOnMetadata, addon, field)
+    if ok and type(val) == "string" and val ~= "" then
+      return val
+    end
+  end
+  if type(GetAddOnMetadata) == "function" then
+    local ok, val = pcall(GetAddOnMetadata, addon, field)
+    if ok and type(val) == "string" and val ~= "" then
+      return val
+    end
+  end
+  return nil
+end
+
+-- NodeTrail is the only gathering module. The skinning probe lives under
+-- Modules/Skinning/ but it is NodeTrail's sub-feature (sub-toggle:
+-- NodeTrailDB.skinning.enabled), NOT a peer module — three sibling
+-- checkboxes read as three separate addons (t_5507a0ba).
 pkg.moduleDefaults = {
   NodeTrail = true,
-  -- t_a5f41944: OFF until the probe has verified the event surface on
-  -- this client (the card's first rule: do not guess it). The options
-  -- checkbox turns it on immediately — no reload needed to enable.
-  Skinning = false,
   Touchstone = false,
 }
 
@@ -72,11 +97,14 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     -- return: this file must print "unknown" and never error in an
     -- environment where the stub does not define the globals at all
     -- (umbrella_spec defines none of them).
+    -- t_5507a0ba: the provider chain (C_AddOns.GetAddOnMetadata, then the
+    -- legacy global, then "unknown") lives in pkg.GetAddOnMeta because the
+    -- Forever client has no global GetAddOnMetadata at all.
     local function tocMeta(what)
-      if type(GetAddOnMetadata) ~= "function" then
+      if type(pkg.GetAddOnMeta) ~= "function" then
         return nil
       end
-      local ok, val = pcall(GetAddOnMetadata, addonName, what)
+      local ok, val = pcall(pkg.GetAddOnMeta, addonName, what)
       if ok and type(val) == "string" and val ~= "" then
         return val
       end
@@ -117,6 +145,20 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     pkg.Print(("interface %s, build %s, client %s, locale %s, GatherMate2: %s")
       :format(iface, build, clientVersion, loc, gm2))
 
+    -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature, so its
+    -- state belongs on the NodeTrail line — there is no "Skinning:" module
+    -- line any more.
+    local function skinningWord()
+      local nt = pkg.NodeTrail
+      if type(nt) == "table" and type(nt.IsSkinningEnabled) == "function" then
+        local okS, on = pcall(nt.IsSkinningEnabled)
+        if okS then
+          return on and "on" or "off"
+        end
+      end
+      return "off"
+    end
+
     for _, name in ipairs(pkg.moduleOrder or {}) do
       local def = pkg.modules and pkg.modules[name]
       if def then
@@ -132,6 +174,9 @@ SlashCmdList.MIGHTIEPACK = function(msg)
         elseif def.loaded then
           line = line .. " (loaded)"
         end
+        if name == "NodeTrail" then
+          line = line .. " - skinning " .. skinningWord()
+        end
         pkg.Print(line)
       end
     end
@@ -145,42 +190,57 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       pkg.Print("bug report form unavailable (BugReport module did not load)")
     end
   elseif first == "skindiag" then
-    -- t_a5f41944: the Skinning event probe (/mp skindiag, /mp skindiag
-    -- dump). Module-gated like /nt ttdiag: the command answers honestly
-    -- when the module is off or failed to load, and delegates to
-    -- pkg.Skinning.Probe when it is live.
+    -- t_a5f41944 probe, re-homed by t_5507a0ba: the probe is NodeTrail's
+    -- sub-feature (sub-toggle NodeTrailDB.skinning.enabled), not a module.
+    -- CHOICE: a diagnostic is allowed to run while the sub-toggle is off —
+    -- the toggle governs recording, and /mp skindiag is the evidence
+    -- channel used to decide whether recording is worth having. The first
+    -- line says which state it is in, so a pasted dump is never ambiguous.
     local restL = (rest or ""):lower()
-    local def = pkg.modules and pkg.modules.Skinning
-    if type(def) ~= "table" or not def.loaded then
-      pkg.Print("skindiag: the Skinning module is off or did not load — tick Skinning in /mpack options (turning it on is immediate)")
+    local sk = pkg.Skinning
+    local P = type(sk) == "table" and sk.Probe or nil
+    if type(P) ~= "table" then
+      pkg.Print("skindiag: the skinning probe did not load"
+        .. (type(sk) == "table" and sk._error and (" (" .. tostring(sk._error) .. ")") or ""))
       pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
       pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
-    else
-      local S = pkg.Skinning
-      local P = S and S.Probe
-      if type(P) ~= "table" then
-        pkg.Print("skindiag: probe did not load"
-          .. (S and S._error and (" (" .. S._error .. ")") or ""))
-      elseif restL == "" then
-        local okT, on = pcall(P.Toggle, P)
-        if okT then
-          if on then
-            pkg.Print("skindiag: capture ON — kill + loot, cast Skinning, then loot again and dump")
-          else
-            pkg.Print("skindiag: capture off")
-          end
+      return
+    end
+    local nt = pkg.NodeTrail
+    local skinOn = false
+    if type(nt) == "table" and type(nt.IsSkinningEnabled) == "function" then
+      local okS, on = pcall(nt.IsSkinningEnabled)
+      skinOn = okS and on == true
+    end
+    if not skinOn then
+      pkg.Print("skindiag: skinning is off (NodeTrail sub-option) — diagnostics run, nothing recorded")
+    end
+    if not P.enabled and type(P.Enable) == "function" then
+      local okE, errE = pcall(P.Enable, P)
+      if not okE then
+        pkg.Print("skindiag: could not start the probe: " .. tostring(errE))
+        return
+      end
+    end
+    if restL == "" then
+      local okT, on = pcall(P.Toggle, P)
+      if okT then
+        if on then
+          pkg.Print("skindiag: capture ON — kill + loot, cast Skinning, then loot again and dump")
         else
-          pkg.Print("skindiag: toggle failed: " .. tostring(on))
-        end
-      elseif restL == "dump" then
-        local okD, errD = pcall(P.Diag, P)
-        if not okD then
-          pkg.Print("skindiag: dump failed: " .. tostring(errD))
+          pkg.Print("skindiag: capture off")
         end
       else
-        pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
-        pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
+        pkg.Print("skindiag: toggle failed: " .. tostring(on))
       end
+    elseif restL == "dump" then
+      local okD, errD = pcall(P.Diag, P)
+      if not okD then
+        pkg.Print("skindiag: dump failed: " .. tostring(errD))
+      end
+    else
+      pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
+      pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
     end
   else
     -- keep the historical usage line verbatim (existing callers/tests

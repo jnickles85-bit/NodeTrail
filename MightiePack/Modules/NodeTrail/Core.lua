@@ -187,6 +187,36 @@ function ns.ScanRecipes()
   return ok and done or false
 end
 
+-- ── Skinning probe ownership (t_5507a0ba) ───────────────────────────
+-- The probe files stay where they are on disk (Modules/Skinning/, loaded
+-- by the TOC) but NodeTrail owns them: nothing starts the probe except
+-- NodeTrail's Enable (when the sub-toggle is on) or an explicit
+-- /mp skindiag diagnostic. This is why they are no longer a peer module:
+-- pkg.Skinning is a namespace here, not an entry in pkg.moduleOrder.
+function ns.EnableSkinning()
+  local sk = pkg.Skinning
+  if type(sk) ~= "table" or type(sk.Enable) ~= "function" then
+    return false, "the skinning probe files did not load"
+  end
+  local ok, err = pcall(sk.Enable)
+  if not ok then
+    return false, tostring(err)
+  end
+  return true
+end
+
+function ns.DisableSkinning()
+  local sk = pkg.Skinning
+  if type(sk) ~= "table" or type(sk.Disable) ~= "function" then
+    return true
+  end
+  local ok, err = pcall(sk.Disable)
+  if not ok then
+    return false, tostring(err)
+  end
+  return true
+end
+
 function ns.Enable()
   if ns.enabled then
     return
@@ -201,6 +231,11 @@ function ns.Enable()
   end
   if ns.Tooltip then
     ns.Tooltip:Enable()
+  end
+  -- Sub-feature first, module last: a probe that fails must not stop the
+  -- herb route from starting (it reports through /mp skindiag instead).
+  if ns.IsSkinningEnabled() then
+    ns.EnableSkinning()
   end
   SLASH_NODETRAIL1 = "/nodetrail"
   SLASH_NODETRAIL2 = "/nt"

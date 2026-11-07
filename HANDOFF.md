@@ -12,10 +12,20 @@ On top of that branch:
   `tools/sync_touchstone.py`). Off by default; stays inert while a standalone `Touchstone` folder
   exists; keeps `StatForgeDB` / `ChestAdvisorDB` names so settings carry over. **Not yet tested in
   game.**
-- **Skinning probe** (`Modules/Skinning/`) — `/mp skindiag` / `/mp skindiag dump` capture the
-  kill → loot → skin → skin-loot chain. Probe only, no recording yet. **Not yet run in game.**
+- **Skinning probe** (`Modules/Skinning/`) — **nested under NodeTrail** (t_5507a0ba): there is no
+  `Skinning` module row. The options panel shows an indented "Skinning (experimental)" sub-option
+  under the NodeTrail checkbox, greyed out while NodeTrail is off, persisted at
+  `NodeTrailDB.skinning.enabled` (default false; the old `MightiePackDB.modules.Skinning` key is
+  inert, never read). Turning it off is immediate — no UI reload, no popup. `/mp skindiag` /
+  `/mp skindiag dump` capture the kill → loot → skin → skin-loot chain and still run while the
+  sub-option is off (the line says so; nothing is recorded then). Probe only, no recording yet.
+  **Not yet run in game.**
 - **Recipe scan in the options panel**, `/nt scanrecipes`, rescan on every Alchemy window open.
-- **`/mpack status`** prints version, Interface, client build, locale, GatherMate2 and module states.
+- **`/mpack status`** prints version, Interface, client build, locale, GatherMate2 and module states
+  (`NodeTrail: on (loaded) - skinning off`). TOC metadata is read through
+  `pkg.GetAddOnMeta`: `C_AddOns.GetAddOnMetadata` first, then the legacy global (t_5507a0ba — the
+  Forever client has no global `GetAddOnMetadata`, which printed "version unknown"). The bug-report
+  header uses the same chain.
 - **`/mpack bug`** — in-game report form; technical header auto-filled, `Copy report` for Ctrl+C, then
   paste into `#mightiepack-bugs`. The client cannot POST, so nothing uploads itself.
 
@@ -130,6 +140,7 @@ Run from repo root with lua5.1:
 - `tests/density_spec.lua` (empty/one-spot/two-spot/three-spot data, dense ring with cold outliers, no self-crossing, 2-opt crossing removal, anchor count scaling, maxStops cap, determinism, map wiring and errors, routeSource switch, old profile without new keys)
 - `tests/tooltip_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched)
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
+- `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
 All twelve specs pass with lua5.1.
 

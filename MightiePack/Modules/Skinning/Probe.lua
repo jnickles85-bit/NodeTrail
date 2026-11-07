@@ -449,6 +449,33 @@ function P:Toggle()
   return self.capturing
 end
 
+-- t_5507a0ba: turning NodeTrail's skinning sub-option off must be
+-- immediate, so the probe can be switched off without a UI reload: stop
+-- capturing, drop the buffered steps of this session, and unregister every
+-- event. Idempotent — calling it while off does nothing.
+function P:Disable()
+  local was = self.enabled
+  self.enabled = false
+  self.capturing = false
+  self.steps = {}
+  self._seq = 0
+  self.lastSkin = nil
+  self.lastLoot = nil
+  self.lastKill = nil
+  local frame = self.frame
+  if type(frame) ~= "table" then
+    return was
+  end
+  for _, e in ipairs(self.EVENTS) do
+    local ok = pcall(frame.UnregisterEvent, frame, e)
+    if ok then
+      self._events[e] = nil
+    end
+  end
+  self.frame = nil
+  return was
+end
+
 function P:Enable()
   if self.enabled then return end
   self.enabled = true
