@@ -45,7 +45,12 @@ local function syncCheckboxes()
             if on then
               pkg.SetModuleEnabled(name, true)
               pkg.EnableModules()
-              pkg.Print((def.title or name) .. " enabled.")
+              -- A module can refuse to run (Touchstone while the standalone
+              -- addon folder is installed). Its Enable() has already printed
+              -- why; "enabled." here would be a lie.
+              if not def.inert then
+                pkg.Print((def.title or name) .. " enabled.")
+              end
             else
               StaticPopup_Show("MIGHTIEPACK_DISABLE_MODULE", def.title or name, nil, { name = name, checkbox = self })
             end

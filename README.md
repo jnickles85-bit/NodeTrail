@@ -11,7 +11,13 @@ MightiePack is an umbrella addon for WoW Forever Classic (Interface 16001). It c
 | Module | Description | Default |
 |--------|-------------|---------|
 | NodeTrail | Herb routes | On |
-| Touchstone | Coming soon | Off (stub) |
+| Touchstone | Gear upgrade advice (vendored Touchstone 0.8.3) | Off |
+
+Touchstone's files are generated into `MightiePack/Modules/Touchstone/` by
+`tools/sync_touchstone.py`; do not hand-edit them. The module refuses to run
+while the standalone `Touchstone` addon folder is installed — two copies must
+never write `StatForgeDB`. Remove that folder and reload to use the vendored
+copy.
 
 ## Slash Commands
 | Command | Description |

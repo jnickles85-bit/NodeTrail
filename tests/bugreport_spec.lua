@@ -278,7 +278,7 @@ onlyIf(haveForm, "BuildBugReportHeader missing (BugReport.lua absent at this com
     has("Reported for: NodeTrail", "reported-for line")
     has("NodeTrail: on", "module state on")
     has("(loaded)", "module loaded marker")
-    has("Touchstone: off (coming soon)", "stub module state off")
+    has("Touchstone: off", "module state off")
     check(h:match("%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d") ~= nil, "header: timestamp present")
     -- The NodeTrail diagnostics are the REAL /nt ttdiag builder's
     -- output: this spec's GameTooltip stub is hidden, so Tooltip:Diag

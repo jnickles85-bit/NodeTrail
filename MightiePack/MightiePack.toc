@@ -1,9 +1,11 @@
 ## Interface: 16001
 ## Title: MightiePack
-## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone coming soon.
+## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone (gear upgrade advice).
 ## Author: Mightie
 ## Version: 0.3.0
-## SavedVariables: MightiePackDB, NodeTrailDB
+## SavedVariables: MightiePackDB, NodeTrailDB, StatForgeDB
+## SavedVariablesPerCharacter: ChestAdvisorDB
+## Assets: Modules/Touchstone/ChestAdvisor/marker.tga
 ## OptionalDeps: GatherMate2
 ## DefaultState: enabled
 
@@ -26,5 +28,17 @@ Modules/NodeTrail/UI/Tooltip.lua
 Modules/NodeTrail/Core.lua
 Modules/Skinning/Probe.lua
 Modules/Skinning/Core.lua
+Modules/Touchstone/Bootstrap.lua
+Modules/Touchstone/Constants.lua
+Modules/Touchstone/UI.lua
+Modules/Touchstone/OptionsTab.lua
+Modules/Touchstone/UpgradesTab.lua
+Modules/Touchstone/LogTab.lua
+Modules/Touchstone/Diagnostics.lua
+Modules/Touchstone/Probe.lua
+Modules/Touchstone/ChestAdvisor/Verdict.lua
+Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
+Modules/Touchstone/Integration.lua
+Modules/Touchstone/Core.lua
 BugReport.lua
 Options.lua

@@ -168,7 +168,7 @@ check(st:find("client 16.0.0.16001", 1, true) ~= nil, "mpack status: full GetBui
 check(st:find("locale enUS", 1, true) ~= nil, "mpack status: current locale")
 check(st:find("GatherMate2: loaded", 1, true) ~= nil, "mpack status: GatherMate2 loaded")
 check(st:find("NodeTrail: on", 1, true) ~= nil, "mpack status: NodeTrail module line still on")
-check(st:find("Touchstone: off (coming soon)", 1, true) ~= nil, "mpack status: Touchstone module line still off")
+check(st:find("Touchstone: off", 1, true) ~= nil, "mpack status: Touchstone module line still off")
 local vPos, ntPos = st:find("version 0.3.0", 1, true), st:find("NodeTrail: on", 1, true)
 check(vPos ~= nil and ntPos ~= nil and vPos < ntPos, "mpack status: header lines come before module lines")
 

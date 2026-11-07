@@ -236,10 +236,10 @@ local foundOn, foundOff = false, false
 for i = before + 1, #chat do
   local m = tostring(chat[i])
   if m:find("NodeTrail: on", 1, true) then foundOn = true end
-  if m:find("Touchstone: off (coming soon)", 1, true) then foundOff = true end
+  if m:find("Touchstone: off", 1, true) then foundOff = true end
 end
 check(foundOn, "status shows NodeTrail on")
-check(foundOff, "status shows Touchstone off (coming soon)")
+check(foundOff, "status shows Touchstone off")
 
 openedId = nil
 SlashCmdList.MIGHTIEPACK("")
@@ -259,7 +259,7 @@ local boxes = pkg.optionsBoxes
 check(boxes ~= nil, "optionsBoxes exists")
 check(boxes.NodeTrail and boxes.NodeTrail:GetChecked() == true, "NodeTrail box checked")
 check(boxes.Touchstone and boxes.Touchstone:GetChecked() == false, "Touchstone box unchecked")
-check(boxes.Touchstone and boxes.Touchstone:IsEnabled() == false, "Touchstone box disabled")
+check(boxes.Touchstone and boxes.Touchstone:IsEnabled() == true, "Touchstone box enabled (no longer a stub)")
 
 local popup
 boxes.NodeTrail:SetChecked(false)
@@ -310,7 +310,9 @@ check(#shownPopups == 1, "no new popup on re-tick")
 -- Test 4
 pkg = loadPackage({ modules = { NodeTrail = false, Touchstone = true } })
 check(MightiePackDB.modules.NodeTrail == false, "saved NodeTrail false preserved")
-check(pkg.IsModuleEnabled("Touchstone") == false, "Touchstone stub never enabled")
+check(pkg.IsModuleEnabled("Touchstone") == true, "saved Touchstone true preserved")
+check(pkg.modules.Touchstone.loaded ~= true,
+  "Touchstone stays inert: no detector in this stub means unknown, not absent")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
