@@ -28,11 +28,10 @@ local addonName, pkg = ...
 
 pkg.bugReport = pkg.bugReport or {
   channelName = "#mightiepack-bugs",
-  -- The channel's URL, once it exists (the channel is "planned" per
-  -- the vault design notes and no invite has been published yet).
-  -- nil/"" -> the footer prints the channel name only. A placeholder
-  -- URL must never be printed.
-  channelUrl = nil,
+  -- The channel exists (Mythic Traveler's Community, 2026-11-06); friends are
+  -- already members, so this is a channel link, not an invite. Empty/nil
+  -- prints the channel name only — never print a placeholder URL.
+  channelUrl = "https://discord.com/channels/825795542390145024/1568478603170156694",
 }
 
 local frame = nil
