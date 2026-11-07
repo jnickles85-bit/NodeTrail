@@ -138,40 +138,126 @@ local function blockIntact(tooltip, title)
 end
 
 -- ── Layout (backdrop + on-screen clamp) ────────────────────────────────
--- The client sizes the tooltip's backdrop and anchors the frame when it
--- populates/shows an item, and it does not redo either while we are
+-- The client sizes the tooltip's backdrop and anchors the frame at Show,
+-- THEN fires the OnShow hook, and it does not redo either while we are
 -- appending late — that is why the in-game block sat on no background
--- and ran off the right/bottom edge. Late appends therefore have to
--- re-layout themselves: `Layout()` (the client's own re-layout) re-sizes
--- the backdrop, and we clamp the anchor once so the frame fits
--- UIParent. We do not own subsequent client repositioning — the clamp
--- happens on append, not on a clock. Re-entrancy: a Layout that re-fires
--- a hook (re-entering Refresh) is dropped by the lock below; the
--- content guard above (since 14c1c30) already stops duplicate appends.
-
+-- and ran off the right/bottom edge. A late append therefore pulls the
+-- client through its OWN show path again: the show path re-runs the
+-- padding/backdrop sizing, which is the re-layout we can rely on.
+-- `Layout()` is kept only as an optional extra (some clients expose it);
+-- it is never the sole mechanism, so a client without it still re-sizes
+-- — a method guarded by `type(...) == "function"` is a coin flip, and
+-- this design does not take it.
+--
+-- Re-entrancy: the show path fires the OnShow hook, which re-enters
+-- Refresh. Two gates keep that safe: the content guard above refuses a
+-- second append (the block is intact by then), and the `_relaying` lock
+-- drops a nested re-layout — no hook loop, no duplicate block. A hostile
+-- show that wipes and re-pays content is absorbed too: the hook re-enters
+-- Refresh, re-appends once (the block was genuinely gone), and its
+-- re-layout is dropped by the lock.
+--
+-- After the re-layout, the frame is clamped ONCE into UIParent using
+-- MEASURED screen coordinates (the client's own edge getters when
+-- present), and the shift is applied through the first anchor — never on
+-- a clock, never fighting the client's later positioning.
+--
+-- API contract (real client, Frame) — the model the code and the spec
+-- share, not a guess:
+--   GetPoint(index)             -> point, relativeTo, relativePoint,
+--                                  offsetX, offsetY                  (5 values)
+--   SetPoint(point, relativeTo, relativePoint, x, y)
+--   GetLeft()/GetRight()/GetTop()/GetBottom()
+--                               -> screen-space edges, y-up, bottom-left
+--                                  origin (the tooltip's parent is
+--                                  UIParent, which spans the screen)
+-- GetPoint is NOT a 7-return and is not parsed in any other order; the
+-- spec pins that shape on the client model (the contract checks at the
+-- top of the layout section) so a green run stays evidence.
 local MARGIN = 10 -- clamp inset; kept in sync with NT_MARGIN in tests/tooltip_refresh_spec.lua
 
 -- Screen-space rect {left, bottom, right, top} (y-up, bottom-left origin)
--- of the frame's first anchor point, or nil when unanchored/unsized.
-local function screenRect(g, relW, relH)
+-- for the frame, or nil when it cannot be determined on this client.
+-- Measured edges (the client's own getters) are the reliable source; only
+-- when they are absent do we derive the rect from the first anchor plus
+-- the frame size, parsing GetPoint with the documented 5-tuple.
+local function screenRect(g)
+  if type(g.GetLeft) == "function" and type(g.GetRight) == "function"
+    and type(g.GetTop) == "function" and type(g.GetBottom) == "function" then
+    local l, r, b, t = g:GetLeft(), g:GetRight(), g:GetBottom(), g:GetTop()
+    if type(l) == "number" and type(r) == "number"
+      and type(b) == "number" and type(t) == "number" then
+      return { left = l, right = r, bottom = b, top = t }
+    end
+  end
   if type(g.GetPoint) ~= "function" then return nil end
-  -- GetPoint returns (relX, relY, xOfs, yOfs, relativeTo, point1, point2)
-  local _, _, xOfs, yOfs, relativeTo, point1, point2 = g:GetPoint(1)
-  if xOfs == nil or yOfs == nil or type(point1) ~= "string" or type(point2) ~= "string" then
+  -- Documented order: point, relativeTo, relativePoint, offsetX, offsetY.
+  local point, relativeTo, relativePoint, xOfs, yOfs = g:GetPoint(1)
+  if type(point) ~= "string" or type(relativeTo) ~= "table"
+    or type(relativePoint) ~= "string"
+    or type(xOfs) ~= "number" or type(yOfs) ~= "number" then
     return nil
   end
   local w = type(g.GetWidth) == "function" and g:GetWidth() or nil
   local h = type(g.GetHeight) == "function" and g:GetHeight() or nil
   if type(w) ~= "number" or type(h) ~= "number" then return nil end
-  local ox = point2:find("RIGHT") and relW or (point2:find("CENTER") and relW * 0.5 or 0)
-  local oy = point2:find("TOP") and relH or (point2:find("CENTER") and relH * 0.5 or 0)
+  local relW = type(relativeTo.GetWidth) == "function" and relativeTo:GetWidth() or nil
+  local relH = type(relativeTo.GetHeight) == "function" and relativeTo:GetHeight() or nil
+  if type(relW) ~= "number" or type(relH) ~= "number" then
+    if type(UIParent) == "table" and type(UIParent.GetWidth) == "function"
+      and type(UIParent.GetHeight) == "function" then
+      relW, relH = UIParent:GetWidth(), UIParent:GetHeight()
+    else
+      return nil
+    end
+  end
+  local ox = relativePoint:find("RIGHT") and relW
+    or (relativePoint:find("CENTER") and relW * 0.5 or 0)
+  local oy = relativePoint:find("TOP") and relH
+    or (relativePoint:find("CENTER") and relH * 0.5 or 0)
   local cx, cy = ox + xOfs, oy + yOfs
   return {
-    left = cx - (point1:find("RIGHT") and w or (point1:find("CENTER") and w * 0.5 or 0)),
-    right = cx + (point1:find("LEFT") and w or (point1:find("CENTER") and w * 0.5 or 0)),
-    bottom = cy - (point1:find("TOP") and h or (point1:find("CENTER") and h * 0.5 or 0)),
-    top = cy + (point1:find("BOTTOM") and h or (point1:find("CENTER") and h * 0.5 or 0)),
+    left = cx - (point:find("RIGHT") and w or (point:find("CENTER") and w * 0.5 or 0)),
+    right = cx + (point:find("LEFT") and w or (point:find("CENTER") and w * 0.5 or 0)),
+    bottom = cy - (point:find("TOP") and h or (point:find("CENTER") and h * 0.5 or 0)),
+    top = cy + (point:find("BOTTOM") and h or (point:find("CENTER") and h * 0.5 or 0)),
   }
+end
+
+-- Shift the frame by (dx, dy) through its first anchor — the real
+-- SetPoint signature, with the anchor fields read back through the real
+-- GetPoint 5-tuple. Returns nil (and touches nothing) when the anchor
+-- does not come back in that shape: a made-up shape must not be written
+-- back as a "clamp".
+local function shiftAnchor(g, dx, dy)
+  if type(g.GetPoint) ~= "function" or type(g.SetPoint) ~= "function" then
+    return nil
+  end
+  local point, relativeTo, relativePoint, xOfs, yOfs = g:GetPoint(1)
+  if type(point) ~= "string" or type(relativeTo) ~= "table"
+    or type(relativePoint) ~= "string"
+    or type(xOfs) ~= "number" or type(yOfs) ~= "number" then
+    return nil
+  end
+  g:SetPoint(point, relativeTo, relativePoint, xOfs + dx, yOfs + dy)
+  return true
+end
+
+-- Clamp the frame into the UIParent margin box once. Returns false when
+-- the rect cannot be determined or the anchor is not writeable.
+local function clampIntoScreen(g, sw, sh)
+  local rect = screenRect(g)
+  if not rect then return false end
+  local dx = 0
+  if rect.left < MARGIN then dx = dx + (MARGIN - rect.left) end
+  if rect.right > sw - MARGIN then dx = dx - (rect.right - (sw - MARGIN)) end
+  local dy = 0
+  if rect.bottom < MARGIN then dy = dy + (MARGIN - rect.bottom) end
+  if rect.top > sh - MARGIN then dy = dy - (rect.top - (sh - MARGIN)) end
+  if dx == 0 and dy == 0 then
+    return true
+  end
+  return shiftAnchor(g, dx, dy) == true
 end
 
 function T:Relayout(tooltip)
@@ -180,25 +266,27 @@ function T:Relayout(tooltip)
   end
   T._relaying = true
   local ok, err = pcall(function()
+    -- 1) The client's own show path: it re-runs the padding/backdrop
+    --    sizing that was frozen before our lines existed. If the show
+    --    re-fires the OnShow hook, onPopulate re-enters Refresh: the
+    --    content guard refuses a second append (the block is intact),
+    --    and a nested re-layout is dropped by the lock above — no loop.
+    if type(tooltip.Show) == "function" then
+      tooltip:Show()
+    end
+    -- 2) Optional extra: clients that expose an explicit re-layout get
+    --    it too. Never the sole mechanism — step 1 must already cover
+    --    a client without it.
     if type(tooltip.Layout) == "function" then
       tooltip:Layout()
     end
+    -- 3) Clamp once into the screen (10px margin) from MEASURED edges.
+    --    This runs on append, not on a clock; the client keeps ownership
+    --    of any subsequent repositioning.
     if type(UIParent) == "table" and type(UIParent.GetWidth) == "function"
       and type(UIParent.GetHeight) == "function" then
       local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
-      local rect = screenRect(tooltip, sw, sh)
-      if rect and type(tooltip.SetPoint) == "function" then
-        local dx = 0
-        if rect.left < MARGIN then dx = dx + (MARGIN - rect.left) end
-        if rect.right > sw - MARGIN then dx = dx - (rect.right - (sw - MARGIN)) end
-        local dy = 0
-        if rect.bottom < MARGIN then dy = dy + (MARGIN - rect.bottom) end
-        if rect.top > sh - MARGIN then dy = dy - (rect.top - (sh - MARGIN)) end
-        if dx ~= 0 or dy ~= 0 then
-          local _, _, xOfs, yOfs, relativeTo, point1, point2 = tooltip:GetPoint(1)
-          tooltip:SetPoint(point1, relativeTo, point2, xOfs + dx, yOfs + dy)
-        end
-      end
+      clampIntoScreen(tooltip, sw, sh)
     end
   end)
   T._relaying = false
@@ -208,10 +296,11 @@ function T:Relayout(tooltip)
 end
 
 -- /nt ttdiag — the in-client evidence channel for tooltip layout. Prints
--- only what is live: NumLines and frame size, every anchor point, the
--- computed screen rect vs UIParent, and whether the current block was
--- added pre- or post-Show. Cheap: a few API calls, no loops beyond
--- GetNumPoints.
+-- only what is live: line count + frame size, every anchor in the REAL
+-- GetPoint order (point, relativeTo, relativePoint, offsetX, offsetY),
+-- the measured screen edges, the screen-vs-rect verdict, and whether the
+-- current block was added after the client's layout. Cheap: a handful of
+-- API calls, no loops beyond GetNumPoints.
 function T:Diag()
   local function say(msg)
     DEFAULT_CHAT_FRAME:AddMessage("NodeTrail ttdiag: " .. msg)
@@ -227,7 +316,8 @@ function T:Diag()
       return ("block: title=%s after=%d added=%s"):format(
         tostring(last.title),
         last.after or -1,
-        last.shown and "post-Show (late path, relayout ran)" or "pre-Show (populate path)")
+        last.shown and "post-Show (appended after client layout; relayout ran)"
+          or "pre-Show (client layout ran after the append)")
     end
     return "block: none (no append recorded for the current title)"
   end
@@ -240,27 +330,52 @@ function T:Diag()
     return
   end
   local n = type(gt.NumLines) == "function" and gt:NumLines() or -1
-  local w = type(gt.GetWidth) == "function" and gt:GetWidth()
-  local h = type(gt.GetHeight) == "function" and gt:GetHeight()
-  say(("NumLines=%d W=%s H=%s"):format(
-    n,
+  local w = type(gt.GetWidth) == "function" and gt:GetWidth() or nil
+  local h = type(gt.GetHeight) == "function" and gt:GetHeight() or nil
+  say(("NumLines=%s W=%s H=%s"):format(
+    tostring(n),
     type(w) == "number" and string.format("%.0f", w) or "?",
     type(h) == "number" and string.format("%.0f", h) or "?"))
   local npts = type(gt.GetNumPoints) == "function" and gt:GetNumPoints() or 0
-  for i = 1, npts do
-    local xOfs, yOfs, relTo, p1, p2 = select(3, gt:GetPoint(i))
-    say(("point %d: %s of %s (%s) xOfs=%s yOfs=%s"):format(
-      i,
-      p1 or "?",
-      type(relTo) == "table" and (type(relTo.GetName) == "function" and tostring(relTo:GetName()) or "frame") or "?",
-      p2 or "?",
-      tostring(xOfs),
-      tostring(yOfs)))
+  if npts > 0 then
+    for i = 1, npts do
+      -- Real GetPoint contract: point, relativeTo, relativePoint, x, y.
+      local point, relativeTo, relativePoint, xOfs, yOfs = gt:GetPoint(i)
+      local relName = "?"
+      if type(relativeTo) == "table" then
+        if type(relativeTo.GetName) == "function" then
+          local okn, nm = pcall(relativeTo.GetName, relativeTo)
+          if okn and type(nm) == "string" then
+            relName = nm
+          end
+        end
+        if relName == "?" then relName = "frame" end
+      end
+      say(("point %d: %s of %s %s xOfs=%s yOfs=%s"):format(
+        i,
+        type(point) == "string" and point or "?",
+        relName,
+        type(relativePoint) == "string" and relativePoint or "?",
+        type(xOfs) == "number" and string.format("%.0f", xOfs) or tostring(xOfs),
+        type(yOfs) == "number" and string.format("%.0f", yOfs) or tostring(yOfs)))
+    end
+  else
+    say("points: none (frame unanchored)")
+  end
+  -- Measured screen edges (the client's own getters when present).
+  if type(gt.GetLeft) == "function" and type(gt.GetRight) == "function"
+    and type(gt.GetTop) == "function" and type(gt.GetBottom) == "function" then
+    local l, r, t, b = gt:GetLeft(), gt:GetRight(), gt:GetTop(), gt:GetBottom()
+    if type(l) == "number" and type(r) == "number" and type(t) == "number" and type(b) == "number" then
+      say(("measured: left=%.0f right=%.0f top=%.0f bottom=%.0f"):format(l, r, t, b))
+    else
+      say("measured: edge getters present but returned non-numbers")
+    end
   end
   if type(UIParent) == "table" and type(UIParent.GetWidth) == "function"
     and type(UIParent.GetHeight) == "function" then
     local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
-    local rect = screenRect(gt, sw, sh)
+    local rect = screenRect(gt)
     if rect then
       local outside = rect.left < 0 or rect.right > sw or rect.bottom < 0 or rect.top > sh
       local offMargin = rect.left < MARGIN or rect.right > sw - MARGIN
@@ -314,9 +429,9 @@ function T:Refresh(tooltip)
   if shown then
     -- Late append: the client sized and anchored the tooltip BEFORE our
     -- lines existed, so its layout decisions don't account for them.
-    -- Re-layout once (backdrop grows to cover us) and clamp the frame
-    -- into the screen; the client keeps ownership of any subsequent
-    -- repositioning.
+    -- Pull the client through its own show path once (that re-runs the
+    -- padding/backdrop sizing), then clamp the frame into the screen;
+    -- the client keeps ownership of any subsequent repositioning.
     self:Relayout(tooltip)
   end
 end

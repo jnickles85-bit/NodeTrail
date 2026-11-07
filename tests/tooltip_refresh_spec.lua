@@ -236,7 +236,8 @@ GT.lines = { "Peacebloom", "Herbalism" }
 check(headerCount() == 0, "Test 9: unseen wipe took our block (header gone)")
 local callsBefore9 = refreshCalls
 pollTick()
-check(refreshCalls == callsBefore9 + 1, "Test 9: one poll tick evaluated a refresh")
+check(refreshCalls == callsBefore9 + 2,
+  "Test 9: one recovery tick = 1 append evaluation + 1 re-entry pass absorbed by the content guard (the relayout show path re-fires the hook)")
 check(has("Peacebloom | 100% (base)"), "Test 9: Peacebloom drop line present after unseen wipe")
 check(headerCount() == 1, "Test 9: header present exactly once after one poll tick")
 
@@ -303,14 +304,23 @@ check(T._error == nil, "Test 15: ns.Tooltip._error == nil")
 -- Tests 16–21: LAYOUT (the laptop report — block shows but the backdrop
 -- stops above it and the frame clips at the screen edge).
 --
--- Client model, as observed in game (14c1c30's own fast-path comment
--- allows builds that lack the SetUnit/SetItem events): the client sizes
--- the backdrop and anchors the frame at Show, THEN fires the OnShow
--- hook. So every append in that flow is a post-layout append, and the
--- addon must re-layout itself on append. The stub below models exactly
--- that: Show freezes frame size + backdrop rect from the CURRENT line
--- count; Layout() recomputes both (the client's own re-layout); the
--- frame carries a real screen anchor on a finite UIParent.
+-- Client model, as observed in game (a build the 14c1c30 fast-path
+-- comment allows that lacks the SetUnit/SetItem events): the client
+-- sizes the backdrop and anchors the frame at Show, THEN fires the
+-- OnShow hook — and does not re-size for late appends. This section
+-- replaces the bare stub above with a client model that speaks the REAL
+-- client's contract, with nothing invented:
+--   * SetPoint(point, relativeTo, relativePoint, x, y)
+--   * GetPoint(i) -> point, relativeTo, relativePoint, x, y   (5 values)
+--   * GetLeft()/GetRight()/GetTop()/GetBottom() -> screen-space
+--     edges (y-up, bottom-left origin; the parent, UIParent, spans the
+--     whole screen) — the reliable measurement the addon must clamp on
+--   * Show() -> sizes the frame+backdrop from the CURRENT line count,
+--     then fires OnShow — the client's order, and the re-layout the
+--     addon is allowed to rely on.
+-- The stub deliberately has NO Layout(): it is not a verified method on
+-- this client, so the addon must not depend on it — the show path is the
+-- re-layout, and this section has to prove it works with none other.
 local LINE_H = 16
 local PAD = 10
 local SCREEN_W, SCREEN_H = 1920, 1080
@@ -318,6 +328,7 @@ local NT_MARGIN = 10 -- must match MARGIN in UI/Tooltip.lua (Relayout clamp)
 
 UIParent.GetWidth = function() return SCREEN_W end
 UIParent.GetHeight = function() return SCREEN_H end
+UIParent.GetName = function() return "UIParent" end
 
 local function contentSizeOf(t)
   local w = 0
@@ -327,124 +338,192 @@ local function contentSizeOf(t)
   return w * 7 + PAD, #t * LINE_H + PAD
 end
 
--- Replaces the bare Show above (tests 2–15 already ran and observe no
--- sizing): size first, then fire the OnShow hook — the client's order.
+-- Replaces the bare Show above: size first, then fire the OnShow hook —
+-- the client's order — and count every show: the addon's re-layout must
+-- drive it, and only it.
 GT.sizeFromContent = function(self)
   self.fw, self.fh = contentSizeOf(self.lines)
   self.bgW, self.bgH = self.fw, self.fh
 end
+GT.showCalls = 0
 GT.Show = function(self)
-  self.shown = true
+  GT.showCalls = GT.showCalls + 1
   self:sizeFromContent()
+  self.shown = true
   for _, fn in ipairs(self.hooks.OnShow or {}) do
     fn(self)
   end
 end
-GT.Layout = function(self)
-  self.layoutCalls = (self.layoutCalls or 0) + 1
-  self:sizeFromContent()
-end
 GT.GetWidth = function(self) return self.fw or 0 end
 GT.GetHeight = function(self) return self.fh or 0 end
-GT.point = nil
-GT.numPoints = 0
+
+-- Anchor storage + the real GetPoint contract (5 values, documented
+-- order): GetNumPoints / GetPoint / SetPoint behave like the real thing.
+GT.points = {}
 GT.SetPoint = function(self, p1, relTo, p2, x, y)
-  GT.point = { p1 = p1, relTo = relTo, p2 = p2, x = x, y = y }
-  GT.numPoints = 1
+  GT.points = { { p = p1, relTo = relTo, rp = p2, x = x, y = y } }
 end
-GT.GetNumPoints = function(self) return GT.numPoints end
+GT.GetNumPoints = function(self) return #GT.points end
 GT.GetPoint = function(self, i)
-  if not GT.point or GT.numPoints < i then
-    return nil, nil, nil, nil, nil, nil, nil
+  local pt = GT.points[i]
+  if not pt then
+    return nil, nil, nil, nil, nil
   end
-  local p = GT.point
-  return 0, 0, p.x, p.y, p.relTo, p.p1, p.p2
+  return pt.p, pt.relTo, pt.rp, pt.x, pt.y
 end
 
+-- Measured screen edges — the client's own getters. The parent (UIParent)
+-- spans the whole screen, so these are screen coordinates, y-up,
+-- bottom-left origin — exactly what the real client returns for a
+-- tooltip parented to UIParent.
+local function anchorOrigin(rp)
+  local ox = rp:find("RIGHT") and SCREEN_W or (rp:find("CENTER") and SCREEN_W * 0.5 or 0)
+  local oy = rp:find("TOP") and SCREEN_H or (rp:find("CENTER") and SCREEN_H * 0.5 or 0)
+  return ox, oy
+end
+local function rectOf()
+  local pt = GT.points[1]
+  if not pt then return nil end
+  local w, h = GT.fw or 0, GT.fh or 0
+  local ox, oy = anchorOrigin(pt.rp)
+  local cx, cy = ox + pt.x, oy + pt.y
+  return {
+    left = cx - (pt.p:find("RIGHT") and w or (pt.p:find("CENTER") and w * 0.5 or 0)),
+    right = cx + (pt.p:find("LEFT") and w or (pt.p:find("CENTER") and w * 0.5 or 0)),
+    bottom = cy - (pt.p:find("TOP") and h or (pt.p:find("CENTER") and h * 0.5 or 0)),
+    top = cy + (pt.p:find("BOTTOM") and h or (pt.p:find("CENTER") and h * 0.5 or 0)),
+  }
+end
+GT.GetLeft = function(self) local e = rectOf() return e and e.left or nil end
+GT.GetRight = function(self) local e = rectOf() return e and e.right or nil end
+GT.GetTop = function(self) local e = rectOf() return e and e.top or nil end
+GT.GetBottom = function(self) local e = rectOf() return e and e.bottom or nil end
+
+-- Test 16 (contract pin, runs before the layout asserts): the stub
+-- speaks the REAL Frame anchor contract. If GetPoint ever returns a
+-- made-up shape again (v4's invented 7-value order), the green layout
+-- runs below stop being evidence — so pin the shape right here.
+local c0 = GT:GetPoint(1)
+check(c0 == nil, "Test 16: unanchored frame — GetPoint(1) carries no anchor point")
+GT:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 12, 34)
+local cp1, crel1, crp1, cx1, cy1 = GT:GetPoint(1)
+check(cp1 == "BOTTOMLEFT", "Test 16: GetPoint value 1 is the anchor point (string)")
+check(crel1 == UIParent, "Test 16: GetPoint value 2 is the relativeTo frame")
+check(crp1 == "BOTTOMLEFT", "Test 16: GetPoint value 3 is the relativePoint (string)")
+check(cx1 == 12 and type(cx1) == "number", "Test 16: GetPoint value 4 is offsetX (number)")
+check(cy1 == 34 and type(cy1) == "number", "Test 16: GetPoint value 5 is offsetY (number)")
+check(select("#", GT:GetPoint(1)) == 5, "Test 16: GetPoint returns exactly 5 values, documented order")
+
 -- Client hover at a screen mouse position: populate, anchor 16px to the
--- right/below the mouse, then Show (sizes backdrop from what is in it).
+-- right/below the mouse (TOPLEFT anchor on a BOTTOMLEFT origin — the
+-- client's convention), then Show (sizes the backdrop from what's in it).
 local function clientHoverAt(name, mx, my)
   GT.lines = { name, "Herbalism" }
   GT:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", mx + 16, SCREEN_H - my - 16)
   GT:Show()
 end
 
--- Screen-space rect from the stub's raw anchor (y-up, bottom-left
--- origin): left, bottom, right, top — independent re-implementation of
--- what Relayout does internally.
-local function rectOf()
-  if not GT.point then return nil, nil, nil, nil end
-  local p = GT.point
-  local w, h = GT:GetWidth(), GT:GetHeight()
-  local ox = p.p2:find("RIGHT") and SCREEN_W or (p.p2:find("CENTER") and SCREEN_W * 0.5 or 0)
-  local oy = p.p2:find("TOP") and SCREEN_H or (p.p2:find("CENTER") and SCREEN_H * 0.5 or 0)
-  local cx, cy = ox + p.x, oy + p.y
-  local left = cx - (p.p1:find("RIGHT") and w or (p.p1:find("CENTER") and w * 0.5 or 0))
-  local right = cx + (p.p1:find("LEFT") and w or (p.p1:find("CENTER") and w * 0.5 or 0))
-  local bottom = cy - (p.p1:find("TOP") and h or (p.p1:find("CENTER") and h * 0.5 or 0))
-  local top = cy + (p.p1:find("BOTTOM") and h or (p.p1:find("CENTER") and h * 0.5 or 0))
-  return left, bottom, right, top
-end
-
 -- Test 16: populate path (OnShow). The client sized the backdrop from
--- its own two lines BEFORE the hook appended ours; the addon's
--- post-append re-layout must grow it to enclose every line.
+-- its own two lines BEFORE the hook appended ours; the addon must pull
+-- the client through its own show path — exactly once — and that show
+-- re-sizes the backdrop to enclose every line.
+local sc16 = GT.showCalls
 clientHoverAt("Peacebloom", 960, 400)
 check(headerCount() == 1, "Test 16: block present after OnShow append")
 check(has("Peacebloom | 100% (base)"), "Test 16: drop line present (OnShow path)")
+check(GT.showCalls == sc16 + 2,
+  "Test 16: hover = 1 client Show + exactly 1 addon re-layout Show (showCalls="
+    .. tostring(GT.showCalls) .. ")")
 check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H,
   "Test 16: backdrop encloses all lines after a post-Show append (bgH="
     .. tostring(GT.bgH) .. " lines=" .. #GT.lines .. ")")
 
--- Test 17: late (poller) path. Unseen repopulate wipes the block; one
--- clock tick re-appends it — that append must force the client's own
--- re-layout, and the resulting backdrop must enclose every line.
+-- Test 17: late (poller) path. An unseen repopulate wipes the block; one
+-- clock tick re-appends it — and that append must pull the client
+-- through the show path (the ONLY verified re-layout mechanism in this
+-- model; the stub has no Layout() to hide behind), leaving a backdrop
+-- that encloses every line.
 GT.lines = { "Peacebloom", "Herbalism" }
 GT:sizeFromContent() -- client re-sizes what it just repopulated
-local lcBefore = GT.layoutCalls or 0
-local rbBefore = refreshCalls
+local sc17 = GT.showCalls
+local rb17 = refreshCalls
 pollTick()
-check(refreshCalls == rbBefore + 1, "Test 17: one poll tick evaluated a refresh")
-check((GT.layoutCalls or 0) == lcBefore + 1, "Test 17: late append forced exactly one client re-layout")
+check(GT.showCalls == sc17 + 1,
+  "Test 17: late append pulled the client through the show path exactly once")
+check(refreshCalls == rb17 + 2,
+  "Test 17: one recovery tick = 1 append evaluation + 1 re-entry pass absorbed by the content guard (got "
+    .. (refreshCalls - rb17) .. ")")
 check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H,
   "Test 17: backdrop encloses all lines after late append (bgH="
     .. tostring(GT.bgH) .. " lines=" .. #GT.lines .. ")")
 check(headerCount() == 1, "Test 17: header exactly once after late re-layout")
 
--- Test 18: bottom-right placement (the Silverleaf clip). The frame must
--- shift to stay on the screen instead of spilling off the right/bottom.
-clientHoverAt("Silverleaf", 1880, 60)
-local l, b, r, t = rectOf()
-check(l ~= nil, "Test 18: frame still has an anchor")
-check(l >= 0 and b >= 0 and r <= SCREEN_W and t <= SCREEN_H,
-  ("Test 18: bottom-right frame stays on screen (L=%.0f B=%.0f R=%.0f T=%.0f)"):format(l, b, r, t))
-check(l >= NT_MARGIN and b >= NT_MARGIN and r <= SCREEN_W - NT_MARGIN and t <= SCREEN_H - NT_MARGIN,
-  "Test 18: frame inside the Relayout margin box")
+-- Test 18: bottom-right placement (the Silverleaf clip), in the card's
+-- anchor shape: a BOTTOMRIGHT anchor with NON-ZERO offsets, past the
+-- bottom-right corner of known screen bounds (1920x1080) — 40px beyond
+-- the right edge, 30px below the bottom. The addon must land the frame
+-- inside the 10px margin box — by moving the anchor, readable back
+-- through the real 5-tuple with its identity intact.
+GT.lines = { "Silverleaf", "Herbalism" }
+GT:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 40, -30)
+local sc18 = GT.showCalls
+GT:Show()
 check(headerCount() == 1, "Test 18: Silverleaf block present")
 check(has("Silverleaf | 100% (base)"), "Test 18: Silverleaf drop line present")
+check(GT.showCalls == sc18 + 2,
+  "Test 18: client Show + one addon re-layout Show for the clamped append")
+local r18 = rectOf()
+check(r18 ~= nil, "Test 18: frame still has an anchor")
+check(r18.right <= SCREEN_W and r18.left >= 0 and r18.bottom >= 0 and r18.top <= SCREEN_H,
+  ("Test 18: bottom-right frame stays on screen (L=%.0f B=%.0f R=%.0f T=%.0f)"):format(r18.left, r18.bottom, r18.right, r18.top))
+check(r18.right <= SCREEN_W - NT_MARGIN and r18.left >= NT_MARGIN
+  and r18.bottom >= NT_MARGIN and r18.top <= SCREEN_H - NT_MARGIN,
+  ("Test 18: frame inside the Relayout margin box (L=%.0f B=%.0f R=%.0f T=%.0f)"):format(r18.left, r18.bottom, r18.right, r18.top))
+check(r18.right == SCREEN_W - NT_MARGIN and r18.bottom == NT_MARGIN,
+  ("Test 18: clamp lands exactly on the margin-box edges (R=%s B=%s)"):format(tostring(r18.right), tostring(r18.bottom)))
+-- The clamp moved the anchor — read it back through the REAL contract:
+local ap18, arel18, arp18, ax18, ay18 = GT:GetPoint(1)
+check(ap18 == "BOTTOMRIGHT" and arel18 == UIParent and arp18 == "BOTTOMRIGHT",
+  "Test 18: anchor identity preserved by the clamp (point, relativeTo, relativePoint)")
+check(ax18 == 40 - ((SCREEN_W + 40) - (SCREEN_W - NT_MARGIN)),
+  "Test 18: xOffset pulled left by exactly the right-edge overflow (xOfs=" .. tostring(ax18) .. ")")
+check(ay18 == -30 + (NT_MARGIN - (-30)),
+  "Test 18: yOffset pulled up by exactly the bottom-edge overflow (yOfs=" .. tostring(ay18) .. ")")
 check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H, "Test 18: backdrop still encloses all lines")
 
--- Test 19: hostile re-entry. A client whose Layout() re-fires the OnShow
--- hook must not produce an append loop or duplicate headers. (The hostile
--- wrapper re-fires the hook and delegates the increment/resize to the
--- base Layout, so one call still counts as one layout.)
-local origLayout = GT.Layout
-GT.Layout = function(self)
-  origLayout(self)
+-- Test 19: hostile re-entry. A client whose Show() first wipes and
+-- re-pays content from its own source and THEN fires the OnShow hook —
+-- the worst re-entry for the show-path relayout (the addon's own show
+-- would discard its just-appended block). The lock + content guard must
+-- still yield exactly one block, and the show calls must stay bounded
+-- (no re-layout loop).
+local benignShow = GT.Show
+GT.Show = function(self)
+  GT.showCalls = (GT.showCalls or 0) + 1
+  self.lines = { "Peacebloom", "Herbalism" } -- hostile re-pay from source
+  self:sizeFromContent()
+  self.shown = true
   for _, fn in ipairs(self.hooks.OnShow or {}) do
     fn(self)
   end
 end
+local sc19 = GT.showCalls
 clientHoverAt("Peacebloom", 960, 400)
-check(headerCount() == 1, "Test 19: hostile Layout re-firing OnShow — exactly one header")
-check((GT.layoutCalls or 0) <= 4, "Test 19: re-layout calls bounded (no hook loop)")
+check(headerCount() == 1, "Test 19: hostile Show re-firing OnShow — exactly one header")
+check(GT.showCalls <= sc19 + 2,
+  "Test 19: show calls bounded (client 1 + addon 1, no re-layout loop) (got " .. (GT.showCalls - sc19) .. ")")
 check(has("Peacebloom | 100% (base)"), "Test 19: block content intact after hostile re-entry")
-local l19, b19, r19, t19 = rectOf()
-check(l19 >= 0 and b19 >= 0 and r19 <= SCREEN_W and t19 <= SCREEN_H, "Test 19: frame on screen after hostile re-entry")
-GT.Layout = origLayout
+local r19 = rectOf()
+check(r19 ~= nil and r19.right <= SCREEN_W and r19.left >= 0 and r19.bottom >= 0 and r19.top <= SCREEN_H,
+  "Test 19: frame on screen after hostile re-entry")
+GT.Show = benignShow
+check(T._error == nil, "Test 19: no error recorded through the hostile path")
 
--- Test 20: /nt ttdiag — while the tooltip is shown it reports the live
--- layout state (NumLines, anchor points, screen rect, pre-/post-Show).
+-- Test 20: /nt ttdiag — the only in-client evidence channel. It must
+-- print the real anchor fields in the real GetPoint order (point,
+-- relativeTo, relativePoint, offsetX, offsetY), the measured screen
+-- edges, and the on-screen/margin verdict — wrong field order there
+-- wastes the smoke test.
 local chat2 = {}
 local origAddMsg = DEFAULT_CHAT_FRAME.AddMessage
 DEFAULT_CHAT_FRAME.AddMessage = function(self, m) chat2[#chat2 + 1] = m end
@@ -456,13 +535,18 @@ end
 DEFAULT_CHAT_FRAME.AddMessage = origAddMsg
 check(type(T.Diag) == "function", "Test 20: T:Diag exists")
 check(diagOut:find("NumLines=", 1, true) ~= nil, "Test 20: ttdiag prints NumLines")
-check(diagOut:find("point 1:", 1, true) ~= nil, "Test 20: ttdiag prints the anchor point")
-check(diagOut:find("screen 1920x1080", 1, true) ~= nil, "Test 20: ttdiag prints screen size + rect")
+check(diagOut:find("point 1: TOPLEFT of UIParent BOTTOMLEFT", 1, true) ~= nil,
+  "Test 20: ttdiag prints the anchor in real field order (point, relativeTo, relativePoint)")
+check(diagOut:find("xOfs=976", 1, true) ~= nil, "Test 20: ttdiag prints offsetX (4th GetPoint value)")
+check(diagOut:find("yOfs=664", 1, true) ~= nil, "Test 20: ttdiag prints offsetY (5th GetPoint value)")
+check(diagOut:find("measured: left=", 1, true) ~= nil, "Test 20: ttdiag prints the measured screen edges")
+check(diagOut:find("screen 1920x1080", 1, true) ~= nil, "Test 20: ttdiag prints the screen size + rect")
+check(diagOut:find("within margin", 1, true) ~= nil, "Test 20: ttdiag prints the on-screen verdict")
 check(diagOut:find("block: title=Peacebloom", 1, true) ~= nil, "Test 20: ttdiag reports the block state")
 check(diagOut:find("added=", 1, true) ~= nil, "Test 20: ttdiag reports pre-/post-Show add")
 
 -- Test 21 (final): nothing errored, including through the layout work
--- (re-layout, clamp, hostile re-entry, diag).
+-- (show-path relayout, clamp, hostile re-entry, diag).
 check(T._error == nil, "Test 21: ns.Tooltip._error == nil after layout tests")
 
 if failed > 0 then
