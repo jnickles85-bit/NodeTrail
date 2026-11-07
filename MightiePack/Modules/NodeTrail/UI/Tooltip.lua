@@ -63,17 +63,37 @@ end
 -- block as intact, so read what the tooltip actually holds — prefer the
 -- per-line text API, falling back to the font strings this addon already
 -- relies on for the title.
+--
+-- BOTH sources are only accepted as a plain string. `GameTooltip:GetLine`
+-- is not a verified method on this client (Forever 16001); if it exists but
+-- returns a different shape (a table of segments, a colour-wrapped object —
+-- anything non-string), treating it as line text would make `headerPresent`
+-- never match, so `Refresh` would conclude the block is gone and append
+-- another one every poll tick (~5/s). A non-string from `GetLine` is simply
+-- discarded and the font string is used instead; the font-string path is
+-- type-checked the same way.
+local function isStringLine(x)
+  return type(x) == "string"
+end
+
 local function lineText(tooltip, i)
+  local text
   if type(tooltip.GetLine) == "function" then
-    local text = tooltip:GetLine(i)
-    if text ~= nil then return text end
-    return nil
+    local candidate = tooltip:GetLine(i)
+    if isStringLine(candidate) then
+      text = candidate
+    end
   end
-  local fs = _G["GameTooltipTextLeft" .. i]
-  if fs and type(fs.GetText) == "function" then
-    return fs:GetText()
+  if text == nil then
+    local fs = _G["GameTooltipTextLeft" .. i]
+    if fs and type(fs.GetText) == "function" then
+      local t = fs:GetText()
+      if isStringLine(t) then
+        text = t
+      end
+    end
   end
-  return nil
+  return text
 end
 
 local function headerPresent(tooltip)

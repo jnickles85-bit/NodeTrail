@@ -92,8 +92,19 @@ GT.ClearLines = function(self)
   self.lines = {}
 end
 GameTooltip = GT
+local origGetLine = GT.GetLine -- restore point for tests that swap the stub
 
-_G["GameTooltipTextLeft1"] = { GetText = function() return GT.lines[1] end }
+-- Font strings: the proven line-reading path the addon falls back to.
+-- Provide a full map (title at index 1, real content at the rest) so the
+-- font-string path holds the real text at any index — the title lookup and
+-- the whole block are visible exactly as the lines array holds them.
+local function makeFontString(i)
+  return { GetText = function() return GT.lines[i] end }
+end
+for _ = 1, 40 do
+  local idx = _
+  _G["GameTooltipTextLeft" .. idx] = makeFontString(idx)
+end
 
 -- Refresh spy: counts every time the addon evaluates a refresh, whether or
 -- not it ends up a no-op.
@@ -261,8 +272,32 @@ end
 check(refreshCalls == callsBefore12 + 2, "Test 12: 0.4s of ticks evaluates the refresh at most ~5x/s (exactly 2)")
 check(headerCount() == 1, "Test 12: no duplicate header from throttled polls")
 
--- Test 13: nothing errored along the way
-check(T._error == nil, "Test 13: ns.Tooltip._error == nil")
+-- Test 13: GetLine returns a TABLE instead of line text (the likely shape if
+-- this client's unverified GameTooltip:GetLine is segment-based). lineText
+-- must reject the non-string and fall through to the font strings, which
+-- still hold the real text — otherwise headerPresent never matches and
+-- every poll tick appends another NodeTrail block.
+GT.GetLine = function() return { "NodeTrail" } end
+hover("Peacebloom")
+check(headerCount() == 1, "Test 13: precondition — header exactly once after hover (table GetLine)")
+for i = 1, 5 do pollTick() end
+check(headerCount() == 1, "Test 13: table-returning GetLine — header exactly once after five poll ticks")
+check(has("Peacebloom | 100% (base)"), "Test 13: Peacebloom drop line present with table GetLine")
+check(has("Your picks: none yet"), "Test 13: picks line present with table GetLine")
+GT.GetLine = origGetLine
+
+-- Test 14: GetLine absent entirely — the font-string path alone must resolve
+-- both the title and the header and stay idempotent across ticks.
+GT.GetLine = nil
+hover("Peacebloom")
+check(headerCount() == 1, "Test 14: precondition — header exactly once after hover (no GetLine)")
+for i = 1, 5 do pollTick() end
+check(headerCount() == 1, "Test 14: missing GetLine — header exactly once via the font-string path")
+check(has("Peacebloom | 100% (base)"), "Test 14: Peacebloom drop line present via font strings")
+GT.GetLine = origGetLine
+
+-- Test 15: nothing errored along the way
+check(T._error == nil, "Test 15: ns.Tooltip._error == nil")
 
 if failed > 0 then
   os.exit(1)
