@@ -121,6 +121,104 @@ local d = run("ttdiag")
 check(d:find("ttdiag", 1, true) ~= nil, "ttdiag prints")
 check(d:find("unavailable", 1, true) ~= nil, "ttdiag falls back when the tooltip stub has no Diag")
 
+-- ── /mpack status identity header (t_e9996745) ──────────────────────────
+-- The card: `/mpack status` must print, BEFORE the module lines, an addon
+-- version line, an interface/client-build line (build number via
+-- select(4, GetBuildInfo()) plus the full GetBuildInfo() version string),
+-- the current locale, and whether GatherMate2 is loaded — so a paste of
+-- the output is a self-describing bug report. We drive the REAL top-level
+-- Core.lua status branch (SlashCmdList.MIGHTIEPACK from the loaded file)
+-- on a fresh umbrella package built from the real Core.lua + Modules.lua
+-- (real RegisterModule / IsModuleEnabled / module loop), with the client
+-- metadata APIs stubbed.
+MightiePackDB = nil
+local mpkg = {}
+assert(loadfile(root .. "/MightiePack/Core.lua"))("MightiePack", mpkg)
+assert(loadfile(root .. "/MightiePack/Modules.lua"))("MightiePack", mpkg)
+mpkg.RegisterModule("NodeTrail", {
+  title = "NodeTrail",
+  notes = "Herb routes from your own gathers (white path on world map + minimap), herb tooltip. /nt start | stop | reload | status",
+  Enable = function() end, -- not called here (no EnableModules in this spec)
+})
+local mpOpened = false
+mpkg.OpenOptions = function() mpOpened = true end
+
+GetAddOnMetadata = function(name, what)
+  if name ~= "MightiePack" then return nil end
+  if what == "Version" then return "0.3.0" end
+  if what == "Interface" then return "16001" end
+  return nil
+end
+GetBuildInfo = function() return "16", "0", "0", "16001" end
+GetLocale = function() return "enUS" end
+IsAddOnLoaded = function(name) return name == "GatherMate2" and true or false end
+
+check(SlashCmdList.MIGHTIEPACK ~= nil, "MIGHTIEPACK slash registered by real Core.lua")
+local function runMp(cmd)
+  for i = #chat, 1, -1 do chat[i] = nil end
+  SlashCmdList.MIGHTIEPACK(cmd)
+  return table.concat(chat, "\n")
+end
+
+local st = runMp("status")
+check(st:find("version 0.3.0", 1, true) ~= nil, "mpack status: version line from GetAddOnMetadata")
+check(st:find("interface 16001", 1, true) ~= nil, "mpack status: interface from TOC metadata")
+check(st:find("build 16001", 1, true) ~= nil, "mpack status: client build number (select 4)")
+check(st:find("client 16.0.0.16001", 1, true) ~= nil, "mpack status: full GetBuildInfo version string")
+check(st:find("locale enUS", 1, true) ~= nil, "mpack status: current locale")
+check(st:find("GatherMate2: loaded", 1, true) ~= nil, "mpack status: GatherMate2 loaded")
+check(st:find("NodeTrail: on", 1, true) ~= nil, "mpack status: NodeTrail module line still on")
+check(st:find("Touchstone: off (coming soon)", 1, true) ~= nil, "mpack status: Touchstone module line still off")
+local vPos, ntPos = st:find("version 0.3.0", 1, true), st:find("NodeTrail: on", 1, true)
+check(vPos ~= nil and ntPos ~= nil and vPos < ntPos, "mpack status: header lines come before module lines")
+
+IsAddOnLoaded = function() return false end
+local stGm = runMp("status")
+check(stGm:find("GatherMate2: not loaded", 1, true) ~= nil, "mpack status: GatherMate2 not loaded when absent")
+IsAddOnLoaded = function(name) return name == "GatherMate2" and true or false end
+
+mpOpened = false
+runMp("")
+check(mpOpened == true, "mpack: no argument still opens options")
+check(#chat == 0, "mpack: no argument prints nothing")
+mpOpened = false
+runMp("options")
+check(mpOpened == true, "mpack: 'options' still opens options")
+check(runMp("bogus"):find("/mpack [options|status]", 1, true) ~= nil, "mpack: bogus command prints usage")
+
+-- A nil GetAddOnMetadata (function missing AND nil return) must print
+-- "version unknown", not error — both variants the card calls out.
+GetAddOnMetadata = nil
+local okE, stE = pcall(runMp, "status")
+check(okE, "mpack status: nil GetAddOnMetadata does not error (missing function)")
+if okE then
+  check(stE:find("version unknown", 1, true) ~= nil, "mpack status: nil GetAddOnMetadata prints version unknown")
+  check(stE:find("interface unknown", 1, true) ~= nil, "mpack status: nil GetAddOnMetadata prints interface unknown")
+  check(stE:find("NodeTrail: on", 1, true) ~= nil, "mpack status: module lines survive the nil metadata")
+end
+GetAddOnMetadata = function() return nil end
+local okR, stR = pcall(runMp, "status")
+check(okR, "mpack status: GetAddOnMetadata returning nil does not error")
+if okR then
+  check(stR:find("version unknown", 1, true) ~= nil, "mpack status: nil return prints version unknown")
+end
+
+-- The umbrella_spec environment: NONE of the metadata globals exist at all.
+GetAddOnMetadata = nil
+GetBuildInfo = nil
+GetLocale = nil
+IsAddOnLoaded = nil
+local okN, stN = pcall(runMp, "status")
+check(okN, "mpack status: all metadata globals absent does not error (umbrella_spec environment)")
+if okN then
+  check(stN:find("version unknown", 1, true) ~= nil, "all absent: version unknown")
+  check(stN:find("interface unknown", 1, true) ~= nil, "all absent: interface unknown")
+  check(stN:find("build unknown", 1, true) ~= nil, "all absent: build unknown")
+  check(stN:find("locale unknown", 1, true) ~= nil, "all absent: locale unknown")
+  check(stN:find("GatherMate2: unknown", 1, true) ~= nil, "all absent: GatherMate2 unknown")
+  check(stN:find("NodeTrail: on", 1, true) ~= nil, "all absent: module lines still printed")
+end
+
 if failed == 0 then
   print("slash_spec: ok")
 else
