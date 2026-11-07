@@ -763,6 +763,142 @@ function Rc:GetUses(itemID)
   return db.alchemy[itemID]
 end
 
+-- ── Shared truth for the options panel and /nt scanrecipes ────────
+-- One source, three surfaces: the panel's status line, the slash
+-- command, and the manual "Scan now" button all read these, so they
+-- can never drift apart from each other.
+
+local function trunc(s, n)
+  if type(s) ~= "string" or s == "" then
+    return nil
+  end
+  if #s <= n then
+    return s
+  end
+  return s:sub(1, n - 3) .. "..."
+end
+
+-- A human "when" for a recorded scan timestamp, from pure epoch
+-- arithmetic — no date() call, so it is safe in the addon sandbox.
+function Rc:When(epoch)
+  local e = tonumber(epoch) or 0
+  local dt = time() - e
+  if dt < 0 then
+    dt = 0
+  end
+  if dt < 90 then
+    return dt .. "s ago"
+  end
+  if dt < 90 * 60 then
+    return math.floor(dt / 60) .. "m ago"
+  end
+  return math.floor(dt / 3600) .. "h ago"
+end
+
+-- Can the OPEN profession window be positively identified as Alchemy?
+-- Undecidable is false — the scan gate (t_217033d4) refuses to write
+-- on exactly the same condition.
+function Rc:AlchemyOpen()
+  local prof
+  if type(C_TradeSkillUI) == "table" then
+    prof = openProfession(C_TradeSkillUI)
+  end
+  if prof == nil and type(GetTradeSkillLine) == "function" then
+    local ok, l = pcall(GetTradeSkillLine)
+    if ok and type(l) == "string" and l ~= "" then
+      prof = l
+    end
+  end
+  if prof == nil then
+    return false
+  end
+  local alch = self:AlchName()
+  return prof == alch or prof == "Alchemy"
+end
+
+-- THE one status line (t_36412359). Four states, same truth as
+-- /nt status:
+--   "scanned: N recipes (modern, <when>)"       — the map is persisted
+--   "last scan found no reagents"               — a scan ran, saved nothing
+--   "this client cannot list recipes (<reason>)" — no trade-skill API
+--   "not scanned yet"                           — API present, no scan yet
+function Rc:StatusLine()
+  local scanned
+  if type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" then
+    scanned = NodeTrailDB.recipes.alchemyScanned
+  end
+  local d = type(Rc._diag) == "table" and Rc._diag or nil
+  if scanned ~= nil then
+    local n = tonumber(d and d.recipeCount) or 0
+    local via = d and d.path or "unknown"
+    return ("scanned: %d recipes (%s, %s)"):format(n, via, self:When(scanned))
+  end
+  if d and d.gated == "no-reagents" then
+    return "last scan found no reagents"
+  end
+  local okA, a = pcall(Rc.APIInfo, Rc)
+  if okA and type(a) == "table" and a.available == false then
+    local reason = trunc(d and d.error, 80)
+    if reason == nil then
+      reason = "no trade skill API found on this client"
+    end
+    return "this client cannot list recipes (" .. reason .. ")"
+  end
+  return "not scanned yet"
+end
+
+-- The last recorded scan error, truncated for the panel — nil when
+-- the current state carries no error (a completed scan, a clean
+-- "not scanned yet").
+function Rc:LastError()
+  local d = type(Rc._diag) == "table" and Rc._diag or nil
+  if d and type(d.error) == "string" and d.error ~= "" then
+    return trunc(d.error, 100)
+  end
+  return nil
+end
+
+-- Manual rescan: the options panel's "Scan now" button and
+-- /nt scanrecipes both go through here. Returns (done, msg) where
+-- msg is chat-ready. Truthful by construction — it never claims a
+-- scan it did not get (t_36412359):
+--   * no usable trade-skill API  → the client-cannot-list line;
+--   * Alchemy window not open   → the instruction line, nothing else;
+--   * Alchemy window open       → run the scan; success OR the real
+--     error string from Rc._diag, truncated.
+function Rc:TryScanNow()
+  local okI, info = pcall(Rc.APIInfo, Rc)
+  if not okI then
+    return false, "NodeTrail recipes: could not probe the client API: " .. tostring(info)
+  end
+  if info.available == false then
+    local d = type(Rc._diag) == "table" and Rc._diag or nil
+    local reason = trunc(d and d.error, 80) or "no trade skill API found on this client"
+    return false,
+      "NodeTrail recipes: this client cannot list recipes (" .. reason .. ")"
+  end
+  if not self:AlchemyOpen() then
+    return false,
+      "NodeTrail recipes: open your Alchemy window, then press this again."
+  end
+  local ok, done, err = pcall(Rc.Scan, Rc)
+  if not ok then
+    return false, "NodeTrail recipes: scan failed: " .. tostring(err)
+  end
+  if done then
+    local db = ns.GetRecipeDB()
+    local n = 0
+    for _ in pairs(db.alchemy or {}) do
+      n = n + 1
+    end
+    return true,
+      "NodeTrail recipes: scanned successfully (" .. n .. " reagent(s) mapped)."
+  end
+  local d = type(Rc._diag) == "table" and Rc._diag or nil
+  local reason = trunc(d and d.error, 100) or "the scan found no usable data"
+  return false, "NodeTrail recipes: " .. reason
+end
+
 function Rc:Enable()
   if self._enabled then
     return
@@ -774,14 +910,38 @@ function Rc:Enable()
       or event == "TRADE_SKILL_UPDATE"
       or event == "TRADE_SKILLS_SHOW"
       or event == "TRADE_SKILLS_UPDATE" then
+      -- Every Alchemy open is a fresh scan — a newly learned recipe
+      -- must appear without the player pressing anything, so a
+      -- successful earlier scan never suppresses this one
+      -- (t_36412359). A pending flag set by a NEW_RECIPE_LEARNED that
+      -- fired while the window was closed flushes here.
+      Rc._pendingRescan = false
       local ok, err = pcall(Rc.Scan)
       if not ok then
         Rc._error = tostring(err)
       end
+    elseif event == "NEW_RECIPE_LEARNED" then
+      -- Only clients that know this event ever fire it (it is gated at
+      -- registration below, never registered when the client rejects
+      -- it). While the Alchemy window is open, rescan immediately;
+      -- otherwise flag the next open to rescan (t_36412359).
+      if Rc:AlchemyOpen() then
+        local ok, err = pcall(Rc.Scan)
+        if not ok then
+          Rc._error = tostring(err)
+        end
+      else
+        Rc._pendingRescan = true
+      end
     end
   end)
-  Rc._events = {}
+  local allEvents = {}
   for _, e in ipairs(TRADE_EVENTS) do
+    table.insert(allEvents, e)
+  end
+  table.insert(allEvents, "NEW_RECIPE_LEARNED")
+  Rc._events = {}
+  for _, e in ipairs(allEvents) do
     -- Register only what this client knows. On Forever 16001 only
     -- TRADE_SKILL_SHOW is valid; the other registers raise "Attempt to
     -- register unknown event" — so when C_EventUtils is present, ask it

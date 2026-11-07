@@ -76,8 +76,107 @@ local function syncCheckboxes()
   end
 end
 
+-- ── Recipes block (NodeTrail's Alchemy recipe scan) ─────────────────
+-- The scan used to be invisible unless you knew /nt status, and
+-- learning a recipe never refreshed it (t_36412359). This block
+-- surfaces the SAME truth the panel/slash share (Rc:StatusLine —
+-- four states: scanned / not scanned yet / cannot list / no reagents)
+-- plus a "Scan now" button (Rc:TryScanNow). Every lookup is pcall'd,
+-- so the panel still renders when the NodeTrail module is off.
+local function ntRecipes()
+  if pkg and pkg.NodeTrail and type(pkg.NodeTrail.Recipes) == "table" then
+    return pkg.NodeTrail.Recipes
+  end
+  return nil
+end
+
+local moduleCount = 0
+for _ in pairs(pkg.moduleOrder or {}) do
+  moduleCount = moduleCount + 1
+end
+if moduleCount < 1 then
+  moduleCount = 1
+end
+local lastBoxY = -48 - (moduleCount - 1) * 32
+local recHeaderY = lastBoxY - 36
+local recStatusY = recHeaderY - 18
+local recErrorY = recStatusY - 16
+local recButtonY = recErrorY - 22
+
+local recHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+recHeader:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, recHeaderY)
+recHeader:SetText("Alchemy Recipes")
+
+local recStatus = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+recStatus:SetPoint("LEFT", recHeader, "LEFT", 0, recStatusY - recHeaderY)
+recStatus:SetText("")
+
+local recError = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+recError:SetPoint("LEFT", recHeader, "LEFT", 0, recErrorY - recHeaderY)
+recError:SetText("")
+recError:Hide()
+
+local function syncRecipesBlock()
+  local rec = ntRecipes()
+  if rec and type(rec.StatusLine) == "function" then
+    local ok, line = pcall(rec.StatusLine, rec)
+    if ok and type(line) == "string" then
+      recStatus:SetText(line)
+    else
+      recStatus:SetText("recipes: status unavailable (" .. tostring(line) .. ")")
+    end
+    recStatus:Show()
+  else
+    recStatus:SetText("recipe module not loaded — turn NodeTrail on")
+    recStatus:Show()
+  end
+  local err
+  if rec and type(rec.LastError) == "function" then
+    local okE, e = pcall(rec.LastError, rec)
+    if okE and type(e) == "string" and e ~= "" then
+      err = e
+    end
+  end
+  if err then
+    recError:SetText("last error: " .. err)
+    recError:Show()
+  else
+    recError:SetText("")
+    recError:Hide()
+  end
+end
+
+local recButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+recButton:SetPoint("TOPLEFT", recHeader, "LEFT", 0, recButtonY - recHeaderY)
+recButton:SetSize(96, 24)
+recButton:SetText("Scan now")
+recButton:SetScript("OnClick", function()
+  local rec = ntRecipes()
+  if rec and type(rec.TryScanNow) == "function" then
+    local ok, done, msg = pcall(rec.TryScanNow, rec)
+    if not ok then
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail recipes: scan failed: " .. tostring(done))
+    else
+      DEFAULT_CHAT_FRAME:AddMessage(msg)
+    end
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail recipes: module not loaded (turn NodeTrail on)")
+  end
+  syncRecipesBlock()
+end)
+recButton:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+  GameTooltip:SetText("Rescan your learned Alchemy recipes now")
+  GameTooltip:AddLine("Needs the Alchemy window open. A learned recipe also refreshes automatically the next time you open Alchemy.", 1, 1, 1, true)
+  GameTooltip:Show()
+end)
+recButton:SetScript("OnLeave", function()
+  GameTooltip:Hide()
+end)
+
 panel:SetScript("OnShow", function()
   syncCheckboxes()
+  syncRecipesBlock()
 end)
 
 StaticPopupDialogs["MIGHTIEPACK_DISABLE_MODULE"] = {

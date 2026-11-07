@@ -22,6 +22,10 @@ local function printHelp()
   printL("HELP_STOP")
   printL("HELP_RELOAD")
   printL("HELP_STATUS")
+  -- t_36412359. Inline like the ttdiag lines below: the new command is
+  -- documented without a new locale entry.
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt scanrecipes (alias: /nt recipes) - recipe-scan status; scans now if your Alchemy window is open")
   printL("HELP_NOTES")
 end
 
@@ -133,6 +137,8 @@ local function handleSlash(msg)
     end
   elseif msg == "status" then
     ns.PrintStatus()
+  elseif msg == "scanrecipes" or msg == "recipes" then
+    ns.ScanRecipes()
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -151,6 +157,34 @@ local function handleSlash(msg)
   else
     printHelp()
   end
+end
+
+-- /nt scanrecipes (alias /nt recipes) — the same line the options
+-- panel shows, plus a live scan when the Alchemy window is open
+-- (t_36412359). The status is read AFTER the attempt, so it is the
+-- current truth; a result message that only repeats the status line
+-- is dropped instead of printed twice.
+function ns.ScanRecipes()
+  local rec = ns.Recipes
+  if type(rec) ~= "table" or type(rec.StatusLine) ~= "function" or type(rec.TryScanNow) ~= "function" then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail recipes: module not loaded (turn NodeTrail on)")
+    return
+  end
+  local ok, done, msg = pcall(rec.TryScanNow, rec)
+  if not ok then
+    msg = "NodeTrail recipes: scan failed: " .. tostring(done)
+  end
+  local okS, line = pcall(rec.StatusLine, rec)
+  if okS and type(line) == "string" then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail recipes: " .. line)
+    if msg == "NodeTrail recipes: " .. line then
+      msg = nil
+    end
+  end
+  if msg then
+    DEFAULT_CHAT_FRAME:AddMessage(msg)
+  end
+  return ok and done or false
 end
 
 function ns.Enable()
