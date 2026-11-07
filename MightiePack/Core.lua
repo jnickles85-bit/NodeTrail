@@ -43,13 +43,17 @@ end)
 SLASH_MIGHTIEPACK1 = "/mightiepack"
 SLASH_MIGHTIEPACK2 = "/mpack"
 SlashCmdList.MIGHTIEPACK = function(msg)
-  msg = (msg or ""):match("^%s*(.-)%s*$") or ""
-  msg = msg:lower()
-  if msg == "" or msg == "options" or msg == "config" then
+  local raw = (msg or ""):match("^%s*(.-)%s*$") or ""
+  -- `rest` is the SECOND capture: `local x = s:match(...)` takes only
+  -- the first capture back, which would be the command word itself.
+  local first, rest = raw:match("^(%S+)%s*(.*)$")
+  first = (first or ""):lower()
+  rest = (rest or ""):match("^%s*(.-)%s*$") or ""
+  if first == "" or first == "options" or first == "config" then
     if type(pkg.OpenOptions) == "function" then
       pkg.OpenOptions()
     end
-  elseif msg == "status" then
+  elseif first == "status" then
     -- t_e9996745: identity header so `/mpack status` output is a
     -- self-describing bug report: addon version + Interface (both from the
     -- TOC via GetAddOnMetadata("MightiePack", ...)), client build number
@@ -118,8 +122,20 @@ SlashCmdList.MIGHTIEPACK = function(msg)
         pkg.Print(line)
       end
     end
+  elseif first == "bug" then
+    -- t_ed1e009e: the in-game bug report form — the same one the
+    -- options panel button opens. Optional module argument preselects
+    -- that module (/mpack bug skinning); case-insensitive.
+    if type(pkg.OpenBugReport) == "function" then
+      pkg.OpenBugReport(rest ~= "" and rest or nil)
+    else
+      pkg.Print("bug report form unavailable (BugReport module did not load)")
+    end
   else
+    -- keep the historical usage line verbatim (existing callers/tests
+    -- rely on it); the new subcommand gets its own line.
     pkg.Print("/mpack [options|status]")
+    pkg.Print("/mpack bug [module] — open the bug report form (no upload — copy and paste into Discord)")
     if pkg.IsModuleEnabled("NodeTrail") then
       pkg.Print("NodeTrail: /nt help")
     end

@@ -174,6 +174,41 @@ recButton:SetScript("OnLeave", function()
   GameTooltip:Hide()
 end)
 
+-- ── Bug report entry point ──────────────────────────────────────────
+-- t_ed1e009e: one button into the report form. The form auto-fills
+-- version/build/locale/character/zone/module state/diagnostics; the
+-- player writes only the description. No upload: the client has no
+-- HTTP, so the form's job ends at a copyable, pre-selected box.
+local bugHeaderY = recButtonY - 40
+local bugButtonY = bugHeaderY - 26
+
+local bugHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+bugHeader:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, bugHeaderY)
+bugHeader:SetText("Bug reports")
+
+local bugButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+bugButton:SetPoint("TOPLEFT", bugHeader, "LEFT", 0, bugButtonY - bugHeaderY)
+bugButton:SetSize(128, 24)
+bugButton:SetText("Report a bug")
+bugButton:SetScript("OnClick", function()
+  if type(pkg.OpenBugReport) == "function" then
+    -- opened from the options panel: no module argument, so the form
+    -- preselects NodeTrail (its default target)
+    pkg.OpenBugReport()
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("MightiePack: bug report form unavailable (BugReport module did not load)")
+  end
+end)
+bugButton:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+  GameTooltip:SetText("Open the bug report form — version, build, locale, character, zone and module diagnostics are filled in for you")
+  GameTooltip:AddLine("Nothing is uploaded: copy the report and paste it into the #mightiepack-bugs Discord channel.", 1, 1, 1, true)
+  GameTooltip:Show()
+end)
+bugButton:SetScript("OnLeave", function()
+  GameTooltip:Hide()
+end)
+
 panel:SetScript("OnShow", function()
   syncCheckboxes()
   syncRecipesBlock()
