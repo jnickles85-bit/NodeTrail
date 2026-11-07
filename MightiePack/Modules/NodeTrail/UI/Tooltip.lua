@@ -56,7 +56,16 @@ function T.BuildLines(name)
     table.insert(lines, { left = "Alchemy: " .. table.concat(display, ", ") })
   elseif NodeTrailDB and NodeTrailDB.recipes and NodeTrailDB.recipes.alchemyScanned == nil
     and recipeAPIAvailable() then
-    table.insert(lines, { left = "Open Alchemy once to list recipe uses" })
+    -- A scan that already ran (the Alchemy window was open, its recipes
+    -- were read) but found no reagent slots is INCOMPLETE: re-promising
+    -- "open Alchemy once" promises a step that was already taken, so say
+    -- what actually happened instead (t_81da8886).
+    local d = (ns.Recipes and type(ns.Recipes._diag) == "table") and ns.Recipes._diag or nil
+    if d and d.gated == "no-reagents" then
+      table.insert(lines, { left = "Alchemy scan found no reagents — none saved" })
+    else
+      table.insert(lines, { left = "Open Alchemy once to list recipe uses" })
+    end
   end
   return lines
 end
@@ -324,6 +333,13 @@ function T:Diag()
   if T._error then
     say("error: " .. tostring(T._error))
   end
+  if type(T._skippedScripts) == "table" and #T._skippedScripts > 0 then
+    -- Name the skipped hooks (printed before the hidden-early return so
+    -- the operator sees it even when the tooltip is currently closed,
+    -- t_81da8886).
+    say("skipped scripts: " .. table.concat(T._skippedScripts, ", ")
+      .. " (this client does not expose them — their fast paths are off)")
+  end
   local shown = type(gt.IsShown) == "function" and gt:IsShown() or false
   if not shown then
     say("tooltip hidden; " .. blockState())
@@ -455,12 +471,31 @@ function T:Enable()
   GameTooltip:HookScript("OnShow", onPopulate)
 
   -- SetUnit / SetItem fire on client builds that expose the events; a
-  -- client that lacks one (or the hooking method) loses that fast path
-  -- rather than breaking Enable.
+  -- client that lacks one loses that fast path rather than breaking
+  -- Enable. Forbidden by the live client's own usage error (t_81da8886):
+  --   bad argument #2 to '?' (Usage: local success = self:HookScript(
+  --   scriptTypeName, script[, bindingType]))
+  -- so ask HasScript first when the client offers it, keep the pcall as
+  -- the backstop either way, record the skipped script for /nt ttdiag,
+  -- and never write _error — a missing optional script is not a module
+  -- error and masking it would hide the real ones.
+  self._skippedScripts = {}
   for _, event in ipairs({ "OnTooltipSetUnit", "OnTooltipSetItem" }) do
-    local ok, err = pcall(GameTooltip.HookScript, GameTooltip, event, onPopulate)
-    if not ok then
-      T._error = tostring(err)
+    local skip = false
+    if type(GameTooltip.HasScript) == "function" then
+      local okH, has = pcall(GameTooltip.HasScript, GameTooltip, event)
+      if okH and has == false then
+        skip = true
+      end
+    end
+    if not skip then
+      local ok = pcall(GameTooltip.HookScript, GameTooltip, event, onPopulate)
+      if not ok then
+        skip = true
+      end
+    end
+    if skip then
+      table.insert(self._skippedScripts, event)
     end
   end
 

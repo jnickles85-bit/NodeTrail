@@ -594,6 +594,201 @@ for _, l in ipairs(GameTooltip.lines) do
 end
 check(line19, "Test 19: tooltip shows the correct Alchemy line")
 
+-- ── Tests 20–22 (t_81da8886): the live client just named the three
+-- remaining defects ──────────────────────────────────────────────────
+-- `/nt ttdiag` on Forever 16001: modern API present, Alchemy identified,
+-- 196 recipes enumerated, nothing persisted.
+--   * GetRecipeSchematic REQUIRES (recipeSpellID, isRecraft [,
+--     recipeLevel]) — a one-arg call raises "bad argument #2 to '?'";
+--   * the schematic carries reagents under
+--     reagentSlotSchematics[i].reagents[j], not the flat keys the old
+--     code read;
+--   * HookScript on a script the client doesn't carry raises the usage
+--     error and masked itself into T._error;
+--   * only TRADE_SKILL_SHOW is a valid event on this client;
+--   * a zero-reagent scan wrote an empty map and set alchemyScanned —
+--     the feature silently empty with the hint gone.
+--   Test 20 MUST fail on 91e2867 (it pins the arity + reagent-shape
+--   hole). Test 21 and Test 22 pin the remaining two.
+
+-- Test 20: the live contract, verbatim. The GetRecipeSchematic stub
+-- RAISES unless called with exactly two arguments (the client's own
+-- usage error), and returns a reagentSlotSchematics table. The scan
+-- must produce the same itemID -> recipes map the legacy stub built in
+-- Test 10/14.
+local schemCalls = {}
+C_TradeSkillUI = {
+  GetAllRecipeIDs = function() return { 101, 102 } end,
+  -- No reagents, no name: forces every recipe through the schematic.
+  GetRecipeInfo = function() return nil end,
+  GetRecipeSchematic = function(...)
+    local n = select("#", ...)
+    assert(n == 2, ("GetRecipeSchematic called with %d argument(s); client contract: GetRecipeSchematic(recipeSpellID, isRecraft [, recipeLevel])"):format(n))
+    local id, second = select(1, ...), select(2, ...)
+    schemCalls[#schemCalls + 1] = { id = id, second = second }
+    if id == 101 then
+      return {
+        name = "Minor Healing Potion",
+        reagentSlotSchematics = {
+          { reagents = { { itemID = 2447, quantity = 2 } } },
+          { reagents = { { itemID = 765, quantity = 2 } } },
+          { reagents = { { itemID = 3371, quantity = 1 } } },
+        },
+      }
+    end
+    if id == 102 then
+      return {
+        name = "Elixir of Lion's Strength",
+        reagentSlotSchematics = {
+          { reagents = { { itemID = 2449, quantity = 1 } } },
+          { reagents = { { itemID = 765, quantity = 2 } } },
+          { reagents = { { itemID = 3371, quantity = 1 } } },
+        },
+      }
+    end
+    return nil
+  end,
+  GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+}
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan20, r20 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan20, "Test 20: scan does not error (schematic shape)")
+check(r20 == true, "Test 20: scan reports success (reagents found)")
+local alch20 = NodeTrailDB.recipes.alchemy
+check(alch20[2447] ~= nil and #alch20[2447] == 1 and alch20[2447][1] == "Minor Healing Potion",
+  "Test 20: 2447 → Minor Healing Potion (reagentSlotSchematics walked)")
+check(alch20[765] ~= nil and #alch20[765] == 2 and alch20[765][1] == "Elixir of Lion's Strength",
+  "Test 20: 765 → both recipes, sorted (same map as the legacy stub)")
+check(alch20[2449] ~= nil and alch20[2449][1] == "Elixir of Lion's Strength",
+  "Test 20: 2449 → Elixir")
+check(countAlchKeys(alch20) == 4, "Test 20: exactly 4 reagent keys (got " .. countAlchKeys(alch20) .. ")")
+check(NodeTrailDB.recipes.alchemyScanned ~= nil, "Test 20: alchemyScanned set (a complete scan)")
+local d20 = ns.Recipes._diag
+check(d20 ~= nil and d20.gated == nil, "Test 20: no gate recorded on a complete scan")
+check(d20 ~= nil and (d20.reagentSlots or 0) == 6, "Test 20: _diag.reagentSlots == 6")
+check(d20 ~= nil and d20.error == nil, "Test 20: _diag.error is nil (no schematic call failed)")
+check(#schemCalls == 2, "Test 20: GetRecipeSchematic called once per recipe (got " .. #schemCalls .. ")")
+local args20ok = true
+for _, c in ipairs(schemCalls) do
+  if c.second ~= false then args20ok = false end
+end
+check(args20ok, "Test 20: every GetRecipeSchematic call carried isRecraft=false (the live contract)")
+check(ns.Recipes._error == nil, "Test 20: Recipes no error")
+hover("Peacebloom")
+local f20a = false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Alchemy: Minor Healing Potion" then f20a = true end
+end
+check(f20a, "Test 20: Peacebloom tooltip line (schematic reagents)")
+hover("Silverleaf")
+local f20b, f20c = false, false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Alchemy: Elixir of Lion's Strength, Minor Healing Potion" then f20b = true end
+  if l == "Open Alchemy once to list recipe uses" then f20c = true end
+end
+check(f20b, "Test 20: Silverleaf tooltip line (schematic reagents)")
+check(not f20c, "Test 20: hint gone after a complete modern scan")
+
+-- Test 21: a client whose HookScript REJECTS OnTooltipSetItem (the
+-- live client raised the usage error there). Enable must still install
+-- the OnShow hook, keep _error nil, and name the skipped script in the
+-- diag. Same truthfulness for the trade-skill events: only
+-- TRADE_SKILL_SHOW is valid on the live client.
+local origHook = GameTooltip.HookScript
+GameTooltip.hooks = {}
+GameTooltip.HookScript = function(self, name, fn)
+  assert(name ~= "OnTooltipSetItem",
+    "bad argument #2 to '?' (Usage: local success = self:HookScript(scriptTypeName, script[, bindingType]))")
+  self.hooks[name] = self.hooks[name] or {}
+  table.insert(self.hooks[name], fn)
+end
+-- No HasScript on this stub: the code must fall back to pcall and
+-- treat the rejected hook as a skip, not an error.
+ns.Tooltip._enabled = false
+ns.Tooltip._error = nil
+local okEn21, enErr21 = pcall(ns.Tooltip.Enable, ns.Tooltip)
+check(okEn21, "Test 21: Enable succeeds despite the rejected script: " .. tostring(enErr21))
+check(GameTooltip.hooks.OnShow ~= nil and #GameTooltip.hooks.OnShow == 1,
+  "Test 21: OnShow hook still installed")
+check(GameTooltip.hooks.OnTooltipSetUnit ~= nil, "Test 21: OnTooltipSetUnit installed (supported)")
+check(GameTooltip.hooks.OnTooltipSetItem == nil, "Test 21: OnTooltipSetItem NOT installed (rejected)")
+check(ns.Tooltip._error == nil, "Test 21: a skipped script does NOT write T._error")
+local diagCap = {}
+DEFAULT_CHAT_FRAME.AddMessage = function(_, m) diagCap[#diagCap + 1] = tostring(m) end
+local okDiag21, dErr21 = pcall(ns.Tooltip.Diag, ns.Tooltip)
+DEFAULT_CHAT_FRAME.AddMessage = origAdd
+check(okDiag21, "Test 21: Tooltip:Diag runs: " .. tostring(dErr21))
+local diagText = table.concat(diagCap, "\n")
+check(diagText:find("skipped scripts", 1, true) ~= nil
+  and diagText:find("OnTooltipSetItem", 1, true) ~= nil,
+  "Test 21: diag names the skipped script (OnTooltipSetItem)")
+-- Events: the live client only knows TRADE_SKILL_SHOW.
+C_EventUtils = {
+  IsEventValid = function(e) return e == "TRADE_SKILL_SHOW" end,
+}
+ns.Recipes._enabled = false
+local okRe21, reErr21 = pcall(ns.Recipes.Enable, ns.Recipes)
+check(okRe21, "Test 21: Recipes:Enable does not error: " .. tostring(reErr21))
+local ev21 = ns.Recipes._events
+check(ev21 and ev21.TRADE_SKILL_SHOW == true, "Test 21: TRADE_SKILL_SHOW registered (valid)")
+check(ev21 and ev21.TRADE_SKILL_UPDATE == "invalid event",
+  "Test 21: TRADE_SKILL_UPDATE recorded as 'invalid event' (not registered, not an error string)")
+check(ev21 and ev21.TRADE_SKILLS_SHOW == "invalid event",
+  "Test 21: TRADE_SKILLS_SHOW recorded as 'invalid event'")
+check(ev21 and ev21.TRADE_SKILLS_UPDATE == "invalid event",
+  "Test 21: TRADE_SKILLS_UPDATE recorded as 'invalid event'")
+C_EventUtils = nil
+GameTooltip.HookScript = origHook
+
+-- Test 22: the zero-reagent scan on the live client — 196 recipes read,
+-- no reagent slot answered. Must NOT write the map, must NOT set
+-- alchemyScanned, and status must say what happened instead of claiming
+-- success (or re-promising a step that already ran).
+C_TradeSkillUI = {
+  GetAllRecipeIDs = function() return { 201, 202, 203 } end,
+  GetRecipeInfo = function() return nil end,
+  GetRecipeSchematic = function(...)
+    return {
+      name = "Recipe " .. tostring(select(1, ...)),
+      -- Slots exist but are EMPTY — the shape matched, the data did
+      -- not arrive.
+      reagentSlotSchematics = { { reagents = {} } },
+    }
+  end,
+  GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+}
+NodeTrailDB.recipes.alchemy = {}
+NodeTrailDB.recipes.alchemyScanned = nil
+local okScan22, r22 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan22, "Test 22: scan does not error")
+check(r22 == false, "Test 22: zero-reagent scan is NOT reported as complete")
+check(countAlchKeys(NodeTrailDB.recipes.alchemy) == 0, "Test 22: no alchemy map persisted")
+check(NodeTrailDB.recipes.alchemyScanned == nil, "Test 22: alchemyScanned stays nil")
+local d22 = ns.Recipes._diag
+check(d22 ~= nil and d22.gated == "no-reagents", "Test 22: _diag.gated == 'no-reagents'")
+check(d22 ~= nil and d22.path == "modern", "Test 22: _diag.path == 'modern'")
+check(d22 ~= nil and (d22.recipesRead or 0) == 3, "Test 22: _diag records recipesRead == 3")
+check(d22 ~= nil and (d22.reagentSlots or 0) == 0, "Test 22: _diag.reagentSlots == 0")
+check(d22 ~= nil and d22.error ~= nil, "Test 22: _diag.records the reason")
+check(ns.Recipes._error == nil, "Test 22: no module error (it is a recorded state, not a failure)")
+local okSt22, stOut22 = captureStatus()
+check(okSt22, "Test 22: status runs")
+check(stOut22:find("no reagents", 1, true) ~= nil,
+  "Test 22: status says the scan found no reagents")
+check(stOut22:find("scanned", 1, true) == nil,
+  "Test 22: status does NOT claim the scan succeeded")
+check(stOut22:find("open your Alchemy window once", 1, true) == nil,
+  "Test 22: status does NOT re-promise a step that already ran")
+hover("Peacebloom")
+local hint22, alt22 = false, false
+for _, l in ipairs(GameTooltip.lines) do
+  if l == "Open Alchemy once to list recipe uses" then hint22 = true end
+  if type(l) == "string" and l:find("no reagents", 1, true) ~= nil then alt22 = true end
+end
+check(not hint22, "Test 22: tooltip does NOT re-promise 'Open Alchemy once'")
+check(alt22, "Test 22: tooltip says the scan found no reagents")
+
 if failed > 0 then
   os.exit(1)
 else

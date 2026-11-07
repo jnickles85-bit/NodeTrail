@@ -148,6 +148,28 @@ end
 -- A reagent entry may be a number, an item link string, or a table with
 -- an id-ish field; anything else is skipped, never raised.
 
+-- The id may sit under itemID or reagentID (the live schematic slot
+-- entries carry either), a bare id-ish field, an item link, or one level
+-- of nesting ({ item = { itemID = 765 } }) (t_81da8886).
+local ID_KEYS = { "itemID", "reagentID", "id", "itemid", "item", "reagent" }
+
+local function idFromScalar(v)
+  if type(v) == "number" then
+    return v
+  end
+  if type(v) == "string" then
+    local id = v:match("item:%s*(%d+)")
+    if id then
+      return tonumber(id)
+    end
+    local n = tonumber(v)
+    if n then
+      return n
+    end
+  end
+  return nil
+end
+
 local function itemFrom(x)
   if type(x) == "number" then
     return x
@@ -163,29 +185,28 @@ local function itemFrom(x)
     end
     return nil
   end
-  if type(x) == "table" then
-    for _, k in ipairs({ "itemID", "id", "itemid", "item" }) do
-      local v = x[k]
-      if type(v) == "number" then
-        return v
+  if type(x) ~= "table" then
+    return nil
+  end
+  for _, k in ipairs(ID_KEYS) do
+    local v = x[k]
+    if type(v) == "table" then
+      local r = itemFrom(v)
+      if r then
+        return r
       end
-      if type(v) == "string" then
-        local id = v:match("item:%s*(%d+)")
-        if id then
-          return tonumber(id)
-        end
-        local n = tonumber(v)
-        if n then
-          return n
-        end
+    else
+      local r = idFromScalar(v)
+      if r then
+        return r
       end
     end
-    local link = x.link
-    if type(link) == "string" then
-      local id = link:match("item:%s*(%d+)")
-      if id then
-        return tonumber(id)
-      end
+  end
+  local link = x.link
+  if type(link) == "string" then
+    local id = link:match("item:%s*(%d+)")
+    if id then
+      return tonumber(id)
     end
   end
   return nil
@@ -219,12 +240,50 @@ local function fromContainer(v)
   return nil
 end
 
+-- The live schematic (Forever 16001, t_81da8886) carries its reagents
+-- in slots, NOT under the flat keys above:
+--   reagentSlotSchematics[i].reagents[j]
+-- each entry an itemID/reagentID holder, an item link, or a nested
+-- id-table. A slot without its own `reagents` list is treated as the
+-- reagent container itself.
+local function slotReagentsFrom(t)
+  if type(t) ~= "table" then
+    return nil
+  end
+  local slots = t.reagentSlotSchematics
+  if type(slots) ~= "table" then
+    return nil
+  end
+  local out = {}
+  for _, slot in ipairs(slots) do
+    local list
+    if type(slot) == "table" and type(slot.reagents) == "table" then
+      list = fromContainer(slot.reagents)
+    else
+      list = fromContainer(slot)
+    end
+    if type(list) == "table" then
+      for _, id in ipairs(list) do
+        table.insert(out, id)
+      end
+    end
+  end
+  if #out > 0 then
+    return out
+  end
+  return nil
+end
+
 local function reagentsFrom(t)
   if type(t) ~= "table" then
     return nil
   end
+  local r = slotReagentsFrom(t)
+  if r then
+    return r
+  end
   for _, key in ipairs({ "reagents", "requiredReagents", "reagentList" }) do
-    local r = fromContainer(t[key])
+    r = fromContainer(t[key])
     if r then
       return r
     end
@@ -384,7 +443,12 @@ local function modernRecipe(mod, id, errbox)
     end
   end
   if (name == nil or reagents == nil) and type(mod.GetRecipeSchematic) == "function" then
-    local ok, s = pcall(mod.GetRecipeSchematic, id)
+    -- LIVE CONTRACT (Forever 16001, t_81da8886):
+    --   GetRecipeSchematic(recipeSpellID, isRecraft [, recipeLevel])
+    -- The second argument is REQUIRED — a one-argument call raises
+    -- "bad argument #2 to '?'" and every schematic read fails. Pass
+    -- isRecraft=false: we read normal recipes, not recrafts.
+    local ok, s = pcall(mod.GetRecipeSchematic, id, false)
     if not ok then
       errbox.err = "C_TradeSkillUI.GetRecipeSchematic: " .. tostring(s)
     elseif type(s) == "table" then
@@ -479,6 +543,24 @@ function Rc:ScanModern()
     table.sort(unique)
     finalMap[rid] = unique
   end
+  -- Zero reagent slots means the recipe/schematic surface did not answer
+  -- on this client (e.g. every GetRecipeSchematic call failed). Writing
+  -- an empty map AND setting alchemyScanned would make the feature
+  -- silently empty with the hint gone (t_81da8886): treat it as an
+  -- incomplete scan, record why, and let the next TRADE_SKILL_SHOW retry.
+  if reagentSlots == 0 then
+    Rc._diag = {
+      path = "modern",
+      enumVia = via,
+      profession = prof,
+      recipeCount = #ids,
+      recipesRead = recipesRead,
+      reagentSlots = 0,
+      gated = "no-reagents",
+      error = errbox.err or ("the scan read " .. recipesRead .. " recipe(s) but found no reagents — nothing was saved"),
+    }
+    return false
+  end
   local db = ns.GetRecipeDB()
   db.alchemy = finalMap
   NodeTrailDB.recipes.alchemyScanned = time()
@@ -558,6 +640,7 @@ local function scanLegacy()
   end
   local newMap = {}
   local recipesRead = 0
+  local reagentSlots = 0
   for i = 1, nSkills do
     local okI, name, skillType = pcall(GetTradeSkillInfo, i)
     if not okI then
@@ -583,6 +666,7 @@ local function scanLegacy()
             local id = link:match("item:(%d+)")
             if id then
               local nid = tonumber(id)
+              reagentSlots = reagentSlots + 1
               newMap[nid] = newMap[nid] or {}
               table.insert(newMap[nid], name)
             end
@@ -594,6 +678,21 @@ local function scanLegacy()
   local finalMap = {}
   for id, names in pairs(newMap) do
     finalMap[id] = dedupNames(names)
+  end
+  -- Same incomplete-scan rule as the modern path (t_81da8886): a scan
+  -- that read zero reagent slots must not persist an empty map and set
+  -- alchemyScanned.
+  if reagentSlots == 0 then
+    Rc._diag = {
+      path = "legacy",
+      profession = Rc:AlchName(),
+      recipeCount = nSkills,
+      recipesRead = recipesRead,
+      reagentSlots = 0,
+      gated = "no-reagents",
+      error = errbox.err or ("the scan read " .. recipesRead .. " recipe(s) but found no reagents — nothing was saved"),
+    }
+    return false
   end
   local db = ns.GetRecipeDB()
   db.alchemy = finalMap
@@ -683,8 +782,23 @@ function Rc:Enable()
   end)
   Rc._events = {}
   for _, e in ipairs(TRADE_EVENTS) do
-    local ok, err = pcall(frame.RegisterEvent, frame, e)
-    Rc._events[e] = ok and true or tostring(err)
+    -- Register only what this client knows. On Forever 16001 only
+    -- TRADE_SKILL_SHOW is valid; the other registers raise "Attempt to
+    -- register unknown event" — so when C_EventUtils is present, ask it
+    -- first, and record a skipped event as "invalid event" (not an error
+    -- string) so /nt ttdiag stays truthful (t_81da8886).
+    local invalid = false
+    if type(C_EventUtils) == "table"
+      and type(C_EventUtils.IsEventValid) == "function" then
+      local okV, valid = pcall(C_EventUtils.IsEventValid, e)
+      invalid = okV and (valid == false)
+    end
+    if invalid then
+      Rc._events[e] = "invalid event"
+    else
+      local ok, err = pcall(frame.RegisterEvent, frame, e)
+      Rc._events[e] = ok and true or tostring(err)
+    end
   end
 end
 

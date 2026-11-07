@@ -79,6 +79,14 @@ function ns.PrintStatus()
     if gated == "unknown-profession" then
       printL("STATUS_ALCHEMY",
         "a scan ran, but this client reports no profession name — the open window could not be verified as Alchemy, so its recipes were not saved")
+    elseif gated == "no-reagents" then
+      -- The Alchemy window WAS open and its recipes were read, but the
+      -- client returned no usable reagents (e.g. its schematic call
+      -- surface does not match this client). That is an INCOMPLETE scan
+      -- — not a success, and not a step the player still has to take;
+      -- it retries on the next TRADE_SKILL_SHOW (t_81da8886).
+      printL("STATUS_ALCHEMY",
+        "a scan ran with the Alchemy window open, but it found no reagents — nothing was saved (the client returned no usable recipe reagents)")
     else
       -- "Open Alchemy once" is only offered while a scan can actually run.
       -- A client with neither the legacy trade-skill globals nor
