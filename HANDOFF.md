@@ -5,6 +5,34 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
 **2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 
+- **The beast panel shows what SKINNING yields — the corpse loot is gone** (t_2c573dbf).
+  Mightie on a Dire Mottled Boar: "beast tooltip doesnt need the actual items the mob can drop. Just
+  what we obtain from skinning." `Data/SkinHints.lua` no longer aggregates or renders the corpse
+  side: rows are the client's name, `skinnable · skin windows recorded: N` (only when known),
+  `skinned` + its item rows, then `kills seen: N · skinned: M`. No `corpse loot` heading, no corpse
+  item row, no corpse percentage — nothing read from the loot window that opened before the Skinning
+  cast. The RECORD is untouched (`Modules/Skinning` still writes `corpseItems` into
+  `NodeTrailDB.skinning`); the panel simply stops reading it, and `H.Aggregate` no longer builds a
+  corpse list at all. The only item percentages left are the skin ones, still floored at
+  `HerbData.PERSONAL_MIN` and never printed when an item outnumbers `skinned` (a skin window with no
+  successful cast behind it is such a case: `Record:OnSkinLoot` does not set `rec.skinned`).
+- **`Scroll: LOWER PING WHOMEVER` is the CLIENT's own name for item 211787** — the id question
+  (t_2c573dbf). That label came from `GetItemInfo(id)`, so it was checked against the id instead of
+  being "fixed": `/nt ttdiag` now prints one line per distinct recorded item id —
+  `beast: item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same`
+  — and says `DISAGREES (the keying is wrong, not the label)` when the client's name for that id is
+  not the name the loot slot reported, and `GetItemInfo answered nothing` / `answered a secret
+  string` when the client has no usable name. Item 211787 is a real world drop of **this** client's
+  data (WoW Forever 1.60.1 / build 16001 — wowhead `/forever/item=211787`,
+  `warcraftforever.wiki`, `thewowdb`, `ahledger` all carry the same id and name), so the label stays
+  and no keying change was made. A secret answer is reported, never concatenated (the same
+  `issecretvalue` guard `ItemName` uses). `tests/skin_tooltip_spec.lua` pins all of it: §1b the block
+  line-for-line with no corpse trace, §2/§6 the thin and never-skinned cases, §12 the four id→name
+  answers, §11 the impossible-percentage guard moved to the skin side. **16 checks fail on `d34dcb3`**
+  (the new §1b/§2/§6/§12 checks, behavioural FAILs, no traceback); all 42 `tests/*.lua` pass under
+  lua5.1. **Not yet run in game**: the live `id -> name` line for his own boar record is the next
+  step — that is the one thing the specs cannot prove for this client.
+
 - **Hovering a BEAST now shows what its corpse and its skinning have yielded** (t_c0221fd7).
   Mightie: "we are missing the skinning tooltip ... says what we might get if we kill it and skin
   it. Same as herbing just another step in the middle." The block is NodeTrail's own panel again
@@ -14,6 +42,8 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   `NodeTrailDB.skinning.chars[Name-Realm].records[*].creatureID` — never a researched table, because
   no such table exists for a beast. Rows: the client's creature name, `skinnable · skin windows
   recorded: N` (only when known), `corpse loot`, `skinned`, then `kills seen: N · skinned: M`.
+  (**t_2c573dbf later removed the `corpse loot` section and its rows** — the panel is skinning only;
+  see the bullet above.)
   A percentage is printed only at `PERSONAL_MIN` (reused from `HerbData`) and is labelled
   `(yours)`; below that, and whenever an item was seen more often than the sample that would
   divide it, the row is a count. New `tests/skin_tooltip_spec.lua` drives the REAL recorder to

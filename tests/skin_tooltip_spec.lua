@@ -12,9 +12,13 @@
 --      name may be SECRET, so it is never measured, sliced or concatenated);
 --   2. "skinnable" is stated only when we know — a client call that answers a
 --      boolean, else our own skin windows; no skin window yet says nothing;
---   3. corpse and skinning yields are separate sections, counts always, a
---      percentage ONLY once the sample reaches PERSONAL_MIN, and that
---      percentage is labelled as the player's own observation;
+--   3. the SKINNING yield is the only item section (t_2c573dbf: Mightie —
+--      "beast tooltip doesnt need the actual items the mob can drop. Just what
+--      we obtain from skinning"), counts always, a percentage ONLY once the
+--      sample reaches PERSONAL_MIN, and that percentage is labelled as the
+--      player's own observation. The corpse side is still RECORDED — the
+--      records keep `corpseItems` — but nothing from the loot window is
+--      rendered, and /nt ttdiag is where an item id is resolved to a name;
 --   4. "kills seen: N · skinned: M" says how thin the evidence is;
 --   5. a creature we have never seen says "no observations here yet" — never
 --      zeros dressed as data;
@@ -256,30 +260,57 @@ check(r[1] == "Clattering Scorpid", "1: the block opens with the creature's name
   .. tostring(r[1]) .. ")")
 check(findRow("skinnable · skin windows recorded: 10"),
   "1: skinnability comes from our own skin windows (got:\n" .. joined() .. ")")
-check(findRow("corpse loot"), "1: the corpse section is labelled")
-check(findRow("Scorpid Stinger x11 | 92% (yours)"),
-  "1: corpse rows carry count + a percentage labelled (yours) (got:\n" .. joined() .. ")")
-check(findRow("Broken Scorpid Leg x1 | 8% (yours)"),
-  "1: a rare corpse item is a percentage of the kills, not of the whole drop list (got:\n" .. joined() .. ")")
 check(findRow("skinned"), "1: the skinning section is labelled")
 check(findRow("Medium Leather x20 | 100% (yours)"),
-  "1: skin rows carry count + a percentage of the corpses that were skinned (got:\n" .. joined() .. ")")
+  "1: skin rows carry count + a percentage of the corpses that were skinned (got:\n"
+  .. joined() .. ")")
 check(findRow("kills seen: 12 · skinned: 10"),
   "1: the totals line states how thin the evidence is (got:\n" .. joined() .. ")")
+
+-- ═══ 1b. t_2c573dbf: THE CORPSE LOOT IS NOT THIS PANEL'S SUBJECT ═════════
+-- Mightie: "beast tooltip doesnt need the actual items the mob can drop. Just
+-- what we obtain from skinning." These twelve corpses DID carry corpse items
+-- (5466 x11, 4867 x1) and the panel must not show a single trace of them.
+check(findRow("corpse loot") == false,
+  "1b: no corpse-loot section is rendered (got:\n" .. joined() .. ")")
+check(joined():find("Scorpid Stinger", 1, true) == nil,
+  "1b: no corpse item row is rendered (got:\n" .. joined() .. ")")
+check(joined():find("Broken Scorpid Leg", 1, true) == nil,
+  "1b: a rare corpse item is not rendered either (got:\n" .. joined() .. ")")
+check(joined():find("92%", 1, true) == nil and joined():find("8%", 1, true) == nil,
+  "1b: no corpse percentage is rendered (got:\n" .. joined() .. ")")
+-- The whole block, pinned line for line: name · skinnable · skinned · items ·
+-- totals. Nothing else may appear, in any order.
+local EXPECTED_BLOCK = {
+  "Clattering Scorpid",
+  "skinnable · skin windows recorded: 10",
+  "skinned",
+  "Medium Leather x20 | 100% (yours)",
+  "kills seen: 12 · skinned: 10",
+}
+local blockOK = #r == #EXPECTED_BLOCK
+if blockOK then
+  for i = 1, #EXPECTED_BLOCK do
+    if r[i] ~= EXPECTED_BLOCK[i] then blockOK = false end
+  end
+end
+check(blockOK, "1b: the block is the skinning panel and only that, line for line (got:\n"
+  .. joined() .. ")")
+
 local at = {}
 for i, line in ipairs(r) do at[line] = at[line] or i end
-check(at["corpse loot"] and at["skinned"] and at["corpse loot"] < at["skinned"],
-  "1: the corpse section precedes the skinning section (got:\n" .. joined() .. ")")
+check(at["skinned"] and at["Medium Leather x20 | 100% (yours)"]
+  and at["skinned"] < at["Medium Leather x20 | 100% (yours)"],
+  "1: the section label precedes its items (got:\n" .. joined() .. ")")
 check(at["skinned"] and at["kills seen: 12 · skinned: 10"]
   and at["skinned"] < at["kills seen: 12 · skinned: 10"] and at["kills seen: 12 · skinned: 10"] == #r,
   "1: the totals line closes the block (got:\n" .. joined() .. ")")
 
 -- No researched table exists for a beast: every percentage is OURS, and none
 -- is printed without that label.
-for _, row in ipairs({ "Scorpid Stinger x11 | 92% (yours)", "Medium Leather x20 | 100% (yours)" }) do
-  check(findRow(row), "1: labelled percentage row " .. row)
-end
-local _, baseLabel = findPrefix("Scorpid Stinger")
+check(findRow("Medium Leather x20 | 100% (yours)"),
+  "1: labelled percentage row Medium Leather x20 | 100% (yours)")
+local _, baseLabel = findPrefix("Medium Leather")
 check(baseLabel == nil or baseLabel:find("(base)", 1, true) == nil,
   "1: nothing here is presented as a base/global rate")
 
@@ -291,10 +322,12 @@ end
 reset()
 hoverBeast({ guid = guidOf(THIN, 1) })
 check(P:IsShown() == true, "2: a thin sample still shows its counts")
-local _, thinCorpse = findPrefix("Scorpid Stinger x3")
-check(thinCorpse == "Scorpid Stinger x3",
-  "2: below PERSONAL_MIN the corpse row is a count with no percentage (got "
-  .. tostring(thinCorpse) .. ")")
+-- t_2c573dbf: these three corpses carried corpse items too, and none of them is
+-- rendered — the thin block is the skinning block.
+check(findRow("corpse loot") == false,
+  "2: a thin sample shows no corpse-loot section (got:\n" .. joined() .. ")")
+check(joined():find("Scorpid Stinger", 1, true) == nil,
+  "2: a thin sample shows no corpse item rows (got:\n" .. joined() .. ")")
 local _, thinSkin = findPrefix("Medium Leather x6")
 check(thinSkin == "Medium Leather x6",
   "2: below PERSONAL_MIN the skin row is a count with no percentage (got "
@@ -327,8 +360,12 @@ reset()
 hoverBeast({ guid = guidOf(CID, 1), name = "Clattering Scorpid" })
 check(findRow("no observations here yet") == false,
   "4: our own creature still resolves its own records")
-check(findRow("Scorpid Stinger x11 | 92% (yours)"),
+-- The proof is now on the skinning side (t_2c573dbf): our own 20 hides, not the
+-- impostor's 24.
+check(findRow("Medium Leather x20 | 100% (yours)"),
   "4: the ids do not bleed into each other (got:\n" .. joined() .. ")")
+check(findRow("Medium Leather x24 | 100% (yours)") == false,
+  "4: the impostor's 24 hides do not appear under our creature (got:\n" .. joined() .. ")")
 reset()
 hoverBeast({ guid = guidOf(UNKNOWN, 501), name = "Clattering Scorpid" })
 check(findRow("no observations here yet"),
@@ -385,7 +422,14 @@ local NOSKIN = 3127
 observe(NOSKIN, CORPSE, nil) -- killed, looted, never skinned
 reset()
 hoverBeast({ guid = guidOf(NOSKIN, 1) })
-check(P:IsShown() == true, "6: kills with no skin window still show the corpse side")
+check(P:IsShown() == true, "6: kills with no skin window still show what we have")
+-- t_2c573dbf: the corpse item that kill DID carry is not rendered, and with no
+-- skin window there is no skin section to render either — the block is the name
+-- and the totals, which is the honest shape of "we have not skinned this yet".
+check(findRow("corpse loot") == false,
+  "6: no corpse-loot section for a corpse we never skinned (got:\n" .. joined() .. ")")
+check(joined():find("Scorpid Stinger", 1, true) == nil,
+  "6: the corpse item stays off the panel (got:\n" .. joined() .. ")")
 local anySkinLine = false
 for _, l in ipairs(rows()) do
   if type(l) == "string" and (l == "skinnable" or l == "not skinnable"
@@ -523,7 +567,7 @@ check(outD8:find("raw rows=1 floor=" .. floorPx .. "px", 1, true) ~= nil,
 local shownName = rows()[1]
 check(type(shownName) == "userdata" and getmetatable(shownName).__payload == PAYLOAD,
   "8: the secret name is carried to the panel whole (got " .. type(shownName) .. ")")
-check(findRow("kills seen: 12 · skinned: 10") or findRow("corpse loot"),
+check(findRow("kills seen: 12 · skinned: 10") or findRow("skinned"),
   "8: the data rows are still rendered below the secret name (got:\n"
   .. table.concat({ rows()[2] or "", rows()[3] or "" }, " / ") .. ")")
 -- The name is carried but unmeasurable, so the width floor comes from the
@@ -578,37 +622,123 @@ check(#writes == 0, "10: zero writes to the tooltip (got " .. #writes .. ": "
 check(P:IsShown() == true, "10: the block still shows through a read-only tooltip")
 
 -- ═══ 11. A PERCENTAGE THAT CANNOT BE TRUE IS NOT PRINTED ══════════════════
--- Some records are loot-only (a window never matched to an observed death), so
--- an item can be seen more often than there are "kills seen". 11 sightings out
--- of 10 kills is not "110%": the row falls back to the count, which is a fact.
+-- The only item section left is the skinning one, so the guard lives there: a
+-- skin window can be recorded without the successful cast that would make the
+-- corpse "skinned" (Record:OnSkinLoot does not set rec.skinned — only the cast
+-- does). Ten skinned corpses plus one such window is 11 sightings against a
+-- sample of 10, which is not "110%": the row falls back to the count, which is
+-- a fact.
 local LOOTONLY = 3128
 for i = 1, 10 do
   seq = seq + 1
   R:OnKill({ guid = guidOf(LOOTONLY, seq), t = 7000 + seq })
-end
-for i = 1, 11 do
-  seq = seq + 1
-  R:OnCorpseLoot({
-    guid = guidOf(LOOTONLY, seq), t = 7100 + seq,
-    items = { { id = 2319, name = "Medium Leather", qty = 1 } },
+  R:OnSkinCast({ guid = guidOf(LOOTONLY, seq), t = 7000.5 + seq, spellID = 8613 })
+  R:OnSkinLoot({
+    guid = guidOf(LOOTONLY, seq), t = 7001 + seq,
+    items = { { id = 2319, name = "Medium Leather", qty = 2 } },
   })
 end
+-- The eleventh: a skin window on a fresh corpse with NO cast behind it.
+seq = seq + 1
+R:OnKill({ guid = guidOf(LOOTONLY, seq), t = 7200 + seq })
+R:OnSkinLoot({
+  guid = guidOf(LOOTONLY, seq), t = 7201 + seq,
+  items = { { id = 2319, name = "Medium Leather", qty = 1 } },
+})
 reset()
 hoverBeast({ guid = guidOf(LOOTONLY, 1) })
-check(P:IsShown() == true, "11: loot-only records still render")
-local _, impossible = findPrefix("Medium Leather x11")
-check(impossible == "Medium Leather x11",
-  "11: 11 sightings against 10 kills prints the count, never 110% (got "
+check(P:IsShown() == true, "11: a record set with an uncounted skin window still renders")
+local _, impossible = findPrefix("Medium Leather x21")
+check(impossible == "Medium Leather x21",
+  "11: 11 sightings against 10 skinned prints the count, never 110% (got "
   .. tostring(impossible) .. ")")
 check(joined():find("%", 1, true) == nil,
   "11: no percentage appears when the item outnumbers its sample (got:\n" .. joined() .. ")")
-check(findRow("kills seen: 10 · skinned: 0"),
+check(findRow("kills seen: 11 · skinned: 10"),
   "11: the totals line counts only the deaths that were seen (got:\n" .. joined() .. ")")
 
--- ═══ 12. NOTHING ERRORED, AND NO EVENT SURFACE WAS TOUCHED ════════════════
-check(T._error == nil, "12: ns.Tooltip recorded no error (" .. tostring(T._error) .. ")")
-check(P._error == nil, "12: the panel recorded no error (" .. tostring(P._error) .. ")")
-check(R._error == nil, "12: the recorder recorded no error (" .. tostring(R._error) .. ")")
+-- ═══ 12. THE CORPSE ITEMS ARE STILL EVIDENCE: `id -> GetItemInfo(id)` ══════
+-- t_2c573dbf: Mightie's Dire Mottled Boar drew `Chunk of Boar Meat x3`,
+-- `Scroll: LOWER PING WHOMEVER x1` under a "corpse loot" heading. The panel no
+-- longer renders that heading, so the label is checked where the evidence is:
+-- /nt ttdiag resolves every recorded item id to what THIS client answers for
+-- it, and says so when the loot slot and the item data disagree — a
+-- DISAGREES line means the record's keying is wrong, not the label.
+NodeTrailDB.skinning.chars = nil -- a known store: only the boar's records
+R:GetDB()
+local BOAR = 3098
+-- 211787 is the REAL id: `Scroll: LOWER PING WHOMEVER` is item 211787 in this
+-- client's data (WoW Forever 1.60.1 — the build this addon targets — wowhead
+-- /forever/item=211787, warcraftforever.wiki, thewowdb, ahledger all agree),
+-- a world drop, so a Dire Mottled Boar corpse can legitimately carry it. The
+-- stub below stands in for the client's answer so the RESOLUTION path is
+-- proved offline; the live confirmation is the diag line this section pins.
+local BOAR_ITEMS = {
+  { id = 211787, name = "Scroll: LOWER PING WHOMEVER", qty = 1 },
+  { id = 7008, name = "Ruined Leather Scraps", qty = 2 },
+  { id = 7009, name = "Boar Ribs", qty = 1 },
+}
+seq = seq + 1
+R:OnKill({ guid = guidOf(BOAR, seq), t = 8000 })
+R:OnCorpseLoot({ guid = guidOf(BOAR, seq), t = 8001, items = BOAR_ITEMS })
+ITEM_NAMES[211787] = "Scroll: LOWER PING WHOMEVER" -- this client names that id so
+ITEM_NAMES[7008] = "Chunk of Boar Meat"         -- ...but calls this id something else
+ITEM_NAMES[7009] = nil                          -- ...and has nothing for this one
+reset()
+hoverBeast({ guid = guidOf(BOAR, 1), name = "Dire Mottled Boar" })
+check(rows()[1] == "Dire Mottled Boar",
+  "12: the boar's own name leads the block (got " .. tostring(rows()[1]) .. ")")
+check(findRow("corpse loot") == false,
+  "12: the boar's corpse list is not rendered (got:\n" .. joined() .. ")")
+check(findRow("Scroll: LOWER PING WHOMEVER x1") == false,
+  "12: the scroll row is not rendered (the old block printed it) (got:\n" .. joined() .. ")")
+check(joined():find("Chunk of Boar Meat", 1, true) == nil,
+  "12: no corpse item name reaches the panel (got:\n" .. joined() .. ")")
+check(findRow("kills seen: 1 · skinned: 0"),
+  "12: the totals still render under the name (got:\n" .. joined() .. ")")
+local okD12, errD12, out12 = diagText()
+check(okD12, "12: ttdiag does not raise (" .. tostring(errD12) .. ")")
+check(out12:find(
+  'item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same',
+  1, true) ~= nil,
+  "12: the client names 211787 exactly as the slot did, and ttdiag says so (got:\n" .. out12 .. ")")
+check(out12:find(
+  'item id: 7008 -> "Chunk of Boar Meat" (GetItemInfo) · corpse · the loot slot said "Ruined Leather Scraps" — DISAGREES',
+  1, true) ~= nil,
+  "12: a mis-keyed id is called out as a disagreement, not a label (got:\n" .. out12 .. ")")
+check(out12:find(
+  'item id: 7009 -> GetItemInfo answered nothing · corpse · the loot slot said "Boar Ribs"',
+  1, true) ~= nil,
+  "12: an id the client cannot name says so instead of inventing a name (got:\n" .. out12 .. ")")
+
+-- ...and a SECRET answer from the client is reported, never measured or used.
+local secretItem = secretName()
+ITEM_NAMES[7010] = secretItem
+seq = seq + 1
+R:OnKill({ guid = guidOf(BOAR, seq), t = 8100 })
+R:OnCorpseLoot({
+  guid = guidOf(BOAR, seq), t = 8101,
+  items = { { id = 7010, name = "Boar Ribs", qty = 1 } },
+})
+issecretvalue = function(v)
+  if type(v) ~= "userdata" then return false end
+  local mt = getmetatable(v)
+  return type(mt) == "table" and mt.__payload ~= nil
+end
+local secretBefore = measuredSecret
+local okDS, errDS, outS = diagText()
+check(okDS, "12: ttdiag does not raise on a secret item name (" .. tostring(errDS) .. ")")
+check(outS:find("item id: 7010 -> GetItemInfo answered a secret string", 1, true) ~= nil,
+  "12: a secret item name is reported as secret (got:\n" .. outS .. ")")
+check(measuredSecret == secretBefore,
+  "12: the secret item name was never measured or formatted ("
+  .. (measuredSecret - secretBefore) .. " attempt(s))")
+issecretvalue = nil
+
+-- ═══ 13. NOTHING ERRORED, AND NO EVENT SURFACE WAS TOUCHED ════════════════
+check(T._error == nil, "13: ns.Tooltip recorded no error (" .. tostring(T._error) .. ")")
+check(P._error == nil, "13: the panel recorded no error (" .. tostring(P._error) .. ")")
+check(R._error == nil, "13: the recorder recorded no error (" .. tostring(R._error) .. ")")
 
 if failed > 0 then
   io.stderr:write(failed .. " skin-tooltip check(s) failed\n")

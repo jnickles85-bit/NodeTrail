@@ -1,9 +1,24 @@
--- NodeTrail — what a beast's CORPSE and its SKINNING have yielded
--- (t_c0221fd7).
+-- NodeTrail — what a beast's SKINNING yields (t_c0221fd7, t_2c573dbf).
 --
 -- Mightie: "we are missing the skinning tooltip. we should have some
 -- information when hovering over beasts that says what we might get if we kill
 -- it and skin it. Same as herbing just another step in the middle."
+--
+-- t_2c573dbf — Mightie on a Dire Mottled Boar: "beast tooltip doesnt need the
+-- actual items the mob can drop. Just what we obtain from skinning." The panel
+-- is about SKINNING, so the corpse side is no longer rendered: no corpse item
+-- rows, no corpse percentages, nothing read from the loot window that opened
+-- before the Skinning cast. The RECORDS still carry it (modules/Skinning keeps
+-- writing `corpseItems` into NodeTrailDB.skinning — that is the comparison this
+-- subsystem was built on, and nothing here removes it); this file simply stops
+-- aggregating and printing it. The item ids the corpse windows carried stay
+-- visible in `/nt ttdiag`, which now resolves each one to
+-- `GetItemInfo(id)` so a label can be checked against the id it came from.
+--
+-- (The label that prompted this — `Scroll: LOWER PING WHOMEVER` — is a REAL
+-- item of this client's data: item 211787 in WoW Forever 1.60.1, the build this
+-- addon targets, a world drop. So it was never a mis-keyed id; the diag line is
+-- what proves that on a live record instead of on a datamine.)
 --
 -- The herb block can lean on a researched drop table (HerbData.NODES); a beast
 -- has nothing of the sort, and this file never invents one. Every number it
@@ -179,11 +194,12 @@ end
 
 -- Returns agg or nil:
 --   agg = { records, kills, skinned, skinWindows,
---           corpse = { {itemID, count, seen, name}, ... },
---           skin   = { ... } }
--- The denominator a percentage may use is `kills` (corpse side) and `skinned`
--- (skin side) — the same two numbers the totals line prints, so the block can
--- never divide by a sample it does not show.
+--           skin = { {itemID, count, seen, name}, ... } }
+-- The denominator a percentage may use is `skinned` — the same number the
+-- totals line prints, so the block can never divide by a sample it does not
+-- show. The corpse side is deliberately NOT aggregated (t_2c573dbf): the panel
+-- reports what skinning yields, so there is nothing to divide there. The
+-- records keep `corpseItems` untouched.
 function H.Aggregate(cid)
   if type(cid) ~= "number" then
     return nil
@@ -194,9 +210,9 @@ function H.Aggregate(cid)
   end
   local agg = {
     records = 0, kills = 0, skinned = 0, skinWindows = 0,
-    corpse = {}, skin = {},
+    skin = {},
   }
-  local byCorpse, bySkin = {}, {}
+  local bySkin = {}
   for _, rec in pairs(bucket.records) do
     -- `creatureID` is the recorder's own field; a record whose id this client
     -- could not derive (R.CreatureID returned nil) matches nothing.
@@ -217,11 +233,9 @@ function H.Aggregate(cid)
         -- Items with no window counter (an older record): the window existed.
         agg.skinWindows = agg.skinWindows + 1
       end
-      addItems(byCorpse, agg.corpse, rec.corpseItems)
       addItems(bySkin, agg.skin, rec.skinItems)
     end
   end
-  sorted(agg.corpse)
   sorted(agg.skin)
   H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d")
     :format(cid, agg.records, agg.kills, agg.skinned, agg.skinWindows)
@@ -302,8 +316,14 @@ end
 -- which is display-only, never measured, never concatenated (see
 -- TooltipPanel's row contract).
 --
--- 1 creature name · 2 skinnable (only when known) · 3 corpse drops ·
--- 4 skinning results · 5 kills/skins seen.
+-- 1 creature name · 2 skinnable (only when known) · 3 skinning results ·
+-- 4 kills/skins seen.
+--
+-- t_2c573dbf: there is no corpse-loot section. Mightie: "beast tooltip doesnt
+-- need the actual items the mob can drop. Just what we obtain from skinning."
+-- The corpse side is still recorded and still resolvable in `/nt ttdiag`; it is
+-- simply not this panel's subject, so nothing from the loot window is rendered
+-- here — no corpse rows, no corpse counts, no corpse percentages.
 local function pct(seen, total)
   if total <= 0 then return nil end
   local v = math.floor(seen / total * 100 + 0.5)
@@ -320,8 +340,9 @@ local function itemRows(rows, list, samples, label)
   rows[#rows + 1] = { left = label }
   -- A percentage is printed only when the sample is big enough to mean
   -- something AND the item cannot have been seen more often than the sample it
-  -- is compared against (a loot-only record with no observed death would
-  -- otherwise print 120%). Below that the row is a count, which is a fact.
+  -- is compared against (a skin window with no successful cast behind it is
+  -- recorded without counting as a skinned corpse, so it would otherwise print
+  -- 110%). Below that the row is a count, which is a fact.
   local enough = samples >= min
   for _, it in ipairs(list) do
     local left = H.ItemName(it) .. " x" .. tostring(it.count)
@@ -365,20 +386,144 @@ function H.Rows(cid, creatureName)
       left = "skinnable · skin windows recorded: " .. tostring(agg.skinWindows),
     }
   end
-  -- 3) what the corpse gave — the denominator is the kills we SAW.
-  itemRows(rows, agg.corpse, agg.kills, "corpse loot")
-  -- 4) what skinning gave — the denominator is the corpses we SKINNED.
+  -- 3) what skinning gave — the denominator is the corpses we SKINNED. This is
+  -- the only item section: the corpse side is recorded but never rendered
+  -- (t_2c573dbf).
   itemRows(rows, agg.skin, agg.skinned, "skinned")
-  -- 5) how thin the evidence is.
+  -- 4) how thin the evidence is.
   rows[#rows + 1] = {
     left = "kills seen: " .. tostring(agg.kills) .. " · skinned: " .. tostring(agg.skinned),
   }
   return rows, agg
 end
 
+-- ── id -> name evidence (t_2c573dbf) ─────────────────────────────────────
+-- Mightie saw `Scroll: LOWER PING WHOMEVER x1` under the corpse list and asked
+-- what it is: item names in the panel come from GetItemInfo(id), and the id
+-- itself comes from the loot slot's link (Probe:ReadLoot matches
+-- "item:(%d+)"), so the question is which id that record carries and what THIS
+-- client answers for it. The panel no longer prints corpse loot, so the answer
+-- lives here: one line per distinct item id in this character's records,
+-- `id -> GetItemInfo(id)`, plus what the loot slot itself reported. When the
+-- two disagree the line says DISAGREES — that is the signal that the record's
+-- KEYING is wrong, not the label.
+--
+-- Nothing here measures or slices a client string: a name is concatenated only
+-- after issecretvalue says it is not secret (the guard ItemName already uses),
+-- and a secret one is reported as a secret instead of being used.
+local function printableName(v)
+  if isSecret(v) then return nil, "secret" end
+  if type(v) ~= "string" or v == "" then return nil, "absent" end
+  return v, "ok"
+end
+
+-- Ask the client what item id N is called. Returns name, how — `how` always
+-- says WHICH answer this was, so a nil name is never mistaken for a name.
+local function clientItemName(id)
+  if type(GetItemInfo) ~= "function" then
+    return nil, "GetItemInfo is not a function on this client"
+  end
+  local ok, n = pcall(GetItemInfo, id)
+  if not ok then
+    return nil, "GetItemInfo raised"
+  end
+  local name, state = printableName(n)
+  if state == "secret" then
+    return nil, "GetItemInfo answered a secret string"
+  end
+  if name == nil then
+    return nil, "GetItemInfo answered nothing"
+  end
+  return name, nil
+end
+
+-- One row per distinct item id across this character's records (corpse and
+-- skin alike: the corpse side is where the question came from, and it is the
+-- only place those ids appear now).
+local function itemIDRows()
+  local bucket = H.Bucket()
+  if not bucket or type(bucket.records) ~= "table" then return nil end
+  local byID, order = {}, {}
+  for _, rec in pairs(bucket.records) do
+    if type(rec) == "table" then
+      for _, side in ipairs({ { "corpseItems", "corpse" }, { "skinItems", "skin" } }) do
+        local list = rec[side[1]]
+        local n = type(list) == "table" and #list or 0
+        for i = 1, n do
+          local it = list[i]
+          local id = type(it) == "table" and it.itemID
+          if type(id) == "number" and id > 0 then
+            local row = byID[id]
+            if not row then
+              row = { id = id, sides = {}, slotName = nil }
+              byID[id] = row
+              order[#order + 1] = row
+            end
+            row.sides[side[2]] = true
+            if row.slotName == nil and it.name ~= nil then
+              row.slotName = it.name
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(order, function(a, b) return a.id < b.id end)
+  return order
+end
+
+H.NAME_PROBE_CAP = 8 -- ids printed in full; the rest are counted
+
+function H.NameProbeLines()
+  local rows = itemIDRows()
+  local out = {}
+  if rows == nil then
+    out[1] = "item names: no records to resolve yet (no store, or no items in it)"
+    return out
+  end
+  if #rows == 0 then
+    out[1] = "item names: the records carry no item ids yet"
+    return out
+  end
+  local shown = math.min(#rows, H.NAME_PROBE_CAP)
+  for i = 1, shown do
+    local row = rows[i]
+    local sides = (row.sides.corpse and row.sides.skin and "corpse+skin")
+      or (row.sides.corpse and "corpse") or "skin"
+    local line = ("item id: %d -> "):format(row.id)
+    local name, why = clientItemName(row.id)
+    if name then
+      line = line .. ("\"" .. name .. "\" (GetItemInfo)")
+    else
+      line = line .. why
+    end
+    line = line .. " · " .. sides .. " · "
+    local slotName, slotState = printableName(row.slotName)
+    if slotState == "secret" then
+      line = line .. "the loot slot reported a secret string (not measured)"
+    elseif slotName == nil then
+      line = line .. "the record kept no loot-slot name"
+    elseif name == nil then
+      line = line .. ("the loot slot said \"" .. slotName .. "\"")
+    elseif slotName == name then
+      line = line .. "the loot slot said the same"
+    else
+      line = line .. ("the loot slot said \"" .. slotName .. "\" — DISAGREES (the keying is wrong, not the label)")
+    end
+    out[#out + 1] = line
+  end
+  if #rows > shown then
+    out[#out + 1] = ("item names: %d further id(s) not printed (cap %d)")
+      :format(#rows - shown, H.NAME_PROBE_CAP)
+  end
+  return out
+end
+
 -- ── /nt ttdiag ────────────────────────────────────────────────────────────
 -- What this file measured and why a beast block may be empty. No client string
--- is formatted or measured here: names are counts, keys and our own literals.
+-- is formatted or measured here: names are counts, keys and our own literals
+-- (the one exception is NameProbeLines, which prints a name only when the
+-- client's own value is NOT secret).
 function H.Diag()
   local out = {}
   local R = H.Recorder()
@@ -402,6 +547,12 @@ function H.Diag()
     out[#out + 1] = "last hover: no beast aggregate computed yet"
   end
   out[#out + 1] = "skinnability: " .. tostring(H._diag.flag or "not probed yet")
+  -- What each recorded item id resolves to (t_2c573dbf). The beast panel shows
+  -- skinning yields only, so an item label seen anywhere else — the corpse list
+  -- Mightie asked about — can only be checked here.
+  for _, l in ipairs(H.NameProbeLines()) do
+    out[#out + 1] = l
+  end
   if (H._diag.nameless or 0) > 0 then
     out[#out + 1] = ("item names: %d row(s) fell back to \"item <id>\" — the client named neither"):format(H._diag.nameless)
   end
