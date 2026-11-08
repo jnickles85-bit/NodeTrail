@@ -237,6 +237,11 @@ check(out:find("widest of our lines=", 1, true) ~= nil, "T9: ttdiag prints the w
 check(out:find("rect L=", 1, true) ~= nil, "T9: ttdiag prints the panel's rect")
 check(out:find("covers its widest line=yes", 1, true) ~= nil,
   "T9: ttdiag asserts the panel covers its widest line (got:\n" .. out .. ")")
+-- The width floor a raw (client-text) row needs must be QUOTED, or the
+-- in-game run cannot tell "floor applied" from "floor 0, the name is clipped".
+-- A herb block has no raw row, so the figure is 0 — printed, never omitted.
+check(out:find("raw rows=0 floor=0px", 1, true) ~= nil,
+  "T9: ttdiag prints the raw-row count and the width floor it applied (got:\n" .. out .. ")")
 check(out:find("src=poll", 1, true) ~= nil, "T9: ttdiag prints the refresh ring with its source")
 gt.shown = false
 tick(0.25)

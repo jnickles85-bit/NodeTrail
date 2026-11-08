@@ -593,8 +593,8 @@ function T:Diag()
         if d.blind then
           how = how .. "; a text-bearing row measured 0"
         end
-        say(("panel: covers its widest line=%s (%s; drawn rows report %s)"):format(
-          d.covers and "yes" or "NO", how, px(d.widest)))
+        say(("panel: covers its widest line=%s (%s; raw rows=%s floor=%spx; drawn rows report %s)"):format(
+          d.covers and "yes" or "NO", how, tostring(d.rawRows or 0), px(d.rawFloor), px(d.widest)))
       end
     end
   else

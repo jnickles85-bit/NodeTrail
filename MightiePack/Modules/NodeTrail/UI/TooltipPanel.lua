@@ -779,6 +779,10 @@ function P:Update(lines, tooltip)
   self.needWidth = needWidth
   self.blind = blind
   self.rawRows = rawRows
+  -- The floor the width was ACTUALLY raised by, in local px (0 when no raw
+  -- row): /nt ttdiag has to quote the figure the panel used, or the operator
+  -- cannot tell "floor applied" from "floor 0, the secret name is clipped".
+  self.rawFloor = rawFloor
   -- The verdict is built from MEASURED TEXT only: no column gap, no padding,
   -- and never from a row whose glyphs measured 0. On a client that cannot
   -- measure, `covers` is false and /nt ttdiag says NO — it does not add a 12 px

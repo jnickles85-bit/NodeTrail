@@ -156,6 +156,13 @@ check(fontless == 0, "T2b: every row carries a font in the update that sized the
 check(type(P.widestMeasured) == "number",
   "T2b: the panel records an independent (meter) measurement for /nt ttdiag")
 check(P.covers == true, "T2b: the panel reports that it covers its widest line")
+-- The floor the width was raised by is part of that report: a herb block has
+-- no raw (client-text) row, so the floor is 0 and /nt ttdiag must be able to
+-- say so — an absent figure would be indistinguishable from an unapplied one.
+local dT2 = P:Diag()
+check(type(dT2.rawFloor) == "number" and dT2.rawFloor == 0,
+  "T2b: no client-text row means no width floor, reported as 0 (got "
+  .. tostring(dT2.rawFloor) .. ")")
 
 -- ── T3: no room underneath -> the panel goes ABOVE the tooltip ────────────
 local lowTip = F.newTooltip({ lines = { "Peacebloom", "Herbalism" }, owner = UIParent,

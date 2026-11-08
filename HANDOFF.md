@@ -892,3 +892,17 @@ writes. **46 checks fail on `06984f6`**; all 42 `tests/*.lua` pass under lua5.1 
 prove on this client: that `UnitCreatureType("mouseover")` really answers `Beast` (vanilla DBC
 string), that `UnitName` for a beast is SECRET here (the panel handles both), and that the panel's
 width floor from the tooltip rect really covers a long secret name.
+
+**Review round 1 fix (same card).** The panel COMPUTED the tooltip-rect width floor but never stored
+it, so `TooltipPanel:Diag().rawFloor` was permanently `nil` and `/nt ttdiag` printed no raw-row figure
+at all — the very instrument named above for the width claim. `TooltipPanel:Update` now assigns
+`self.rawFloor` (0 when the block carries no raw row, so "no floor" and "floor 0" are the same
+reported number), and the diag's coverage line quotes it:
+`panel: covers its widest line=yes (...; raw rows=1 floor=180px; drawn rows report 158)`.
+A probe over a SECRET creature name (real panel, real poller, real `T:Diag`) prints
+`P:Diag().rawRows = 1`, `P:Diag().rawFloor = 180`, `P.width = 180` and the line above. New checks —
+`skin_tooltip_spec` §8 (the reported floor is ≥ the tooltip's own width, and the ttdiag text carries
+the figure), `tooltip_panel_spec` T2b (no raw row ⇒ floor 0, reported), `tooltip_refresh_spec` T9
+(`raw rows=0 floor=0px` on a herb block): **4 checks, all red on `34d0510`** (2 + 1 + 1, behavioural
+FAILs, no traceback) and green here. The earlier commit message's "43 checks fail on `06984f6`" was a
+typo — the real count is **46**.

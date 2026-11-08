@@ -508,6 +508,18 @@ check(formattedSecret == 0, "8: the secret name was never concatenated ("
   .. formattedSecret .. " time(s))")
 check(convertedSecret == 0, "8: the secret name was never converted with tostring ("
   .. convertedSecret .. " time(s))")
+-- The floor is only evidence if the panel REPORTS the figure it used: the
+-- in-game /nt ttdiag run has to distinguish "floored by the tooltip rect" from
+-- "floor 0 and the secret name is clipped". 180 is the fake tooltip's width.
+local d8 = P:Diag()
+check(type(d8.rawFloor) == "number" and d8.rawFloor >= 180 - 0.01,
+  "8: the panel reports the tooltip-rect width floor it actually applied (got "
+  .. tostring(d8.rawFloor) .. ")")
+local okD8, errD8, outD8 = diagText()
+check(okD8, "8: ttdiag does not raise on a secret-name block (" .. tostring(errD8) .. ")")
+local floorPx = type(d8.rawFloor) == "number" and string.format("%.0f", d8.rawFloor) or "nil"
+check(outD8:find("raw rows=1 floor=" .. floorPx .. "px", 1, true) ~= nil,
+  "8: ttdiag prints the raw-row count and the floor it applied (got:\n" .. outD8 .. ")")
 local shownName = rows()[1]
 check(type(shownName) == "userdata" and getmetatable(shownName).__payload == PAYLOAD,
   "8: the secret name is carried to the panel whole (got " .. type(shownName) .. ")")
