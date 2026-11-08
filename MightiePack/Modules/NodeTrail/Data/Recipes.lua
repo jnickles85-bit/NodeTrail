@@ -1059,8 +1059,8 @@ function Rc:HiddenHint()
     return nil
   end
   if db.alchemyAvailability == "none" and NodeTrailDB.recipes.alchemyScanned ~= nil then
-    return "alchemy uses hidden — this client has no recipe-availability API "
-      .. "(GetCraftableCount, IsRecipeProfessionLearned, requiredSkillRank all absent)"
+    return "alchemy uses hidden — this client version lacks a recipe-availability API "
+      .. "(GetCraftableCount, IsRecipeProfessionLearned or requiredSkillRank)"
   end
   if NodeTrailDB.recipes.alchemyScanned ~= nil then
     return "alchemy uses hidden — the saved scan recorded no availability; open Alchemy once to rescan"

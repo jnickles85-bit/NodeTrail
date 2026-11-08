@@ -350,7 +350,7 @@ local okHint6, hint6, why6 = pcall(function() return ns.Recipes:HiddenHint() end
 check(okHint6, "6: the options panel reason exists (" .. tostring(hint6) .. ")")
 check(type(hint6) == "string" and hint6:find("hidden", 1, true) ~= nil,
   "6: the options panel has the one short reason (got " .. tostring(hint6) .. ")")
-check(type(hint6) == "string" and hint6:find("no recipe-availability API", 1, true) ~= nil,
+check(type(hint6) == "string" and hint6:find("recipe-availability API", 1, true) ~= nil,
   "6: the reason names the client API this version lacks (got " .. tostring(hint6) .. ")")
 
 -- The diag says it once, and says which signal was missing.

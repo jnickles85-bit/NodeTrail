@@ -341,7 +341,7 @@ local okHint, hint, hintWhy = pcall(function() return ns.Recipes:HiddenHint() en
 check(okHint, "4: Rc:HiddenHint exists (" .. tostring(hint) .. ")")
 check(type(hint) == "string" and hint:find("alchemy uses hidden", 1, true) ~= nil,
   "4: the options panel gets the one short reason (got " .. tostring(hint) .. ")")
-check(type(hint) == "string" and hint:find("no recipe-availability API", 1, true) ~= nil,
+check(type(hint) == "string" and hint:find("recipe-availability API", 1, true) ~= nil,
   "4: the reason names the missing client API (" .. tostring(hint) .. ")")
 
 -- The hidden state survives a reload: saved recipes with no gate keys must not

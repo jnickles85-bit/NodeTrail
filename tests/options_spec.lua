@@ -632,7 +632,7 @@ check(panelFsNote ~= nil, "panel has the hidden-list note line")
 local noteText = fsText(panelFsNote)
 check(type(noteText) == "string" and noteText:find("alchemy uses hidden", 1, true) ~= nil,
   "panel note says the alchemy uses are hidden (got " .. tostring(noteText) .. ")")
-check(type(noteText) == "string" and noteText:find("no recipe-availability API", 1, true) ~= nil,
+check(type(noteText) == "string" and noteText:find("recipe-availability API", 1, true) ~= nil,
   "panel note names the client API this version lacks")
 check(type(noteText) == "string" and noteText:find("GetCraftableCount", 1, true) ~= nil,
   "panel note names GetCraftableCount")
