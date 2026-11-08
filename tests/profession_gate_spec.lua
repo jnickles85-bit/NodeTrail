@@ -460,6 +460,92 @@ GetNumSkillLines, GetSkillLineInfo = tier1Num, tier1Info
 GetProfessions = nil
 GetProfessionInfo = nil
 
+-- ── 15. a row that answers NO NAME is unknown, not a readable row ──────────
+-- The round-3 residue, same class as case 12: `GetNumSkillLines` can
+-- over-report, and indices past the end of the list answer "" rather than
+-- raising. Reading "" as a row whose profession we saw lets the tier answer a
+-- definitive "no" about names it never actually received — which hides the
+-- block on a real herbalist.
+skillLines = {
+  { name = "Skinning", rank = 300 },
+  { name = "", rank = 0 }, -- an over-reported row: the client has no name here
+}
+skillShape = "4-field"
+skillRaises = false
+skillRaiseRows = nil
+GetTradeSkillLine = nil
+C_TradeSkillUI = nil
+reset()
+local emptyAnswer, emptyDetail = Pr:FromSkillLines(Pr)
+check(emptyAnswer == nil,
+  "15: an empty-string row abstains, never answers 'no' (got " .. tostring(emptyAnswer) .. ")")
+check(type(emptyDetail) == "string" and emptyDetail:find("unreadable", 1, true) ~= nil,
+  "15: the detail names the unreadable row (got " .. tostring(emptyDetail) .. ")")
+local _, emptyInfo = Pr:Herbalism()
+check(type(emptyInfo) == "table" and emptyInfo.herbalism == nil,
+  "15: the gate answer is unknown, not false")
+hover("Peacebloom")
+check(P:IsShown() == true, "15: an unnamed row does not hide the block")
+check(countRowsLike("Picks") == 0 and countRowsLike("Your picks") == 0,
+  "15: ...and it still claims no picks")
+local okD15, _, out15 = diagText()
+check(okD15, "15: ttdiag survives a nameless skill row")
+check(okD15 and out15:find("herbalism=unknown", 1, true) ~= nil,
+  "15: ttdiag says unknown (got:\n" .. tostring(out15) .. ")")
+
+-- ── 16. a LISTED profession slot whose name cannot be decoded is unknown ──
+-- GetProfessions answers nil for an empty slot, so a numeric index is a
+-- learned profession by contract. A slot that comes back as a table profName()
+-- cannot decode (`{ skillLine = "Herbalism" }`, `{}`) is therefore a read that
+-- failed — never an empty slot. Treating it as empty lets one readable
+-- non-herb slot carry a definitive "no" over the slot that might be Herbalism.
+local t15Num, t15Info = GetNumSkillLines, GetSkillLineInfo
+GetNumSkillLines = nil
+GetSkillLineInfo = nil
+skillLines = nil
+GetProfessions = function() return 1, 4, 6, nil, nil, nil, nil end
+GetProfessionInfo = function(index)
+  -- 1 and 6 are LEARNED slots naming their profession in a shape this module
+  -- cannot decode; 4 is a plain readable non-herb profession.
+  if index == 1 then return { skillLine = "Herbalism" }, "icon", 300, 300 end
+  if index == 4 then return "Alchemy", "icon", 300, 300 end
+  if index == 6 then return {}, "icon", 1, 1 end
+  return nil
+end
+reset()
+local undecAnswer, undecDetail = Pr:FromProfessions(Pr)
+check(undecAnswer == nil,
+  "16: an undecodable name on a learned slot abstains, never answers 'no' (got "
+    .. tostring(undecAnswer) .. ": " .. tostring(undecDetail) .. ")")
+check(type(undecDetail) == "string" and undecDetail:find("unreadable", 1, true) ~= nil,
+  "16: the detail counts the undecodable slots (got " .. tostring(undecDetail) .. ")")
+local _, undecInfo = Pr:Herbalism()
+check(type(undecInfo) == "table" and undecInfo.herbalism == nil,
+  "16: the gate answer is unknown, not false")
+hover("Peacebloom")
+check(P:IsShown() == true, "16: an undecodable learned slot does not hide the block")
+check(countRowsLike("Picks") == 0 and countRowsLike("Your picks") == 0,
+  "16: ...and it still claims no picks")
+local okD16, _, out16 = diagText()
+check(okD16, "16: ttdiag survives an undecodable profession name")
+check(okD16 and out16:find("herbalism=unknown", 1, true) ~= nil,
+  "16: ttdiag says unknown (got:\n" .. tostring(out16) .. ")")
+-- The same slots, decoded, still answer definitively in both directions: the
+-- abstention must not swallow a real answer from this tier.
+GetProfessions = function() return 1, 4, nil, nil, nil, nil, nil end
+GetProfessionInfo = function(index)
+  if index == 1 then return "Skinning", "icon", 300, 300 end
+  if index == 4 then return "Alchemy", "icon", 300, 300 end
+  return nil
+end
+reset()
+local readableNo = Pr:FromProfessions(Pr)
+check(readableNo == false,
+  "16: a fully readable non-herb slot list is still a definitive no (got " .. tostring(readableNo) .. ")")
+GetNumSkillLines, GetSkillLineInfo = t15Num, t15Info
+GetProfessions = nil
+GetProfessionInfo = nil
+
 -- ── 14. the new module obeys the card's hard constraints ──────────────────
 -- The profession reader is new code in NodeTrail: it may probe the client, but
 -- it must not ask C_EventUtils for validity and must not register (or even

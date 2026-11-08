@@ -179,7 +179,7 @@ function Pr:FromSkillLines()
       -- that FAILED, never as an answer. A definitive "no" needs every row.
       unreadable = unreadable + 1
       raiseMsg = raiseMsg or tostring(a)
-    elseif type(a) == "string" and not isSecret(a) then
+    elseif type(a) == "string" and a ~= "" and not isSecret(a) then
       rows = rows + 1
       local thisShape, rank
       if type(b) == "boolean" then
@@ -196,9 +196,12 @@ function Pr:FromSkillLines()
         break
       end
     else
-      -- The row answered with something that is not a readable name (nil, a
-      -- table, or a secret string): the row exists, so its profession is
-      -- unknown to us and cannot be ruled out.
+      -- The row answered with nothing usable as a name: nil, an EMPTY string,
+      -- a table, or a secret string. A client that over-reports
+      -- GetNumSkillLines answers "" for indices past the end of its list;
+      -- counting that as a readable row would let the tier claim "no
+      -- Herbalism" about rows whose names were never seen. The row exists, so
+      -- Herbalism cannot be ruled out: unreadable, exactly like a raise.
       unreadable = unreadable + 1
     end
   end
@@ -260,10 +263,12 @@ function Pr:FromProfessions()
       -- answers `{ skillLineName = "Herbalism" }` must not be read as
       -- "no Herbalism" just because the raw return is a table.
       local nm = okI and profName(name) or nil
-      if nm == nil then
-        -- A slot index that names nothing is an empty slot, not a failure.
-        if not okI then unreadable = unreadable + 1 end
-      elseif isSecret(nm) then
+      if nm == nil or isSecret(nm) then
+        -- A NUMERIC index is a learned profession by contract: GetProfessions
+        -- answers nil for an empty slot. So a slot whose name cannot be
+        -- decoded is a read that FAILED, not an empty slot. Counting it as
+        -- empty is how `{ skillLine = "Herbalism" }` came to answer a
+        -- definitive "no" and hide the block on an herbalist.
         unreadable = unreadable + 1
       else
         seen = seen + 1
@@ -277,6 +282,10 @@ function Pr:FromProfessions()
     return true, ("%d learned profession(s) read; Herbalism among them"):format(seen)
   end
   if seen == 0 then
+    if unreadable > 0 then
+      return nil, ("no profession slot named anything readable; %d learned slot(s) unreadable — Herbalism cannot be ruled out")
+        :format(unreadable)
+    end
     return nil, "GetProfessionInfo named none of the profession slots"
   end
   if unreadable > 0 then
