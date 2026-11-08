@@ -79,10 +79,15 @@ NodeTrailDB = { recipes = {}, profile = {}, herbs = { schema = 1, total = 0, map
 local skillLines = {}
 local skillShape = "4-field"
 local skillRaises = false
+-- Individual rows can fail while the rest of the list reads: case 12.
+local skillRaiseRows = nil
 GetNumSkillLines = function() return #skillLines end
 GetSkillLineInfo = function(i)
   if skillRaises then
     error("boom: GetSkillLineInfo")
+  end
+  if skillRaiseRows and skillRaiseRows[i] then
+    error("boom: GetSkillLineInfo row " .. i)
   end
   local row = skillLines[i]
   if not row then return nil end
@@ -378,7 +383,84 @@ check(okD11 and out11:find("cache: hovers reuse", 1, true) ~= nil,
   "11: ttdiag reports the reuse window the hover path is using (got:\n" .. tostring(out11) .. ")")
 GetTime = nil
 
--- ── 12. the new module obeys the card's hard constraints ──────────────────
+-- ── 12. a PARTIALLY readable skill list is unknown, not "no" ───────────────
+-- The dangerous direction: one row raises, the readable rows carry no
+-- Herbalism. Answering "no" here would hide the block on a real herbalist, so
+-- the tier must abstain and let the question fall through (here: nothing else
+-- answers, so the answer is unknown -> block without a picks line).
+skillLines = {
+  { name = "Skinning", rank = 300 },
+  { name = "Cooking", rank = 75 },
+}
+skillShape = "4-field"
+skillRaises = false
+skillRaiseRows = { [1] = true }
+GetTradeSkillLine = nil
+C_TradeSkillUI = nil
+reset()
+local mixedAnswer, mixedDetail = Pr:FromSkillLines(Pr)
+check(mixedAnswer == nil,
+  "12: a partially raised skill list abstains, never answers 'no' (got " .. tostring(mixedAnswer) .. ")")
+check(type(mixedDetail) == "string" and mixedDetail:find("unreadable", 1, true) ~= nil,
+  "12: the detail names the unreadable row (got " .. tostring(mixedDetail) .. ")")
+local _, mixedInfo = Pr:Herbalism()
+check(type(mixedInfo) == "table" and mixedInfo.herbalism == nil,
+  "12: the gate answer is unknown, not false")
+hover("Peacebloom")
+check(P:IsShown() == true, "12: a partial read does not hide the block")
+check(countRowsLike("Picks") == 0 and countRowsLike("Your picks") == 0,
+  "12: ...and it still claims no picks")
+local okD12, _, out12 = diagText()
+check(okD12, "12: ttdiag survives a partially raised skill read")
+check(okD12 and out12:find("herbalism=unknown", 1, true) ~= nil,
+  "12: ttdiag says unknown (got:\n" .. tostring(out12) .. ")")
+check(okD12 and out12:find("unreadable", 1, true) ~= nil,
+  "12: ttdiag records why the skill tier abstained")
+skillRaiseRows = nil
+
+-- ── 13. a TABLE-shaped profession name is matched after decoding ──────────
+-- profName() exists because some clients answer GetProfessionInfo with
+-- `{ skillLineName = "Herbalism" }`. Matching the RAW return against a string
+-- name reads that as "no Herbalism" and hides the block on an herbalist.
+local tier1Num, tier1Info = GetNumSkillLines, GetSkillLineInfo
+GetNumSkillLines = nil
+GetSkillLineInfo = nil
+GetProfessions = function() return 1, 4, nil, nil, nil, nil, nil end
+GetProfessionInfo = function(index)
+  if index == 1 then return { skillLineName = "Herbalism" }, "icon", 300, 300 end
+  if index == 4 then return "Alchemy", "icon", 300, 300 end
+  return nil
+end
+reset()
+local tableAnswer, tableDetail = Pr:FromProfessions(Pr)
+check(tableAnswer == true,
+  "13: a table-shaped Herbalism name is recognised (got " .. tostring(tableAnswer)
+    .. ": " .. tostring(tableDetail) .. ")")
+hover("Peacebloom")
+check(P:IsShown() == true, "13: the block shows for a table-shaped herbalist")
+local okPicks13, picks13 = hasRow("Picks: ")
+check(okPicks13 and picks13 == "Picks: none yet (all characters)",
+  "13: ...with the account-wide picks wording (got " .. tostring(picks13) .. ")")
+local okD13, _, out13 = diagText()
+check(okD13 and out13:find("from professions", 1, true) ~= nil,
+  "13: ttdiag names the professions tier (got:\n" .. tostring(out13) .. ")")
+
+-- ...and a table-shaped NON-herb list is still a real "no".
+GetProfessions = function() return 1, nil, nil, nil, nil, nil, nil end
+GetProfessionInfo = function(index)
+  if index == 1 then return { skillLineName = "Skinning" }, "icon", 300, 300 end
+  return nil
+end
+reset()
+local tableNo = Pr:FromProfessions(Pr)
+check(tableNo == false, "13: a table-shaped non-herb list is still a definitive no")
+hover("Peacebloom")
+check(P:IsShown() == false, "13: ...so the block stays hidden for that character")
+GetNumSkillLines, GetSkillLineInfo = tier1Num, tier1Info
+GetProfessions = nil
+GetProfessionInfo = nil
+
+-- ── 14. the new module obeys the card's hard constraints ──────────────────
 -- The profession reader is new code in NodeTrail: it may probe the client, but
 -- it must not ask C_EventUtils for validity and must not register (or even
 -- mention) the combat log event. It also must not write a frame of its own.

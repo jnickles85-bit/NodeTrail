@@ -169,16 +169,17 @@ function Pr:FromSkillLines()
     return nil, "GetNumSkillLines returned " .. tostring(n)
   end
   local names = herbNames()
-  local rows, shape = 0, nil
+  local rows, unreadable, shape = 0, 0, nil
   local raiseMsg = nil
   local found, foundRank = false, nil
   for i = 1, n do
     local ok, a, b, c, d = pcall(GetSkillLineInfo, i)
     if not ok then
-      -- A row that RAISES is not a row without Herbalism: keep the message so
-      -- an all-raising client reads as "unreadable", not as "no Herbalism".
+      -- A row that RAISES is not a row without Herbalism: count it as a read
+      -- that FAILED, never as an answer. A definitive "no" needs every row.
+      unreadable = unreadable + 1
       raiseMsg = raiseMsg or tostring(a)
-    elseif type(a) == "string" then
+    elseif type(a) == "string" and not isSecret(a) then
       rows = rows + 1
       local thisShape, rank
       if type(b) == "boolean" then
@@ -194,6 +195,11 @@ function Pr:FromSkillLines()
         foundRank = type(rank) == "number" and rank or nil
         break
       end
+    else
+      -- The row answered with something that is not a readable name (nil, a
+      -- table, or a secret string): the row exists, so its profession is
+      -- unknown to us and cannot be ruled out.
+      unreadable = unreadable + 1
     end
   end
   if rows == 0 then
@@ -203,6 +209,13 @@ function Pr:FromSkillLines()
   end
   local detail = ("%d skill line(s) read (%s)"):format(rows, shape or "shape unreadable")
   if not found then
+    if unreadable > 0 then
+      -- SOME rows answered and some did not. "No Herbalism" would then be a
+      -- guess about rows we never saw — the direction that hides the block on a
+      -- real herbalist — so this tier abstains and the next one gets a turn.
+      return nil, detail .. ("; %d row(s) unreadable (%s) — Herbalism cannot be ruled out")
+        :format(unreadable, raiseMsg and ("raised: " .. raiseMsg) or "no readable name")
+    end
     return false, detail .. "; no Herbalism line"
   end
   if foundRank == nil then
@@ -238,24 +251,40 @@ function Pr:FromProfessions()
     list = { a, b, c, d, e, f, g }
   end
   local names = herbNames()
-  local seen, herb = 0, false
+  local seen, herb, unreadable = 0, false, 0
   for slot = 1, 7 do
     local idx = list[slot]
     if type(idx) == "number" then
       local okI, name = pcall(GetProfessionInfo, idx)
-      if okI and profName(name) ~= nil then
+      -- Decode the name ONCE, and match the decoded string: a client that
+      -- answers `{ skillLineName = "Herbalism" }` must not be read as
+      -- "no Herbalism" just because the raw return is a table.
+      local nm = okI and profName(name) or nil
+      if nm == nil then
+        -- A slot index that names nothing is an empty slot, not a failure.
+        if not okI then unreadable = unreadable + 1 end
+      elseif isSecret(nm) then
+        unreadable = unreadable + 1
+      else
         seen = seen + 1
-        if isHerbName(name, names) then
+        if isHerbName(nm, names) then
           herb = true
         end
       end
     end
   end
+  if herb then
+    return true, ("%d learned profession(s) read; Herbalism among them"):format(seen)
+  end
   if seen == 0 then
     return nil, "GetProfessionInfo named none of the profession slots"
   end
-  if herb then
-    return true, ("%d learned profession(s) read; Herbalism among them"):format(seen)
+  if unreadable > 0 then
+    -- Some slots were named and some were not readable: "no Herbalism" would be
+    -- a guess about the slots we could not read, and a wrong "no" hides the
+    -- block on a real herbalist.
+    return nil, ("%d learned profession(s) read; %d slot(s) unreadable — Herbalism cannot be ruled out")
+      :format(seen, unreadable)
   end
   return false, ("%d learned profession(s) read; no Herbalism"):format(seen)
 end
