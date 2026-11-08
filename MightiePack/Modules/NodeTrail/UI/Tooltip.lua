@@ -499,23 +499,20 @@ function T:Enable()
     end
   end
 
-  -- Dirty tracking is a hint only: the clears we CAN observe (clear event,
-  -- a wrapped clear method) mark content as rewritten, but self-heal never
-  -- relies on it — the repopulate that matters bypasses all of these.
+  -- Dirty tracking is a hint only: the clears we CAN observe (clear event)
+  -- mark content as rewritten, but self-heal never relies on it — the
+  -- repopulate that matters bypasses all of these.
   GameTooltip:HookScript("OnTooltipCleared", function()
     T.dirty = true
   end)
-  for _, name in ipairs({ "ClearLines", "Clear" }) do
-    local orig = GameTooltip[name]
-    if type(orig) == "function" and not GameTooltip["__ntWrapped" .. name] then
-      GameTooltip[name] = function(self, ...)
-        local r1, r2, r3, r4 = orig(self, ...)
-        T.dirty = true
-        return r1, r2, r3, r4
-      end
-      GameTooltip["__ntWrapped" .. name] = true
-    end
-  end
+  -- NEVER replace a GameTooltip method. An earlier build wrapped ClearLines and
+  -- Clear in Lua to set a flag; the client then reported, on every action-bar
+  -- hover:
+  --   SharedTooltipTemplates.lua:167: attempt to index local 'color'
+  --   (a secret table value, while execution tainted by 'MightiePack')
+  -- because Blizzard's own tooltip pipeline called the replaced (tainted)
+  -- method, and a tainted execution path may not touch secret values. The flag
+  -- was only a hint, so the wrapper is gone rather than narrowed.
 
   -- Backstop clock: a private, visually inert helper frame (a bare Frame
   -- has no texture; Show only subscribes it to OnUpdate ticks).

@@ -91,6 +91,12 @@ GT.AddDoubleLine = function(self, l, r) table.insert(self.lines, l .. " | " .. r
 GT.ClearLines = function(self)
   self.lines = {}
 end
+if type(GT.Clear) ~= "function" then
+  GT.Clear = function(self) self.lines = {} end
+end
+-- Restore points for the taint guard: Enable must not swap these out.
+GT.__origClearLines = GT.ClearLines
+GT.__origClear = GT.Clear
 GameTooltip = GT
 local origGetLine = GT.GetLine -- restore point for tests that swap the stub
 
@@ -175,6 +181,13 @@ ns.Tooltip:Enable()
 ns.Tooltip:Enable()
 check(GT.hooks.OnShow and #GT.hooks.OnShow == 1, "Test 1: Enable idempotent — exactly one OnShow hook")
 check(T.poller ~= nil, "Test 1: private poller frame created in Enable")
+-- Taint guard: replacing a GameTooltip method makes Blizzard's own tooltip
+-- pipeline run tainted, and the client then refuses to index secret values
+-- ("execution tainted by 'MightiePack'"). Enable must leave the methods alone.
+check(GT.ClearLines == GT.__origClearLines and GT.Clear == GT.__origClear,
+  "Test 1: Enable never replaces GameTooltip.ClearLines/Clear (taint)")
+check(GT.__ntWrappedClearLines == nil and GT.__ntWrappedClear == nil,
+  "Test 1: no wrapper bookkeeping keys left on GameTooltip")
 check(GT.scripts.OnUpdate == nil, "Test 1: GameTooltip keeps its own scripts (no OnUpdate clobber)")
 
 -- Test 2: baseline hover still works (the first hover of the session)
