@@ -115,6 +115,21 @@ On top of that branch:
   removes them. `/nt mapdiag primitive <auto|line|dots|rotate>` pins a primitive for one redraw and
   reports the mode the client's measurement ended up choosing — an in-game A/B with no code edit.
   **Not yet confirmed visible in game**: the probe is in place for that run.
+- **The herb block has its own panel now** (t_f4ff9ea6) — `Modules/NodeTrail/UI/TooltipPanel.lua`.
+  The addon no longer writes into `GameTooltip` at all: three append-based fixes (widen the frame,
+  measure-and-`SetWidth` it, wrap our lines to the client's width) each lost to the client's own
+  layout, and the third failed as "the backdrop stops covering our lines as I play". The block is
+  now drawn in a frame NodeTrail owns — a `CreateTexture` background plus four 1px border textures
+  (`SetBackdrop` is measured, never used), width taken from OUR lines only (measured with the
+  tooltip's own font, padded, capped at 45% of the screen, long lines wrapped at `, ` / space /
+  `: `, a percentage never split from its item name), and positioned READ-ONLY from the tooltip's
+  rect: left edge on the tooltip's left, top edge just under `GetBottom()`, flipped above the
+  tooltip when there is no room, clamped into the screen. Rows are rebuilt from scratch on every
+  update, so a repeated hover cannot duplicate the block. Visibility comes from the existing poll
+  clock only — no `HookScript`, no replaced method, no `Show()` on the tooltip. `/nt ttdiag` prints
+  `panel: SHOWN … rect …`, the width budget, the widest of our lines, whether the width covers it,
+  the adopted font and the backdrop measurement. **Not yet run in game**: the six-hover check and
+  its `ttdiag` numbers are the next live step.
 - **Tooltip flicker instrumentation + fix** (t_c0a68ed2): `Refresh` takes a `source`
   (`show`/`setunit`/`setitem`/`poll`) and keeps a ring of the last **8** evaluations — hovered name,
   NumLines before/after, whether `blockIntact` matched, whether the block was appended, whether
@@ -161,6 +176,7 @@ MightiePack/Modules/NodeTrail/UI/MapOverlay.lua
 MightiePack/Modules/NodeTrail/UI/MinimapPath.lua
 MightiePack/Modules/NodeTrail/UI/PathGeom.lua
 MightiePack/Modules/NodeTrail/UI/Tooltip.lua
+MightiePack/Modules/NodeTrail/UI/TooltipPanel.lua
 MightiePack/Modules/NodeTrail/locale
 MightiePack/Modules/NodeTrail/locale/enUS.lua
 MightiePack/Options.lua
@@ -174,6 +190,10 @@ tests/recorder_spec.lua
 tests/umbrella_spec.lua
 tests/density_spec.lua
 tests/tooltip_spec.lua
+tests/tooltip_refresh_spec.lua
+tests/tooltip_panel_spec.lua
+tests/tooltip_no_gametooltip_writes_spec.lua
+tests/support/fakeui.lua
 tests/slash_spec.lua
 ```
 
@@ -182,7 +202,7 @@ tests/slash_spec.lua
 - Umbrella code lives on `pkg` (global `MightiePack`).
 - NodeTrail lives on the sub-table `pkg.NodeTrail` (global `NodeTrail`).
 - Each NodeTrail file starts with `local addonName, pkg = ...` / `pkg.NodeTrail = pkg.NodeTrail or {}` / `local ns = pkg.NodeTrail`.
-- Load order (MightiePack.toc): Core.lua, Modules.lua, the 15 NodeTrail files (locale, Config, Data/GM2, Data/Recorder, Data/Density, Data/HerbData, Data/Recipes, Route/Cluster, Route/Build, UI/PathGeom, UI/LineDraw, UI/MapOverlay, UI/MinimapPath, UI/Tooltip, Core), Options.lua.
+- Load order (MightiePack.toc): Core.lua, Modules.lua, the 16 NodeTrail files (locale, Config, Data/GM2, Data/Recorder, Data/Density, Data/HerbData, Data/Recipes, Route/Cluster, Route/Build, UI/PathGeom, UI/LineDraw, UI/MapOverlay, UI/MinimapPath, UI/TooltipPanel, UI/Tooltip, Core), Options.lua. `UI/TooltipPanel.lua` must load BEFORE `UI/Tooltip.lua`: the poller reads `ns.TooltipPanel` at call time, and the panel needs nothing from Tooltip.
 - Module registry (Modules.lua): `pkg.RegisterModule(name, {title, notes, stub, Enable})`, `pkg.IsModuleEnabled`, `pkg.SetModuleEnabled`, `pkg.EnableModules` (runs each enabled module's Enable once, pcall-wrapped, on ADDON_LOADED of MightiePack).
 - Touchstone is registered as a stub (always off, checkbox greyed out, label "Touchstone (coming soon)").
 - Adding a module: create `Modules/<Name>/` files, add them to the TOC before Options.lua, call `pkg.RegisterModule` with an Enable function, add a default to `pkg.moduleDefaults` in Core.lua.
@@ -244,12 +264,27 @@ Run from repo root with lua5.1:
 - `tests/diag_truthful_spec.lua` (t_c0a68ed2 round 2: a later redraw never raises again and the verdict stops claiming draw order; a host the client refuses to raise is reported as `DRAW ORDER (still below after the raise attempt)` with the two levels; and after a redraw that early-returns because another map is open, `points:`/`segments:`/`colour:` all read `not measured on the last redraw (<why>)` instead of printing the previous route's numbers. Round 3 adds the two shapes the raise used to lie about: `SetFrameLevel` present but silently ignored (art at 80 → `raise attempted; the frame still reads level=45`, `raisedNow=false`, `stillBelow=true`, `the client did not accept a higher level`, and no `RAISED from 45 to 45`) and `SetFrameStrata` present but ignored (art HIGH at level 40 → audit keeps the MEASURED `MEDIUM`, the z-order line reads `NOT above the art`, and the verdict says `the client did not accept a higher strata`))
 - `tests/minimap_diag_spec.lua` (t_c0a68ed2: with no redraw yet the minimap verdict says `no redraw on a usable minimap sample yet`; a route inside the view is drawn and the diag prints mode/radius/unit + per-point `inside`; a route 0.4 map away queues nothing and the diag names the OUTSIDE points and the per-segment clip reason; the fraction fallback follows the zoom (`dist` grows when zoomed in) and `/nt mapdiag` carries the minimap half)
 - `tests/ttdiag_minimal_spec.lua` (t_c0a68ed2: `/nt ttdiag` with no GameTooltip, a bare tooltip table, a shown-but-unreadable tooltip, readers that RAISE, a ring entry recorded from an empty tooltip, and a chat frame that raises — every read prints `absent`/`?`, nothing errors, and the ring is always printed)
-- `tests/tooltip_refresh_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched; t_c0a68ed2 adds the flicker invariants — five poll ticks while the same node is hovered touch nothing, a rewritten tooltip is re-appended without ever showing the frame, the re-layout is deferred and flushed on the next client show, the ring is bounded and printed by ttdiag)
+- `tests/tooltip_refresh_spec.lua` (t_f4ff9ea6 rewrite: the poll clock is the only driver — Enable
+  installs NO GameTooltip script and replaces no method, a hidden tooltip hides the panel and spends
+  no evaluation, a herb shows the block, a non-herb and a unit tooltip hide it, six hovers of the same
+  herb render the same rows with one frame, the clock is throttled to ~5/s, the diag prints the panel
+  rect/budget/widest, and a full hover cycle writes nothing into a write-hostile tooltip proxy)
+- `tests/tooltip_panel_spec.lua` (t_f4ff9ea6: the panel is built and positioned from a fake tooltip —
+  below, flipped above near the bottom edge, clamped at both side edges; six hovers plus a font change
+  and a scale change always leave the width >= the widest line; a long line wraps at `, ` under the
+  45% cap while "100% (base)" stays whole; a scaled UI does not double the panel's scale; an
+  unreadable tooltip rect builds the block but never places it blind; nothing is written to the
+  tooltip. RED on the installed build, where the first `Refresh` calls `GameTooltip:AddDoubleLine`)
+- `tests/tooltip_no_gametooltip_writes_spec.lua` (t_f4ff9ea6: the grep gate — no field is assigned on
+  GameTooltip anywhere in the addon, exactly one `GameTooltip:HookScript` exists in the whole tree and
+  it is Touchstone's read-only `OnTooltipSetItem` fallback, zero tooltip method calls in
+  `Modules/NodeTrail`, and neither tooltip file calls `:HookScript(`, `C_EventUtils` or registers
+  `COMBAT_LOG_EVENT_UNFILTERED`. RED on the installed build with 3 hooks)
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
 - `tests/mapdraw_primitive_spec.lua` (t_a08cb3e0: the LIVE client shape — a `CreateLine` region whose `SetStartPoint`/`SetEndPoint` return and whose getters keep reading `TOPLEFT(0.0,absent)` at `size=0x0`, and a texture with no `SetWidth`/`SetHeight`/`SetRotation`. Pins: the line primitive is refused by measurement and the overlay falls back to `mode="dots"`; the dots are two-corner-anchored 2.5px quads every 3px that cover the segment end to end and reach both endpoints; the diag prints `primitive:` with both proofs, `anchor probe … two corner anchors -> 64x8 points=2`, and the held object's `object=`/`numpoints=`/`points=`/`methods=`; `verdict: PRIMITIVE` names the dropped endpoints instead of blaming a zero size; `mapdiag probe` draws the marker/border/diagonal with printed coordinates and is off by default; `mapdiag primitive <auto|line|dots|rotate>` reports the mode the measurement chose, not the one requested; and a client whose line region DOES keep its endpoints still uses `mode="line"`. Also unit-tests the pure `DotPlan`/`PlanDots` (coverage, both endpoints, the 1200-object cap, size/spacing scaled together). RED on `c220ec7` with 40 FAILs)
-All twenty-seven spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_a08cb3e0` HEAD.
+All twenty-nine spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_f4ff9ea6` HEAD.
 On `c220ec7` the four specs this card touched are RED with **51 FAILs**
 (`mapdraw_primitive_spec` 40, `diag_truthful_spec` 6, `draw_smoke` 3, `minimap_diag_spec` 2);
 the other 23 stay green.
@@ -277,10 +312,16 @@ the other 23 stay green.
 - Chat on start: "NodeTrail: route started (<belt points> belt points from <picks> herb picks)."
 
 ## Herb tooltip (Base D)
-- New files: `MightiePack/Modules/NodeTrail/Data/HerbData.lua`, `Data/Recipes.lua`, `UI/Tooltip.lua`.
+- New files: `MightiePack/Modules/NodeTrail/Data/HerbData.lua`, `Data/Recipes.lua`, `UI/Tooltip.lua`,
+  and (t_f4ff9ea6) `UI/TooltipPanel.lua` — loaded BEFORE `UI/Tooltip.lua` in the TOC.
 - `ns.Enable()` now also calls `ns.Recipes:Enable()` and `ns.Tooltip:Enable()`. Loading the files hooks nothing and registers no events; a disabled module adds no tooltip lines.
-- Hover detection: hooks GameTooltip OnShow. Only when no unit is moused over, the tooltip owner is UIParent/WorldFrame (world object), and tooltip line 1 is a known herb node name from the HerbData table (English names). OnTooltipCleared resets a flag so lines are added once per tooltip.
-- Lines added (light blue): header "NodeTrail"; one row per drop "<item> <pct>%" (suffix "(base)" when from the baseline stub); "Your picks: N" or "Your picks: none yet"; "Alchemy: <recipe>, <recipe>, ..." (first 4, then "+N more"), or "Open Alchemy once to list recipe uses" if Alchemy was never scanned.
+- Hover detection (t_f4ff9ea6): the private poll clock (5x/second) asks whether the tooltip is shown,
+  whether no unit is moused over, whether the tooltip owner is UIParent/WorldFrame (world object),
+  and whether tooltip line 1 is a known herb node name from the HerbData table (English names). The
+  tooltip is never hooked and never written to; the block is drawn in NodeTrail's own panel
+  (`UI/TooltipPanel.lua`, see the Status section). A hidden tooltip hides the panel without spending
+  an evaluation.
+- Panel rows: one row per drop "<item> <pct>%" (suffix "(base)" when from the baseline stub); "Your picks: N" or "Your picks: none yet"; "Alchemy: <recipe>, <recipe>, ..." (first 4, then "+N more"), or "Open Alchemy once to list recipe uses" if Alchemy was never scanned.
 - Drop % source: baseline stub table in HerbData.lua (primary herb 100% for the 28 Classic herb nodes Peacebloom..Black Lotus; rough placeholder secondaries: Swiftthistle 10% from Mageroyal and Briarthorn, Wildvine 5% from Purple Lotus; NOT researched Forever data). Personal data from NodeTrailDB.herbs: a gather of a herb = any recorded gather whose items include that herb's item id. Once there are 10 or more gathers (H.PERSONAL_MIN) the personal % replaces the baseline (each item counted once per gather). Items you looted that are not in the stub are shown from personal data.
 - Alchemy recipe uses: best-effort Classic API. When the Alchemy trade skill window is open (TRADE_SKILL_SHOW / TRADE_SKILL_UPDATE and GetTradeSkillLine() equals the localized Alchemy name), it scans learned recipes (GetNumTradeSkills, GetTradeSkillInfo, skipping headers, GetTradeSkillReagentItemLink) and stores itemID -> sorted recipe names. Each scan replaces the old map. The player has to open the Alchemy window once (per character) before uses show.
 - Limitations: herb node names are matched in English only (non-English clients show no lines until localized names are added); Forever custom herbs/rare mats are not in the stub; recipe list is per character and only after opening Alchemy; tooltip not yet seen in-game on Forever (assumes the client puts the node name on line 1 of GameTooltip).
@@ -366,17 +407,12 @@ the other 23 stay green.
 - The tooltip flash is instrumented, not proven fixed: the ring in `/nt ttdiag` must show the real
   sequence on the minimap hover (who fired, how many lines, whether Show ran) before the fix is
   called confirmed.
-- The tooltip PANEL sizing was wrong for late appends, and the cause is measured, not assumed:
-  live `/nt ttdiag` on Forever prints `last relayout: show=ran layout=no` — that client has no
-  `Frame:Layout()` and its `Show()` does NOT re-run the padding sizing, so neither the relayout nor
-  the clamp (which measures the frame, not the text) could size the panel. The frame is now sized
-  from the measured text (`GetStringWidth` over the line font strings, plus the tooltip's own
-  padding measured as frameWidth minus its widest own row), grow-only, never shrinking and never
-  touching a tooltip without a NodeTrail block; height grows by the measured tail overflow of the
-  last line. `ttdiag` prints `content:` and `last fit:` with frame before -> after, the widest row
-  and whether it widened, so the next hover (including a RE-hover of the same node) is provable
-  from the log. Still unproven: the live client's font strings must expose `GetStringWidth` and
-  `GetBottom` for the measurement to work — if they do not, `ttdiag` says
-  `content: not measurable on this client` and the next measurement is that line.
+- The herb block has its own panel now, and the in-tooltip approach is withdrawn (t_f4ff9ea6) — the
+  three append-based fixes all lost to the client's own layout, so the append path is deleted, not
+  tuned. What is still unproven is the LIVE run of the replacement: hover a herb, leave, hover the
+  SAME herb six times, then play ten minutes and hover again, and quote `/nt ttdiag`. The `panel:`
+  lines give the rect, the width budget (45% of the screen), the widest of our lines, and
+  `covers its widest line=yes|NO`; the answer closes the card. The specs prove the arithmetic on a
+  modelled client, not the pixels on Forever.
 - Herb tooltip node names are matched in English only.
 - `/mpack status` reports `inert` for a module that refused to start (standalone Touchstone present).

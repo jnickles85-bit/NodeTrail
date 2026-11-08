@@ -9,6 +9,9 @@ local function check(cond, msg)
   end
 end
 
+local F = dofile(root .. "/tests/support/fakeui.lua")
+local SCREEN_W, SCREEN_H = F.install({ width = 1920, height = 1080 })
+
 local pkg = {}
 local function loadFile(path)
   local f = assert(loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. path))
@@ -20,6 +23,7 @@ loadFile("Config.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
 loadFile("Data/Recipes.lua")
+loadFile("UI/TooltipPanel.lua")
 loadFile("UI/Tooltip.lua")
 loadFile("Core.lua")
 
@@ -28,23 +32,25 @@ local ns = pkg.NodeTrail
 time = time or os.time
 CopyTable = function(t) local c = {} for k, v in pairs(t) do c[k] = type(v) == table and CopyTable(v) or v end return c end
 DEFAULT_CHAT_FRAME = { AddMessage = function() end }
-local frames = {}
--- Events this fake client refuses, per test. Validity is never asked of
--- C_EventUtils (restricted — see event_gate_spec); the client answers by
--- raising on RegisterEvent.
+-- Frames come from the shared client model (tests/support/fakeui.lua): they
+-- have real textures, font strings and geometry, which is what the herb panel
+-- needs. The event gate stays here — validity is never asked of C_EventUtils
+-- (restricted, see event_gate_spec); the client answers by raising on
+-- RegisterEvent.
 local unknownEvents = {}
-CreateFrame = function()
-  local f = { scripts = {}, events = {} }
-  f.SetScript = function(self, name, fn) self.scripts[name] = fn end
-  f.RegisterEvent = function(self, name)
-    if unknownEvents[name] then
-      error('Attempt to register unknown event "' .. tostring(name) .. '"', 2)
+local baseCreateFrame = CreateFrame
+CreateFrame = function(kind, name, parent)
+  local f = baseCreateFrame(kind, name, parent)
+  f.events = {}
+  f.RegisterEvent = function(self, event)
+    if unknownEvents[event] then
+      error('Attempt to register unknown event "' .. tostring(event) .. '"', 2)
     end
-    self.events[name] = true
+    self.events[event] = true
   end
-  table.insert(frames, f)
   return f
 end
+local frames = F.frames
 GetSpellInfo = function(id)
   local map = { [2366] = "Herb Gathering", [2259] = "Alchemy" }
   return map[id]
@@ -54,38 +60,35 @@ UnitExists = function(u) return u == "mouseover" and mouseoverUnit end
 UIParent = {}
 WorldFrame = {}
 
-GameTooltip = {
+GameTooltip = F.newTooltip({
   lines = {},
-  hooks = {},
   owner = UIParent,
-  shows = 0,
-}
+  left = 400,
+  bottom = 800,
+  width = 180,
+  height = 60,
+})
+GameTooltip.hooks = {}
 GameTooltip.HookScript = function(self, name, fn)
   self.hooks[name] = self.hooks[name] or {}
   table.insert(self.hooks[name], fn)
 end
-GameTooltip.NumLines = function(self) return #self.lines end
-GameTooltip.GetOwner = function(self) return self.owner end
-GameTooltip.AddLine = function(self, t) table.insert(self.lines, t) end
-GameTooltip.AddDoubleLine = function(self, l, r) table.insert(self.lines, l .. " | " .. r) end
-GameTooltip.Show = function(self)
-  self.shows = self.shows + 1
-  if self.hooks.OnShow then
-    for _, fn in ipairs(self.hooks.OnShow) do
-      fn(self)
-    end
-  end
+_G.GameTooltip = GameTooltip
+
+-- What the PANEL renders, in the same "name | value" shape the tooltip's own
+-- double lines use. This replaces the old `GameTooltip.lines` read: the block
+-- no longer lives in the tooltip.
+local function panelLines()
+  return ns.TooltipPanel:TextLines()
 end
 
 local function hover(name)
   GameTooltip.lines = { name, "Herbalism" }
-  _G["GameTooltipTextLeft1"] = { GetText = function() return GameTooltip.lines[1] end }
-  if GameTooltip.hooks.OnTooltipCleared then
-    for _, fn in ipairs(GameTooltip.hooks.OnTooltipCleared) do
-      fn()
-    end
-  end
-  GameTooltip:Show()
+  GameTooltip:SyncFirstLine()
+  GameTooltip.shown = true
+  -- The poller is the only thing that drives the panel (there is no OnShow hook
+  -- any more); this is one tick of it.
+  ns.Tooltip:Poll(GameTooltip)
 end
 
 local trade = { line = nil, rows = {} }
@@ -100,6 +103,7 @@ end
 -- Test 1
 check(#frames == 0, "Test 1: no frames created at load")
 check(GameTooltip.hooks.OnShow == nil or #GameTooltip.hooks.OnShow == 0, "Test 1: no OnShow hooks at load")
+check(ns.TooltipPanel.frame == nil, "Test 1: the herb panel is created lazily, not at load")
 
 -- Test 2
 NodeTrailDB = nil
@@ -107,16 +111,29 @@ ns.Recipes:Enable()
 ns.Tooltip:Enable()
 ns.Recipes:Enable()
 ns.Tooltip:Enable()
-check(GameTooltip.hooks.OnShow and #GameTooltip.hooks.OnShow == 1, "Test 2: OnShow hooks count == 1")
+-- t_f4ff9ea6: the tooltip is not hooked any more. Enable is idempotent and the
+-- only thing it creates is the private poll clock.
+local hookTotal = 0
+for _, list in pairs(GameTooltip.hooks) do hookTotal = hookTotal + #list end
+check(hookTotal == 0, "Test 2: Enable installs no GameTooltip script (got " .. hookTotal .. ")")
+check(ns.Tooltip.poller ~= nil, "Test 2: Enable created the private poll clock")
+check(ns.Tooltip.poller == frames[#frames],
+  "Test 2: the poll clock was the last frame created (it is Tooltip's own)")
+local framesAfterEnable = #frames
+ns.Tooltip:Enable()
+check(#frames == framesAfterEnable, "Test 2: Enable is idempotent (no second clock)")
 
 -- Test 3
 hover("Copper Vein")
-check(#GameTooltip.lines == 2, "Test 3: unknown object adds no lines")
+check(#GameTooltip.lines == 2, "Test 3: unknown object adds no lines to the tooltip")
+check(#panelLines() == 0 and ns.TooltipPanel:IsShown() == false,
+  "Test 3: unknown object shows no panel")
 
 -- Test 4
 mouseoverUnit = true
 hover("Peacebloom")
-check(#GameTooltip.lines == 2, "Test 4: unit tooltip ignored")
+check(#GameTooltip.lines == 2, "Test 4: unit tooltip ignored (no lines appended)")
+check(ns.TooltipPanel:IsShown() == false, "Test 4: unit tooltip shows no panel")
 mouseoverUnit = false
 
 -- Test 5
@@ -124,7 +141,7 @@ mouseoverUnit = false
 -- line the addon appends is the node name (the drop row's left column), so the
 -- client's two lines are followed by it directly.
 hover("Peacebloom")
-local lines = GameTooltip.lines
+local lines = panelLines()
 local found = { Peacebloom = false, Picks = false, Alchemy = false }
 local addonNameLines, firstBlockIndex = 0, nil
 for i, l in ipairs(lines) do
@@ -137,16 +154,18 @@ for i, l in ipairs(lines) do
   if l == "Open Alchemy once to list recipe uses" then found.Alchemy = true end
 end
 check(addonNameLines == 0, "Test 5: no line reads the addon's name (got " .. addonNameLines .. ")")
-check(firstBlockIndex == 3,
-  "Test 5: the block starts with the node name right after the client's two lines (index "
+check(firstBlockIndex == 1,
+  "Test 5: the panel's block OPENS with the node name (index "
     .. tostring(firstBlockIndex) .. ")")
+check(#GameTooltip.lines == 2,
+  "Test 5: the client's tooltip still holds only its own two lines (got " .. #GameTooltip.lines .. ")")
 check(found.Peacebloom, "Test 5: Peacebloom line present")
 check(found.Picks, "Test 5: picks line present")
 check(found.Alchemy, "Test 5: alchemy hint present")
 
 -- Test 6
 hover("Mageroyal")
-local mLines = GameTooltip.lines
+local mLines = panelLines()
 local idxM, idxS = nil, nil
 for i, l in ipairs(mLines) do
   if l == "Mageroyal | 100% (base)" then idxM = i end
@@ -161,7 +180,7 @@ ns.RecordHerb(1429, 0.5, 0.5, { { id = 2447, count = 2 } })
 ns.RecordHerb(1429, 0.5, 0.5, { { id = 2447, count = 2 } })
 ns.RecordHerb(1429, 0.5, 0.5, { { id = 2447, count = 2 } })
 hover("Peacebloom")
-local pLines = GameTooltip.lines
+local pLines = panelLines()
 local foundPicks3 = false
 for _, l in ipairs(pLines) do
   if l == "Your picks: 3" then foundPicks3 = true end
@@ -182,7 +201,7 @@ for i = 1, 7 do
   ns.RecordHerb(1429, 0.5, 0.5, items)
 end
 hover("Peacebloom")
-local pLines8 = GameTooltip.lines
+local pLines8 = panelLines()
 local found100, found40, found10 = false, false, false
 for _, l in ipairs(pLines8) do
   if l == "Peacebloom | 100%" then found100 = true end
@@ -209,7 +228,15 @@ trade = {
     { name = "Swiftness Potion", type = "medium", reagents = { 2452, 2450, 3371 } },
   }
 }
-local recipesFrame = frames[#frames]
+-- The recipes event frame is Tooltip-independent; the poll clock is created
+-- after it, so find it by its OnEvent script rather than by position.
+local recipesFrame
+for i = #frames, 1, -1 do
+  if frames[i].scripts and frames[i].scripts.OnEvent then
+    recipesFrame = frames[i]
+    break
+  end
+end
 if recipesFrame and recipesFrame.scripts.OnEvent then
   recipesFrame.scripts.OnEvent(recipesFrame, "TRADE_SKILL_SHOW")
 end
@@ -227,18 +254,18 @@ if alch[765] then
 end
 hover("Peacebloom")
 local foundAlch = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Minor Healing Potion" then foundAlch = true end
 end
 check(foundAlch, "Test 10: Peacebloom alchemy line")
 hover("Silverleaf")
 local foundAlch2 = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Elixir of Lion's Strength, Minor Healing Potion" then foundAlch2 = true end
 end
 check(foundAlch2, "Test 10: Silverleaf alchemy line")
 local foundHint = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Open Alchemy once to list recipe uses" then foundHint = true end
 end
 check(not foundHint, "Test 10: hint gone")
@@ -364,14 +391,14 @@ check(ns.Recipes._error == nil, "Test 14: Recipes no error")
 
 hover("Peacebloom")
 local foundP14 = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Minor Healing Potion" then foundP14 = true end
 end
 check(foundP14, "Test 14: Peacebloom tooltip line (same as legacy stub)")
 hover("Silverleaf")
 local foundS14 = false
 local foundHint14 = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Elixir of Lion's Strength, Minor Healing Potion" then foundS14 = true end
   if l == "Open Alchemy once to list recipe uses" then foundHint14 = true end
 end
@@ -435,7 +462,7 @@ check(d16 ~= nil and d16.path == "none", "Test 16: scan diag records path=none")
 hover("Peacebloom")
 local foundHint16 = false
 local foundBlock16 = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Open Alchemy once to list recipe uses" then foundHint16 = true end
   if type(l) == "string" and l:find("^Your picks: ") then foundBlock16 = true end
 end
@@ -499,7 +526,7 @@ check(d17 ~= nil and d17.gated == "profession", "Test 17: _diag.gated == 'profes
 check(d17 ~= nil and d17.profession == "Cooking", "Test 17: _diag.profession == 'Cooking'")
 hover("Silverleaf")
 local hint17, wrong17 = false, false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Open Alchemy once to list recipe uses" then
     hint17 = true
   end
@@ -603,7 +630,7 @@ check(d19 ~= nil and d19.gated == nil and d19.profession == "Alchemy",
   "Test 19: diag records the positive Alchemy identification, not a gate")
 hover("Peacebloom")
 local line19 = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Minor Healing Potion" then
     line19 = true
   end
@@ -693,52 +720,44 @@ check(args20ok, "Test 20: every GetRecipeSchematic call carried isRecraft=false 
 check(ns.Recipes._error == nil, "Test 20: Recipes no error")
 hover("Peacebloom")
 local f20a = false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Minor Healing Potion" then f20a = true end
 end
 check(f20a, "Test 20: Peacebloom tooltip line (schematic reagents)")
 hover("Silverleaf")
 local f20b, f20c = false, false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Alchemy: Elixir of Lion's Strength, Minor Healing Potion" then f20b = true end
   if l == "Open Alchemy once to list recipe uses" then f20c = true end
 end
 check(f20b, "Test 20: Silverleaf tooltip line (schematic reagents)")
 check(not f20c, "Test 20: hint gone after a complete modern scan")
 
--- Test 21: a client whose HookScript REJECTS OnTooltipSetItem (the
--- live client raised the usage error there). Enable must still install
--- the OnShow hook, keep _error nil, and name the skipped script in the
--- diag. Same truthfulness for the trade-skill events: only
--- TRADE_SKILL_SHOW is valid on the live client.
+-- Test 21 (t_f4ff9ea6): a client whose HookScript REJECTS everything — the
+-- live client raised a usage error on OnTooltipSetItem. Enable must not care:
+-- it installs NO script on the tooltip at all, so a rejected hook can neither
+-- break it nor leave a "skipped script" to explain. _error stays nil.
 local origHook = GameTooltip.HookScript
 GameTooltip.hooks = {}
-GameTooltip.HookScript = function(self, name, fn)
-  assert(name ~= "OnTooltipSetItem",
-    "bad argument #2 to '?' (Usage: local success = self:HookScript(scriptTypeName, script[, bindingType]))")
-  self.hooks[name] = self.hooks[name] or {}
-  table.insert(self.hooks[name], fn)
+GameTooltip.HookScript = function()
+  error("bad argument #2 to '?' (Usage: local success = self:HookScript(scriptTypeName, script[, bindingType]))")
 end
--- No HasScript on this stub: the code must fall back to pcall and
--- treat the rejected hook as a skip, not an error.
 ns.Tooltip._enabled = false
 ns.Tooltip._error = nil
 local okEn21, enErr21 = pcall(ns.Tooltip.Enable, ns.Tooltip)
-check(okEn21, "Test 21: Enable succeeds despite the rejected script: " .. tostring(enErr21))
-check(GameTooltip.hooks.OnShow ~= nil and #GameTooltip.hooks.OnShow == 1,
-  "Test 21: OnShow hook still installed")
-check(GameTooltip.hooks.OnTooltipSetUnit ~= nil, "Test 21: OnTooltipSetUnit installed (supported)")
-check(GameTooltip.hooks.OnTooltipSetItem == nil, "Test 21: OnTooltipSetItem NOT installed (rejected)")
-check(ns.Tooltip._error == nil, "Test 21: a skipped script does NOT write T._error")
+check(okEn21, "Test 21: Enable succeeds on a hook-hostile client: " .. tostring(enErr21))
+local hooks21 = 0
+for _, list in pairs(GameTooltip.hooks) do hooks21 = hooks21 + #list end
+check(hooks21 == 0, "Test 21: no script was installed on the tooltip (got " .. hooks21 .. ")")
+check(ns.Tooltip._error == nil, "Test 21: Enable wrote no T._error")
 local diagCap = {}
 DEFAULT_CHAT_FRAME.AddMessage = function(_, m) diagCap[#diagCap + 1] = tostring(m) end
 local okDiag21, dErr21 = pcall(ns.Tooltip.Diag, ns.Tooltip)
 DEFAULT_CHAT_FRAME.AddMessage = origAdd
 check(okDiag21, "Test 21: Tooltip:Diag runs: " .. tostring(dErr21))
 local diagText = table.concat(diagCap, "\n")
-check(diagText:find("skipped scripts", 1, true) ~= nil
-  and diagText:find("OnTooltipSetItem", 1, true) ~= nil,
-  "Test 21: diag names the skipped script (OnTooltipSetItem)")
+check(diagText:find("skipped scripts", 1, true) == nil,
+  "Test 21: the diag claims no skipped script (there is none to skip)")
 -- Events: the live client only knows TRADE_SKILL_SHOW; everything else is
 -- refused at registration time.
 unknownEvents = {
@@ -801,7 +820,7 @@ check(stOut22:find("open your Alchemy window once", 1, true) == nil,
   "Test 22: status does NOT re-promise a step that already ran")
 hover("Peacebloom")
 local hint22, alt22 = false, false
-for _, l in ipairs(GameTooltip.lines) do
+for _, l in ipairs(panelLines()) do
   if l == "Open Alchemy once to list recipe uses" then hint22 = true end
   if type(l) == "string" and l:find("no reagents", 1, true) ~= nil then alt22 = true end
 end
