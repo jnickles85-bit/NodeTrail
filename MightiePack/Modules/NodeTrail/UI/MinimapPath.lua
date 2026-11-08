@@ -399,6 +399,7 @@ function M:_redraw()
 
   local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
   ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup")
+  self._lastQueued = count
   if count > 0 then
     pcall(host.Show, host)
   else
@@ -481,3 +482,85 @@ for event in pairs(IMMEDIATE) do
   pcall(driver.RegisterEvent, driver, event)
 end
 pcall(driver.RegisterEvent, driver, "CVAR_UPDATE")
+
+-- ── /nt mapdiag, minimap half ───────────────────────────────────────────────
+-- Same shape as MapOverlay:Diag: one labelled line per fact, built inside
+-- pcall, so a client missing these APIs prints "absent" instead of erroring.
+local function say(text)
+  local line = "NodeTrail mapdiag: " .. tostring(text)
+  if type(DEFAULT_CHAT_FRAME) == "table" and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+    local ok = pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, line)
+    if ok then
+      return
+    end
+  end
+  pcall(print, line)
+end
+
+local function fact(build)
+  local ok, text = pcall(build)
+  if not ok then
+    text = "error: " .. tostring(text)
+  end
+  say(text)
+end
+
+local function fmtNum(value)
+  if type(value) ~= "number" or value ~= value then
+    return "absent"
+  end
+  if value == math.floor(value) then
+    return string.format("%d", value)
+  end
+  return string.format("%.2f", value)
+end
+
+function M:Diag()
+  fact(function()
+    if not Minimap then
+      return "Minimap: absent"
+    end
+    local okW, w = pcall(Minimap.GetWidth, Minimap)
+    local okH, h = pcall(Minimap.GetHeight, Minimap)
+    local visible = "absent"
+    if type(Minimap.IsVisible) == "function" then
+      local okV, v = pcall(Minimap.IsVisible, Minimap)
+      visible = okV and tostring(v) or "error"
+    end
+    return string.format("Minimap: present, size=%sx%s visible=%s zoom=%s",
+      okW and fmtNum(w) or "absent", okH and fmtNum(h) or "absent", visible,
+      (type(Minimap.GetZoom) == "function") and fmtNum(select(2, pcall(Minimap.GetZoom, Minimap))) or "absent")
+  end)
+  fact(function()
+    local host = self.host
+    if not host then
+      return "minimap host: absent"
+    end
+    local okW, w = pcall(host.GetWidth, host)
+    local okH, h = pcall(host.GetHeight, host)
+    local name = select(2, pcall(host.GetName, host))
+    return string.format("minimap host: parent=%s size=%sx%s",
+      type(name) == "string" and name or "<unnamed>",
+      okW and fmtNum(w) or "absent", okH and fmtNum(h) or "absent")
+  end)
+  fact(function()
+    local mode = self.drawer and self.drawer.mode or "absent"
+    local held = (self.drawer and self.drawer.pool and #self.drawer.pool) or 0
+    local ticker = "off"
+    if self._driver and type(self._driver.GetScript) == "function" then
+      local ok, fn = pcall(self._driver.GetScript, self._driver, "OnUpdate")
+      ticker = (ok and type(fn) == "function") and "on" or "off"
+    end
+    return string.format("minimap redraw: queued=%s segment(s); LineDraw mode=%s; objects held=%s; ticker=%s",
+      fmtNum(self._lastQueued or 0), tostring(mode), fmtNum(held), ticker)
+  end)
+  fact(function()
+    return string.format("minimap projection: points=%s useWorld=%s zone=%sx%s radius=%s",
+      fmtNum(self.points and #self.points or 0), tostring(self.useWorld),
+      fmtNum(self.zoneW), fmtNum(self.zoneH), fmtNum(viewRadiusYards()))
+  end)
+  fact(function()
+    return "minimap drawError=" .. tostring(self._drawError or "none")
+  end)
+end
+

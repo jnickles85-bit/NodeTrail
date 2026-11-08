@@ -15,6 +15,52 @@ function G.IsMapPoint(p)
     and p.x == p.x and p.y == p.y
 end
 
+local function finite(v)
+  return type(v) == "number" and v == v and v > -1e9 and v < 1e9
+end
+
+--- Measured map rectangle inside a host frame.
+--- The host is whatever frame the client pans/zooms with; the client may
+--- inset the map texture inside it (Classic: WorldMapButton sits inside
+--- WorldMapDetailFrame). Both sizes are MEASURED — nothing is assumed; when
+--- the inner frame is unknown or larger, the whole host is the map.
+--- @return { left, top, width, height } or nil when a size is unusable
+function G.MapRect(hostWidth, hostHeight, mapWidth, mapHeight)
+  if not finite(hostWidth) or not finite(hostHeight) then
+    return nil
+  end
+  if hostWidth <= 0 or hostHeight <= 0 then
+    return nil
+  end
+  local w, h = hostWidth, hostHeight
+  if finite(mapWidth) and finite(mapHeight) and mapWidth > 0 and mapHeight > 0
+    and mapWidth <= hostWidth and mapHeight <= hostHeight then
+    w, h = mapWidth, mapHeight
+  end
+  return {
+    left = (hostWidth - w) * 0.5,
+    top = (hostHeight - h) * 0.5,
+    width = w,
+    height = h,
+  }
+end
+
+--- Map fraction (0..1) -> pixels from the rectangle's left/top, +y down.
+--- @return x, y or nil when the point or the rectangle is unusable
+function G.FractionToPixel(fx, fy, rect)
+  if type(rect) ~= "table" then
+    return nil
+  end
+  local width, height = rect.width, rect.height
+  if not finite(width) or not finite(height) or width <= 0 or height <= 0 then
+    return nil
+  end
+  if not finite(fx) or not finite(fy) then
+    return nil
+  end
+  return (rect.left or 0) + fx * width, (rect.top or 0) + fy * height
+end
+
 --- Clip a segment to a circle centered at the origin.
 --- @return x1, y1, x2, y2 or nil
 function G.ClipCircle(x1, y1, x2, y2, radius)

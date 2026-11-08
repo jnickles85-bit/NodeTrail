@@ -26,6 +26,15 @@ On top of that branch:
   `pkg.GetAddOnMeta`: `C_AddOns.GetAddOnMetadata` first, then the legacy global (t_5507a0ba — the
   Forever client has no global `GetAddOnMetadata`, which printed "version unknown"). The bug-report
   header uses the same chain.
+- **World-map overlay** (t_0f65b0b9): `/nt mapdiag` prints one labelled line per frame fact
+  (WorldMapFrame / canvas / mapIDs / legacy frames / the parent MapOverlay picked / the last
+  redraw) and works before any route exists (`route: none`). The overlay now measures whatever
+  the client exposes — canvas, else WorldMapDetailFrame, else WorldMapButton — and converts map
+  fractions through the measured map rectangle (`PathGeom.MapRect` / `FractionToPixel`), including
+  the legacy inset (WorldMapButton inside WorldMapDetailFrame). Script hooks (`OnShow`,
+  `hooksecurefunc` on `OnMapChanged` / `OnCanvasScaleChanged`, the canvas `OnSizeChanged`) are
+  installed whether or not a data provider exists, so a map opened after `/nt start` still draws;
+  no OnUpdate polling. **Still unproven in game** — run `/nt start`, open the map, `/nt mapdiag`.
 - **`/mpack bug`** — in-game report form; technical header auto-filled, `Copy report` for Ctrl+C, then
   paste into `#mightiepack-bugs`. The client cannot POST, so nothing uploads itself.
 
@@ -71,6 +80,8 @@ README.md
 tests
 tests/draw_smoke.lua
 tests/pathgeom_spec.lua
+tests/mapoverlay_spec.lua
+tests/mapdiag_spec.lua
 tests/recorder_spec.lua
 tests/umbrella_spec.lua
 tests/density_spec.lua
@@ -139,10 +150,12 @@ Run from repo root with lua5.1:
 - `tests/recorder_spec.lua` (SV preserved, record shape, rounding, node id, LOOT_READY+LOOT_OPENED dedupe, custom spell id by name, non-herb/other unit/too late/fishing/no position/no cast ignored, empty loot still recorded, fresh DB)
 - `tests/density_spec.lua` (empty/one-spot/two-spot/three-spot data, dense ring with cold outliers, no self-crossing, 2-opt crossing removal, anchor count scaling, maxStops cap, determinism, map wiring and errors, routeSource switch, old profile without new keys)
 - `tests/tooltip_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched)
+- `tests/mapoverlay_spec.lua` (t_0f65b0b9: geometry with a Classic-era stub — WorldMapFrame WITHOUT GetCanvas, WorldMapDetailFrame 1002x1002 with the 986x986 WorldMapButton inset by 8: a known fraction lands at the expected pixel with and without the inset, an oversized inner frame is clamped, a zero-sized frame converts to nil with no division, the overlay parents to WorldMapDetailFrame, zero size queues nothing and asks for a retry, mismatched mapID and showWorldMap=off hide it, and mapdiag prints every line on that client)
+- `tests/mapdiag_spec.lua` (t_0f65b0b9: `/nt mapdiag` on a client missing WorldMapFrame, canvas, legacy frames, Minimap, GetCVar, GetCurrentMapAreaID, C_Timer, hooksecurefunc and the canvas mixin prints every labelled line with no error; throwing GetCanvas/GetMapID/GetWidth still print `absent`; no chat frame falls back to print; `/nt status` is unchanged)
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
-All twelve specs pass with lua5.1.
+All fifteen specs pass with lua5.1.
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -221,5 +234,8 @@ All twelve specs pass with lua5.1.
   position rather than node position.
 - Density tunables have never been tuned against real data.
 - MapOverlay/MinimapPath frames load even when NodeTrail is off.
+- The world-map line has never been seen drawing in game. `/nt mapdiag` reports which frame this
+  client exposes (canvas vs WorldMapDetailFrame vs WorldMapButton), the measured sizes, the
+  displayed vs route mapID and what the last redraw queued — that output is what closes the gap.
 - Herb tooltip node names are matched in English only.
 - `/mpack status` reports `inert` for a module that refused to start (standalone Touchstone present).

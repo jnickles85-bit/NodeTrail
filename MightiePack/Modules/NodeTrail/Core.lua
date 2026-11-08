@@ -26,6 +26,10 @@ local function printHelp()
   -- documented without a new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt scanrecipes (alias: /nt recipes) - recipe-scan status; scans now if your Alchemy window is open")
+  -- t_0f65b0b9: the world-map overlay diagnostic. Inline like the line above,
+  -- so the new command is documented without a new locale entry.
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt mapdiag - world-map/minimap frame environment; run this if the route does not appear on the map")
   printL("HELP_NOTES")
 end
 
@@ -139,6 +143,8 @@ local function handleSlash(msg)
     ns.PrintStatus()
   elseif msg == "scanrecipes" or msg == "recipes" then
     ns.ScanRecipes()
+  elseif msg == "mapdiag" then
+    ns.PrintMapDiag()
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -185,6 +191,33 @@ function ns.ScanRecipes()
     DEFAULT_CHAT_FRAME:AddMessage(msg)
   end
   return ok and done or false
+end
+
+-- /nt mapdiag (t_0f65b0b9) — the world-map overlay has never been confirmed
+-- drawing on the Forever client. This prints the frame environment the
+-- overlay actually found (canvas or legacy frames, measured sizes, the
+-- displayed vs route mapID, what the last redraw queued) so the next in-game
+-- run says WHY nothing is visible instead of guessing.
+function ns.PrintMapDiag()
+  local function say(text)
+    local line = "NodeTrail mapdiag: " .. tostring(text)
+    if type(DEFAULT_CHAT_FRAME) == "table" and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+      local ok = pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, line)
+      if ok then
+        return
+      end
+    end
+    pcall(print, line)
+  end
+  local overlay = ns.MapOverlay
+  if type(overlay) ~= "table" or type(overlay.Diag) ~= "function" then
+    say("unavailable (map overlay module not loaded)")
+    return
+  end
+  local ok, err = pcall(overlay.Diag, overlay)
+  if not ok then
+    say("failed: " .. tostring(err))
+  end
 end
 
 -- ── Skinning probe ownership (t_5507a0ba) ───────────────────────────
