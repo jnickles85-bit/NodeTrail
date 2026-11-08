@@ -3734,7 +3734,90 @@ local toastRT = {
 	held = {}, deferred = false,
 	fadeIn = nil, fadeOut = nil, ticker = nil,
 	fadeFor = nil, shownAt = nil, showMs = nil, lastEnd = nil,
+	-- t_fe7a636a: the show's deadline in the client's own clock, and
+	-- the counters for the repairs below. `deadline` is refreshed by the
+	-- countdown every tick, so a finish step can require that the
+	-- configured lifetime really elapsed instead of trusting whichever
+	-- animation callback arrived.
+	deadline = nil, fadeArmedAt = nil, lastTickPrinted = nil,
+	revived = 0, alphaRestored = 0,
 }
+
+-- ---- t_fe7a636a: the toast's own trace ---------------------------------
+--
+-- A toast can end from the countdown, the fade-out group's OnFinished,
+-- that group's fallback timer, a right-click, or a scan that runs while
+-- one is up. A tester who reports "it is a flash" leaves exactly one
+-- question: WHICH transition ran early. This prints all of them with the
+-- client's own clock (GetTime, three decimals). It is OFF until
+-- /up toastdebug turns it on, and it writes nothing until then.
+--
+-- Vocabulary, one line per transition, `t=` always last:
+--   show id=<n>                      showToastItem starts drawing
+--   shown id=<n> alpha=<a>           after f:Show()
+--   fadeIn play id=<n>               the fade-in group was played
+--   animation finished: group=<fadeIn|fadeOut> id=<n> fadeFor=<nil|id>
+--   tick id=<n> left=<seconds>       at most once per second
+--   expire id=<n> reason=<timer|dismiss|rescan|other>
+--   finish id=<n> reason=<fadeOnFinished|fadeTimer|dismiss|rescan>
+--      lifeLeft=<seconds>
+-- plus what the fix adds, so a flash is diagnosed from the text:
+--   finish refused: id=<n> reason=<r> left=<seconds>
+--   alpha restore id=<n> was=<a>     the fade-in left the panel at 0
+--   revive id=<n> left=<seconds>     a hidden panel was shown again
+local TRACE = { on = false, buf = {}, max = 80 }
+function TRACE.now()
+	if type(GetTime) == "function" then
+		local ok, t = pcall(GetTime)
+		if ok and type(t) == "number" then return t end
+	end
+	return 0
+end
+function TRACE.fmt(num)
+	return string.format("%.3f", tonumber(num) or 0)
+end
+function TRACE.sec(num)
+	return string.format("%.2f", tonumber(num) or 0)
+end
+function TRACE.line(msg, at)
+	if not TRACE.on then return end
+	local line = tostring(msg) .. " t=" .. TRACE.fmt(at or TRACE.now())
+	TRACE.buf[#TRACE.buf + 1] = line
+	while #TRACE.buf > TRACE.max do table.remove(TRACE.buf, 1) end
+	-- Straight to the chat frame: this is a raw trace a tester copies
+	-- back, not one of the addon's own messages, so it carries no
+	-- "Touchstone:" wrapper and no colour on the payload.
+	if DEFAULT_CHAT_FRAME and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+		pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME,
+			"|cff66fcf1toast debug|r " .. line)
+	elseif type(print) == "function" then
+		pcall(print, "toast debug " .. line)
+	end
+end
+-- The switch behind /up toastdebug: `on|off|dump`, and a bare call
+-- toggles. Turning it ON clears the buffer, so the lines a tester reads
+-- back describe the toast they are about to raise and not an old one.
+ChestAdvisor.toastDebug = function(mode)
+	local m = type(mode) == "string" and mode:lower() or ""
+	if m == "dump" then
+		if #TRACE.buf == 0 then
+			return true, "no trace lines yet — /up toastdebug on, then /up toasts"
+		end
+		return true, table.concat(TRACE.buf, "\n")
+	end
+	if m == "on" then
+		TRACE.on = true
+		TRACE.buf = {}
+	elseif m == "off" then
+		TRACE.on = false
+	else
+		TRACE.on = not TRACE.on
+		if TRACE.on then TRACE.buf = {} end
+	end
+	return true, "toast debug is " .. (TRACE.on and "ON" or "off")
+		.. " — /up toasts raises one; /up toastdebug dump prints the last "
+		.. tostring(TRACE.max) .. " lines"
+end
 
 local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure
 
@@ -3848,12 +3931,13 @@ end
 -- Fade+slide the panel in. Both animation groups live on the frame and are
 -- re-used forever; only their offsets are rewritten per show, so a rotation
 -- through TOAST_MAX toasts does not leak an animation object per toast.
-local function toastPlayFadeIn(f)
+local function toastPlayFadeIn(f, showId)
 	toastStopAnimations()
 	if type(f.SetAlpha) ~= "function" then return end
 	pcall(f.SetAlpha, f, 0)
 	if type(toastRT.fadeIn) == "table" and type(toastRT.fadeIn.Play) == "function" then
 		pcall(toastRT.fadeIn.Play, toastRT.fadeIn)
+		TRACE.line("fadeIn play id=" .. tostring(showId))
 	else
 		-- A client with no animation system still gets a visible toast.
 		pcall(f.SetAlpha, f, 1)
@@ -3875,6 +3959,18 @@ local function toastBuildAnimations(f)
 				s:SetOffset(0, -TOAST.slide)
 			end
 			if type(s.SetDuration) == "function" then s:SetDuration(TOAST.fadeIn) end
+		end
+		-- t_fe7a636a: the fade-IN group reports its own OnFinished to the
+		-- trace and does nothing else. It has no finish path at all; if this
+		-- client delivers OnFinished from a Stop() (the behaviour the
+		-- fade-out's guard exists for), the trace says so instead of a
+		-- comment asserting it.
+		if type(ag.SetScript) == "function" then
+			ag:SetScript("OnFinished", function()
+				TRACE.line("animation finished: group=fadeIn id="
+					.. tostring(toastRT.showId)
+					.. " fadeFor=" .. tostring(toastRT.fadeFor))
+			end)
 		end
 		toastRT.fadeIn = ag
 	end
@@ -3906,9 +4002,12 @@ local function toastBuildAnimations(f)
 		if type(ag.SetScript) == "function" then
 			ag:SetScript("OnFinished", function()
 				local id = toastRT.fadeFor
+				TRACE.line("animation finished: group=fadeOut id="
+					.. tostring(toastRT.showId)
+					.. " fadeFor=" .. tostring(id))
 				if id == nil then return end
 				toastRT.fadeFor = nil
-				pcall(toastFinishShow, id)
+				pcall(toastFinishShow, id, "fadeOnFinished")
 			end)
 		end
 		toastRT.fadeOut = ag
@@ -4006,6 +4105,16 @@ local function buildToastFrame()
 				-- same measured duration, and it disarms the fade BEFORE the Stop
 				-- below (a Stop reports OnFinished on this client).
 				toastRT.lastEnd = "dismissed"
+				-- t_fe7a636a: a dismiss is the one end that may come before the
+				-- deadline (the player asked for it). It is traced as both an
+				-- expire and a finish so every end reads in the same vocabulary.
+				local dismissedLeft = tonumber(toastRT.lifetimeLeft) or 0
+				if dismissedLeft < 0 then dismissedLeft = 0 end
+				TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=dismiss")
+				TRACE.line("finish id=" .. tostring(toastRT.showId)
+					.. " reason=dismiss lifeLeft=" .. TRACE.sec(dismissedLeft))
+				toastRT.deadline = nil
+				toastRT.fadeArmedAt = nil
 				local ms = toastMeasure and toastMeasure()
 				if ms then toastRT.showMs = ms end
 				toastRT.shownAt = nil
@@ -4117,10 +4226,46 @@ local function toastStartTimer(showId)
 	toastRT.ticker = C_Timer.NewTicker(TOAST.tick, function()
 		if not toastActive then return end
 		if showId ~= nil and toastRT.showId ~= showId then return end
+		local now = TRACE.now()
+		-- t_fe7a636a: the panel must be ON SCREEN while this show is live.
+		-- If anything outside this block took it away (an animation quirk, a
+		-- client-side hide, a path nobody has found yet) the show would run
+		-- invisibly — which is exactly what "a flash, then nothing" looks
+		-- like from the outside. Put it back, and say so.
+		if toastRT.fadeFor == nil and (toastRT.lifetimeLeft or 0) > 0
+			and type(toastFrame) == "table" then
+			local tf = toastFrame
+			local shownNow = true
+			if type(tf.IsShown) == "function" then
+				local okS, s = pcall(tf.IsShown, tf)
+				if okS then shownNow = (s ~= false) end
+			end
+			if not shownNow then
+				if type(tf.Show) == "function" then pcall(tf.Show, tf) end
+				tf.shown = true
+				if type(tf.SetAlpha) == "function" then pcall(tf.SetAlpha, tf, 1) end
+				tf.alpha = 1
+				toastRT.revived = (toastRT.revived or 0) + 1
+				TRACE.line("revive id=" .. tostring(showId) .. " left="
+					.. TRACE.sec(toastRT.lifetimeLeft), now)
+			end
+		end
 		if toastRT.hovered or (toastFrame and toastFrame.dragging) then return end
 		toastRT.lifetimeLeft = toastRT.lifetimeLeft - TOAST.tick
+		-- The deadline the finish step obeys. Refreshed from the clock on
+		-- every tick, so the countdown and the finish cannot disagree even
+		-- when a tick is late (and a hover pause moves it with the pause).
+		toastRT.deadline = now + toastRT.lifetimeLeft
+		if (toastRT.lifetimeLeft or 0) > 0 and TRACE.on then
+			local whole = math.floor(toastRT.lifetimeLeft)
+			if toastRT.lastTickPrinted ~= whole then
+				toastRT.lastTickPrinted = whole
+				TRACE.line("tick id=" .. tostring(showId) .. " left="
+					.. TRACE.sec(toastRT.lifetimeLeft), now)
+			end
+		end
 		if toastRT.lifetimeLeft <= 0 then
-			toastExpire()
+			toastExpire("timer")
 		end
 	end)
 end
@@ -4143,13 +4288,36 @@ toastMeasure = function()
 	return math.floor((now - toastRT.shownAt) * 1000 + 0.5)
 end
 
-toastFinishShow = function(showId)
+toastFinishShow = function(showId, reason)
 	if showId ~= nil and toastRT.showId ~= showId then return end
 	if not toastActive then return end
+	-- t_fe7a636a: the configured lifetime is the authority. Only a
+	-- right-click dismiss may end a show early; every callback-driven end
+	-- (the fade-out's OnFinished, its fallback timer, a scan repair) waits
+	-- for the deadline the countdown published. A client that reports
+	-- OnFinished early — or delivers a stale Stop() after the fade-out was
+	-- armed — therefore cannot eat a live toast, and the trace names the
+	-- attempt instead of hiding it.
+	local now = TRACE.now()
+	reason = reason or "other"
+	if reason ~= "dismiss" and type(toastRT.deadline) == "number"
+		and now + 0.001 < toastRT.deadline then
+		TRACE.line("finish refused: id=" .. tostring(showId)
+			.. " reason=" .. reason .. " left="
+			.. TRACE.sec(toastRT.deadline - now), now)
+		return
+	end
+	local lifeLeft = tonumber(toastRT.lifetimeLeft) or 0
+	if lifeLeft < 0 then lifeLeft = 0 end
+	TRACE.line("finish id=" .. tostring(showId) .. " reason=" .. reason
+		.. " lifeLeft=" .. TRACE.sec(lifeLeft), now)
 	local ms = toastMeasure()
 	if ms then toastRT.showMs = ms end
 	toastRT.shownAt = nil
 	toastRT.fadeFor = nil
+	toastRT.deadline = nil
+	toastRT.fadeArmedAt = nil
+	toastRT.lastTickPrinted = nil
 	toastRT.showId = (toastRT.showId or 0) + 1
 	local f = toastFrame
 	toastActive = false
@@ -4186,7 +4354,7 @@ end
 -- OnFinished on the classic client while the alpha still runs, which is the
 -- stuck near-transparent "...und!" panel. A timer finishes the show anyway, and
 -- so does a finish step that errors.
-toastExpire = function()
+toastExpire = function(reason)
 	if type(toastRT.ticker) == "table" and type(toastRT.ticker.Cancel) == "function" then
 		pcall(toastRT.ticker.Cancel, toastRT.ticker)
 	end
@@ -4194,6 +4362,8 @@ toastExpire = function()
 	if not toastActive then return end
 	toastRT.lastEnd = "expired"
 	local showId = toastRT.showId
+	TRACE.line("expire id=" .. tostring(showId) .. " reason="
+		.. tostring(reason or "timer"))
 	local f = toastFrame
 	local fade = toastRT.fadeOut
 	local fadeFinishes = type(fade) == "table" and type(fade.Play) == "function"
@@ -4209,17 +4379,18 @@ toastExpire = function()
 		-- does cannot end it. Cleared before Play so a Play that throws does not
 		-- leave a stale arm behind.
 		toastRT.fadeFor = showId
+		toastRT.fadeArmedAt = TRACE.now()
 		local played = pcall(fade.Play, fade)
 		if not played then toastRT.fadeFor = nil end
 		if played and type(C_Timer) == "table" and type(C_Timer.After) == "function" then
 			local delay = (TOAST.fadeOut or 0.25) + 0.05
 			C_Timer.After(delay, function()
-				pcall(toastFinishShow, showId)
+				pcall(toastFinishShow, showId, "fadeTimer")
 			end)
 			return
 		end
 	end
-	pcall(toastFinishShow, showId)
+	pcall(toastFinishShow, showId, "fadeTimer")
 end
 
 -- Put ONE item on screen. The single place a toast becomes visible, so the
@@ -4227,6 +4398,7 @@ end
 showToastItem = function(item)
 	toastRT.showId = (toastRT.showId or 0) + 1
 	local showId = toastRT.showId
+	TRACE.line("show id=" .. tostring(showId))
 	local f = ensureToast()
 	if type(f) ~= "table" then
 		toastActive = false
@@ -4287,6 +4459,12 @@ showToastItem = function(item)
 		else
 			toastRT.shownAt = nil
 		end
+		-- t_fe7a636a: the deadline this show must survive to, on the same
+		-- clock the countdown ticks on. The finish step refuses to end a
+		-- show before it.
+		toastRT.deadline = (toastRT.shownAt or TRACE.now()) + toastRT.lifetimeLeft
+		toastRT.fadeArmedAt = nil
+		toastRT.lastTickPrinted = nil
 		-- Re-anchor from the persisted position on every show: the panel may have
 		-- been dragged since it was built, and the resting point is what is saved.
 		if type(f.dragging) ~= "boolean" or not f.dragging then
@@ -4295,8 +4473,41 @@ showToastItem = function(item)
 		f:Show()
 		toastActive = true
 		toastFired = toastFired + 1
-		toastPlayFadeIn(f)
+		local alphaAtShow = 1
+		if type(f.GetAlpha) == "function" then
+			local okA, av = pcall(f.GetAlpha, f)
+			if okA and type(av) == "number" then alphaAtShow = av end
+		end
+		TRACE.line("shown id=" .. tostring(showId) .. " alpha="
+			.. TRACE.sec(alphaAtShow))
+		toastPlayFadeIn(f, showId)
 		toastStartTimer(showId)
+		-- t_fe7a636a: the fade-in must not be the only thing that makes the
+		-- panel visible. The alpha was just set to 0 and this client can drop
+		-- a group that was Stopped and Played in one frame (the behaviour the
+		-- fade-out's guard already exists for); the toast would then be an
+		-- invisible show whose only visible frame is the one before the set.
+		-- One timer puts the alpha back if the animation did not.
+		if type(C_Timer) == "table" and type(C_Timer.After) == "function" then
+			C_Timer.After((TOAST.fadeIn or 0.18) + 0.05, function()
+				if not toastActive or toastRT.showId ~= showId then return end
+				if toastRT.fadeFor ~= nil then return end
+				local tf = toastFrame
+				if type(tf) ~= "table" or type(tf.SetAlpha) ~= "function" then return end
+				local cur = 1
+				if type(tf.GetAlpha) == "function" then
+					local okA, av = pcall(tf.GetAlpha, tf)
+					if okA and type(av) == "number" then cur = av end
+				end
+				if cur < 0.98 then
+					pcall(tf.SetAlpha, tf, 1)
+					tf.alpha = 1
+					toastRT.alphaRestored = (toastRT.alphaRestored or 0) + 1
+					TRACE.line("alpha restore id=" .. tostring(showId)
+						.. " was=" .. TRACE.sec(cur))
+				end
+			end)
+		end
 	end)
 	if not ok then
 		if type(f.Hide) == "function" then pcall(f.Hide, f) end
@@ -4396,8 +4607,17 @@ local function maybeToastUpgrades(verdicts)
 	-- A toast whose lifetime already elapsed must not stay up. OnFinished is
 	-- supposed to hide it; if that step never ran, toastActive would block
 	-- every later upgrade behind a faded panel.
-	if toastActive and (toastRT.lifetimeLeft or 0) <= 0 then
-		pcall(toastFinishShow, toastRT.showId)
+	--
+	-- t_fe7a636a: but a scan must NEVER cut a live toast short. The old test
+	-- (`lifetimeLeft <= 0`) is true for the whole fade-out window, so a scan
+	-- landing there finished the show on the spot and cut the fade — and this
+	-- is the path the card asked about, so it is traced. Only a show that is
+	-- past its deadline AND has no fade-out in flight is repaired here; the
+	-- fade's own OnFinished/fallback timer owns the normal end.
+	if toastActive and toastRT.fadeFor == nil
+		and (toastRT.lifetimeLeft or 0) <= -TOAST.tick then
+		TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=rescan")
+		pcall(toastFinishShow, toastRT.showId, "rescan")
 	end
 	-- Draw now only if nothing is on screen; otherwise the queue drains as each
 	-- toast's lifetime expires.
@@ -4511,6 +4731,13 @@ ChestAdvisor.toastState = function()
 		lifetime = toastLifetime(),
 		showMs = toastRT.showMs,
 		lastEnd = toastRT.lastEnd,
+		-- t_fe7a636a: the trace switch and the repairs the fix performed.
+		-- Read by /up diag only; nothing on the panel ever shows them.
+		debug = TRACE.on,
+		deadlineLeft = (toastActive and type(toastRT.deadline) == "number")
+			and math.max(0, toastRT.deadline - TRACE.now()) or nil,
+		revived = toastRT.revived or 0,
+		alphaRestored = toastRT.alphaRestored or 0,
 	}
 end
 
@@ -5474,6 +5701,8 @@ local function helpText()
 		.. "                 queue, so its lifetime, fade and right-click dismiss can be checked without\n"
 		.. "                 waiting for a real upgrade. Run it twice to see the rotation. /up diag reports\n"
 		.. "                 how many fired and how long the last one was actually on screen.\n"
+		.. "  /up toastdebug [on|off|dump]  print every transition of one toast with GetTime stamps\n"
+		.. "                 (off by default; /up toasts raises one, dump prints the last lines)\n"
 		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
 		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
 		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
@@ -5570,6 +5799,20 @@ local function cmdTestToast()
 		"test toast: %s | queued: %s | lifetime: %.1fs — /up diag reports fired and the measured time",
 		st.shown and "showing" or "not showing", tostring(st.queue or 0),
 		tonumber(st.lifetime) or 0)
+end
+
+-- /up toastdebug [on|off|dump] — t_fe7a636a: the toast's transition trace.
+-- Off by default. Every line is the client's own GetTime at three decimals,
+-- and `dump` prints the last lines back because a toast is on screen for
+-- seconds: the point is to read the trace AFTER it is gone.
+local function cmdToastDebug(msg)
+	local word = (msg:match("^toastdebug%s+(%a+)%s*$") or ""):lower()
+	if type(ChestAdvisor.toastDebug) ~= "function" then
+		return false, "the toast surface is not loaded (is the Touchstone module off?)"
+	end
+	if word == "" then word = nil end
+	local ok, out = ChestAdvisor.toastDebug(word)
+	return ok ~= false, out
 end
 
 -- /up tooltip <on|off> — the sibling of /up toast, on the SAME per-character
@@ -5915,6 +6158,14 @@ local function cmdDiag()
 				.. "\nconfigured lifetime: "
 				.. string.format("%.2fs", tonumber(ts.lifetime) or 0)
 				.. " | last show on screen: " .. measured
+				-- t_fe7a636a: the trace switch and the repairs, so a flash
+				-- report comes with the numbers that explain it.
+				.. " | trace: " .. (ts.debug and "ON" or "off")
+				.. "\nrevived this session: " .. tostring(ts.revived)
+				.. " | alpha restored: " .. tostring(ts.alphaRestored)
+				.. " | deadline left: "
+				.. (tonumber(ts.deadlineLeft)
+					and string.format("%.2fs", ts.deadlineLeft) or "-")
 	end
 	-- E3 (AC-E9): the walk ledger is part of the /up diag OUTPUT, not just
 	-- the record. A reader must be able to answer "why did this item
@@ -6262,6 +6513,8 @@ local function dispatch(msg)
 		ok, out = cmdToast(trimmed)
 	elseif subword == "toasts" or subword == "testtoast" then
 		ok, out = cmdTestToast()
+	elseif subword == "toastdebug" then
+		ok, out = cmdToastDebug(trimmed)
 	elseif subword == "tooltip" then
 		ok, out = cmdTooltip(trimmed)
 	elseif subword == "detail" then
