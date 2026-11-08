@@ -612,6 +612,98 @@ function R:Last(store)
   return nil
 end
 
+-- ── which records the dump shows (t_11fc0755) ────────────────────────
+-- The dump used to render R:Last(store) — ONE record — and the newest record
+-- is by definition the corpse that died most recently. The live run showed
+-- exactly the cost of that:
+--
+--   record unknown g=..BF2A02 cid=3125 kill=UNIT_DIED
+--     corpse items: none seen
+--     skinning cast: none
+--     skin items: none seen
+--     gap corpse-close->skin-open: n/a (no skin window)
+--
+-- on a mob that died at the LAST step of the buffer. `none seen` was true and
+-- useless: the dump always showcased the one record that cannot be complete
+-- yet. It now renders a small SET: the newest complete cycles first, and the
+-- corpse still in flight last, where it can be seen to be in flight.
+R.DUMP_RECORDS = 3
+-- The horizon. A record can only still gain a window while it is the newest
+-- one, and a corpse left this long without its skin window is never skinned
+-- (the probe attributes a skin window to a cast; the player loots and skins
+-- the mob within seconds of the kill). Past it the record is SETTLED: it is
+-- shown, and it is not called `in progress`.
+R.DUMP_HORIZON = 120
+
+-- A complete cycle: the ordinary corpse window AND the skin window that
+-- follows it, on this record's own GUID (the probe files a window under the
+-- GUID it opened on, so one record carrying both windows IS the same corpse
+-- on both). Counted from the windows actually filed, never inferred.
+function R:IsComplete(rec)
+  if type(rec) ~= "table" then return false end
+  return (rec.corpseLootOpens or 0) > 0 and (rec.skinLootOpens or 0) > 0
+end
+
+-- The last moment this record was touched, for the horizon.
+local ACTIVITY = { "firstSeenAt", "diedAt", "corpseLootAt", "corpseClosedAt",
+  "skinCastAt", "skinWindowAt", "skinClosedAt" }
+
+local function lastActivity(rec)
+  local last = nil
+  for _, k in ipairs(ACTIVITY) do
+    local v = rec[k]
+    if type(v) == "number" and (last == nil or v > last) then last = v end
+  end
+  return last
+end
+
+-- The set the dump renders, newest first, as { rec = <record>, state = ... }.
+-- States:
+--   complete        corpse window + skin window — the cycle this file records
+--   in progress     the newest record, still inside the horizon: its loot
+--                   windows are ahead of it, so `none seen` means `not yet`
+--   no skin window  the newest record, past the horizon, never skinned: the
+--                   cycle is over and no window is coming. Deliberately NOT
+--                   `complete` — calling a skinless record complete would be
+--                   the same false claim the newest-record dump made.
+--
+-- Selection: the newest incomplete record is always kept (printed last); the
+-- remaining slots go to the newest complete records, scanning past incomplete
+-- older ones so a run of unlooted kills cannot hide a finished cycle.
+function R:DumpSet(store, limit, t)
+  store = store or self:Store()
+  limit = limit or R.DUMP_RECORDS
+  if type(limit) ~= "number" or limit < 1 then limit = 1 end
+  local order = type(store.order) == "table" and store.order or {}
+  local recs = {}
+  for i = #order, 1, -1 do                       -- newest first
+    local rec = store.records[order[i]]
+    if type(rec) == "table" then recs[#recs + 1] = rec end
+  end
+  if #recs == 0 then return {} end
+  local at = t or nowT()
+  local pending = nil
+  local newest = recs[1]
+  if not self:IsComplete(newest) then
+    local last = lastActivity(newest)
+    local state = "in progress"
+    if last ~= nil and (at - last) > R.DUMP_HORIZON then
+      state = "no skin window"
+    end
+    pending = { rec = newest, state = state }
+  end
+  local out = {}
+  local room = limit - (pending and 1 or 0)
+  for i = 1, #recs do
+    local rec = recs[i]
+    if rec ~= (pending and pending.rec) and self:IsComplete(rec) then
+      if #out < room then out[#out + 1] = { rec = rec, state = "complete" } end
+    end
+  end
+  if pending then out[#out + 1] = pending end
+  return out
+end
+
 -- ── accounting ───────────────────────────────────────────────────────
 -- A run must be able to say where its kills went. The old counts line said
 -- "kills=15 corpse-windows=4" and nothing else, so 11 corpses were simply
@@ -684,20 +776,19 @@ end
 -- into a string here is what killed the c220ec7 dump at Probe.lua:908. The
 -- printer appends `name` and never measures the result. Lines with no client
 -- text are plain strings.
-function R:Describe(store)
-  store = store or self:Store()
-  local rec = self:Last(store)
-  local out = {}
-  if not rec then
-    out[#out + 1] = "record: none yet (kill a skinnable, loot it, cast Skinning, loot again)"
-    return out
-  end
+-- One record's block. Every line is kept short enough for the probe's
+-- 120-char chat cap, and the header reads its position in the set:
+--   record 1 of 3 (complete) Scorpid Worker g=..B4A5F9 cid=3125 kill=UNIT_DIED
+-- Lines carrying client text come back as { pre, name, post } (see Describe).
+function R:RenderRecord(out, rec, i, n, state)
   -- The NAME slot says `unknown` when there is no name, and never shows the
   -- GUID: live, a GUID that arrived where a name belongs printed the corpse as
   -- "record ? g=..30C716" and, once, as the GUID twice.
-  local headPre, headName = "record unknown", nil
+  local label = "record " .. tostring(i) .. " of " .. tostring(n)
+    .. " (" .. tostring(state) .. ") "
+  local headPre, headName = label .. "unknown", nil
   local shownName = R.DisplayName(rec)
-  if shownName ~= nil then headPre, headName = "record ", shownName end
+  if shownName ~= nil then headPre, headName = label, shownName end
   local post = ""
   local gs = guidSuffix(rec.guid)
   -- A GUID this client marks secret cannot be sliced, so it is not shortened
@@ -708,16 +799,25 @@ function R:Describe(store)
   elseif rec.guid ~= nil then post = post .. " g=unknown" end
   if rec.creatureID then post = post .. " cid=" .. tostring(rec.creatureID) end
   post = post .. " kill=" .. (rec.killObserved and "UNIT_DIED" or "loot-only")
-  local z = cut(rec.zone, 14)
-  if z then post = post .. " z=" .. z end
-  if rec.map and type(rec.x) == "number" and type(rec.y) == "number" then
-    post = post .. " " .. tostring(rec.map) .. "@" .. pct3(rec.x) .. "," .. pct3(rec.y)
-  end
   if headName ~= nil then
     out[#out + 1] = { pre = headPre, name = headName, post = post }
   else
     out[#out + 1] = headPre .. post
   end
+  -- Where: on its own line. The header has to hold the position label, the
+  -- creature's name (client text, never measured) and the identity fields, and
+  -- all four on one line pushes a long name past the probe's 120-char cap —
+  -- which truncated the label itself (live spec run: "record 2 of 3 (complete"
+  -- with no closing paren). The position is not dropped, it moves one line down.
+  local z = cut(rec.zone, 14)
+  local where = ""
+  if z then where = "z=" .. z end
+  if rec.map and type(rec.x) == "number" and type(rec.y) == "number" then
+    if where ~= "" then where = where .. " " end
+    where = where .. tostring(rec.map) .. "@" .. pct3(rec.x) .. "," .. pct3(rec.y)
+  end
+  if where ~= "" then out[#out + 1] = "  where: " .. where end
+
   local lateRead = 0
   for _, w in ipairs(type(rec.corpseWindowLog) == "table" and rec.corpseWindowLog or {}) do
     if type(w) == "table" and (w.rereads or 0) > 0 then lateRead = lateRead + 1 end
@@ -742,6 +842,33 @@ function R:Describe(store)
   else
     out[#out + 1] = "  gap corpse-close->skin-open: n/a (no skin window)"
   end
+  return out
+end
+
+function R:Describe(store)
+  store = store or self:Store()
+  local out = {}
+  local set = self:DumpSet(store)
+  local n = #set
+  if n == 0 then
+    out[#out + 1] = "record: none yet (kill a skinnable, loot it, cast Skinning, loot again)"
+    return out
+  end
+  -- "none seen" is only useful next to a record that CAN be complete. When no
+  -- cycle has closed yet the dump says which one is still open, instead of
+  -- letting the reader decode four `none seen` lines.
+  local complete = 0
+  for i = 1, n do
+    if set[i].state == "complete" then complete = complete + 1 end
+  end
+  if complete == 0 then
+    out[#out + 1] = "no complete corpse->skin cycle captured yet — kill, loot, skin one more mob"
+  end
+  for i = 1, n do
+    R:RenderRecord(out, set[i].rec, i, n, set[i].state)
+  end
+  -- The counts belong to the STORE, not to a record: they print once, under
+  -- the records, however many records the dump shows.
   local c = store.counts or {}
   out[#out + 1] = "counts kills=" .. tostring(c.kills or 0)
     .. " corpse-windows=" .. tostring(c.corpseWindows or 0)

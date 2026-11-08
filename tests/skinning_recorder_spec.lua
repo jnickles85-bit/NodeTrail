@@ -369,8 +369,8 @@ onlyIf(type(R) == "table" and type(P) == "table",
   for i = #chat, 1, -1 do chat[i] = nil end
   SlashCmdList.MIGHTIEPACK("skindiag dump")
   local out = table.concat(chat, "\n")
-  check(out:find("record Scorpid Worker", 1, true) ~= nil,
-    "dump names the recorded corpse: " .. out:gsub("\n", " | "))
+  check(out:find("record 1 of 1 (complete) Scorpid Worker", 1, true) ~= nil,
+    "dump names the recorded corpse, labelled complete: " .. out:gsub("\n", " | "))
   check(out:find("g=..F29C6F", 1, true) ~= nil, "dump shows the corpse GUID suffix")
   check(out:find("cid=3124", 1, true) ~= nil, "dump shows the creature entry")
   check(out:find("corpse items: 7100x1", 1, true) ~= nil, "dump shows the corpse items")

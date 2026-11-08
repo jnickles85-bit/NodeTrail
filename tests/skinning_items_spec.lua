@@ -353,14 +353,30 @@ onlyIf(type(P) == "table" and type(R) == "table",
   out = chatText()
   check(out:find("dump failed", 1, true) == nil, "the dump completed: " .. out)
 
-  -- the card's record, now with its items
-  check(out:find("record Clattering Scorpid g=..10B81C cid=3125 kill=UNIT_DIED", 1, true) ~= nil,
+  -- the card's record, now with its items. t_11fc0755 put the record's
+  -- POSITION in the dump ahead of its name ("record 1 of 2 (complete) ..."), so
+  -- the header is pinned from the label on; the name still follows our own text
+  -- and the identity fields are unchanged.
+  check(out:find("(complete) Clattering Scorpid g=..10B81C cid=3125 kill=UNIT_DIED", 1, true) ~= nil,
     "the record header is the card's: " .. out)
   check(out:find("corpse items: 5466x1,4867x1", 1, true) ~= nil,
     "THE RECORD SHOWS THE CORPSE ITEMS ITS WINDOW CARRIED: " .. out)
   check(out:find("skin items: 2318x1", 1, true) ~= nil,
     "THE RECORD SHOWS THE SKIN ITEMS ITS WINDOW CARRIED: " .. out)
-  check(out:find("corpse items: none seen", 1, true) == nil,
+  -- Scoped to the ..10B81C record: the dump now renders several records, and an
+  -- older corpse whose window really was empty legitimately says `none seen`.
+  -- What must never happen is THIS corpse being stored that way.
+  local g2From = out:find("record 1 of 2 (complete) Clattering Scorpid g=..10B81C", 1, true)
+  local g2Block = ""
+  if g2From then
+    local rest = out:sub(g2From)
+    -- the block ends at the NEXT record header, or at the counts line
+    local stop = rest:find("record %d+ of %d+ %(", 2)
+    local stopCounts = rest:find("counts kills=", 1, true)
+    if stopCounts and (not stop or stopCounts < stop) then stop = stopCounts end
+    g2Block = stop and rest:sub(1, stop - 1) or rest
+  end
+  check(g2From ~= nil and g2Block:find("corpse items: none seen", 1, true) == nil,
     "no corpse of this run is stored as `none seen`: " .. out)
   check(out:find("skinning cast: 8613 ok", 1, true) ~= nil, "the cast is tied to the corpse")
   check(out:find("gap corpse-close->skin-open: 2.77s", 1, true) ~= nil,

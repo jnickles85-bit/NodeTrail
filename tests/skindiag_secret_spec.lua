@@ -311,7 +311,7 @@ onlyIf(type(P) == "table" and type(R) == "table",
   check(out:find("Vile Familiar", 1, true) ~= nil,
     "the secret creature name is shown in the dump (" .. out:gsub("\n", " | ") .. ")")
   check(out:find("record ", 1, true) ~= nil, "the record header is printed")
-  check(out:find("record Vile Familiar", 1, true) ~= nil,
+  check(out:find("record 1 of 1 (complete) Vile Familiar", 1, true) ~= nil,
     "the record header names the corpse, with the name appended after our own text")
   check(out:find("g=..F29C6F", 1, true) ~= nil,
     "the record still carries the shortened corpse GUID")

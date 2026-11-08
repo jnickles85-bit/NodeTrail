@@ -404,7 +404,7 @@ onlyIf(type(R) == "table" and type(P) == "table",
   SlashCmdList.MIGHTIEPACK("skindiag dump")
   local out = chatText()
   check(out:find("dump failed", 1, true) == nil, "the dump completed: " .. out)
-  check(out:find("record unknown", 1, true) ~= nil,
+  check(out:find("(complete) unknown", 1, true) ~= nil,
     "with no name seen the record says `unknown` (never '?'): " .. out)
   check(out:find("record ?", 1, true) == nil, "the old `record ?` is gone")
   check(out:find("g=..EF7D0D", 1, true) ~= nil, "the record shows the GUID suffix")
