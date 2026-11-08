@@ -113,6 +113,18 @@ GetUnitGUID = function(u)
   if u == "player" then return "Player-0-1" end
   return "Creature-0-150-1234"
 end
+-- Target API: the probe's kill signal (COMBAT_LOG is protected on this client).
+local targetDead = true
+UnitExists = function(u) return u == "target" end
+UnitIsDead = function(u) return u == "target" and targetDead == true end
+UnitName = function(u)
+  if u == "target" then return "Ratkin" end
+  return nil
+end
+UnitGUID = function(u)
+  if u == "target" then return "Creature-0-150-9999" end
+  return nil
+end
 
 -- loot window stub (classic contract, same read the NodeTrail recorder uses)
 local loot = {}
@@ -305,16 +317,11 @@ now = 2007
 fire("SKILL_LINES_CHANGED", 770)
 now = 2008
 lootSourceName = "Ratkin"
--- a non-death combat log event: must be dropped (the card says deaths only)
-fire("COMBAT_LOG_EVENT_UNFILTERED", 8.0, "SWING",
-  "Player-0-1", "Mightie", 1,
-  "Creature-0-150-9999", "Ratkin", 2,
-  "SpellId", 99999)
--- a death: captured
-fire("COMBAT_LOG_EVENT_UNFILTERED", 9.0, "SPELL_DAMAGE",
-  "Player-0-1", "Mightie", 1,
-  "Creature-0-150-9999", "Ratkin", 2,
-  "SpellId", 7384, "SpellName", "Rend", "targetDead")
+-- The kill signal: a dead target. COMBAT_LOG_EVENT_UNFILTERED is a protected
+-- event on this client (ADDON_ACTION_FORBIDDEN on registration, live
+-- 2026-11-07), so the probe never registers it and watches the target instead.
+targetDead = true
+fire("PLAYER_TARGET_CHANGED")
 
 local expect = {
   "PLAYER_ENTERING_WORLD",
@@ -325,11 +332,10 @@ local expect = {
   "LOOT_OPENED",
   "LOOT_CLOSED",
   "SKILL_LINES_CHANGED",
-  "COMBAT_LOG_EVENT_UNFILTERED",
+  "TARGET_DEAD",
 }
 check(#P.steps == #expect,
-  "captured " .. #P.steps .. " steps, expected " .. #expect
-  .. " (non-death COMBAT_LOG must be dropped)")
+  "captured " .. #P.steps .. " steps, expected " .. #expect)
 local orderOk = true
 local got = {}
 for i = 1, #expect do
@@ -428,7 +434,7 @@ local i4 = i3 and out:find("k=skin-cast", i3, true)
 local i5 = i4 and out:find("k=skin ", i4, true)
 local i6 = i5 and out:find("LOOT_CLOSED", i5, true)
 local i7 = i6 and out:find("SKILL_LINES_CHANGED", i6, true)
-local i8 = i7 and out:find("COMBAT_LOG_EVENT_UNFILTERED", i7, true)
+local i8 = i7 and out:find("TARGET_DEAD", i7, true)
 check(i1 and i2 and i3 and i4 and i5 and i6 and i7 and i8,
   "dump prints the captured steps in order")
 

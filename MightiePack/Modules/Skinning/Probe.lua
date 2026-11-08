@@ -40,7 +40,13 @@ P.EVENTS = {
   "LOOT_SLOT_CLEARED",
   "LOOT_CLOSED",
   "UNIT_DIED",
-  "COMBAT_LOG_EVENT_UNFILTERED", -- death-only, filtered in the handler
+  -- COMBAT_LOG_EVENT_UNFILTERED is NOT registered: the client treats it as a
+  -- protected call and answers ADDON_ACTION_FORBIDDEN ("blocked from an action
+  -- only available to the Blizzard UI", function=UNKNOWN) the moment it is
+  -- registered, even though the registration itself reports success. Live
+  -- 2026-11-07, isolated by per-step tracing. Deaths are picked up from
+  -- UNIT_DIED and from the target going dead instead.
+  "PLAYER_TARGET_CHANGED",
   "SKILL_LINES_CHANGED",
   "PLAYER_ENTERING_WORLD",
 }
@@ -376,11 +382,43 @@ function P:OnUnitDied(unit)
   })
 end
 
--- COMBAT_LOG_EVENT_UNFILTERED — deaths only (the card says so: the
--- unfiltered feed is voluminous and only the death marker matters for
--- the kill step). Classic varargs: time, event, sourceGUID,
--- sourceName, sourceFlags, destGUID, destName, destFlags, then key/value
--- cl strings ("SpellId", "SpellName", "targetDead", ...).
+-- The combat-log replacement (see P.EVENTS): when the target changes, note a
+-- dead target as a kill. This is the only death signal available once
+-- COMBAT_LOG_EVENT_UNFILTERED is off the table, and it fires exactly when the
+-- player moves from a corpse to the next mob.
+function P:OnTargetChanged()
+  if not self.capturing then return end
+  if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function" then return end
+  local okE, exists = pcall(UnitExists, "target")
+  if not okE or not exists then return end
+  local okD, dead = pcall(UnitIsDead, "target")
+  if not okD or not dead then return end
+  local name, guid
+  if type(UnitName) == "function" then
+    local ok, nm = pcall(UnitName, "target")
+    if ok and type(nm) == "string" and nm ~= "" then name = nm end
+  end
+  if type(UnitGUID) == "function" then
+    local ok, g = pcall(UnitGUID, "target")
+    if ok and type(g) == "string" then guid = g end
+  end
+  if not name and not guid then return end
+  local t = nowT()
+  self.lastKill = { guid = guid, name = name, at = t }
+  local w = whereAmI()
+  local d = "k=death target n=" .. cut(tostring(name or "?"), 16)
+  if guid then d = d .. " g=" .. guidSuffix(guid) end
+  d = d .. locLine(w)
+  self:Step("TARGET_DEAD", d, {
+    unit = "target", guid = guid, name = name,
+    zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
+  })
+end
+
+-- Kept, but never registered: COMBAT_LOG_EVENT_UNFILTERED is a protected event
+-- on this client (ADDON_ACTION_FORBIDDEN on registration). The unit-tooltip-era
+-- varargs are preserved here so the shape is not lost if a future client
+-- permits it again.
 function P:OnCombat(...)
   if not self.capturing then return end
   local args = { ... }
@@ -501,8 +539,8 @@ function P:Enable()
       self:OnLootClosed()
     elseif event == "UNIT_DIED" then
       self:OnUnitDied(...)
-    elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-      self:OnCombat(...)
+    elseif event == "PLAYER_TARGET_CHANGED" then
+      self:OnTargetChanged(...)
     elseif event == "SKILL_LINES_CHANGED" then
       self:OnSkillLines(...)
     elseif event == "PLAYER_ENTERING_WORLD" then
