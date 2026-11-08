@@ -260,6 +260,14 @@ local function clipToMinimap(x1, y1, x2, y2, halfW, halfH)
   )
 end
 
+--- The minimap's radius in YARDS. Exported because the waypoint arrow has to
+--- use the same scale as the line it sits on top of — two projections of the
+--- same minimap that disagree by a few percent would put the arrow on the
+--- wrong bearing (t_d17939c1).
+function M:ViewRadiusYards()
+  return viewRadiusYards()
+end
+
 function M:ReleaseVisuals()
   if self.drawer then
     ns.LineDraw.Clear(self.drawer)

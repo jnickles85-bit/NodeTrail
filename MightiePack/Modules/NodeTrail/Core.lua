@@ -32,6 +32,10 @@ local function printHelp()
     "  /nt mapdiag - world-map/minimap frame environment; run this if the route does not appear on the map")
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt mapdiag probe [off] - draw a marker, a border and one diagonal line on the map overlay to prove it is visible at all")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt navdiag - what this client can tell us about yards: C_Map, HereBeDragons, zone size, world vector, and the arrow's next waypoint")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt arrow [on|off] - the next-waypoint arrow with the distance counting down")
   printL("HELP_NOTES")
 end
 
@@ -59,6 +63,9 @@ function ns.StopRoute()
   intent.startedAt = 0
   if ns.MapOverlay then ns.MapOverlay:Clear() end
   if ns.MinimapPath then ns.MinimapPath:Clear() end
+  if ns.Nav and ns.Nav.Arrow then
+    pcall(ns.Nav.Arrow.Clear, ns.Nav.Arrow)
+  end
   printL("ROUTE_STOPPED")
 end
 
@@ -86,6 +93,9 @@ function ns.StartRoute(trigger)
       ns.activeRoute = route
       if ns.MapOverlay then ns.MapOverlay:SetRoute(route) end
       if ns.MinimapPath then ns.MinimapPath:SetRoute(route) end
+      if ns.Nav and ns.Nav.Arrow then
+        pcall(ns.Nav.Arrow.SetRoute, ns.Nav.Arrow, route)
+      end
     end
   end
 
@@ -209,6 +219,10 @@ local function handleSlash(msg)
   elseif msg == "mapdiag" or msg:match("^mapdiag%s") then
     -- /nt mapdiag probe [on|off] — the visibility bisect (off by default)
     ns.PrintMapDiag(msg:match("^mapdiag%s+(.*)$"))
+  elseif msg == "navdiag" then
+    ns.PrintNavDiag()
+  elseif msg == "arrow" or msg:match("^arrow%s") then
+    ns.ToggleNavArrow(msg:match("^arrow%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -308,6 +322,59 @@ function ns.PrintMapDiag(arg)
   if not ok then
     say("failed: " .. tostring(err))
   end
+end
+
+-- ── /nt navdiag (t_d17939c1) ────────────────────────────────────────────────
+-- The Step-1 measurement for the waypoint arrow, printed as plain numbers:
+-- which map/world APIs this client has, whether HereBeDragons is reachable as
+-- an EXISTING library, and — when it is — the raw world position, the zone size
+-- in yards and HBD:GetWorldVector's angle/distance to the first and last route
+-- points. Then what the arrow's own chooser picked, so a wrong arrow is
+-- attributable to the chooser or to the projection instead of guessed at.
+function ns.PrintNavDiag()
+  local nav = ns.Nav
+  local arrow = type(nav) == "table" and nav.Arrow or nil
+  if type(arrow) ~= "table" or type(arrow.Diag) ~= "function" then
+    DEFAULT_CHAT_FRAME:AddMessage(
+      "NodeTrail navdiag: unavailable (the nav modules did not load)")
+    return
+  end
+  local ok, lines = pcall(arrow.Diag, arrow)
+  if not ok then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navdiag: failed: " .. tostring(lines))
+    return
+  end
+  for i = 1, #lines do
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navdiag: " .. tostring(lines[i]))
+  end
+end
+
+-- /nt arrow [on|off] — the waypoint arrow's own switch, kept separate from
+-- showMinimap so the followable element can be turned off without losing the
+-- nearby-legs hint of the line.
+function ns.ToggleNavArrow(arg)
+  local profile = ns.GetDB()
+  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  local on
+  if want == "on" or want == "1" or want == "true" then
+    on = true
+  elseif want == "off" or want == "0" or want == "false" then
+    on = false
+  elseif want == "" then
+    on = (profile.showNavArrow == false)
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt arrow [on|off]")
+    return
+  end
+  profile.showNavArrow = on
+  -- Redraw, never Clear: the arrow keeps the route it was given, so turning it
+  -- back on does not need a rebuild.
+  local arrow = type(ns.Nav) == "table" and ns.Nav.Arrow or nil
+  if type(arrow) == "table" and type(arrow.Redraw) == "function" then
+    pcall(arrow.Redraw, arrow)
+  end
+  DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: waypoint arrow " .. (on and "on" or "off"))
+  return on
 end
 
 -- ── Skinning probe ownership (t_5507a0ba) ───────────────────────────

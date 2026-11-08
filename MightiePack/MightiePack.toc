@@ -25,6 +25,9 @@ Modules/NodeTrail/UI/PathGeom.lua
 Modules/NodeTrail/UI/LineDraw.lua
 Modules/NodeTrail/UI/MapOverlay.lua
 Modules/NodeTrail/UI/MinimapPath.lua
+Modules/NodeTrail/Nav/Target.lua
+Modules/NodeTrail/Nav/Source.lua
+Modules/NodeTrail/Nav/Arrow.lua
 Modules/NodeTrail/UI/TooltipPanel.lua
 Modules/NodeTrail/UI/Tooltip.lua
 Modules/NodeTrail/Core.lua

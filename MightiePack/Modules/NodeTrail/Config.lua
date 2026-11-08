@@ -15,6 +15,14 @@ ns.defaults = {
     pathWidth = 2,
     showWorldMap = true,
     showMinimap = true,
+    -- t_d17939c1: the followable element. A world-anchored line on a
+    -- player-centred minimap slides under the player, so the NEXT waypoint is
+    -- named by an arrow with the yards counting down. navRange is how far away
+    -- a waypoint may be before the arrow hides instead of drawing a marker on
+    -- the ring for something in another zone.
+    showNavArrow = true,
+    navRange = 1200,
+    navArriveYards = 12,
     routeSource = "density", -- "density" (our recorded herbs) or "gm2" (GatherMate2 nodes, optional fallback)
     densityCell = 0.02,
     densityWarm = 0.4,

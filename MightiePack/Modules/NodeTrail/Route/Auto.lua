@@ -146,6 +146,14 @@ function A:Draw(route)
     local ok = pcall(ns.MinimapPath.SetRoute, ns.MinimapPath, route)
     if ok then drew = true end
   end
+  -- t_d17939c1: the arrow is the followable element, so it is a third sink. A
+  -- client without a usable yard scale hides it and says so; it must not cost
+  -- the route line (or the reverse).
+  local arrow = type(ns.Nav) == "table" and ns.Nav.Arrow or nil
+  if type(arrow) == "table" and type(arrow.SetRoute) == "function" then
+    local ok = pcall(arrow.SetRoute, arrow, route)
+    if ok then drew = true end
+  end
   return drew
 end
 
