@@ -284,8 +284,28 @@ function T.BuildBeastLines(unit)
     return nil, "not a beast (" .. tostring(creatureType) .. ")", cid
   end
   local answer = professionAnswer("skinning")
-  if answer == false then
-    return nil, "no Skinning on this character — the beast block is hidden", cid
+  if answer ~= true then
+    -- t_5ba9b43c: only a CONFIRMED skinner sees this block. The herb block hides
+    -- on a definitive "no" and shows on "unknown" because its node knowledge
+    -- (HerbData's researched drop table) is not personal — there is something
+    -- true left to say without the picks line. The beast block has no such
+    -- table: every row is an aggregate of this character's own recorded corpses
+    -- (Data/SkinHints.lua never invents one), so "unknown" leaves nothing that
+    -- is both true and useful, and the panel abstains.
+    --
+    -- The live report (skinned: 0 beside "(yours)" percentages on a
+    -- non-skinner) is exactly this branch: the old code tested `== false` and
+    -- let nil through. A definitive "no" cannot produce that block — the gate
+    -- already hid it.
+    --
+    -- The GATE is the shared one: professionAnswer -> ns.Profession:Skinning,
+    -- the same three measured tiers the herb block asks about Herbalism. Only
+    -- what each consumer does with "unknown" differs, and each site says why.
+    if answer == false then
+      return nil, "no Skinning on this character — the beast block is hidden", cid
+    end
+    return nil, "Skinning could not be read on this client — the beast block abstains "
+      .. "rather than show records it cannot attribute", cid
   end
   local skinnable = H.SkinFlag(unit)
   if skinnable == false then

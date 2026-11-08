@@ -60,6 +60,13 @@ Pr.SPELL_ID = 2366
 -- to match, the label to print, and the spell to ask GetSpellInfo about.
 -- Skinning is spell 8613 (the recorder's R.SKIN_SPELL_ID, live-confirmed on
 -- this client: the probe's dump carries "cast 8613").
+--
+-- t_5ba9b43c — the one place the two consumers differ: the beast block shows
+-- only on a CONFIRMED answer. The herb block keeps its node knowledge on an
+-- unreadable client (that table is not personal) and drops the picks line; the
+-- beast block has no non-personal table at all, so an unreadable answer means
+-- no block. The gate implementation is still shared — see UI/Tooltip.lua,
+-- BuildBeastLines, for the rule and why.
 Pr.SKIN_NAMES = { "skinning" }
 Pr.SKIN_SPELL_ID = 8613
 Pr.LABEL = "Herbalism"
@@ -552,7 +559,13 @@ function Pr:Diagnose()
     if skin.answer == false then
       out[#out + 1] = "gate: this character has no Skinning — the beast block is hidden"
     elseif skin.answer == nil then
-      out[#out + 1] = "gate: skinning unreadable on this client — the beast block shows (its records are this character's own)"
+      -- t_5ba9b43c: the beast block abstains where the herb block shows. Its
+      -- every row is an aggregate of this character's own records, so an
+      -- unconfirmed Skinning leaves nothing to say — and the old wording here
+      -- ("the beast block shows") is what made a hidden panel look like a bug
+      -- and a shown panel look correct.
+      out[#out + 1] = "gate: skinning unreadable on this client — the beast block is hidden "
+        .. "(it abstains; every row in it would be this character's own records)"
     else
       out[#out + 1] = "gate: the beast block shows on a beast hover"
     end
@@ -568,6 +581,15 @@ function Pr:Diagnose()
         math.max(0, math.floor(GetTime() - c.at)), self.TTL)
     else
       out[#out + 1] = "cache: nothing cached — every hover reads the client"
+    end
+    -- The beast gate keeps its own reuse window (t_5ba9b43c): a definitive
+    -- "no"/"yes" held for TTL seconds is one of the two ways a beast hover can
+    -- disagree with a fresh read, so it is named too. An "unknown" is never
+    -- cached, so this line only ever reports a definitive answer.
+    local sk = type(caches) == "table" and caches.skinning or nil
+    if sk and type(sk.at) == "number" then
+      out[#out + 1] = (("cache: beast hovers reuse a skinning answer read %ds ago (TTL %ds)")):format(
+        math.max(0, math.floor(GetTime() - sk.at)), self.TTL)
     end
   end
   return out
