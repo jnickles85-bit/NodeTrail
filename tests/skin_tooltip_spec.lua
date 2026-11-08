@@ -112,6 +112,7 @@ end
 
 loadFile("locale/enUS.lua")
 loadFile("Config.lua")
+loadFile("Data/ItemNames.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
 loadFile("Data/Profession.lua")
@@ -709,18 +710,21 @@ check(findRow("kills seen: 1 · skinned: 0"),
   "12: the totals still render under the name (got:\n" .. joined() .. ")")
 local okD12, errD12, out12 = diagText()
 check(okD12, "12: ttdiag does not raise (" .. tostring(errD12) .. ")")
+-- t_e27da774: the line now opens with what the RECORD stored at loot time (the
+-- loot slot's own link), then what the client answers. The stored name is the
+-- one printed, because that is the name the client itself showed.
 check(out12:find(
-  'item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same',
+  'item id: 211787 -> stored "Scroll: LOWER PING WHOMEVER" · GetItemInfo answered "Scroll: LOWER PING WHOMEVER" · corpse · the panel prints "Scroll: LOWER PING WHOMEVER"',
   1, true) ~= nil,
-  "12: the client names 211787 exactly as the slot did, and ttdiag says so (got:\n" .. out12 .. ")")
+  "12: the client names 211787 exactly as the loot slot did, and ttdiag says so (got:\n" .. out12 .. ")")
 check(out12:find(
-  'item id: 7008 -> "Chunk of Boar Meat" (GetItemInfo) · corpse · the loot slot said "Ruined Leather Scraps" — DISAGREES',
+  'item id: 7008 -> stored "Ruined Leather Scraps" · GetItemInfo answered "Chunk of Boar Meat" (the client and the stored name disagree; the stored one is printed) · corpse · the panel prints "Ruined Leather Scraps"',
   1, true) ~= nil,
-  "12: a mis-keyed id is called out as a disagreement, not a label (got:\n" .. out12 .. ")")
+  "12: a disagreement between the link and the client is called out, and the stored name wins (got:\n" .. out12 .. ")")
 check(out12:find(
-  'item id: 7009 -> GetItemInfo answered nothing · corpse · the loot slot said "Boar Ribs"',
+  'item id: 7009 -> stored "Boar Ribs" · GetItemInfo answered nothing · corpse · the panel prints "Boar Ribs"',
   1, true) ~= nil,
-  "12: an id the client cannot name says so instead of inventing a name (got:\n" .. out12 .. ")")
+  "12: an id the client cannot name is printed with the name the record stored (got:\n" .. out12 .. ")")
 
 -- ...and a SECRET answer from the client is reported, never measured or used.
 local secretItem = secretName()
@@ -739,8 +743,8 @@ end
 local secretBefore = measuredSecret
 local okDS, errDS, outS = diagText()
 check(okDS, "12: ttdiag does not raise on a secret item name (" .. tostring(errDS) .. ")")
-check(outS:find("item id: 7010 -> GetItemInfo answered a secret string", 1, true) ~= nil,
-  "12: a secret item name is reported as secret (got:\n" .. outS .. ")")
+check(outS:find("item id: 7010 -> stored \"Boar Ribs\" · GetItemInfo answered a secret string", 1, true) ~= nil,
+  "12: a secret item name is reported as secret, and the stored name is printed (got:\n" .. outS .. ")")
 check(measuredSecret == secretBefore,
   "12: the secret item name was never measured or formatted ("
   .. (measuredSecret - secretBefore) .. " attempt(s))")
@@ -767,7 +771,7 @@ R:OnCorpseLoot({ guid = guidOf(BOAR, seq), t = 9101, items = BOAR_ITEMS })
 local okD12b, errD12b, out12b = diagText()
 check(okD12b, "12b: ttdiag does not raise on a store of many ids (" .. tostring(errD12b) .. ")")
 check(out12b:find(
-  'item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same',
+  'item id: 211787 -> stored "Scroll: LOWER PING WHOMEVER" · GetItemInfo answered "Scroll: LOWER PING WHOMEVER" · corpse · the panel prints "Scroll: LOWER PING WHOMEVER"',
   1, true) ~= nil,
   "12b: the id the card asks about resolves even when the store holds 12 distinct ids (got:\n"
   .. out12b .. ")")
@@ -781,7 +785,8 @@ check(resolved12b == 12,
   "12b: every distinct id got its own line (" .. resolved12b .. " of 12)")
 -- The loot-slot name kept for an id must not depend on table order: 7009 is
 -- named by one corpse record only, and its line still reports that name.
-check(out12b:find('item id: 7009 -> GetItemInfo answered nothing · corpse · the loot slot said "Boar Ribs"', 1, true) ~= nil,
+check(out12b:find('item id: 7009 -> stored "Boar Ribs" · GetItemInfo answered nothing', 1, true) ~= nil
+  and out12b:find('· corpse · the panel prints "Boar Ribs"', 1, true) ~= nil,
   "12b: the slot name is the one the record carried, in a store of many ids (got:\n"
   .. out12b .. ")")
 

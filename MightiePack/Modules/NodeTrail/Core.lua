@@ -516,6 +516,14 @@ function ns.Enable()
   if ns.Tooltip then
     ns.Tooltip:Enable()
   end
+  -- t_e27da774: the item-name retry clock. Item names are stored with the id at
+  -- loot time; GetItemInfo is only the fallback, and an id the client has not
+  -- cached yet gets asked again when the client announces item data (or, on a
+  -- client without such an event, on the next loot/bag event) so the panel row
+  -- can move from `item <id> (name unavailable)` to the real name.
+  if ns.ItemNames and type(ns.ItemNames.Watch) == "function" then
+    pcall(ns.ItemNames.Watch, ns.ItemNames)
+  end
   -- Sub-feature first, module last: a probe that fails must not stop the
   -- herb route from starting (it reports through /mp skindiag instead).
   if ns.IsSkinningEnabled() then

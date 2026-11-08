@@ -14,6 +14,7 @@ Modules.lua
 Modules/NodeTrail/locale/enUS.lua
 Modules/NodeTrail/Config.lua
 Modules/NodeTrail/Data/GM2.lua
+Modules/NodeTrail/Data/ItemNames.lua
 Modules/NodeTrail/Data/Recorder.lua
 Modules/NodeTrail/Data/Density.lua
 Modules/NodeTrail/Data/HerbData.lua

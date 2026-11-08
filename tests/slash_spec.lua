@@ -28,7 +28,7 @@ local pkg = { modState = { NodeTrail = true } }
 pkg.IsModuleEnabled = function(n) return pkg.modState[n] end
 pkg.RegisterModule = function(name, def) pkg.registered = def end
 
-local files = { "locale/enUS.lua", "Config.lua", "Data/GM2.lua", "Data/Recorder.lua", "Data/Density.lua", "Data/HerbData.lua", "Data/Recipes.lua", "Core.lua" }
+local files = { "locale/enUS.lua", "Config.lua", "Data/GM2.lua", "Data/ItemNames.lua", "Data/Recorder.lua", "Data/Density.lua", "Data/HerbData.lua", "Data/Recipes.lua", "Core.lua" }
 for _, f in ipairs(files) do
   assert(loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. f))("MightiePack", pkg)
 end

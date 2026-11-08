@@ -282,30 +282,52 @@ function H.SkinFlag(unit)
 end
 
 -- ── item names ────────────────────────────────────────────────────────────
--- "Leather/hide names come from the client's item data, not from a hardcoded
--- table": GetItemInfo(id) is asked first, the name the loot slot itself
--- reported (stored on the record) second, and only when neither names the item
--- does the row fall back to our own literal `item <id>`. A secret name is
--- skipped rather than measured — the panel measures the label it is given.
+-- ONE resolver for the whole addon (Data/ItemNames.lua, t_e27da774). The order
+-- is: the name the RECORD captured (the loot slot's own link, stored with the
+-- id at capture time) -> GetItemInfo -> `item <id> (name unavailable)`.
+--
+-- This used to ask GetItemInfo FIRST, which is the bug the card is about:
+-- GetItemInfo answers nil for an id this client has not cached (249399 ->
+-- "Frilled Lichen"), so a name we had already stored was thrown away and the
+-- row fell back to a bare id.
+local function names()
+  local IN = ns.ItemNames
+  if type(IN) == "table" and type(IN.Label) == "function" then
+    return IN
+  end
+  return nil
+end
+
 function H.ItemName(item)
   if type(item) ~= "table" then
-    return "item ?"
+    return "item ? (name unavailable)"
   end
+  local IN = names()
+  if IN then
+    local label, how = IN.Label(item.itemID, item.name)
+    if how == "none" then
+      H._diag.nameless = (H._diag.nameless or 0) + 1
+    end
+    return label
+  end
+  -- A harness that loaded this file alone: same order, no shared module.
   local id = item.itemID
   local name = nil
-  if type(id) == "number" and type(GetItemInfo) == "function" then
+  if type(item.name) == "string" and item.name ~= "" and not isSecret(item.name) then
+    name = item.name
+  end
+  if name == nil and type(id) == "number" and type(GetItemInfo) == "function" then
     local ok, n = pcall(GetItemInfo, id)
     if ok and type(n) == "string" and n ~= "" and not isSecret(n) then
       name = n
     end
   end
-  if name == nil and type(item.name) == "string" and item.name ~= ""
-    and not isSecret(item.name) then
-    name = item.name
-  end
   if name == nil then
-    name = "item " .. tostring(id)
     H._diag.nameless = (H._diag.nameless or 0) + 1
+    if type(id) == "number" then
+      return ("item %d (name unavailable)"):format(id)
+    end
+    return "item ? (name unavailable)"
   end
   return name
 end
@@ -397,50 +419,25 @@ function H.Rows(cid, creatureName)
   return rows, agg
 end
 
--- ── id -> name evidence (t_2c573dbf) ─────────────────────────────────────
--- Mightie saw `Scroll: LOWER PING WHOMEVER x1` under the corpse list and asked
--- what it is: item names in the panel come from GetItemInfo(id), and the id
--- itself comes from the loot slot's link (Probe:ReadLoot matches
--- "item:(%d+)"), so the question is which id that record carries and what THIS
--- client answers for it. The panel no longer prints corpse loot, so the answer
--- lives here: one line per distinct item id in this character's records,
--- `id -> GetItemInfo(id)`, plus what the loot slot itself reported. When the
--- two disagree the line says DISAGREES — that is the signal that the record's
--- KEYING is wrong, not the label.
+-- ── id -> name evidence (t_2c573dbf, reworked by t_e27da774) ──────────────
+-- Mightie saw `Scroll: LOWER PING WHOMEVER x1` in an item row and asked what it
+-- is: names in the panel come from ONE resolver (Data/ItemNames.lua), and the
+-- id itself comes from the loot slot's link (Probe:ReadLoot matches
+-- "item:(%d+)"), so the question is which id that record carries, what it
+-- stored at capture time, and what THIS client answers for it. One line per
+-- distinct id:
 --
--- Nothing here measures or slices a client string: a name is concatenated only
--- after issecretvalue says it is not secret (the guard ItemName already uses),
--- and a secret one is reported as a secret instead of being used.
-local function printableName(v)
-  if isSecret(v) then return nil, "secret" end
-  if type(v) ~= "string" or v == "" then return nil, "absent" end
-  return v, "ok"
-end
-
--- Ask the client what item id N is called. Returns name, how — `how` always
--- says WHICH answer this was, so a nil name is never mistaken for a name.
-local function clientItemName(id)
-  if type(GetItemInfo) ~= "function" then
-    return nil, "GetItemInfo is not a function on this client"
-  end
-  local ok, n = pcall(GetItemInfo, id)
-  if not ok then
-    return nil, "GetItemInfo raised"
-  end
-  local name, state = printableName(n)
-  if state == "secret" then
-    return nil, "GetItemInfo answered a secret string"
-  end
-  if name == nil then
-    return nil, "GetItemInfo answered nothing"
-  end
-  return name, nil
-end
-
--- The character's records in the recorder's own insertion order. `pairs()` is
--- not stable between runs, and this list decides which loot-slot name is kept
--- for an id, so the same store must always print the same lines. A record the
--- `order` list does not mention (a hand-written store) still resolves.
+--   item id: 211787 -> stored "Scroll: LOWER PING WHOMEVER" · GetItemInfo
+--                      answered the same · corpse · the panel prints "…"
+--
+-- A DISAGREES note means the link and the client name the id differently; the
+-- stored (link) name is the one printed, because that is the name the client
+-- itself showed at the loot window.
+--
+-- Nothing else measures or slices a client string: a name travels straight to
+-- the panel. (t_e27da774 moved the name lookup itself into Data/ItemNames.lua,
+-- which both this file and Data/HerbData.lua ask — one resolver, one order.)
+-- Every distinct recorded id, in the recorder's own insertion order.
 local function orderedRecords(bucket)
   local seen, out = {}, {}
   if type(bucket.order) == "table" then
@@ -518,31 +515,32 @@ function H.NameProbeLines()
     return out
   end
   out[1] = ("item names: %d distinct id(s) in this character's records"):format(#rows)
+  local IN = names()
   for i = 1, #rows do
     local row = rows[i]
     local sides = (row.sides.corpse and row.sides.skin and "corpse+skin")
       or (row.sides.corpse and "corpse") or "skin"
-    local line = ("item id: %d -> "):format(row.id)
-    local name, why = clientItemName(row.id)
-    if name then
-      line = line .. ("\"" .. name .. "\" (GetItemInfo)")
+    if IN and type(IN.Describe) == "function" then
+      -- ONE format for herbs and beast drops (t_e27da774): what the record
+      -- stored at capture time, what the client answered, which side it came
+      -- from, and the label the panel prints.
+      out[#out + 1] = IN.Describe(row.id, row.slotName, nil, sides)
     else
-      line = line .. why
+      local line = ("item id: %d -> "):format(row.id)
+      local name, why = nil, "GetItemInfo answered nothing"
+      if type(GetItemInfo) == "function" then
+        local ok, n = pcall(GetItemInfo, row.id)
+        if ok and type(n) == "string" and n ~= "" and not isSecret(n) then
+          name = n
+        end
+      end
+      if name then
+        line = line .. ("\"" .. name .. "\" (GetItemInfo)")
+      else
+        line = line .. why
+      end
+      out[#out + 1] = line .. " · " .. sides
     end
-    line = line .. " · " .. sides .. " · "
-    local slotName, slotState = printableName(row.slotName)
-    if slotState == "secret" then
-      line = line .. "the loot slot reported a secret string (not measured)"
-    elseif slotName == nil then
-      line = line .. "the record kept no loot-slot name"
-    elseif name == nil then
-      line = line .. ("the loot slot said \"" .. slotName .. "\"")
-    elseif slotName == name then
-      line = line .. "the loot slot said the same"
-    else
-      line = line .. ("the loot slot said \"" .. slotName .. "\" — DISAGREES (the keying is wrong, not the label)")
-    end
-    out[#out + 1] = line
   end
   return out
 end
@@ -581,8 +579,19 @@ function H.Diag()
   for _, l in ipairs(H.NameProbeLines()) do
     out[#out + 1] = l
   end
+  local IN = names()
+  if IN then
+    if type(IN.UnnamedLines) == "function" then
+      for _, l in ipairs(IN.UnnamedLines()) do
+        out[#out + 1] = l
+      end
+    end
+    if type(IN.RetryLine) == "function" then
+      out[#out + 1] = IN.RetryLine()
+    end
+  end
   if (H._diag.nameless or 0) > 0 then
-    out[#out + 1] = ("item names: %d row(s) fell back to \"item <id>\" — the client named neither"):format(H._diag.nameless)
+    out[#out + 1] = ("item names: %d row(s) printed the marker \"item <id> (name unavailable)\" — the record stored no name and the client named nothing"):format(H._diag.nameless)
   end
   return out
 end

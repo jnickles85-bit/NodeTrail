@@ -144,6 +144,7 @@ for _, f in ipairs({
   "locale/enUS.lua",
   "Config.lua",
   "Data/GM2.lua",
+  "Data/ItemNames.lua",
   "Data/Recorder.lua",
   "Data/Density.lua",
   "Data/HerbData.lua",

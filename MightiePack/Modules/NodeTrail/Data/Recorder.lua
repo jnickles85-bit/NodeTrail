@@ -92,6 +92,24 @@ function R:OnSpellSucceeded(unit, castGUID, spellID)
   self.pending = { mapID = mapID, x = x, y = y, at = GetTime(), spellID = spellID }
 end
 
+-- The NAME a looted slot carries (t_e27da774). The item link is the copy that
+-- survives to draw time: `|cnIQ2:|Hitem:249399:...|h[Frilled Lichen]|h|r`, the
+-- real name of a real reagent this client's GetItemInfo cannot answer for. The
+-- slot's own name field is the fallback, and a secret one is dropped by
+-- `storable` (a secret must never reach SavedVariables).
+-- Data/ItemNames.lua owns the parse; this is only the call, and a harness that
+-- loads the recorder alone still stores the slot's name.
+local function lootedName(link, slotName)
+  local IN = ns.ItemNames
+  if type(IN) == "table" and type(IN.Capture) == "function" then
+    local ok, name = pcall(IN.Capture, link, slotName)
+    if ok and name ~= nil then
+      return name
+    end
+  end
+  return slotName
+end
+
 function R:ReadLoot()
   local items = {}
   local nodeID = nil
@@ -104,13 +122,16 @@ function R:ReadLoot()
     if type(GetLootSlotLink) == "function" then
       link = GetLootSlotLink(i)
     end
-    local name = nil
+    local slotName = nil
     local qty = 1
     if type(GetLootSlotInfo) == "function" then
       local icon, nm, q = GetLootSlotInfo(i)
-      name = storable(nm)
+      slotName = storable(nm)
       if type(q) == "number" then qty = q end
     end
+    -- The id stays the key; the name is stored WITH it, so the panel never has
+    -- to ask GetItemInfo for an id this client does not cache.
+    local name = lootedName(link, slotName)
     if link or name then
       local id = nil
       if type(link) == "string" and not isSecret(link) then

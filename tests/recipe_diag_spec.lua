@@ -48,6 +48,7 @@ SlashCmdList = {}
 
 loadFile("locale/enUS.lua")
 loadFile("Config.lua")
+loadFile("Data/ItemNames.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
 loadFile("Data/Profession.lua")

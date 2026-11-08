@@ -78,16 +78,19 @@ function H.GetNode(name)
   return H.NODES[name]
 end
 
--- ── item labels (t_04c983cc) ────────────────────────────────────────────────
+-- ── item labels (t_04c983cc, reworked by t_e27da774) ───────────────────────
 -- Mightie's panel showed `item 249399  4%` — a drop row that printed the bare
--- id where a name belongs. The id was real; the LABEL was the bug. Resolution
--- order:
---   1. our own table (the 29 herb ids — offline, always right for herbs),
---   2. GetItemInfo(id), the client's own answer,
---   3. `unknown item <id>` — an honest label that also keeps the row
+-- id where a name belongs, then `unknown item 249399` once the fallback was
+-- dressed up as a fix. Neither is the name. 249399 is "Frilled Lichen", and the
+-- name was in the loot slot's own link when he gathered it.
+--
+-- The resolution order lives in ONE place (Data/ItemNames.lua) and is used by
+-- the herb rows, the beast rows and /nt ttdiag alike:
+--   1. the name the record captured at loot time (`rec.items[i].name`),
+--   2. our own table (the 29 herb ids — offline, always right for herbs),
+--   3. GetItemInfo(id), the client's own answer,
+--   4. `item <id> (name unavailable)` — an honest label that also keeps the row
 --      identifiable in a report. Never a bare number passing as a name.
--- The state is recorded for /nt ttdiag (NameProbeLines below): "answered" vs
--- "answered nothing" is the question the operator needs answered.
 local function isSecret(v)
   if type(issecretvalue) ~= "function" then
     return false
@@ -98,9 +101,24 @@ end
 
 H._diag = H._diag or {}
 
+-- The shared resolver, or nil on a harness that loaded this file alone. A
+-- partial load is never the client (MightiePack.toc lists Data/ItemNames.lua
+-- before this file), and without it the honest label is the marker.
+local function names()
+  local IN = ns.ItemNames
+  if type(IN) == "table" and type(IN.Label) == "function" then
+    return IN
+  end
+  return nil
+end
+
 -- Ask the client what item id N is called. Returns name, why — `why` always
 -- says which answer this was, so a nil name is never mistaken for a name.
 function H.ClientItemName(id)
+  local IN = names()
+  if IN and type(IN.ClientName) == "function" then
+    return IN.ClientName(id)
+  end
   if type(GetItemInfo) ~= "function" then
     return nil, "GetItemInfo is not a function on this client"
   end
@@ -117,12 +135,18 @@ function H.ClientItemName(id)
   return n, nil
 end
 
+-- The label of one drop row: `FRow` carries the id and, when the record that
+-- produced it had one, the name captured at loot time.
 function H.ItemLabel(idOrRow)
-  local id = idOrRow
+  local id, stored = idOrRow, nil
   if type(idOrRow) == "table" then
-    id = idOrRow.id
+    id, stored = idOrRow.id, idOrRow.name
   end
   id = tonumber(id)
+  local IN = names()
+  if IN then
+    return IN.Label(id, stored, H.ITEM_NAMES)
+  end
   if id ~= nil and H.ITEM_NAMES[id] then
     return H.ITEM_NAMES[id]
   end
@@ -131,17 +155,35 @@ function H.ItemLabel(idOrRow)
     if name then
       return name
     end
-    return "unknown item " .. tostring(id)
+    return ("item %d (name unavailable)"):format(id)
   end
-  return "unknown item"
+  return "item ? (name unavailable)"
+end
+
+-- A stored name in its usable form, or nil. Data/ItemNames.lua owns the rule
+-- (a secret name is never used); this copy exists only for a harness that
+-- loaded this file alone, and it must agree with it.
+function H.StoredName(v)
+  local IN = names()
+  if IN and type(IN.StoredName) == "function" then
+    return IN.StoredName(v)
+  end
+  if v == nil or isSecret(v) or type(v) ~= "string" or v == "" then
+    return nil
+  end
+  return v
 end
 
 H.PERSONAL_MIN = 10
 
+-- One walk of the store answers both questions the panel asks: how often each id
+-- was seen, and (t_e27da774) the NAME the record captured for it. The name of the
+-- first record that carried it wins, so the same store always prints the same
+-- label; a record written before names were stored simply has none.
 function H.GetPersonalStats(primaryItem)
   local db = ns.GetHerbDB()
   local gathers = 0
-  local perItem = {}
+  local perItem, nameByID = {}, {}
   if db and db.maps then
     for _, mapData in pairs(db.maps) do
       for _, rec in ipairs(mapData) do
@@ -163,25 +205,33 @@ function H.GetPersonalStats(primaryItem)
                 counted[it.id] = true
                 perItem[it.id] = (perItem[it.id] or 0) + 1
               end
+              if it.id and nameByID[it.id] == nil then
+                local stored = H.StoredName(it.name)
+                if stored then
+                  nameByID[it.id] = stored
+                end
+              end
             end
           end
         end
       end
     end
   end
-  return gathers, perItem
+  return gathers, perItem, nameByID
 end
 
 function H.GetDropLines(name)
   local node = H.GetNode(name)
   if not node then return nil end
-  local gathers, perItem = H.GetPersonalStats(node.item)
+  local gathers, perItem, stored = H.GetPersonalStats(node.item)
   local list = {}
   local seen = {}
   local function add(id, pct, source)
     if not seen[id] then
       seen[id] = true
-      table.insert(list, { id = id, pct = pct, source = source })
+      -- t_e27da774: the row carries the name the record captured, so the panel
+      -- never has to ask GetItemInfo for an id this client cannot name.
+      table.insert(list, { id = id, pct = pct, source = source, name = stored[id] })
     end
   end
   for id, basePct in pairs(node.drops) do
@@ -210,19 +260,29 @@ function H.GetDropLines(name)
   return list, gathers
 end
 
--- ── id -> name evidence (t_04c983cc) ────────────────────────────────────────
+-- ── id -> name evidence (t_04c983cc, reworked by t_e27da774) ────────────────
 -- Every drop id the panel can print that OUR table does not name, resolved the
--- way the panel resolves it: `item id: 249399 -> GetItemInfo answered nothing ·
--- shown as "unknown item 249399"`. A player reporting "this row says unknown
--- item" and an operator reading /nt ttdiag are then looking at the same ids.
+-- way the panel resolves it — one line per id saying what the RECORD stored,
+-- what GetItemInfo answered and what the panel prints:
+--
+--   item id: 249399 -> stored "Frilled Lichen" · GetItemInfo answered nothing
+--                      · the panel prints "Frilled Lichen"
+--
 -- Ids come from the researched drop tables AND from this account's recorded
--- gathers (a herb drops rare mats we never listed). Output is sorted by id, so
--- the same store always prints the same lines.
-local function unresolvedDropIDs()
+-- gathers (a herb drops rare mats we never listed, and 249399 is one of them).
+-- Output is sorted by id, so the same store always prints the same lines. The
+-- ids that ended up with the marker are listed again at the end with the
+-- lookups that failed (t_e27da774: "which id, which lookups").
+local function unresolvedDropIDs(stored)
   local seen, order = {}, {}
-  local function add(id)
+  local function add(id, storedName)
     id = tonumber(id)
-    if id ~= nil and H.ITEM_NAMES[id] == nil and not seen[id] then
+    if id == nil then return end
+    if storedName ~= nil and stored[id] == nil then
+      local name = H.StoredName(storedName)
+      if name then stored[id] = name end
+    end
+    if H.ITEM_NAMES[id] == nil and not seen[id] then
       seen[id] = true
       order[#order + 1] = id
     end
@@ -242,7 +302,7 @@ local function unresolvedDropIDs()
           if type(rec) == "table" and type(rec.items) == "table" then
             for _, it in ipairs(rec.items) do
               if type(it) == "table" then
-                add(it.id)
+                add(it.id, it.name)
               end
             end
           end
@@ -255,19 +315,30 @@ local function unresolvedDropIDs()
 end
 
 function H.NameProbeLines()
-  local ids = unresolvedDropIDs()
+  local stored = {}
+  local ids = unresolvedDropIDs(stored)
   local out = {}
   if #ids == 0 then
     out[1] = "item names: every drop id we can print is named by our own table or the client"
     return out
   end
   out[1] = ("item names: %d drop id(s) are not in our herb table"):format(#ids)
+  local IN = names()
   for _, id in ipairs(ids) do
-    local name, why = H.ClientItemName(id)
-    if name then
-      out[#out + 1] = ('item id: %d -> "%s" (GetItemInfo) · the panel uses that name'):format(id, name)
+    if IN and type(IN.Describe) == "function" then
+      out[#out + 1] = IN.Describe(id, stored[id], H.ITEM_NAMES, "gather")
     else
-      out[#out + 1] = ('item id: %d -> %s · the panel prints "unknown item %d"'):format(id, why, id)
+      local name, why = H.ClientItemName(id)
+      if name then
+        out[#out + 1] = ('item id: %d -> "%s" (GetItemInfo) · the panel uses that name'):format(id, name)
+      else
+        out[#out + 1] = ('item id: %d -> %s · the panel prints "item %d (name unavailable)"'):format(id, why, id)
+      end
+    end
+  end
+  if IN and type(IN.UnnamedLines) == "function" then
+    for _, line in ipairs(IN.UnnamedLines()) do
+      out[#out + 1] = line
     end
   end
   return out

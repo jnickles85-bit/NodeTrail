@@ -196,6 +196,7 @@ local FILES = {
   "UI/MapOverlay.lua",
   "UI/MinimapPath.lua",
   "Data/GM2.lua",
+  "Data/ItemNames.lua",
   "Data/Recorder.lua",
   "Data/Density.lua",
   "Route/Cluster.lua",

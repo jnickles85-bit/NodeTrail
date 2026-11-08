@@ -425,6 +425,19 @@ function P:ReadLoot()
         if type(d) == "number" then qual = d end
       end
     end
+    -- t_e27da774: the link's own bracketed name wins over the slot's name
+    -- field. GetItemInfo cannot answer for an id this client has not cached
+    -- (249399 -> "Frilled Lichen"), and the link always carries the real name;
+    -- storing it here is what lets the panel print a name instead of an id.
+    -- Data/ItemNames.lua owns the parse (a secret link is never searched).
+    local nodeTrail = pkg.NodeTrail
+    local names = type(nodeTrail) == "table" and nodeTrail.ItemNames or nil
+    if link and type(names) == "table" and type(names.FromLink) == "function" then
+      local okName, fromLink = pcall(names.FromLink, link)
+      if okName and type(fromLink) == "string" then
+        name = fromLink
+      end
+    end
     local id = nil
     if link then
       -- the link is client text: matching it is a read, so it is attempted

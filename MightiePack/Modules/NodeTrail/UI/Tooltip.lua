@@ -188,10 +188,13 @@ function T.BuildLines(name)
   local drops, gathers = ns.HerbData.GetDropLines(name)
   if drops then
     for _, d in ipairs(drops) do
-      -- t_04c983cc: a drop id our own table does not name is resolved through
-      -- GetItemInfo (the client's own answer), and only when the client knows
-      -- nothing either does the row say `unknown item <id>` — a bare id where a
-      -- name belongs was the bug Mightie reported.
+      -- t_04c983cc, reworked by t_e27da774: the row's name comes from ONE
+      -- resolver (Data/ItemNames.lua) in one order — the name the record
+      -- captured at loot time (the slot's own item link), then our researched
+      -- table, then GetItemInfo, and only then
+      -- `item <id> (name unavailable)`. A bare number printed as a name was the
+      -- bug Mightie reported; `249399` is "Frilled Lichen" and the name was
+      -- there at gather time.
       local itemName = ns.HerbData.ItemLabel(d)
       local right = d.pct .. "%" .. (d.source == "base" and " (base)" or "")
       table.insert(lines, { left = itemName, right = right })
@@ -572,10 +575,12 @@ function T:Diag()
     end
   end
 
-  -- 2b) Herb drop labels (t_04c983cc): every drop id the panel can print that
-  --     OUR table does not name, resolved the way the panel resolves it. This
-  --     is where "unknown item 249399" on the panel becomes an answerable
-  --     question — did the client name that id or not?
+  -- 2b) Herb drop labels (t_04c983cc, t_e27da774): every drop id the panel can
+  --     print that OUR table does not name, resolved the way the panel resolves
+  --     it — what the record stored at loot time, what the client answers, and
+  --     the label the panel prints. This is where "item 249399" on the panel
+  --     becomes an answerable question, and where an id that could not be named
+  --     is listed with the lookups that failed.
   local herbData = ns.HerbData
   if type(herbData) == "table" and type(herbData.NameProbeLines) == "function" then
     local okHd, hdLines = pcall(herbData.NameProbeLines)

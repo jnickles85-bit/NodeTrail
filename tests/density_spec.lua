@@ -29,6 +29,7 @@ DEFAULT_CHAT_FRAME = { AddMessage = function() end }
 
 local ns = loadAddon("locale/enUS.lua")
 ns = loadAddon("Config.lua")
+ns = loadAddon("Data/ItemNames.lua")
 ns = loadAddon("Data/Recorder.lua")
 ns = loadAddon("Data/Density.lua")
 

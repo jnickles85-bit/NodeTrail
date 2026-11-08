@@ -49,6 +49,7 @@ end
 
 loadFile("locale/enUS.lua")
 loadFile("Config.lua")
+loadFile("Data/ItemNames.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
 loadFile("Data/Profession.lua")
@@ -365,9 +366,12 @@ check(rd6:find("Alchemy line is hidden", 1, true) ~= nil,
 check(rd6:find("not filtered by skill", 1, true) == nil,
   "6: the old unfiltered caveat is gone")
 
--- ═══ 7. `item 249399` — the client's name, or an honest label ═════════════
+-- ═══ 7. `item 249399` — the stored name, the client's name, or the marker ══
 -- 25 gathers of Briarthorn, one of which also dropped the unknown 249399:
--- that is the 4% row from the report.
+-- that is the 4% row from the report. These records carry the id only, i.e. a
+-- record written BEFORE t_e27da774 (or one whose loot slot reported no link) —
+-- so this is also the migration case: an old record still renders, and the
+-- label is the marker, never a bare id.
 for i = 1, 25 do
   local items = { { id = 2450, count = 1 } }
   if i == 1 then
@@ -380,19 +384,25 @@ local unknownRow = findLine(function(l)
   return type(l) == "string" and l:find("249399", 1, true) ~= nil
 end)
 check(unknownRow ~= nil, "7: the 249399 drop row is rendered at all")
-check(unknownRow == "unknown item 249399 | 4%",
-  "7: an id the client cannot name prints as `unknown item <id>`, not a bare id ("
+check(unknownRow == "item 249399 (name unavailable) | 4%",
+  "7: an id with no stored name and no client answer prints `item <id> (name unavailable)`, never a bare id ("
     .. tostring(unknownRow) .. ")")
 local bareRow = findLine(function(l)
-  return type(l) == "string" and l:match("^item %d+") ~= nil
+  return type(l) == "string" and l:match("^item %d+$") ~= nil
 end)
 check(bareRow == nil, "7: no row prints a bare `item <id>` (" .. tostring(bareRow) .. ")")
 
--- And the diag asks the client the same question.
+-- And the diag asks the client the same question, and says which lookups ran.
 local okTd7, td7 = captureDiag()
 check(okTd7, "7: /nt ttdiag runs")
-check(td7:find("herb item: item id: 249399 -> GetItemInfo answered nothing", 1, true) ~= nil,
+check(td7:find('herb item: item id: 249399 -> no stored name · GetItemInfo answered nothing', 1, true) ~= nil,
   "7: the diag resolves the unknown id and records what the client answered ("
+    .. td7 .. ")")
+check(td7:find('· gather · the panel prints "item 249399 (name unavailable)"', 1, true) ~= nil,
+  "7: the diag says which id and which lookups failed ("
+    .. td7 .. ")")
+check(td7:find("herb item: item names: id 249399 could not be named — lookups attempted: the record's stored name (absent), GetItemInfo", 1, true) ~= nil,
+  "7: the unnamed id is listed with the lookups that failed ("
     .. td7 .. ")")
 
 -- A client that DOES know the id must be used instead of the label.
@@ -405,8 +415,10 @@ check(namedRow == "Pinecone of Doom | 4%",
   "7b: the client's own name is used when it has one (" .. tostring(namedRow) .. ")")
 local okTd7b, td7b = captureDiag()
 check(okTd7b, "7b: /nt ttdiag runs")
-check(td7b:find('herb item: item id: 249399 -> "Pinecone of Doom" (GetItemInfo)', 1, true) ~= nil,
-  "7b: the diag quotes the name the client answered")
+check(td7b:find('herb item: item id: 249399 -> no stored name · GetItemInfo answered "Pinecone of Doom"', 1, true) ~= nil,
+  "7b: the diag quotes the name the client answered (" .. td7b .. ")")
+check(td7b:find('the panel prints "Pinecone of Doom"', 1, true) ~= nil,
+  "7b: the panel prints the client's name, and the diag says so (" .. td7b .. ")")
 ITEM_NAMES[249399] = nil
 
 -- ═══ 8. one source of truth: the panel asks Recipes, it does not compute ══

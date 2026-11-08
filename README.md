@@ -50,6 +50,7 @@ MightiePack/Modules/NodeTrail/Config.lua
 MightiePack/Modules/NodeTrail/Core.lua
 MightiePack/Modules/NodeTrail/Data
 MightiePack/Modules/NodeTrail/Data/GM2.lua
+MightiePack/Modules/NodeTrail/Data/ItemNames.lua
 MightiePack/Modules/NodeTrail/Data/Recorder.lua
 MightiePack/Modules/NodeTrail/Data/Density.lua
 MightiePack/Modules/NodeTrail/Data/HerbData.lua
@@ -99,7 +100,11 @@ tests/slash_spec.lua
 - A client that exposes none of those signals draws NO Alchemy line at all — an unfiltered
   list of crafts the character cannot make is worse than silence. The options panel says
   once why the list is hidden; `/nt recipediag [id|name]` prints the raw per-recipe values.
-- A drop the client cannot name is labelled `unknown item <id>`, never a bare id.
+- A drop's NAME is stored with its id at loot time, copied out of the loot slot's own item
+  link (`|h[Frilled Lichen]|h`) — this client's `GetItemInfo` cannot name a custom id, so the
+  id alone is not enough. One resolver order, for herbs, skinned items and corpse drops:
+  stored name -> our own table -> `GetItemInfo` -> `item <id> (name unavailable)`. Never a
+  bare id. `/nt ttdiag` lists any id that could not be named and the lookups that failed.
 
 ## Tests
 Run from repo root with lua5.1:
@@ -110,6 +115,7 @@ Run from repo root with lua5.1:
 - `tests/density_spec.lua`
 - `tests/tooltip_spec.lua`
 - `tests/alchemy_skill_gate_spec.lua` (the craftability gate, its tail, the unfiltered label and the unknown-item label)
+- `tests/item_name_capture_spec.lua` (the name stored with the id at loot time, the resolver order, the item-data retry, the migration case)
 - `tests/slash_spec.lua`
 - `tests/skindiag_spec.lua`
 - `tests/skinning_recorder_spec.lua` (replays the live kill -> corpse loot -> 8613 cast -> skin loot chain)

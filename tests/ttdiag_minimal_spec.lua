@@ -51,6 +51,7 @@ local function loadAddon(path)
 end
 loadAddon("locale/enUS.lua")
 loadAddon("Config.lua")
+loadAddon("Data/ItemNames.lua")
 loadAddon("Data/Recorder.lua")
 loadAddon("Data/HerbData.lua")
 loadAddon("Data/Recipes.lua")
