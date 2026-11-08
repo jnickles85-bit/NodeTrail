@@ -317,6 +317,72 @@ check(type(probe) == "table" and type(probe.why) == "string"
   "6: with the reason recorded (" .. tostring(probe and probe.why) .. ")")
 shownMapID = 1413
 
+-- ── 7. a partly-unreadable draw must not read as a pass ────────────────────
+-- Review round 1: with 36 of 72 painted dots dragged off the visible map and
+-- made unreadable, the line printed `36/36 inside` with no verdict — because
+-- the denominator was `measured`. Half the route was unexamined and the line
+-- still read as a pass, which is the same defect class as the `outside=0`
+-- check this spec exists to end. The denominator is PAINTED, and a remainder
+-- that could not be measured is named in the verdict.
+clock = clock + 1
+W:Redraw()
+local total = tonumber((ns.LineDraw.Applied(W.drawer) or {}).paintedDots) or 0
+check(total > 2, "7: the redraw painted dots to mix (" .. total .. " dot(s))")
+local sabotaged = 0
+do
+  local drawer = W.drawer
+  for d = 2, total, 2 do -- every second dot: measurable and unmeasurable mixed
+    local obj = drawer and drawer.pool and drawer.pool[2 * d]
+    if obj and obj.GetPoint and obj:GetNumPoints() >= 2 then
+      local _, _, _, x1, y1 = obj:GetPoint(1)
+      local _, _, _, x2, y2 = obj:GetPoint(2)
+      obj:ClearAllPoints()
+      obj:SetPoint("BOTTOMLEFT", W.host, "TOPLEFT", x1, y1)
+      -- the second corner is anchored to a DIFFERENT frame: the client still
+      -- draws it, but no screen rect can be computed from these anchors
+      obj:SetPoint("TOPRIGHT", canvas, "TOPLEFT", x2, y2)
+      sabotaged = sabotaged + 1
+    end
+  end
+end
+check(sabotaged > 0 and sabotaged < total,
+  "7: some but not all dots are unreadable (" .. sabotaged .. " of " .. total .. ")")
+local mixedOut = diag()
+local mixed = line(mixedOut, "route dots on the visible map:")
+check(mixed ~= nil, "7: the line is printed for a mixed draw")
+if mixed and os.getenv("NODETRAIL_VERBOSE") then io.write("mixed draw: " .. mixed .. "\n") end
+if mixed then
+  local insideN, denom = mixed:match("visible map: (%d+)/(%d+)")
+  check(tonumber(denom) == total,
+    "7: the denominator is the PAINTED count (" .. tostring(denom) .. " of " .. total .. ")")
+  check(tonumber(insideN) ~= tonumber(denom),
+    "7: half the dots are unexamined, so the line cannot read as all-inside (" .. mixed .. ")")
+  local measuredN = tonumber((mixed:match("measured (%d+) of %d+ painted")))
+  check(measuredN == total - sabotaged,
+    "7: it says how many dots were actually measured (" .. tostring(measuredN) .. " of " .. total .. ")")
+  check(mixed:find("report no screen rect — not measured", 1, true) ~= nil,
+    "7: and names the unreadable remainder in the verdict (" .. mixed .. ")")
+  local namedN = tonumber(mixed:match("(%d+) of %d+ painted dot%(s%) report no screen rect"))
+  check(namedN == sabotaged,
+    "7: the remainder count matches the sabotage (" .. tostring(namedN) .. " of " .. sabotaged .. ")")
+end
+-- The saved copy must keep the two counts apart: a reader who sees
+-- painted=14 has to be able to see that only some of them were measured.
+if type(W.RecordProbe) == "function" then
+  W:RecordProbe(true)
+else
+  check(false, "7: the draw records its placement in the DB (no RecordProbe method)")
+end
+local mixedProbe = ns.GetDB().mapProbe
+check(type(mixedProbe) == "table" and mixedProbe.painted == total,
+  "7: the probe records painted (" .. tostring(mixedProbe and mixedProbe.painted) .. ")")
+check(type(mixedProbe) == "table" and mixedProbe.measured == total - sabotaged,
+  "7: and measured separately (" .. tostring(mixedProbe and mixedProbe.measured) .. ")")
+check(type(mixedProbe) == "table" and mixedProbe.unmeasured == sabotaged,
+  "7: and the unmeasured remainder (" .. tostring(mixedProbe and mixedProbe.unmeasured) .. ")")
+check(type(mixedProbe) == "table" and (mixedProbe.inside or 0) <= (mixedProbe.measured or 0),
+  "7: never more dots inside than it measured")
+
 if failed > 0 then
   io.stderr:write(("mapdiag_visible_spec: %d failure(s)\n"):format(failed))
   os.exit(1)

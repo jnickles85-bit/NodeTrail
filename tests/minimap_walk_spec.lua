@@ -509,6 +509,134 @@ do
   end
 end
 
+-- ── G. the SHIPPED projection: the same walk in WORLD mode (yards) ─────────
+-- Review round 1: the four-stop table was produced by the pre-HBD build
+-- (`mode=frac radius=0.0750 [fallback]`), and the replay above covers only that
+-- fallback path. On this client HereBeDragons resolves through LibStub (RXPGuides
+-- ships it), so the shipped minimap draws `mode=world radius=C_Minimap.GetViewRadius()`
+-- yards — a projection that had never been walked. Same route, same segment, same
+-- landmark, same four stops: the scale becomes halfW/radius px per YARD instead
+-- of px per map fraction, so every number changes and every invariant must not.
+-- This is the fake HereBeDragons that tests/minimap_hbd_spec.lua uses.
+do
+  local ZONE_W = 1000          -- yd across the zone, one map fraction wide
+  local ZONE_H = 800
+  local VIEW_RADIUS_YARDS = 233 + 1 / 3
+  local HBD = { version = "2.18" }
+  function HBD.GetVersion() return HBD.version end
+  function HBD.GetZoneSize() return ZONE_W, ZONE_H end
+  -- HBD world x grows WEST, y NORTH (`left - width * x`), so the fake does the
+  -- same or it would "prove" a mirrored projection.
+  function HBD.GetWorldCoordinatesFromZone(_, fx, fy) return -fx * ZONE_W, -fy * ZONE_H, 0 end
+  function HBD.GetPlayerWorldPosition() return -playerX * ZONE_W, -playerY * ZONE_H, 0 end
+  function HBD.GetPlayerZonePosition() return playerX, playerY, MAPID end
+  function HBD.GetWorldDistance(_, inst, x1, y1, x2, y2)
+    local dx, dy = x2 - x1, y2 - y1
+    return math.sqrt(dx * dx + dy * dy)
+  end
+  local library = { ["HereBeDragons-2.0"] = HBD }
+  LibStub = setmetatable({}, {
+    __call = function(_, name, silent)
+      local lib = library[name]
+      if lib then return lib end
+      if silent then return nil end
+      error("LibStub: no library named " .. tostring(name))
+    end,
+  })
+  function LibStub:GetLibrary(name, silent) return LibStub(name, silent) end
+  C_Minimap = { GetViewRadius = function() return VIEW_RADIUS_YARDS end }
+
+  playerX, playerY = 0.480, 0.300
+  clock = clock + 1
+  M:SetRoute(ROUTE)            -- re-indexes the route WITH world coordinates
+  W:SetRoute(ROUTE)
+  check(M._drawError == nil, "G: world-mode minimap draw error: " .. tostring(M._drawError))
+  check(M._proj and M._proj.mode == "world",
+    "G: the drawer now projects in world mode (got " .. tostring(M._proj and M._proj.mode) .. ")")
+  near(M._proj and M._proj.radius, VIEW_RADIUS_YARDS, 0.01,
+    "G: the radius is the client's view radius in yards")
+  check(M._proj and M._proj.radiusUnit == "yards",
+    "G: and it is labelled yards (got " .. tostring(M._proj and M._proj.radiusUnit) .. ")")
+  local out = sayMinimap()
+  check(out:find("mode=world", 1, true) ~= nil,
+    "G: the diag prints the world mode this build ships (got "
+      .. tostring(out:match("minimap projection used:[^\n]*")) .. ")")
+  check(out:find("fallback", 1, true) == nil,
+    "G: the world-mode draw is not dressing up the fraction fallback")
+
+  local PX_PER_YD = HALF / VIEW_RADIUS_YARDS
+  local PX_PER_FRAC_WORLD = ZONE_W * PX_PER_YD   -- 300 px per map fraction east
+  local rowsW = {}
+  local previousW
+  local WORLDMODE_STOPS = {
+    { name = "1 start",       x = 0.480, y = 0.300 },
+    { name = "2 toward",      x = 0.510, y = 0.300 },
+    { name = "3 past it",     x = 0.522, y = 0.300 },
+    { name = "4 walked back", x = 0.505, y = 0.300 },
+  }
+  for i = 1, #WORLDMODE_STOPS do
+    local stop = WORLDMODE_STOPS[i]
+    playerX, playerY = stop.x, stop.y
+    clock = clock + 1.5
+    M:Redraw()
+    local applied = M.drawer.lastApplied or {}
+    -- In world mode the stamp carries the WORLD position the draw used (there is
+    -- no map fraction in this projection), so that is the draw-time value to
+    -- check — and `playerFrac` being absent is honest, not a missing stamp.
+    check(applied.projMode == "world", "G" .. i .. ": the stamp names the projection it used")
+    check(type(applied.playerWorld) == "table"
+      and math.abs(applied.playerWorld.x - (-playerX * ZONE_W)) < 1e-6,
+      ("G%s: the world-mode stamp is this redraw's player position (got %s, player %s)")
+        :format(i, tostring(applied.playerWorld and applied.playerWorld.x),
+          tostring(-playerX * ZONE_W)))
+    check(applied.playerFrac == nil,
+      "G" .. i .. ": the world-mode draw does not carry a fraction it did not use")
+    local dot, painted = drawnDotCentre()
+    check(dot ~= nil and painted > 0, "G" .. i .. ": a dot is drawn in world mode")
+    local expectX = (SEG_X - playerX) * ZONE_W * PX_PER_YD
+    local expectLandmarkX = (LANDMARK.x - playerX) * ZONE_W * PX_PER_YD
+    local audit = (type(M.DrawnAudit) == "function") and M:DrawnAudit() or nil
+    local an = audit and audit.nearest
+    rowsW[i] = {
+      name = stop.name, playerX = playerX, cx = dot and dot.cx, cy = dot and dot.cy,
+      dist = dot and dot.dist, toSegment = an and an.playerSegPx, painted = painted,
+    }
+    near(dot and dot.cx, expectX, 0.75,
+      ("G%s: in world mode the dot sits where the yards put it (%.3f yd = %s px)")
+        :format(i, (SEG_X - playerX) * ZONE_W, tostring(expectX)))
+    check(dot and math.abs(dot.cy) <= 2.0,
+      ("G%s: the nearest dot is the perpendicular foot (cy=%s)")
+        :format(i, tostring(dot and dot.cy)))
+    -- "stays beside the same landmark": a constant west-of-the-landmark offset.
+    near((dot and dot.cx or 0) - expectLandmarkX, (SEG_X - LANDMARK.x) * ZONE_W * PX_PER_YD, 0.75,
+      ("G%s: the dot keeps the ground's offset from the landmark"):format(i))
+    if previousW then
+      near((dot and dot.cx or 0) - previousW.cx, -(playerX - previousW.playerX) * PX_PER_FRAC_WORLD, 0.75,
+        ("G%s: in world mode the drawn anchor moves opposite the player"):format(i))
+    end
+    previousW = rowsW[i]
+  end
+  local function wn(v) return type(v) == "number" and v or nil end
+  check(wn(rowsW[2].toSegment) and wn(rowsW[2].toSegment) < wn(rowsW[1].toSegment),
+    "G: walking toward the segment shrinks the world-mode distance")
+  check(wn(rowsW[3].toSegment) and wn(rowsW[3].toSegment) < wn(rowsW[2].toSegment),
+    "G: standing on it is closer than approaching it")
+  check(wn(rowsW[4].toSegment) and wn(rowsW[4].toSegment) > wn(rowsW[3].toSegment),
+    "G: walking back recedes from it")
+
+  io.write("\nworld mode (radius=" .. string.format("%.3f", VIEW_RADIUS_YARDS) .. " yd, "
+    .. string.format("%.2f", PX_PER_YD) .. " px/yd):\n")
+  io.write("stop              playerX   anchor cx,cy px   to-segment px   painted\n")
+  for i = 1, #rowsW do
+    local r = rowsW[i]
+    io.write(string.format("%-16s %-8.4f  (%s, %s)      %s            %s\n", r.name, r.playerX,
+      r.cx and string.format("%.2f", r.cx) or "absent",
+      r.cy and string.format("%.2f", r.cy) or "absent",
+      r.toSegment and string.format("%.2f", r.toSegment) or "absent", tostring(r.painted)))
+  end
+  io.write("\n")
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " minimap walk check(s) failed\n")
   os.exit(1)

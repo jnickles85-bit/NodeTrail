@@ -18,8 +18,10 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   `minimap crosscheck:` (per index: world canvas anchor, minimap px, drawn/hidden + reason,
   mapID equality) and `minimap scale audit:` (HereBeDragons yard distance ÷ drawn px = the real
   yd/px, so the 0.075 fallback can be measured instead of assumed; prints `absent` without HBD).
-  The WORLD MAP half got the same treatment: `route dots inside the map's visible rect: N/M` (a
-  route that is 100% outside can no longer read as a pass) and `/nt mapdiag probe` now draws
+  The WORLD MAP half got the same treatment: `route dots on the visible map: <inside>/<painted> inside
+  (measured <m> of <p> painted; …)` (a route that is 100% outside can no longer read as a pass, and
+  neither can one that is only partly measured — see the third-pass note at the end) and
+  `/nt mapdiag probe` now draws
   labelled markers at #1/#10/#20/last plus `P` for the player, printing canvas, host and
   WorldMapFrame/ScrollContainer rects. New `/nt minimap on|off` switches the minimap route alone
   (world map untouched). New `/nt navwalk start|mark <label>|clear` records the four-stop walk
@@ -28,9 +30,12 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   disk instead of transcribed. New `tests/minimap_walk_spec.lua` replays four stops on a synthetic
   segment beside a landmark and asserts the DRAWN anchors (read from the regions) sit where the
   stamp puts them, move opposite the player, keep a constant offset from the landmark, and that the
-  player's distance to the segment shrinks → ~0 → grows: **38 FAILs on `d34dcb3`**, green at this
-  commit; all 43 `tests/*.lua` pass under lua5.1. The live four-stop walk in Mightie's client is
+  player's distance to the segment shrinks → ~0 → grows. It replays BOTH projections: the fraction
+  fallback (§A) and, with a fake HereBeDragons, world mode with `C_Minimap.GetViewRadius()` yards
+  (§G — the projection this build ships). **77 FAILs on `d34dcb3`**, green at this commit; all 45
+  `tests/*.lua` pass under lua5.1. The live four-stop walk in Mightie's client is
   still the operator's step — the numbers this card's acceptance needs come from `/nt navwalk`.
+  **The table already collected is from the pre-HBD build; see the third-pass note at the end.**
   Route generation and the dot primitive (`UI/LineDraw.lua`) are untouched.
 
 - **The beast panel shows what SKINNING yields — the corpse loot is gone** (t_2c573dbf).
@@ -1019,3 +1024,33 @@ what triggers a redraw) and `/reload` again. `NodeTrailDB.mapProbe` then holds, 
 rects and the `inside/measured` count — the numbers that say whether the route is inside the map
 the player can see, and whether the host rect and the visible rect agree. `/nt mapdiag` prints the
 same lines live, and `/nt mapdiag probe` labels #1/#10/#20/last plus `P` for one screenshot.
+
+**2026-11-08 (third pass, `wt/t_86583cf2`) — review round 1 corrections: the count cannot pass with
+part of the route unexamined, and the walk is replayed in the projection this build actually uses.**
+
+1. **`route dots on the visible map:` now divides by PAINTED, not by measured.** A dot whose anchors
+   cannot be read is not evidence, so it no longer leaves the denominator. The line reads
+   `route dots on the visible map: <inside>/<painted> inside (measured <m> of <p> painted; …)`, and
+   when `m < p` the verdict names the remainder:
+   `— 36 of 72 painted dot(s) report no screen rect — not measured`. Review round 1 reproduced the
+   old behaviour exactly (`36/36 inside`, verdict nil, half the route gone); §7 of
+   `tests/mapdiag_visible_spec.lua` now fails on that build with 6 behavioural FAILs and passes here.
+   `NodeTrailDB.mapProbe` gained `unmeasured` next to `painted`/`measured`/`inside`, so the saved
+   record keeps the two counts apart.
+2. **The walk is replayed in WORLD mode (the projection this build ships).** §G of
+   `tests/minimap_walk_spec.lua` installs the same fake HereBeDragons `minimap_hbd_spec` uses
+   (LibStub, zone 1000×800 yd, `C_Minimap.GetViewRadius()` = 233.333 yd, 0.30 px/yd) and walks the
+   same four stops past the same landmark. Same invariants: the drawn anchors sit where the yards
+   put them, move opposite the player, keep a constant offset from the landmark, and the
+   player→segment distance collapses onto the line then recedes:
+   `12.00 → 3.00 → 0.60 → 4.50` px with the dot at `12.00 → 3.00 → −0.60 → 4.50` px.
+   It fails on `d6f2a31` (which projected `mode=frac radius=0.0750`, drawing 37.33 px where the
+   yards say 12.00) and passes at this commit.
+3. **The four-stop table in the previous pass is from the PRE-HBD build, `d6f2a31`** — navwalk mtime
+   13:57, `mode=frac radius=0.0750`. It proves anchoring for that projection; the shipped build draws
+   `mode=world`. The world-mode replay above is the coverage for the shipped projection, and the
+   live table still has to be re-walked on the shipped build to be a live measurement of it.
+4. **The screenshot pair is not obtainable from this host.** `NodeTrailDB.mapProbe` still does not
+   exist on disk (SavedVariables mtime 13:57, pre-deploy), and the client is in active use while this
+   runs: `Wow` pid 33436 running, `GetLastInputInfo` idle **0 s**. Opening the world map and taking
+   the two screenshots therefore needs the operator, once, after a `/reload`.

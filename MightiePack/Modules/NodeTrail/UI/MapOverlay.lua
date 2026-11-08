@@ -1043,6 +1043,7 @@ function M:RecordProbe(force)
     pathPoints = self.path and #self.path or 0,
     painted = audit.painted or 0,
     measured = audit.measured or 0,
+    unmeasured = audit.unmeasured or 0,
     inside = audit.inside or 0,
     idle = audit.idle and true or false,
     why = self._why or audit.why,
@@ -1146,12 +1147,34 @@ function M:VisibleAudit()
     out.bbox = { minL, minB, maxR, maxT }
   end
   out.disagree, out.disagreeWorst = disagree, disagreeWorst
+  -- The denominator is PAINTED, not measured. A dot whose anchors cannot be
+  -- read is not evidence of anything, so it must not leave the denominator:
+  -- dividing by `measured` let "36/36 inside" read as a pass while half the
+  -- route was unexamined (review round 1). `unmeasured` is reported so the
+  -- remainder is named instead of silently dropped.
+  local unmeasured = out.painted - measured
+  if unmeasured < 0 then
+    unmeasured = 0
+  end
+  out.unmeasured = unmeasured
+  local why = {}
   if measured == 0 then
-    out.verdict = " — the painted dots report no screen rect: their position cannot be checked"
-  elseif inside == 0 then
-    out.verdict = " — NO dot is inside the visible map: the route is drawn where the player cannot see it"
-  elseif inside < measured then
-    out.verdict = " — " .. fmtNum(measured - inside) .. " dot(s) fall outside the visible map (clipped)"
+    why[#why + 1] = ("none of the %s painted dot(s) report a screen rect: their position cannot be checked")
+      :format(fmtNum(out.painted))
+  else
+    if inside == 0 then
+      why[#why + 1] = "NO dot is inside the visible map: the route is drawn where the player cannot see it"
+    elseif inside < measured then
+      why[#why + 1] = ("%s dot(s) fall outside the visible map (clipped)")
+        :format(fmtNum(measured - inside))
+    end
+    if unmeasured > 0 then
+      why[#why + 1] = ("%s of %s painted dot(s) report no screen rect — not measured")
+        :format(fmtNum(unmeasured), fmtNum(out.painted))
+    end
+  end
+  if #why > 0 then
+    out.verdict = " — " .. table.concat(why, "; ")
   end
   return out
 end
@@ -1381,8 +1404,10 @@ function M:Diag()
       note = (", %s dot(s) whose own GetLeft/GetTop disagree with that arithmetic by up to %s px")
         :format(fmtNum(a.disagree), fmtNum(a.disagreeWorst, 1))
     end
-    return string.format("route dots on the visible map: %s/%s inside (dots bbox=%s; visible=%s%s)%s",
-      fmtNum(a.inside or 0), fmtNum(a.measured or 0), bbox, rectText(a.visible), note,
+    return string.format("route dots on the visible map: %s/%s inside (measured %s of %s painted; dots bbox=%s; visible=%s%s)%s",
+      fmtNum(a.inside or 0), fmtNum(a.painted or 0),
+      fmtNum(a.measured or 0), fmtNum(a.painted or 0),
+      bbox, rectText(a.visible), note,
       tostring(a.verdict or ""))
   end)
   fact(function()
