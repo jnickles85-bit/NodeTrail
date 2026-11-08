@@ -967,8 +967,11 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
       end
       local p2, t2, w2 = planFitting(widen * (total / maxDots) * 1.03, maxDots)
       local i2, painted2, missing2, first2 = paint(p2)
-      local better = (missing2 < missing) or (missing2 == missing and painted2 > painted)
-      if not better then
+      -- Only a plan that fits COMPLETELY is worth taking: a partly-wider plan
+      -- paints enormous dots and still loses the tail, which is worse than the
+      -- honest shortfall below. Either the whole route is painted, or the
+      -- missing count says how much of it is not.
+      if missing2 ~= 0 then
         break
       end
       widen, plans, total = w2, p2, t2
