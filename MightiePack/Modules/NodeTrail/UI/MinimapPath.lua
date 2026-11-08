@@ -515,7 +515,7 @@ end
 function M:_indexPoints(route)
   local HBD = getHBD()
   local pts = {}
-  local anyWorld = false
+  local anyWorld, worldPoints = false, 0
   for i = 1, #route.path do
     local p = route.path[i]
     local entry = {}
@@ -526,13 +526,28 @@ function M:_indexPoints(route)
         if ok and type(wx) == "number" and type(wy) == "number" then
           entry.wx, entry.wy, entry.inst = wx, wy, inst
           anyWorld = true
+          worldPoints = worldPoints + 1
         end
       end
     end
     pts[i] = entry
   end
   self.points = pts
-  self.useWorld = anyWorld
+  -- ALL points, or the projection is not a world projection. `anyWorld` used to
+  -- be enough, and a point without world coordinates then produced no delta and
+  -- was silently dropped from the minimap while the diag claimed a world
+  -- projection for the whole route (review round 3: "useWorld=true but the
+  -- points carry the wrong space"). A partial world set now falls back to the
+  -- frac/zone projection, where every point has a fraction, and says why.
+  self.useWorld = anyWorld and worldPoints == #route.path
+  self._worldPoints = worldPoints
+  self._worldWhy = nil
+  if anyWorld and worldPoints < #route.path then
+    self._worldWhy = (("HereBeDragons converted %d of %d point(s); %d have no world position, so the world projection would drop them")
+      :format(worldPoints, #route.path, #route.path - worldPoints))
+  elseif not anyWorld then
+    self._worldWhy = "no HereBeDragons world position for any route point"
+  end
   self.zoneW, self.zoneH = nil, nil
   if HBD and type(HBD.GetZoneSize) == "function" and route.mapID then
     local ok, w, h = pcall(HBD.GetZoneSize, HBD, route.mapID)
@@ -560,9 +575,15 @@ function M:_sample()
   if self.useWorld and HBD and type(HBD.GetPlayerWorldPosition) == "function" and radiusYards then
     local ok, x, y, inst = pcall(HBD.GetPlayerWorldPosition, HBD)
     if ok and type(x) == "number" and type(y) == "number" then
+      -- The fraction is not used by the world projection — but the stamp has to
+      -- carry it, because the card's four-stop table compares "player fraction"
+      -- with "the fraction the draw was built from", and in world mode that
+      -- stamp read `frac=(absent,absent)` (review round 3).
+      local mx, my = playerMapPosition(self.mapID, HBD)
       return {
         mode = "world",
         px = x, py = y, pinst = inst,
+        mx = mx, my = my,
         radius = radiusYards,
         radiusUnit = "yards",
         sinF = sinF, cosF = cosF,
@@ -776,14 +797,32 @@ function M:_redraw()
     pcall(host.Show, host)
   else
     local outside = 0
+    local nearest, nearestIndex
     for i = 1, #proj.points do
       local p = proj.points[i]
       if p and p.inside == false then
         outside = outside + 1
       end
+      if p and type(p.dist) == "number" and (not nearest or p.dist < nearest) then
+        nearest, nearestIndex = p.dist, i
+      end
     end
-    self._why = ("none of the %d segment(s) reach the minimap: %d of %d point(s) project outside the %.0fpx circle")
-      :format(#proj.segs, outside, #proj.points, math.min(sample.halfW, sample.halfH) * ROUND_INSET)
+    -- "Nothing drawn" must say WHY with the quantity that decides it: the
+    -- distance from the player to the nearest route point, in the projection's
+    -- own units and in minimap radii. A player 5.6 radii from the line is not a
+    -- broken projection, and the diag has to tell them apart (review round 3:
+    -- the verdict named the clipped fraction but never the nearest distance).
+    local extra = ""
+    if nearest and nearestIndex then
+      local yards = nearest / sample.halfW * sample.radius
+      extra = ("; nearest point #%d is %spx = %s%s = %sx-radius (the minimap covers %s%s)")
+        :format(nearestIndex, fmtNum(nearest, 1), fmtNum(yards, 1),
+          sample.mode == "world" and " yd" or "",
+          fmtNum(sample.halfW > 0 and (nearest / (math.min(sample.halfW, sample.halfH) * ROUND_INSET)) or nil, 2),
+          fmtNum(sample.radius, 1), sample.mode == "world" and " yd" or "")
+    end
+    self._why = (("none of the %d segment(s) reach the minimap: %d of %d point(s) project outside the %.0fpx circle%s")
+      :format(#proj.segs, outside, #proj.points, math.min(sample.halfW, sample.halfH) * ROUND_INSET, extra))
     pcall(host.Hide, host)
   end
 end
@@ -1153,9 +1192,16 @@ function M:Diag()
     return "minimap hereBeDragons: " .. hbdSourceText()
   end)
   fact(function()
-    return string.format("minimap projection: points=%s useWorld=%s zone=%sx%s radius=%s",
+    local why = ""
+    if self._worldWhy and not self.useWorld then
+      why = ("; world projection OFF: %s"):format(tostring(self._worldWhy))
+    elseif self._worldWhy and self.useWorld then
+      why = ("; HereBeDragons converted all %s point(s)"):format(fmtNum(self._worldPoints))
+    end
+    return string.format("minimap projection: points=%s useWorld=%s worldPoints=%s/%s zone=%sx%s radius=%s%s",
       fmtNum(self.points and #self.points or 0), tostring(self.useWorld),
-      fmtNum(self.zoneW), fmtNum(self.zoneH), fmtNum(viewRadiusYards()))
+      fmtNum(self._worldPoints or 0), fmtNum(self.points and #self.points or 0),
+      fmtNum(self.zoneW), fmtNum(self.zoneH), fmtNum(viewRadiusYards()), why)
   end)
   fact(function()
     local p = self._proj
@@ -1425,6 +1471,7 @@ function M:Diag()
     for i = 1, #path do
       local w = type(wpx) == "table" and wpx[i] or nil
       local p = proj.points[i]
+      local pt = type(self.points) == "table" and self.points[i] or nil
       local wText
       if type(w) == "table" then
         worldShown = worldShown + 1
@@ -1432,6 +1479,18 @@ function M:Diag()
       else
         worldMissing = worldMissing + 1
         wText = "MISSING"
+      end
+      -- The three spaces, side by side and each labelled: the route's own map
+      -- fraction, the world map's canvas pixel for it, and its HereBeDragons
+      -- world yards. Review round 3 read `world=(429.8,89.5)` as a world
+      -- position when it was the canvas anchor — one label, two spaces. Nothing
+      -- in this line may be mistaken for another space again.
+      local fracText, ydText = "absent", "absent"
+      if type(pt) == "table" and type(pt.x) == "number" then
+        fracText = string.format("(%s,%s)", fmtNum(pt.x, 3), fmtNum(pt.y, 3))
+      end
+      if type(pt) == "table" and type(pt.wx) == "number" then
+        ydText = string.format("(%s,%s)", fmtNum(pt.wx, 1), fmtNum(pt.wy, 1))
       end
       local mText, state
       if type(p) == "table" and type(p.x) == "number" then
@@ -1449,7 +1508,8 @@ function M:Diag()
         state = "hidden: no projection"
         mText = "absent"
       end
-      parts[#parts + 1] = string.format("#%s world=%s mini=%s %s", fmtNum(i), wText, mText, state)
+      parts[#parts + 1] = string.format("#%s frac=%s canvas=%s worldYd=%s mini=%s %s",
+        fmtNum(i), fracText, wText, ydText, mText, state)
     end
     local ids = "mapIDs differ"
     local mine, theirs = self.mapID, type(overlay) == "table" and overlay.mapID or nil
@@ -1457,7 +1517,7 @@ function M:Diag()
       ids = "mapID equal"
     end
     return string.format(
-      "minimap crosscheck: %s route point(s); world map %s on this map, %s missing; minimap %s drawn, %s hidden (outside radius or clipped); %s (%s vs %s): %s",
+      "minimap crosscheck: %s route point(s); world-map canvas %s on this map, %s missing; minimap %s drawn, %s hidden (outside radius or clipped); %s (%s vs %s): %s",
       fmtNum(#path), fmtNum(worldShown), fmtNum(worldMissing),
       fmtNum(miniDrawn), fmtNum(miniHidden), ids,
       fmtNum(mine), fmtNum(theirs), table.concat(parts, " | "))

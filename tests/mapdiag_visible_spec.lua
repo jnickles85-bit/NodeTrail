@@ -152,12 +152,31 @@ local scroll = newFrame("ScrollContainer")
 scroll.parent = UIParent
 scroll.width, scroll.height = 697, 465
 scroll.fixedLeft, scroll.fixedTop = 717, 1080
+-- The scroll frame's window, in CANVAS units. A client that reports it is the
+-- only way to know which part of the canvas the player can see (the canvas'
+-- GetLeft/GetTop are in the scroll child's space and cannot be compared with
+-- this rect — the live client reported canvas top 699.4 against a map frame at
+-- 1084, which is what made the old screen-space check read 0/319).
+local scrollH, scrollV = 0, 0
+local windowW, windowH = 1002, 668
 
 local canvas = newFrame("WorldMapFrameCanvas")
 canvas.parent = scroll
 canvas.width, canvas.height = 1002, 668
 canvas.scale = 0.696
 canvas.fixedLeft, canvas.fixedTop = 717, 1080
+
+function scroll:GetScrollChild() return canvas end
+function scroll:GetHorizontalScroll() return scrollH end
+function scroll:GetVerticalScroll() return scrollV end
+-- SetWindow takes CANVAS units (what the map maths needs) and stores the
+-- scroll frame's own units (screen px at the canvas' 0.696 scale), which is
+-- what the client reports.
+function scroll:SetWindow(w, h)
+  windowW, windowH = w or 1002, h or 668
+  self.width, self.height = windowW * canvas.scale, windowH * canvas.scale
+end
+function scroll:SetScroll(h, v) scrollH, scrollV = h or 0, v or 0 end
 
 local mapFrame = newFrame("WorldMapFrame")
 mapFrame.parent = UIParent
@@ -236,18 +255,24 @@ if visible then
     "2: a healthy draw carries no 'off the map' verdict (" .. visible .. ")")
 end
 
--- ── 3. the defect ara photographed: the host is somewhere else ────────────
--- Move the overlay host off the map (this is what "the route is not anywhere
--- in the picture" looks like to the client) and re-ask the diag. The count must
--- be taken against the visible rect, so it must read 0/14 with a verdict.
+-- ── 3. a host moved off the canvas must be caught, in the host's own space ─
+-- The canvas-unit check cannot see a misplaced host (dots anchored to the host
+-- move with it), so the diag has a second, separate assertion in the
+-- host/canvas space. This is the failure ara photographed: a route drawn into a
+-- host that is not the map.
+local onCanvas = line(out, "host on the canvas:")
+check(onCanvas ~= nil and onCanvas:find("host on the canvas: yes", 1, true) ~= nil,
+  "3: a healthy draw asserts the host is the canvas (got " .. tostring(onCanvas) .. ")")
 W.host:ClearAllPoints()
 W.host:SetPoint("TOPLEFT", WorldMapFrame, "TOPLEFT", 0, 1200)
+W.host.width, W.host.height = 100, 100
 out = diag()
-local off = line(out, "route dots on the visible map:")
-check(off ~= nil and off:find("visible map: 0/" .. painted, 1, true) ~= nil,
-  "3: a host placed away from the map reads 0/" .. painted .. " inside — not all inside (got " .. tostring(off) .. ")")
-check(off ~= nil and off:find("NO dot is inside the visible map", 1, true) ~= nil,
-  "3: and the line carries the verdict instead of a pass (got " .. tostring(off) .. ")")
+local offHost = line(out, "host on the canvas:")
+check(offHost ~= nil and offHost:find("host on the canvas: NO", 1, true) ~= nil,
+  "3: a host placed away from the map reads NO — not a pass (got " .. tostring(offHost) .. ")")
+check(offHost ~= nil and (offHost:find("not parented to the canvas", 1, true) ~= nil
+    or offHost:find("another size", 1, true) ~= nil),
+  "3: and names why (got " .. tostring(offHost) .. ")")
 
 -- ── 4. a redraw that bails must not report the previous draw ──────────────
 -- Put the host back, redraw on the route's map (14 dots painted), then open
@@ -294,8 +319,11 @@ if type(probe) == "table" then
   check(probe.painted == painted, "6: it records the painted dot count (" .. tostring(probe.painted) .. ")")
   check(probe.inside == painted, "6: and how many of them are inside the visible map ("
     .. tostring(probe.inside) .. ")")
-  check(type(probe.visible) == "table" and probe.visible.left == 717,
-    "6: with the visible rect, measured (" .. tostring(probe.visible and probe.visible.left) .. ")")
+  check(type(probe.window) == "table" and probe.window.left == 0 and math.abs(probe.window.width - 1002) < 2,
+    "6: with the visible window in canvas units ("
+      .. tostring(probe.window and (probe.window.left .. ".." .. probe.window.width)) .. ")")
+  check(type(probe.window) == "table" and type(probe.window.method) == "string",
+    "6: and the measurement it came from (" .. tostring(probe.window and probe.window.method) .. ")")
   check(type(probe.host) == "table" and probe.host.top == 1080,
     "6: and the host rect (" .. tostring(probe.host and probe.host.top) .. ")")
   check(type(probe.canvas) == "table" and math.abs((probe.canvas.width or 0) - 697.4) < 0.2,
@@ -316,6 +344,67 @@ check(type(probe) == "table" and type(probe.why) == "string"
   and probe.why:find("the open map is 1414", 1, true) ~= nil,
   "6: with the reason recorded (" .. tostring(probe and probe.why) .. ")")
 shownMapID = 1413
+
+-- ── 8. the "inside" count follows the SCROLL WINDOW, in canvas units ────────
+-- Review round 3: the old check compared the host with ScrollContainer in two
+-- different spaces and printed 0/319 for a route drawn across the map. The
+-- window is now measured in canvas units and the count must follow it: zoom the
+-- fixture in (a 400x300 window at 300,200 of a 1002x668 canvas) and only the
+-- dots whose canvas anchors fall in that window may count. The expectation is
+-- computed here from the objects' anchors, not from the diag's own numbers.
+shownMapID = 1413
+scroll:SetWindow(400, 300)
+scroll:SetScroll(300, 200)
+clock = clock + 1
+W:Redraw()
+local zoomOut = line(diag(), "route dots on the visible map:")
+check(zoomOut ~= nil, "8: the visible-map line is printed for a zoomed map")
+check(zoomOut ~= nil and zoomOut:find("window=300.0,200.0 400.0x300.0", 1, true) ~= nil,
+  "8: and it names the scroll window in canvas units (got " .. tostring(zoomOut) .. ")")
+do
+  local drawer = W.drawer
+  local appliedNow = ns.LineDraw.Applied(drawer) or {}
+  local tot = tonumber(appliedNow.paintedDots) or 0
+  local expect = 0
+  for d = 1, tot do
+    local obj = drawer and drawer.pool and drawer.pool[2 * d]
+    if obj and obj.GetPoint and obj:GetNumPoints() >= 2 then
+      local _, _, _, x1, y1 = obj:GetPoint(1)
+      local _, _, _, x2, y2 = obj:GetPoint(2)
+      if type(x1) == "number" and type(x2) == "number" then
+        local cx, cy = (x1 + x2) * 0.5, -(y1 + y2) * 0.5
+        if cx >= 300 and cx <= 700 and cy >= 200 and cy <= 500 then
+          expect = expect + 1
+        end
+      end
+    end
+  end
+  local insideN, denom
+  if zoomOut then
+    insideN, denom = zoomOut:match("visible map: (%d+)/(%d+)")
+  end
+  check(tonumber(denom) == tot, "8: the denominator is the painted count (" .. tostring(denom) .. ")")
+  check(tonumber(insideN) == expect,
+    ("8: exactly the dots inside the scroll window count (%s, expected %d of %d)")
+      :format(tostring(insideN), expect, tot))
+  check(expect > 0 and expect < tot,
+    ("8: the fixture is a real subset (%d of %d inside)"):format(expect, tot))
+end
+-- A window over empty canvas must read 0 with a verdict, never a pass.
+scroll:SetWindow(10, 10)
+scroll:SetScroll(0, 0)
+clock = clock + 1
+W:Redraw()
+local empty = line(diag(), "route dots on the visible map:")
+check(empty ~= nil and empty:find("visible map: 0/", 1, true) ~= nil,
+  "8: a window over empty canvas reads 0 (got " .. tostring(empty) .. ")")
+check(empty ~= nil and empty:find("NO dot is inside the visible window", 1, true) ~= nil,
+  "8: and carries the verdict (got " .. tostring(empty) .. ")")
+-- Back to the whole canvas for the remaining sections.
+scroll:SetWindow(1002, 668)
+scroll:SetScroll(0, 0)
+clock = clock + 1
+W:Redraw()
 
 -- ── 7. a partly-unreadable draw must not read as a pass ────────────────────
 -- Review round 1: with 36 of 72 painted dots dragged off the visible map and
@@ -360,9 +449,9 @@ if mixed then
   local measuredN = tonumber((mixed:match("measured (%d+) of %d+ painted")))
   check(measuredN == total - sabotaged,
     "7: it says how many dots were actually measured (" .. tostring(measuredN) .. " of " .. total .. ")")
-  check(mixed:find("report no screen rect — not measured", 1, true) ~= nil,
+  check(mixed:find("report no canvas anchors — not measured", 1, true) ~= nil,
     "7: and names the unreadable remainder in the verdict (" .. mixed .. ")")
-  local namedN = tonumber(mixed:match("(%d+) of %d+ painted dot%(s%) report no screen rect"))
+  local namedN = tonumber(mixed:match("(%d+) of %d+ painted dot%(s%) report no canvas anchors"))
   check(namedN == sabotaged,
     "7: the remainder count matches the sabotage (" .. tostring(namedN) .. " of " .. sabotaged .. ")")
 end

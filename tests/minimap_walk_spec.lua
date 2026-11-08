@@ -435,13 +435,15 @@ do
   local out = sayMinimap()
   local cross = out:match("minimap crosscheck:[^\n]*")
   check(cross ~= nil, "D: the diag prints a point-by-point crosscheck")
-  check(cross and cross:find("world map 2 on this map, 0 missing", 1, true) ~= nil,
+  check(cross and cross:find("world-map canvas 2 on this map, 0 missing", 1, true) ~= nil,
     "D: every route point is on the world map (got " .. tostring(cross) .. ")")
   check(cross and cross:find("mapID equal", 1, true) ~= nil,
     "D: both surfaces are on the same mapID")
-  check(cross and cross:find("#1 world=", 1, true) ~= nil
-    and cross:find("#2 world=", 1, true) ~= nil,
-    "D: the crosscheck names each index with its world canvas anchor")
+  check(cross and cross:find("#1 frac=", 1, true) ~= nil
+    and cross:find(" canvas=", 1, true) ~= nil
+    and cross:find(" worldYd=", 1, true) ~= nil
+    and cross:find("#2 frac=", 1, true) ~= nil,
+    "D: the crosscheck names each index with its fraction, canvas anchor and world yards (" .. tostring(cross) .. ")")
   check(cross and cross:find(" minimap 2 drawn", 1, true) ~= nil,
     "D: both route points are drawn on the minimap at this range")
   check(W._px and W._px[1] and W._px[2], "D: the world map projected both points")
@@ -589,8 +591,16 @@ do
       ("G%s: the world-mode stamp is this redraw's player position (got %s, player %s)")
         :format(i, tostring(applied.playerWorld and applied.playerWorld.x),
           tostring(-playerX * ZONE_W)))
-    check(applied.playerFrac == nil,
-      "G" .. i .. ": the world-mode draw does not carry a fraction it did not use")
+    -- Review round 3: the world-mode stamp also carries the player's map
+    -- fraction now, because the card's four-stop table compares "player
+    -- fraction" with "the fraction the draw was built from" on both surfaces.
+    -- The projection still uses yards; the fraction is recorded, not used.
+    check(type(applied.playerFrac) == "table"
+      and math.abs(applied.playerFrac.x - playerX) < 1e-6
+      and math.abs(applied.playerFrac.y - playerY) < 1e-6,
+      ("G%s: the world-mode stamp carries the player fraction this redraw was at (got %s, player %s,%s)")
+        :format(i, tostring(applied.playerFrac and applied.playerFrac.x),
+          tostring(playerX), tostring(playerY)))
     local dot, painted = drawnDotCentre()
     check(dot ~= nil and painted > 0, "G" .. i .. ": a dot is drawn in world mode")
     local expectX = (SEG_X - playerX) * ZONE_W * PX_PER_YD
