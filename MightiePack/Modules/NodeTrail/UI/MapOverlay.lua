@@ -772,7 +772,6 @@ function M:_redraw()
   while #self._draws > 4 do
     table.remove(self._draws)
   end
-  self:RecordProbe()
   if count > 0 then
     pcall(host.Show, host)
   else
@@ -780,6 +779,9 @@ function M:_redraw()
       :format(#self.path - 1, #skipped > 0 and table.concat(skipped, "; ") or "no segments in the path")
     pcall(host.Hide, host)
   end
+  -- After `_why` is settled: the probe records the reason when nothing survived,
+  -- so a zero-painted record can never be mistaken for an empty route.
+  self:RecordProbe()
 end
 
 function M:Redraw()
