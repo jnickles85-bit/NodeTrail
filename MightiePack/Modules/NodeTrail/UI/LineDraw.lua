@@ -55,6 +55,14 @@ function D.BindOverlay(host, parent)
   if host.SetPassThroughButtons then
     pcall(host.SetPassThroughButtons, host, "LeftButton", "RightButton", "MiddleButton")
   end
+  -- An overlay must never clip its own dots: a host that clips would cut the
+  -- route at its own edge, which looks exactly like "only the opening leg
+  -- painted". The client defaults this to off, but it is set explicitly (and
+  -- always measured back by /nt mapdiag) so a client that defaults it on cannot
+  -- silently crop the route.
+  if host.SetClipsChildren then
+    pcall(host.SetClipsChildren, host, false)
+  end
   if parent.GetFrameLevel and host.SetFrameLevel then
     local ok, level = pcall(parent.GetFrameLevel, parent)
     if ok and type(level) == "number" then
@@ -415,6 +423,13 @@ function D.Invalidate(drawer)
     -- The proof belonged to the previous parent; a new parent must be measured
     -- again rather than inherit the old evidence.
     drawer.capability = {}
+    -- The region ceiling and the width it forced belong to the old host too.
+    drawer.poolHigh = nil
+    drawer.capacity = nil
+    drawer.createFailed = nil
+    drawer.widenHint = nil
+    drawer.hideFromIndex = nil
+    drawer.hiddenCount = nil
   end
 end
 
@@ -599,10 +614,18 @@ end
 
 --- Pure: a dot plan per segment, with one global scale so the whole route
 --- stays inside DOT_MAX_TOTAL. Both endpoints are always drawn.
-function D.PlanDots(buf, count, metrics)
+--- `widen` (>= 1) multiplies both the dot and the spacing again, so a caller
+--- that measured a smaller region budget can re-plan the same route onto the
+--- objects it can actually create — the chain still covers the segment, with
+--- fewer, larger dots.
+function D.PlanDots(buf, count, metrics, widen)
   local m = metrics
   if type(m) ~= "table" then
     m = D.DotMetrics(nil, 1)
+  end
+  local extra = tonumber(widen) or 1
+  if extra ~= extra or extra < 1 then
+    extra = 1
   end
   local function build(scale)
     local plans, total = {}, 0
@@ -613,7 +636,7 @@ function D.PlanDots(buf, count, metrics)
         local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
         len = math.sqrt(dx * dx + dy * dy)
       end
-      plans[i] = D.DotPlan(len, m.size, m.spacing, scale)
+      plans[i] = D.DotPlan(len, m.size, m.spacing, scale * extra)
       total = total + plans[i].count
     end
     return plans, total
@@ -643,14 +666,42 @@ local function acquire(drawer, index, parent)
       created = tex
     end
   end
+  if not created then
+    -- The client refused another region. That is a MEASURED ceiling, not an
+    -- error: remember it, so the draw can re-plan onto what it can create
+    -- instead of silently losing every dot past this index. It is kept per
+    -- surface (cleared by Invalidate), because it is a property of the host.
+    drawer.createFailed = (drawer.createFailed or 0) + 1
+    if not drawer.capacity or (index - 1) < drawer.capacity then
+      drawer.capacity = index - 1
+    end
+    return nil
+  end
   drawer.pool[index] = created
+  if not drawer.poolHigh or index > drawer.poolHigh then
+    drawer.poolHigh = index
+  end
   return created
 end
 
+--- Hide every held object from `index` on. Iterates to the HIGH-WATER index
+--- rather than `#drawer.pool`: a pool that ever failed to create an object has
+--- a nil slot in it, and `#` on such a table is unspecified — the old loop
+--- could stop early and leave the previous route's dots on screen.
+--- @return number of objects hidden
 local function hideFrom(drawer, index)
-  for i = index, #drawer.pool do
-    hideObj(drawer.pool[i])
+  local high = drawer.poolHigh or #drawer.pool
+  local hidden = 0
+  for i = index, high do
+    local obj = drawer.pool[i]
+    if obj and (not obj.IsShown or obj:IsShown() ~= false) then
+      hidden = hidden + 1
+    end
+    hideObj(obj)
   end
+  drawer.hideFromIndex = index
+  drawer.hiddenCount = hidden
+  return hidden
 end
 
 local function paintLine(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
@@ -830,44 +881,115 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     if type(m) ~= "table" then
       m = D.DotMetrics(thickness, 1)
     end
-    local plans, total = D.PlanDots(buf, count, m)
     -- When the allocation cap widened the dots, the rim widens with them, so
     -- the outlined stroke keeps the same weight-to-rim ratio everywhere.
     local rimRatio = (m.size > 0) and (m.outline / m.size) or 1
-    local index = 1
-    local first
-    for i = 1, count do
-      local seg, plan = buf[i], plans[i]
-      if seg and plan and plan.steps > 0 then
-        first = first or plan
-        local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
-        for k = 0, plan.steps do
-          local t = k / plan.steps
-          local cx, cy = seg[1] + dx * t, seg[2] + dy * t
-          -- Each dot is drawn TWICE. White at 0.9 alpha alone is invisible over
-          -- bright terrain (the Barrens' tan centre), which is what made the
-          -- route read as "somewhere else across the zone". The dark outline is
-          -- drawn first, one or two screen px larger, then the white dot on top:
-          -- that survives any terrain colour, which is the actual requirement —
-          -- the map art varies per zone.
-          local under = acquire(drawer, index, parent)
-          if under then
-            paintDot(under, parent, cx, cy, plan.size * rimRatio,
-              DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
+
+    --- Paint `plans` over `buf`. Returns the next free pool index, and how many
+    --- dots were ACTUALLY painted (both of their objects existed) versus
+    --- planned — the loop index alone cannot tell those apart, which is how a
+    --- truncated route used to report itself as complete.
+    local function paint(plans)
+      local index, painted, missing = 1, 0, 0
+      local first
+      for i = 1, count do
+        local seg, plan = buf[i], plans[i]
+        if seg and plan and plan.steps > 0 then
+          first = first or plan
+          local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
+          for k = 0, plan.steps do
+            local t = k / plan.steps
+            local cx, cy = seg[1] + dx * t, seg[2] + dy * t
+            -- Each dot is drawn TWICE. White at 0.9 alpha alone is invisible
+            -- over bright terrain (the Barrens' tan centre), which is what made
+            -- the route read as "somewhere else across the zone". The dark
+            -- outline is drawn first, one or two screen px larger, then the
+            -- white dot on top: that survives any terrain colour, which is the
+            -- actual requirement — the map art varies per zone.
+            local under = acquire(drawer, index, parent)
+            if under then
+              paintDot(under, parent, cx, cy, plan.size * rimRatio,
+                DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
+            end
+            index = index + 1
+            local obj = acquire(drawer, index, parent)
+            if obj then
+              paintDot(obj, parent, cx, cy, plan.size, r, g, b, a, space, 7)
+              painted = painted + 1
+            else
+              -- No region for this dot: it is NOT painted, whatever the plan
+              -- says. Counting it as painted is what made a route that stopped
+              -- after its opening leg report "painted == planned".
+              missing = missing + 1
+            end
+            index = index + 1
           end
-          index = index + 1
-          local obj = acquire(drawer, index, parent)
-          if obj then
-            paintDot(obj, parent, cx, cy, plan.size, r, g, b, a, space, 7)
-          end
-          index = index + 1
         end
       end
+      return index, painted, missing, first
     end
+
+    -- ── The plan must fit the regions this client actually hands out ────────
+    -- A client that stops creating regions used to lose every dot past the
+    -- ceiling, silently: the route painted its opening leg and nothing else
+    -- while the diag still read `dots=<the whole plan>`. Two things fix that:
+    -- the paint counts what it really painted, and the plan is re-widened onto
+    -- the objects that exist, so the chain still spans the route end to end
+    -- (fewer, larger dots) instead of stopping at the ceiling.
+    --- Widest plan that still fits `maxDots`, by planning only (no painting).
+    local function planFitting(startWiden, maxDots)
+      local w = startWiden
+      for _ = 1, 6 do
+        local p, t = D.PlanDots(buf, count, m, w)
+        if t <= maxDots then
+          return p, t, w
+        end
+        w = w * (t / maxDots) * 1.03 -- 1.03: ceil() at the segment level
+      end
+      local p, t = D.PlanDots(buf, count, m, w)
+      return p, t, w
+    end
+
+    local widen = drawer.widenHint or 1
+    local maxDots = drawer.capacity and math.floor(drawer.capacity / 2) or nil
+    local plans, total
+    if maxDots and maxDots >= count then
+      plans, total, widen = planFitting(widen, maxDots)
+    else
+      plans, total = D.PlanDots(buf, count, m, widen)
+    end
+    local index, painted, missing, first = paint(plans)
+    local replans = 0
+    while missing > 0 and drawer.capacity and replans < 4 do
+      maxDots = math.floor(drawer.capacity / 2)
+      if maxDots < count or total < 1 then
+        break
+      end
+      local p2, t2, w2 = planFitting(widen * (total / maxDots) * 1.03, maxDots)
+      local i2, painted2, missing2, first2 = paint(p2)
+      local better = (missing2 < missing) or (missing2 == missing and painted2 > painted)
+      if not better then
+        break
+      end
+      widen, plans, total = w2, p2, t2
+      index, painted, missing, first = i2, painted2, missing2, first2
+      replans = replans + 1
+    end
+    -- Start the next draw at the width this client actually needed, so a route
+    -- on a capped surface does not re-discover the ceiling on every redraw.
+    drawer.widenHint = (replans > 0) and widen or drawer.widenHint
     hideFrom(drawer, index)
-    drawer.lastApplied.dots = (total > 0) and math.floor((index - 1) / 2) or 0
+    drawer.lastApplied.dots = (total > 0) and painted or 0
+    drawer.lastApplied.paintedDots = painted
     drawer.lastApplied.dotObjects = (total > 0) and (index - 1) or 0
     drawer.lastApplied.plannedDots = total
+    drawer.lastApplied.missingDots = missing
+    drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+    drawer.lastApplied.capacity = drawer.capacity
+    drawer.lastApplied.replans = replans
+    drawer.lastApplied.widen = widen
+    drawer.lastApplied.hideFromIndex = drawer.hideFromIndex
+    drawer.lastApplied.hiddenByHide = drawer.hiddenCount
     drawer.lastApplied.dotSize = first and first.size or nil
     drawer.lastApplied.dotSpacing = first and first.spacing or nil
     drawer.lastApplied.dotOutline = first and (first.size * rimRatio) or nil

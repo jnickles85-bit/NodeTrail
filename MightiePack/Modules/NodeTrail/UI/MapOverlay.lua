@@ -688,6 +688,22 @@ function M:_redraw()
   ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / canvasScale, r, g, b, a, "ydown", metrics)
   self._drew = true
   self._lastQueued = count
+  -- One record per draw, newest first. The card's third suspect is a later pass
+  -- rewriting the pool with a shorter buffer: a one-entry snapshot cannot show
+  -- that, a short history can.
+  self._drawNum = (self._drawNum or 0) + 1
+  self._draws = self._draws or {}
+  table.insert(self._draws, 1, {
+    seq = self._drawNum,
+    count = count,
+    dots = (self.drawer.lastApplied or {}).paintedDots,
+    planned = (self.drawer.lastApplied or {}).plannedDots,
+    hideFrom = (self.drawer.lastApplied or {}).hideFromIndex,
+    hidden = (self.drawer.lastApplied or {}).hiddenByHide,
+  })
+  while #self._draws > 4 do
+    table.remove(self._draws)
+  end
   if count > 0 then
     pcall(host.Show, host)
   else
@@ -1005,6 +1021,75 @@ function M:Diag()
       fmtNum(self._lastQueued or 0), tostring(mode), fmtNum(held))
   end)
   fact(function()
+    -- The card's first question, answered from the objects rather than from the
+    -- loop counter: a dot counts as PAINTED only when its own region exists.
+    local drawer = self.drawer
+    local a = (drawer and ns.LineDraw.Applied(drawer)) or {}
+    if type(drawer) ~= "table" or not self._drew then
+      return "dots pool: no draw on this map yet"
+    end
+    local high = drawer.poolHigh or 0
+    local existing, shown = 0, 0
+    for i = 1, (high > 0 and high or #drawer.pool) do
+      local o = drawer.pool[i]
+      if o then
+        existing = existing + 1
+        if not o.IsShown or o:IsShown() ~= false then
+          shown = shown + 1
+        end
+      end
+    end
+    return string.format(
+      "dots pool: planned=%s painted=%s missing=%s objects=%s shown=%s highest=%s capacity=%s widen=%s replans=%s hideFrom=%s hidden=%s createFailed=%s",
+      fmtNum(a.plannedDots), fmtNum(a.paintedDots), fmtNum(a.missingDots),
+      fmtNum(existing), fmtNum(shown), fmtNum(high),
+      a.capacity and fmtNum(a.capacity) or "none",
+      fmtNum(a.widen or 1, 2), fmtNum(a.replans or 0),
+      a.hideFromIndex and fmtNum(a.hideFromIndex) or "none",
+      fmtNum(a.hiddenByHide or 0), fmtNum(drawer.createFailed or 0))
+  end)
+  fact(function()
+    local draws = self._draws
+    if type(draws) ~= "table" or #draws == 0 then
+      return "draws: none recorded yet"
+    end
+    local parts = {}
+    for i = 1, #draws do
+      local d = draws[i]
+      parts[#parts + 1] = ("#%s count=%s dots=%s/%s hideFrom=%s hid=%s"):format(
+        fmtNum(d.seq), fmtNum(d.count), fmtNum(d.dots or 0), fmtNum(d.planned or 0),
+        d.hideFrom and fmtNum(d.hideFrom) or "none", fmtNum(d.hidden or 0))
+    end
+    return string.format("draws: %s draw(s) recorded, newest first: %s",
+      fmtNum(#draws), table.concat(parts, "; "))
+  end)
+  fact(function()
+    -- Does anything clip the dots? A host that clips crops the route at its own
+    -- edge; a canvas that clips crops it at the canvas. Both are MEASURED, not
+    -- assumed, and both rects are printed.
+    local function clipper(frame, label)
+      if not frame then
+        return label .. "=absent"
+      end
+      local value = nil
+      local fn = frame.DoesClipChildren or frame.GetClipsChildren or frame.IsClipsChildren
+      if isFn(fn) then
+        local ok, v = pcall(fn, frame)
+        if ok and type(v) == "boolean" then
+          value = tostring(v)
+        end
+      end
+      local w, h = frameSize(frame)
+      local left = call(frame, "GetLeft")
+      local top = call(frame, "GetTop")
+      return string.format("%s clips=%s rect=%sx%s at %s,%s scale=%s",
+        label, value and value or (isFn(frame.SetClipsChildren) and "settable/unreadable" or "absent"),
+        fmtNum(w), fmtNum(h), fmtNum(left, 1), fmtNum(top, 1), fmtNum(call(frame, "GetScale"), 3))
+    end
+    return "clips: " .. clipper(self.host, "host") .. "; "
+      .. clipper(self._hostParent, "hostParent") .. "; " .. clipper(getCanvas(_G.WorldMapFrame), "canvas")
+  end)
+  fact(function()
     -- WHY this mode was chosen, measured at detection time. The old code chose
     -- "line" on the existence of Frame:CreateLine alone.
     local drawer = self.drawer
@@ -1157,12 +1242,22 @@ function M:Diag()
           fmtNum(applied.dotSize, 2), fmtNum(applied.dotSpacing, 2))
         or "")
   end)
-  for i = 1, 2 do
+  -- The opening of the chain (pool 1/2) AND the middle of the route, in the
+  -- SAME shape: "only the first leg paints" is a claim about the MIDDLE, so the
+  -- middle has to be measured. In dots mode every dot holds two regions (rim,
+  -- then dot), so dot 8 is pool 16 and dot 9 is pool 18.
+  local samples = { { 1, "line 1" }, { 2, "line 2" } }
+  if self.drawer and self.drawer.mode == "dots" then
+    samples[#samples + 1] = { 16, "dot 8" }
+    samples[#samples + 1] = { 18, "dot 9" }
+  end
+  for s = 1, #samples do
+    local i, tag = samples[s][1], samples[s][2]
     fact(function()
       local obj = self.drawer and self.drawer.pool and self.drawer.pool[i]
       local d = ns.LineDraw.Describe(obj)
       if not d.present then
-        return ("line %d: absent (no line object held)"):format(i)
+        return ("%s: absent (no line object held at pool %d)"):format(tag, i)
       end
       local len = "absent"
       local startText = "absent"
@@ -1236,8 +1331,8 @@ function M:Diag()
         end
         methodText = table.concat(parts, " ")
       end
-      return string.format("line %d: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s object=%s numpoints=%s points=[%s] methods=[%s]",
-        i, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2), vertex,
+      return string.format("%s: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s object=%s numpoints=%s points=[%s] methods=[%s]",
+        tag, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2), vertex,
         fmtNum(d.thickness, 2), size, level, strata, parent, chain, len, startText, stopText,
         tostring(d.objectType or "absent"),
         type(d.numPoints) == "number" and fmtNum(d.numPoints) or "absent",

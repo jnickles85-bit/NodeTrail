@@ -571,3 +571,50 @@ the other 23 stay green.
   modelled client, not the pixels on Forever.
 - Herb tooltip node names are matched in English only.
 - `/mpack status` reports `inert` for a module that refused to start (standalone Touchstone present).
+
+### t_ec00e4f3 — the world map painted only the opening leg (measured, partly fixed)
+
+**What the pixels say.** Two live screenshots of the same 17-point Barrens route, from two
+different builds (2.88px dots at 10:25, 3px dots with a dark rim at 10:58) and two different
+zooms, show the same thing: ONE short dash stroke near Orgrimmar and no other route pixel
+anywhere on the map. A pixel scan (near-white, low-saturation) of the 10:58 shot found exactly
+one cluster, 24x18px ≈ one 43-canvas-px segment, plus the player arrow. The minimap, drawing the
+same path at the same moment, showed both legs. So the dots are not "too faint" and the route is
+not "somewhere else": **the chain stops after its opening segment.**
+
+**The route itself is sound.** `Density.Build(cell 0.02, warm 0.4, anchorCell 0.06, smooth 2,
+maxStops 4)` on the live herb data reproduces exactly the 17 points / 16 segments the diag
+reported, starting at canvas px (407.6, 98.0) — and the card's visible cluster
+`0.4068..0.4454, 0.1448..0.1594` is points #1..#3 of that path. Reproduced offline, the drawer
+paints all 130 dots (260 regions) on a permissive client, so the geometry/plan is not the defect.
+
+**Three real defects fixed (each one can produce exactly this symptom).**
+- *Painted was a tautology.* The dots branch derived `dots` from the loop index, so a route that
+  stopped after its first segment still reported the whole plan. It now counts the dots whose own
+  region exists (`paintedDots`) and reports `missingDots` — the number it could not paint.
+- *A region ceiling truncated silently.* When `CreateTexture` stops handing out regions (the
+  codebase already guards every create against that), the drawer used to skip those dots and keep
+  counting; the route ended at the ceiling. It now records the measured `capacity` and re-plans the
+  same route onto the regions that exist — fewer, wider dots that still span it end to end. On a
+  150-region client a 130-dot plan becomes a 73-dot plan with `painted == planned == 73` and the
+  last dot exactly on the closing point (spec A).
+- *`hideFrom` used `#pool`.* A pool with one nil slot has an unspecified length, so the tail of a
+  previous route could survive a shorter pass. It now hides to a high-water index; the diag prints
+  the index and how many objects it hid.
+
+**Instrumentation, so one run answers the card.** `/nt mapdiag` on the world map now also prints:
+- `dots pool: planned=… painted=… missing=… objects=… shown=… highest=… capacity=… widen=…
+  replans=… hideFrom=… hidden=… createFailed=…` — planned vs painted vs *on screen*.
+- `dot 8:` and `dot 9:` in the same shape as `line 1:`/`line 2:` (shown, alpha, size, parent, both
+  anchors), because "only the first leg paints" is a claim about the middle of the route.
+- `draws: N draw(s) recorded, newest first: #seq count=… dots=…/… hideFrom=… hid=…` — a later pass
+  that rewrites the pool with a shorter buffer is now visible instead of invisible.
+- `clips: host clips=… rect=… ; hostParent … ; canvas …` — and the overlay host now calls
+  `SetClipsChildren(false)`, so a client that clips children by default cannot crop the route.
+
+**Still unproven in game.** Which of the three it was. The build is installed; one world-map
+open + `/nt mapdiag` closes it: `painted == planned` with the full loop visible is done. If the
+loop is still short and `painted == planned`, read `draws:` — a `count=2`/`count=3` pass on top of
+a `count=16` one means a rebuild shrank the route and `hideFrom` cropped the pool (next fix).
+`shown` well below `2 × painted` means the client hid the objects; `clips: host clips=true` means
+it clipped them.
