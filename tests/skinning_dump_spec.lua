@@ -197,7 +197,10 @@ end
 local function dumpLines()
   clearChat()
   SlashCmdList.MIGHTIEPACK("skindiag dump")
-  return chat
+  -- a COPY: `chat` is the live buffer, and clearChat() reuses it
+  local out = {}
+  for i = 1, #chat do out[i] = chat[i] end
+  return out
 end
 
 -- ════════════════════════════════════════════════════════════════════
@@ -451,6 +454,15 @@ do
   end
   check(out3:find("no complete corpse->skin cycle captured yet", 1, true) ~= nil,
     "F: and the dump still says no cycle has completed: " .. out3)
+end
+
+-- The evidence the handoff quotes:
+--   SKINNING_SPEC_DUMP=1 lua5.1 tests/skinning_dump_spec.lua
+-- This is a SPEC REPLAY of four closed cycles plus one corpse still in flight;
+-- the live proof is the same dump produced by /mp skindiag dump in the client.
+if os.getenv("SKINNING_SPEC_DUMP") then
+  io.write("-- spec replay: four closed corpse->skin cycles, then one corpse killed seconds ago\n")
+  for _, l in ipairs(lines) do io.write(l .. "\n") end
 end
 
 if failed > 0 then
