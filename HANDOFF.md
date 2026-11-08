@@ -35,6 +35,33 @@ On top of that branch:
   `hooksecurefunc` on `OnMapChanged` / `OnCanvasScaleChanged`, the canvas `OnSizeChanged`) are
   installed whether or not a data provider exists, so a map opened after `/nt start` still draws;
   no OnUpdate polling. **Still unproven in game** — run `/nt start`, open the map, `/nt mapdiag`.
+- **Draw order + colour, measured** (t_c0a68ed2): the report `queued=2 segment(s)` with nothing on
+  screen was taken apart by measurement, not assumption. On every redraw the overlay now measures
+  the frames that cover the map — the legacy art frames (`WorldMapDetailFrame` / `WorldMapButton`,
+  which the 1.2x-derived clients reparent INTO the canvas) and any shown canvas child covering at
+  least half the canvas (the canvas detail-layer pool) — and raises its host above the highest of
+  them (`top + 5`, adopting the art's strata when the art orders above it) instead of the old
+  fixed `canvas level + 10`. The raise is sticky for the diag and never ratchets on its own host.
+  `LineDraw` records the exact colour/thickness/space a draw applied, and `Describe()` reads a live
+  line's shown/alpha/thickness/start/end back through the real region contract. `/nt mapdiag` now
+  also prints: host level/strata/shown/size/alpha, the parent chain by name, the z-order audit with
+  every candidate and the verdict (`verdict: DRAW ORDER — the host sat at level 13, below
+  WorldMapDetailFrame (level 40) …`), the applied colour, both line objects, **every projected path
+  point with its pixel coordinates**, every segment's length and skip reason, and one `verdict:`
+  line that names draw-order, colour, geometry (a dot) or "cause still unknown, next measurement".
+  The minimap half prints the sample it actually used (mode, radius, unit), the player position,
+  every point's pixel/`dist=x-radius inside|OUTSIDE`, every segment's clip decision, and its own
+  verdict; the fraction fallback now follows the minimap zoom instead of drawing the same size at
+  every zoom step. **The z-order fix is not yet confirmed in game** — `/nt mapdiag` with the map
+  open is the proof (it must print `host_level` > `top`).
+- **Tooltip flicker instrumentation + fix** (t_c0a68ed2): `Refresh` takes a `source`
+  (`show`/`setunit`/`setitem`/`poll`) and keeps a ring of the last **8** evaluations — hovered name,
+  NumLines before/after, whether `blockIntact` matched, whether the block was appended, whether
+  Show/Clamp ran, and the decision — printed by `/nt ttdiag`. A **poll tick never shows the frame**:
+  an append on a tick clamps the position only and defers the backdrop re-layout to the next real
+  client show, because a Show from a tick re-runs the client's own show path under a tooltip it may
+  be rewriting (the minimap herb flash). Every ttdiag read is pcall-guarded so the command works on
+  a client that exposes almost nothing.
 - **`/mpack bug`** — in-game report form; technical header auto-filled, `Copy report` for Ctrl+C, then
   paste into `#mightiepack-bugs`. The client cannot POST, so nothing uploads itself.
 
@@ -152,10 +179,14 @@ Run from repo root with lua5.1:
 - `tests/tooltip_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched)
 - `tests/mapoverlay_spec.lua` (t_0f65b0b9: geometry with a Classic-era stub — WorldMapFrame WITHOUT GetCanvas, WorldMapDetailFrame 1002x1002 with the 986x986 WorldMapButton inset by 8: a known fraction lands at the expected pixel with and without the inset, an oversized inner frame is clamped, a zero-sized frame converts to nil with no division, the overlay parents to WorldMapDetailFrame, zero size queues nothing and asks for a retry, mismatched mapID and showWorldMap=off hide it, and mapdiag prints every line on that client)
 - `tests/mapdiag_spec.lua` (t_0f65b0b9: `/nt mapdiag` on a client missing WorldMapFrame, canvas, legacy frames, Minimap, GetCVar, GetCurrentMapAreaID, C_Timer, hooksecurefunc and the canvas mixin prints every labelled line with no error; throwing GetCanvas/GetMapID/GetWidth still print `absent`; no chat frame falls back to print; `/nt status` is unchanged)
+- `tests/mapdiag_zorder_spec.lua` (t_c0a68ed2: a canvas whose map art is a SIBLING frame at level 40 — the host must be measured above it, the level must not ratchet across redraws, the line must carry pathColor's alpha and the projected pixels, and mapdiag must print the host facts, the parent chain, the z-order audit with `RAISED from`, the applied colour, both line objects, every point's pixels, the segment lengths and the `verdict: DRAW ORDER` line)
+- `tests/minimap_diag_spec.lua` (t_c0a68ed2: a route inside the minimap view is drawn and the diag prints mode/radius/unit + per-point `inside`; a route 0.4 map away queues nothing and the diag names the OUTSIDE points and the per-segment clip reason; the fraction fallback follows the zoom (`dist` grows when zoomed in) and `/nt mapdiag` carries the minimap half)
+- `tests/ttdiag_minimal_spec.lua` (t_c0a68ed2: `/nt ttdiag` with no GameTooltip, a bare tooltip table, a shown-but-unreadable tooltip, readers that RAISE, a ring entry recorded from an empty tooltip, and a chat frame that raises — every read prints `absent`/`?`, nothing errors, and the ring is always printed)
+- `tests/tooltip_refresh_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched; t_c0a68ed2 adds the flicker invariants — five poll ticks while the same node is hovered touch nothing, a rewritten tooltip is re-appended without ever showing the frame, the re-layout is deferred and flushed on the next client show, the ring is bounded and printed by ttdiag)
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
-All fifteen specs pass with lua5.1.
+All nineteen specs pass with lua5.1.
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -236,6 +267,16 @@ All fifteen specs pass with lua5.1.
 - MapOverlay/MinimapPath frames load even when NodeTrail is off.
 - The world-map line has never been seen drawing in game. `/nt mapdiag` reports which frame this
   client exposes (canvas vs WorldMapDetailFrame vs WorldMapButton), the measured sizes, the
-  displayed vs route mapID and what the last redraw queued — that output is what closes the gap.
+  displayed vs route mapID, what the last redraw queued, the measured draw order (host level vs the
+  top art frame, with the raise recorded), the applied colour, both line objects, every projected
+  point's pixels and a verdict line — that output is what closes the gap. t_c0a68ed2 added the
+  z-order audit; the next in-game run has to show `host_level` > `top` and, if the line is still
+  invisible, the `verdict:` line will say which measurement is next.
+- The minimap path's `queued=0` report is now explained per point/segment (inside/OUTSIDE vs the
+  clipped circle, mode, radius and unit). If the in-game numbers say the route is simply farther
+  than the view radius, nothing is wrong to fix — the diag says so instead of leaving it ambiguous.
+- The tooltip flash is instrumented, not proven fixed: the ring in `/nt ttdiag` must show the real
+  sequence on the minimap hover (who fired, how many lines, whether Show ran) before the fix is
+  called confirmed.
 - Herb tooltip node names are matched in English only.
 - `/mpack status` reports `inert` for a module that refused to start (standalone Touchstone present).

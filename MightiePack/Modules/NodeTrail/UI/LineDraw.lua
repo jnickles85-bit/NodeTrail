@@ -71,6 +71,57 @@ function D.Create()
   }
 end
 
+--- Live state of one pool object, for /nt mapdiag. Every read is guarded, so a
+--- region missing a getter reports nil ("absent") instead of erroring. The
+--- point fields are the real 5-value region contract
+--- (point, relativeTo, relativePoint, offsetX, offsetY).
+function D.Describe(obj)
+  if type(obj) ~= "table" then
+    return { present = false }
+  end
+  local function read(method, ...)
+    local fn = obj[method]
+    if type(fn) ~= "function" then
+      return nil
+    end
+    local ok, a, b, c, d, e = pcall(fn, obj, ...)
+    if not ok then
+      return nil
+    end
+    return a, b, c, d, e
+  end
+  local d = { present = true, kind = obj.kind }
+  local shown = read("IsShown")
+  if shown == nil then
+    shown = read("IsVisible")
+  end
+  d.shown = shown
+  d.alpha = read("GetAlpha")
+  d.thickness = read("GetThickness")
+  local p1, _, rp1, x1, y1 = read("GetStartPoint")
+  if type(p1) == "string" then
+    d.start = { p1, rp1, x1, y1 }
+  end
+  local p2, _, rp2, x2, y2 = read("GetEndPoint")
+  if type(p2) == "string" then
+    d.stop = { p2, rp2, x2, y2 }
+  end
+  d.width = read("GetWidth")
+  d.height = read("GetHeight")
+  local tex = read("GetTexture")
+  if type(tex) == "string" then
+    d.texture = tex
+  end
+  return d
+end
+
+--- What the last Draw actually applied. The client cannot be asked "what colour
+--- is this line", so the drawer records the values it passed: a diag that only
+--- re-reads pathColor reports the setting, not the draw.
+function D.Applied(drawer)
+  return drawer and drawer.lastApplied or nil
+end
+
 local function applyColor(obj, r, g, b, a, texturePath)
   if obj.SetColorTexture then
     local ok = pcall(obj.SetColorTexture, obj, r, g, b, a)
@@ -335,6 +386,16 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space)
     detect(drawer, parent)
   end
   count = count or 0
+  -- Record what this draw applies: the in-client diag can read the pool
+  -- objects' geometry but not their colour, so the values the code actually
+  -- passed are the only truthful answer to "is alpha 0 / did pathColor apply".
+  drawer.lastApplied = {
+    mode = drawer.mode,
+    count = count,
+    thickness = thickness,
+    r = r, g = g, b = b, a = a,
+    space = space,
+  }
   if drawer.mode == "none" or count < 1 then
     D.Clear(drawer)
     return

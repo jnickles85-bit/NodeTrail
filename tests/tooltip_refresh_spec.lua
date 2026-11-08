@@ -113,12 +113,13 @@ for _ = 1, 40 do
 end
 
 -- Refresh spy: counts every time the addon evaluates a refresh, whether or
--- not it ends up a no-op.
+-- not it ends up a no-op. The source argument is forwarded: it decides whether
+-- an append may Show the frame (event) or must stay inert (poll).
 local refreshCalls = 0
 local origRefresh = T.Refresh
-T.Refresh = function(self, tt)
+T.Refresh = function(self, tt, source)
   refreshCalls = refreshCalls + 1
-  return origRefresh(self, tt)
+  return origRefresh(self, tt, source)
 end
 
 -- Client driver
@@ -249,8 +250,8 @@ GT.lines = { "Peacebloom", "Herbalism" }
 check(headerCount() == 0, "Test 9: unseen wipe took our block (header gone)")
 local callsBefore9 = refreshCalls
 pollTick()
-check(refreshCalls == callsBefore9 + 2,
-  "Test 9: one recovery tick = 1 append evaluation + 1 re-entry pass absorbed by the content guard (the relayout show path re-fires the hook)")
+check(refreshCalls == callsBefore9 + 1,
+  "Test 9: one recovery tick = exactly one append evaluation (a poll tick no longer re-enters: it does not Show the frame)")
 check(has("Peacebloom | 100% (base)"), "Test 9: Peacebloom drop line present after unseen wipe")
 check(headerCount() == 1, "Test 9: header present exactly once after one poll tick")
 
@@ -452,24 +453,34 @@ check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H,
     .. tostring(GT.bgH) .. " lines=" .. #GT.lines .. ")")
 
 -- Test 17: late (poller) path. An unseen repopulate wipes the block; one
--- clock tick re-appends it — and that append must pull the client
--- through the show path (the ONLY verified re-layout mechanism in this
--- model; the stub has no Layout() to hide behind), leaving a backdrop
--- that encloses every line.
+-- clock tick re-appends it BUT MUST NOT SHOW THE FRAME: a Show from a tick
+-- re-runs the client's show path under a tooltip the client may be rewriting,
+-- which is the minimap herb flash. The position is clamped, the backdrop
+-- re-layout is deferred to the next real client show.
 GT.lines = { "Peacebloom", "Herbalism" }
 GT:sizeFromContent() -- client re-sizes what it just repopulated
 local sc17 = GT.showCalls
 local rb17 = refreshCalls
 pollTick()
-check(GT.showCalls == sc17 + 1,
-  "Test 17: late append pulled the client through the show path exactly once")
-check(refreshCalls == rb17 + 2,
-  "Test 17: one recovery tick = 1 append evaluation + 1 re-entry pass absorbed by the content guard (got "
+check(GT.showCalls == sc17,
+  "Test 17: a poll append must NOT show the frame (flicker guard) — showCalls went "
+    .. tostring(GT.showCalls - sc17))
+check(refreshCalls == rb17 + 1,
+  "Test 17: one recovery tick = one append evaluation, no re-entry (got "
     .. (refreshCalls - rb17) .. ")")
+check(T._layoutPending == true, "Test 17: the backdrop re-layout is deferred, not dropped")
+check(headerCount() == 1, "Test 17: header exactly once after late append")
+-- The deferred re-layout runs on the next real client evaluation (here the
+-- SetUnit fast path the client fires on a repopulate), where a Show is safe.
+local sc17b = GT.showCalls
+fire("OnTooltipSetUnit")
+check(GT.showCalls == sc17b + 1,
+  "Test 17: the deferred re-layout pulls the client through its show path exactly once on the next client evaluation")
+check(T._layoutPending == false, "Test 17: the deferred re-layout is cleared once it ran")
 check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H,
-  "Test 17: backdrop encloses all lines after late append (bgH="
+  "Test 17: backdrop encloses all lines after the deferred re-layout (bgH="
     .. tostring(GT.bgH) .. " lines=" .. #GT.lines .. ")")
-check(headerCount() == 1, "Test 17: header exactly once after late re-layout")
+check(headerCount() == 1, "Test 17: header still exactly once after the deferred re-layout")
 
 -- Test 18: bottom-right placement (the Silverleaf clip), in the card's
 -- anchor shape: a BOTTOMRIGHT anchor with NON-ZERO offsets, past the
@@ -561,6 +572,99 @@ check(diagOut:find("added=", 1, true) ~= nil, "Test 20: ttdiag reports pre-/post
 -- Test 21 (final): nothing errored, including through the layout work
 -- (show-path relayout, clamp, hostile re-entry, diag).
 check(T._error == nil, "Test 21: ns.Tooltip._error == nil after layout tests")
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- Tests 22–25: THE MINIMAP FLICKER ("it tries to give me the tooltip info but
+-- it goes away super fast"). Two invariants, from the card:
+--   * while the same node is hovered the block must stay put;
+--   * the frame must not be hidden/re-shown on a poll tick.
+-- The model is the minimap case: the tooltip is CURSOR-anchored (BOTTOMLEFT on
+-- UIParent, a small positive offset), which is what a minimap tracking dot
+-- produces, and the client rewrites the content under us on some ticks.
+local function cursorAnchorAt(mx, my)
+  GT:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", mx + 14, my + 14)
+end
+
+cursorAnchorAt(300, 700)
+GT.lines = { "Peacebloom", "Herbalism" }
+local sc22 = GT.showCalls
+GT:Show() -- client show at the cursor
+check(headerCount() == 1, "Test 22: block present on a cursor-anchored minimap hover")
+check(GT.showCalls == sc22 + 2,
+  "Test 22: the event path still re-layouts once (backdrop sizing is unchanged)")
+
+-- Test 22: five poll ticks with the same node hovered and the block intact —
+-- the evaluation must touch NOTHING (no Show, no clamp, no line change).
+local sc22b = GT.showCalls
+local lines22 = #GT.lines
+for _ = 1, 5 do
+  pollTick()
+end
+check(GT.showCalls == sc22b,
+  "Test 22: five poll ticks while the same node is hovered must not show the frame (went "
+    .. tostring(GT.showCalls - sc22b) .. ")")
+check(#GT.lines == lines22, "Test 22: five poll ticks change no line")
+check(headerCount() == 1, "Test 22: header still exactly once after five poll ticks")
+
+-- Test 23: the same node hovered but the client rewrites the text under us on
+-- every tick (the minimap's repopulate path). The block must be re-appended
+-- once per rewrite and the frame must STILL not be shown from a tick.
+local sc23 = GT.showCalls
+for _ = 1, 5 do
+  GT.lines = { "Peacebloom", "Herbalism" } -- unseen client rewrite, no Show, no hook
+  pollTick()
+end
+check(GT.showCalls == sc23,
+  "Test 23: a poll append on a rewritten tooltip must not show the frame (went "
+    .. tostring(GT.showCalls - sc23) .. ")")
+check(headerCount() == 1, "Test 23: exactly one header after five rewritten ticks")
+check(T._layoutPending == true, "Test 23: relayout stays deferred while only ticks arrive")
+
+-- Test 24: the ring records what actually happened. The last eight evaluations
+-- must be readable and each one must carry the facts the card asks for:
+-- hovered name, NumLines, whether the block was appended, whether blockIntact
+-- matched, and whether Show/Clamp ran.
+local ring = T.RingEntries()
+check(#ring > 0, "Test 24: the refresh ring holds evaluations")
+check(#ring <= 8, "Test 24: the refresh ring is bounded to the last 8 (got " .. #ring .. ")")
+local sawPoll = false
+local sawAppended = false
+for i = 1, #ring do
+  local e = ring[i]
+  check(e.n ~= nil, "Test 24: ring entry " .. i .. " carries a sequence number")
+  check(e.source ~= nil, "Test 24: ring entry " .. i .. " names its source")
+  if e.source == "poll" then
+    sawPoll = true
+    check(e.show == false or e.show == nil,
+      "Test 24: no poll evaluation in the ring ever showed the frame")
+  end
+  if e.appended then
+    sawAppended = true
+    check(e.name ~= nil, "Test 24: an append records the hovered node name")
+    check(type(e.after) == "number", "Test 24: an append records NumLines after")
+  end
+end
+check(sawPoll, "Test 24: the ring contains poll evaluations")
+check(sawAppended, "Test 24: the ring contains appended evaluations")
+
+-- Test 25: /nt ttdiag prints the ring — the whole point of keeping it, since
+-- the flash is over before the player can type the command.
+local chat3 = {}
+local origAdd3 = DEFAULT_CHAT_FRAME.AddMessage
+DEFAULT_CHAT_FRAME.AddMessage = function(_, m) chat3[#chat3 + 1] = m end
+T:Diag()
+DEFAULT_CHAT_FRAME.AddMessage = origAdd3
+local diag3 = table.concat(chat3, "\n")
+check(diag3:find("refresh ring:", 1, true) ~= nil, "Test 25: ttdiag prints the refresh ring header")
+check(diag3:find("src=poll", 1, true) ~= nil, "Test 25: ttdiag prints the evaluation source")
+check(diag3:find("intact=", 1, true) ~= nil, "Test 25: ttdiag prints the blockIntact decision")
+check(diag3:find("show=", 1, true) ~= nil, "Test 25: ttdiag prints whether Show ran")
+check(diag3:find("clamp=", 1, true) ~= nil, "Test 25: ttdiag prints whether Clamp ran")
+check(diag3:find("appended=", 1, true) ~= nil, "Test 25: ttdiag prints whether the block was appended")
+check(diag3:find("last relayout:", 1, true) ~= nil, "Test 25: ttdiag prints the last relayout")
+
+-- Test 26 (final): still nothing errored after the flicker work.
+check(T._error == nil, "Test 26: ns.Tooltip._error == nil after the flicker tests")
 
 if failed > 0 then
   os.exit(1)

@@ -62,6 +62,132 @@ local function frameName(frame)
   return "<unnamed>"
 end
 
+--- Strata draw order. A frame level only orders frames INSIDE one strata, so a
+--- frame on a higher strata wins regardless of level; that is why the overlay
+--- adopts the art's strata when the art orders above it.
+local STRATA_RANK = {
+  BACKGROUND = 1,
+  LOW = 2,
+  MEDIUM = 3,
+  HIGH = 4,
+  DIALOG = 5,
+  FULLSCREEN = 6,
+  FULLSCREEN_DIALOG = 7,
+  TOOLTIP = 8,
+}
+
+local function strataRank(strata)
+  if type(strata) ~= "string" then
+    return nil
+  end
+  return STRATA_RANK[strata:upper()]
+end
+
+local function frameLevel(frame)
+  local level = call(frame, "GetFrameLevel")
+  if type(level) == "number" then
+    return level
+  end
+  return nil
+end
+
+local function shownState(frame)
+  local shown = call(frame, "IsShown")
+  if type(shown) == "boolean" then
+    return shown
+  end
+  shown = call(frame, "IsVisible")
+  if type(shown) == "boolean" then
+    return shown
+  end
+  return nil
+end
+
+local function fmtNum(value, decimals)
+  if type(value) ~= "number" then
+    return "absent"
+  end
+  if value ~= value then
+    return "nan"
+  end
+  if decimals then
+    return string.format("%." .. decimals .. "f", value)
+  end
+  if value == math.floor(value) then
+    return string.format("%d", value)
+  end
+  return string.format("%.2f", value)
+end
+
+--- One frame as a diag fact: name, level, strata, shown, size.
+local function frameFact(frame)
+  if not frame then
+    return "absent"
+  end
+  local w, h = frameSize(frame)
+  return string.format("%s(lvl=%s strata=%s shown=%s %sx%s)",
+    frameName(frame),
+    tostring(frameLevel(frame) or "?"),
+    tostring(call(frame, "GetFrameStrata") or "?"),
+    tostring(shownState(frame)),
+    fmtNum(w), fmtNum(h))
+end
+
+--- The frames a map draws its ART with, as far as this client exposes them.
+--- On a client with the canvas system the art is a pool of detail-layer frames
+--- parented to the canvas (MapCanvasDetailLayerTemplate, useParentLevel), so a
+--- sibling overlay only wins by frame level. On the 1.12-derived clients the
+--- 1.12 art frames are the ones that cover the map — and they are reparented
+--- INTO the canvas, which is exactly why a host parented to the canvas can sit
+--- under them. Both are measured, never assumed: a candidate only counts when
+--- it is shown and covers at least half the canvas.
+local function artCandidates(parent, width, height, exclude)
+  local out = {}
+  local seen = {}
+  local function add(frame, label)
+    if not frame or frame == parent or frame == exclude or seen[frame] then
+      return
+    end
+    seen[frame] = true
+    local w, h = frameSize(frame)
+    local covers = true
+    if type(width) == "number" and type(height) == "number" and w and h then
+      covers = w >= width * 0.5 and h >= height * 0.5
+    end
+    if covers and shownState(frame) ~= false then
+      out[#out + 1] = { frame = frame, label = label }
+    end
+  end
+  add(_G.WorldMapDetailFrame, "WorldMapDetailFrame")
+  add(_G.WorldMapButton, "WorldMapButton")
+  local kids = call(parent, "GetChildren")
+  if type(kids) == "table" then
+    for i = 1, #kids do
+      add(kids[i], "child " .. i)
+    end
+  end
+  return out
+end
+
+local function parentChainText(frame, limit)
+  local parts = {}
+  local node = frame
+  local depth = 0
+  while node and depth < (limit or 6) do
+    depth = depth + 1
+    parts[#parts + 1] = frameFact(node)
+    local up = call(node, "GetParent")
+    if up == node then
+      break
+    end
+    node = up
+  end
+  if #parts == 0 then
+    return "absent"
+  end
+  return table.concat(parts, " <- ")
+end
+
 local function displayedMapID(mapFrame)
   if mapFrame and isFn(mapFrame.GetMapID) then
     local ok, id = pcall(mapFrame.GetMapID, mapFrame)
@@ -174,6 +300,12 @@ function M:Clear()
   self._lastQueued = 0
   self._rect = nil
   self._hostSize = nil
+  self._px = nil
+  self._segLens = nil
+  self._skipped = nil
+  self._zorder = nil
+  self._raisedInfo = nil
+  self._why = nil
   self:ReleaseVisuals()
 end
 
@@ -227,6 +359,95 @@ function M:EnsureHost(parent, label)
   return host
 end
 
+--- Measure the draw order this client actually gives the map art, and raise
+--- the host above it. The old code raised the host to `parent level + 10` and
+--- stopped there — a guess: on a client whose art frames are siblings of the
+--- host inside the canvas (the 1.12 detail frame reparented into the canvas,
+--- or the canvas detail-layer pool), the art wins whenever its level is higher,
+--- and a line drawn underneath the map art is invisible with no error.
+--- Nothing here is hardcoded: the art's own level is read, every candidate is
+--- recorded for /nt mapdiag, and the raise only happens when it is needed.
+function M:AuditAndRaise(host, parent, width, height)
+  local canvasLevel = frameLevel(parent)
+  local parentStrata = call(parent, "GetFrameStrata")
+  local audit = {
+    canvasLevel = canvasLevel,
+    canvasStrata = parentStrata,
+    candidates = {},
+  }
+  local topLevel = canvasLevel or 0
+  local topStrata = parentStrata
+  local topLabel = "canvas"
+  local list = artCandidates(parent, width, height, host)
+  for i = 1, #list do
+    local entry = list[i]
+    local level = frameLevel(entry.frame)
+    local strata = call(entry.frame, "GetFrameStrata")
+    audit.candidates[#audit.candidates + 1] = {
+      label = entry.label,
+      name = frameName(entry.frame),
+      level = level,
+      strata = strata,
+      shown = shownState(entry.frame),
+    }
+    if type(level) == "number" and level > topLevel then
+      topLevel = level
+      topStrata = strata
+      topLabel = entry.label
+    end
+  end
+  audit.topLevel = topLevel
+  audit.topLabel = topLabel
+  audit.topStrata = topStrata
+
+  -- Inside one strata, level wins; across strata, the strata wins.
+  local wantedLevel = topLevel + 5
+  local baseLevel = (canvasLevel or 0) + 3
+  if wantedLevel < baseLevel then
+    wantedLevel = baseLevel
+  end
+  local currentLevel = frameLevel(host)
+  -- Never lower the frame: EnsureHost already placed it at canvas level + 10,
+  -- and a lower level than that is a regression on clients with no measurable
+  -- art frame.
+  if type(currentLevel) == "number" and currentLevel > wantedLevel then
+    wantedLevel = currentLevel
+  end
+  local raised = false
+  if isFn(host.SetFrameLevel) and (currentLevel ~= wantedLevel) then
+    pcall(host.SetFrameLevel, host, wantedLevel)
+    raised = type(currentLevel) == "number" and currentLevel < wantedLevel
+    if raised then
+      -- Sticky: the raise is the evidence for the verdict, and it must still be
+      -- reported on later redraws (where nothing needs raising any more).
+      self._raisedInfo = { from = currentLevel, to = wantedLevel, label = topLabel }
+    end
+  end
+  local hostStrata = call(host, "GetFrameStrata")
+  local topRank = strataRank(topStrata)
+  local hostRank = strataRank(hostStrata)
+  if type(topStrata) == "string" and topRank and (not hostRank or topRank > hostRank) then
+    if isFn(host.SetFrameStrata) then
+      pcall(host.SetFrameStrata, host, topStrata)
+      hostStrata = topStrata
+      raised = true
+    end
+  elseif type(parentStrata) == "string" and isFn(host.SetFrameStrata) and hostStrata ~= parentStrata then
+    pcall(host.SetFrameStrata, host, parentStrata)
+    hostStrata = parentStrata
+  end
+  local info = self._raisedInfo
+  if not raised and type(info) == "table" and info.to == wantedLevel and info.from ~= info.to then
+    raised = true
+  end
+  audit.hostLevel = frameLevel(host)
+  audit.hostStrata = hostStrata
+  audit.raised = raised
+  audit.raisedFrom = (type(info) == "table") and info.from or currentLevel
+  self._zorder = audit
+  return audit
+end
+
 function M:RequestRetry()
   if (self._retries or 0) >= RETRY_LIMIT or self._retryScheduled or not self.path then
     return
@@ -251,11 +472,14 @@ end
 
 function M:_redraw()
   self._lastQueued = 0
+  self._why = nil
   if not self.path or #self.path < 2 then
+    self._why = "no route"
     self:ReleaseVisuals()
     return
   end
   if not ns.GetDB().showWorldMap then
+    self._why = "showWorldMap is off"
     self:ReleaseVisuals()
     return
   end
@@ -263,12 +487,14 @@ function M:_redraw()
   local mapFrame = _G.WorldMapFrame
   local shown = displayedMapID(mapFrame)
   if shown and self.mapID and shown ~= self.mapID then
+    self._why = ("the open map is %s, the route is on %s"):format(tostring(shown), tostring(self.mapID))
     self:ReleaseVisuals()
     return
   end
 
   local parent, label, _, _, isCanvas = selectParent()
   if not parent then
+    self._why = "no map frame (canvas and legacy frames all absent)"
     self._parentLabel = nil
     self._hostSize = nil
     self:ReleaseVisuals()
@@ -278,12 +504,14 @@ function M:_redraw()
 
   local host = self:EnsureHost(parent, label)
   if not host or not self.drawer then
+    self._why = "no overlay host (CreateFrame failed)"
     self:ReleaseVisuals()
     return
   end
 
   local width, height = frameSize(parent)
   if not width or not height or width < 2 or height < 2 then
+    self._why = "the map frame has no measurable size"
     self._hostSize = nil
     self._rect = nil
     self._innerLabel = nil
@@ -310,6 +538,21 @@ function M:_redraw()
   self._segBuf = buf
   local count = 0
   local geom = ns.PathGeom
+  -- Measured per draw, printed by /nt mapdiag: every projected point and every
+  -- decision, so "no line" can be told apart from "a 3-pixel line" and from
+  -- "points that never projected".
+  local px = {}
+  local segLens = {}
+  local skipped = {}
+  for i = 1, #self.path do
+    local p = self.path[i]
+    if geom.IsMapPoint(p) then
+      local x, y = geom.FractionToPixel(p.x, p.y, rect)
+      px[i] = { x = x, y = y, fx = p.x, fy = p.y }
+    else
+      skipped[#skipped + 1] = "point " .. i .. " not a map point"
+    end
+  end
   for i = 1, #self.path - 1 do
     local a, b = self.path[i], self.path[i + 1]
     if geom.IsMapPoint(a) and geom.IsMapPoint(b) then
@@ -325,10 +568,24 @@ function M:_redraw()
             buf[count] = seg
           end
           seg[1], seg[2], seg[3], seg[4] = x1, y1, x2, y2
+          segLens[count] = math.sqrt(dx * dx + dy * dy)
+        else
+          skipped[#skipped + 1] = ("segment %d shorter than 0.5px"):format(i)
         end
+      else
+        skipped[#skipped + 1] = ("segment %d did not project"):format(i)
       end
+    else
+      skipped[#skipped + 1] = ("segment %d has a non-map point"):format(i)
     end
   end
+  self._px = px
+  self._segLens = segLens
+  self._skipped = skipped
+
+  -- Draw order is measured on every redraw, not assumed once: the art frames
+  -- can be created (or raised) after the first draw.
+  self:AuditAndRaise(host, parent, width, height)
 
   local r, g, b, a, stroke = ns.LineDraw.ColorWidth()
   local thickness = stroke / mapZoom(mapFrame)
@@ -337,6 +594,8 @@ function M:_redraw()
   if count > 0 then
     pcall(host.Show, host)
   else
+    self._why = ("none of the %d segments survived projection (%s)")
+      :format(#self.path - 1, #skipped > 0 and table.concat(skipped, "; ") or "no segments in the path")
     pcall(host.Hide, host)
   end
 end
@@ -467,22 +726,6 @@ local function fact(build)
   say(text)
 end
 
-local function fmtNum(value, decimals)
-  if type(value) ~= "number" then
-    return "absent"
-  end
-  if value ~= value then
-    return "nan"
-  end
-  if decimals then
-    return string.format("%." .. decimals .. "f", value)
-  end
-  if value == math.floor(value) then
-    return string.format("%d", value)
-  end
-  return string.format("%.2f", value)
-end
-
 local function fmtMethod(frame, method)
   if not frame or not isFn(frame[method]) then
     return "absent"
@@ -575,6 +818,161 @@ function M:Diag()
     local held = (self.drawer and self.drawer.pool and #self.drawer.pool) or 0
     return string.format("redraw: queued=%s segment(s); LineDraw mode=%s; objects held=%s",
       fmtNum(self._lastQueued or 0), tostring(mode), fmtNum(held))
+  end)
+  fact(function()
+    if self._why then
+      return "last redraw decided: " .. tostring(self._why)
+    end
+    return "last redraw decided: drew " .. fmtNum(self._lastQueued or 0) .. " segment(s)"
+  end)
+
+  say("draw order and colour (the line is drawn, but is it visible?)")
+  fact(function()
+    local w, h = frameSize(self.host)
+    return string.format("host: name=%s level=%s strata=%s shown=%s size=%sx%s alpha=%s",
+      self.host and frameName(self.host) or "absent",
+      fmtNum(frameLevel(self.host)), tostring(call(self.host, "GetFrameStrata") or "absent"),
+      tostring(shownState(self.host)), fmtNum(w), fmtNum(h),
+      fmtNum(call(self.host, "GetAlpha"), 2))
+  end)
+  fact(function()
+    return "parent chain: " .. parentChainText(self.host and self._hostParent or nil)
+  end)
+  fact(function()
+    local z = self._zorder
+    if type(z) ~= "table" then
+      return "z-order: not measured yet (no redraw on a measurable map frame)"
+    end
+    local names = {}
+    for i = 1, #z.candidates do
+      local c = z.candidates[i]
+      names[#names + 1] = string.format("%s=%s/%s%s", c.label, tostring(c.level), tostring(c.strata),
+        c.shown == false and "(hidden)" or "")
+    end
+    local verdict = "below the art" 
+    if type(z.hostLevel) == "number" and type(z.topLevel) == "number" then
+      verdict = z.hostLevel > z.topLevel and "above the art" or "NOT above the art"
+    end
+    return string.format(
+      "z-order: canvas_level=%s canvas_strata=%s candidates=%s [%s] top=%s(lvl=%s) host_level=%s strata=%s -> %s%s",
+      fmtNum(z.canvasLevel), tostring(z.canvasStrata or "absent"), fmtNum(#z.candidates),
+      table.concat(names, ", "), tostring(z.topLabel), fmtNum(z.topLevel),
+      fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), verdict,
+      z.raised and (" (RAISED from " .. fmtNum(z.raisedFrom) .. ")") or "")
+  end)
+  fact(function()
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    if type(applied) ~= "table" then
+      return "colour: no draw recorded yet"
+    end
+    return string.format(
+      "colour applied by the last draw: r=%s g=%s b=%s a=%s thickness=%s mode=%s segments=%s space=%s",
+      fmtNum(applied.r, 2), fmtNum(applied.g, 2), fmtNum(applied.b, 2), fmtNum(applied.a, 2),
+      fmtNum(applied.thickness, 2), tostring(applied.mode), fmtNum(applied.count), tostring(applied.space))
+  end)
+  for i = 1, 2 do
+    fact(function()
+      local obj = self.drawer and self.drawer.pool and self.drawer.pool[i]
+      local d = ns.LineDraw.Describe(obj)
+      if not d.present then
+        return ("line %d: absent (no line object held)"):format(i)
+      end
+      local len = "absent"
+      if type(d.start) == "table" and type(d.stop) == "table"
+        and type(d.start[3]) == "number" and type(d.stop[3]) == "number" then
+        local dx = (d.stop[3] or 0) - (d.start[3] or 0)
+        local dy = (d.stop[4] or 0) - (d.start[4] or 0)
+        len = fmtNum(math.sqrt(dx * dx + dy * dy), 1) .. "px"
+      end
+      local function pt(p)
+        if type(p) ~= "table" then
+          return "absent"
+        end
+        return string.format("%s(%s,%s)", tostring(p[1]), fmtNum(p[3], 1), fmtNum(p[4], 1))
+      end
+      return string.format("line %d: kind=%s shown=%s alpha=%s thickness=%s len=%s start=%s end=%s",
+        i, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2),
+        fmtNum(d.thickness, 2), len, pt(d.start), pt(d.stop))
+    end)
+  end
+  fact(function()
+    local px = self._px
+    if type(px) ~= "table" then
+      return "points: not projected yet (no redraw on a measurable map rect)"
+    end
+    local out = {}
+    local shown = 0
+    for i = 1, #px do
+      local p = px[i]
+      if p then
+        shown = shown + 1
+        if shown <= 48 then
+          out[#out + 1] = string.format("#%d (%s,%s)->(%s,%s)",
+            i, fmtNum(p.fx, 3), fmtNum(p.fy, 3), fmtNum(p.x, 1), fmtNum(p.y, 1))
+        end
+      end
+    end
+    local text = string.format("points: %s of %s projected", fmtNum(shown), fmtNum(#self.path or 0))
+    if shown > 48 then
+      text = text .. " (first 48 shown, " .. fmtNum(shown - 48) .. " more not printed)"
+    end
+    if #out > 0 then
+      text = text .. "; " .. table.concat(out, " ")
+    end
+    return text
+  end)
+  fact(function()
+    local lens = self._segLens or {}
+    local names = {}
+    for i = 1, #lens do
+      names[#names + 1] = fmtNum(lens[i], 1)
+    end
+    local total = 0
+    for i = 1, #lens do
+      total = total + lens[i]
+    end
+    local text = string.format("segments: queued=%s total=%spx lengths=[%s] skipped=%s",
+      fmtNum(#lens), fmtNum(total, 1), table.concat(names, ", "),
+      fmtNum(#(self._skipped or {})))
+    if self._skipped and #self._skipped > 0 then
+      text = text .. ": " .. table.concat(self._skipped, "; ")
+    end
+    return text
+  end)
+  fact(function()
+    -- The one line that names the likely cause from what was measured above.
+    if not self.host then
+      return "verdict: no host frame yet — nothing has been drawn on this client"
+    end
+    if shownState(self.host) == false then
+      return "verdict: the host is hidden — " .. tostring(self._why or "no reason recorded")
+    end
+    local z = self._zorder
+    if type(z) == "table" and z.raised then
+      return string.format(
+        "verdict: DRAW ORDER — the host sat at level %s, below %s (level %s); the overlay now raises it to %s. Re-run /nt mapdiag after opening the map to confirm host_level > top",
+        fmtNum(z.raisedFrom), tostring(z.topLabel), fmtNum(z.topLevel), fmtNum(z.hostLevel))
+    end
+    local total = 0
+    for i = 1, #(self._segLens or {}) do
+      total = total + self._segLens[i]
+    end
+    if (self._lastQueued or 0) < 1 then
+      return "verdict: nothing queued — " .. tostring(self._why or "no reason recorded")
+    end
+    if total < 8 then
+      return string.format(
+        "verdict: GEOMETRY — the %s queued segment(s) total %spx on a %sx%s map: a dot, not a missing line. Next measurement: zoom in on the route's coordinates and screenshot",
+        fmtNum(self._lastQueued), fmtNum(total, 1),
+        fmtNum(self._rect and self._rect.width), fmtNum(self._rect and self._rect.height))
+    end
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    if type(applied) == "table" and type(applied.a) == "number" and applied.a <= 0 then
+      return "verdict: COLOUR — the draw applied alpha " .. fmtNum(applied.a, 2) .. " (pathColor[4]); the line is fully transparent"
+    end
+    return string.format(
+      "verdict: no draw-order, colour or geometry cause found — %s segment(s) totalling %spx queued on a shown host at level %s. Next measurement: /nt mapdiag with this map open at this zoom, plus a screenshot of the same view",
+      fmtNum(self._lastQueued), fmtNum(total, 1), fmtNum(frameLevel(self.host)))
   end)
 
   say("route")

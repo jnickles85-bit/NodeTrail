@@ -129,6 +129,41 @@ local function minimapHalf()
   return w * 0.5, h * 0.5
 end
 
+--- Zoom-aware fallback view radius, in MAP FRACTIONS.
+--- The fallback only runs when the client cannot report a yard radius or a
+--- zone size, and the minimap zoom still has to matter: the yard view radius
+--- shrinks with zoom, so a fixed fraction draws the same route the same size at
+--- every zoom step (which is how a route that is on screen at zoom 0 silently
+--- disappears at zoom 5). The fraction therefore scales with the same diameter
+--- table the yard radius uses.
+local function fallbackViewFraction()
+  local zoom
+  if Minimap and type(Minimap.GetZoom) == "function" then
+    local ok, z = pcall(Minimap.GetZoom, Minimap)
+    if ok and type(z) == "number" then
+      zoom = z
+    end
+  end
+  if not zoom then
+    return FALLBACK_VIEW_FRACTION
+  end
+  local where = "outdoor"
+  if type(GetCVar) == "function" then
+    local okC, value = pcall(GetCVar, "minimapZoom")
+    local n = okC and tonumber(value)
+    if n and n ~= zoom then
+      where = "indoor"
+    end
+  end
+  local row = MINIMAP_DIAMETER[where] or MINIMAP_DIAMETER.outdoor
+  local max = row[0]
+  local at = row[zoom] or max
+  if type(max) ~= "number" or max <= 0 or type(at) ~= "number" then
+    return FALLBACK_VIEW_FRACTION
+  end
+  return FALLBACK_VIEW_FRACTION * (at / max)
+end
+
 local function playerMapPosition(mapID, HBD)
   if C_Map and type(C_Map.GetPlayerMapPosition) == "function" and mapID then
     local ok, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
@@ -247,6 +282,9 @@ function M:Clear()
   self.mapID = nil
   self.useWorld = nil
   self.zoneW, self.zoneH = nil, nil
+  self._proj = nil
+  self._why = nil
+  self._sampleWhy = nil
   self:StopUpdates()
   self:ReleaseVisuals()
 end
@@ -299,12 +337,15 @@ function M:_indexPoints(route)
 end
 
 function M:_sample()
+  self._sampleWhy = nil
   local halfW, halfH = minimapHalf()
   if not halfW then
+    self._sampleWhy = "the minimap has no measurable size"
     return nil
   end
   local sinF, cosF, faceOK = minimapRotation()
   if not faceOK then
+    self._sampleWhy = "no player facing (rotateMinimap is on and GetPlayerFacing is absent)"
     return nil
   end
   local radiusYards = viewRadiusYards()
@@ -317,6 +358,7 @@ function M:_sample()
         mode = "world",
         px = x, py = y, pinst = inst,
         radius = radiusYards,
+        radiusUnit = "yards",
         sinF = sinF, cosF = cosF,
         halfW = halfW, halfH = halfH,
       }
@@ -325,6 +367,7 @@ function M:_sample()
 
   local mx, my = playerMapPosition(self.mapID, HBD)
   if not mx then
+    self._sampleWhy = ("no player position on map %s"):format(tostring(self.mapID))
     return nil
   end
   if self.zoneW and self.zoneH and radiusYards then
@@ -333,31 +376,40 @@ function M:_sample()
       mx = mx, my = my,
       zoneW = self.zoneW, zoneH = self.zoneH,
       radius = radiusYards,
+      radiusUnit = "yards",
       sinF = sinF, cosF = cosF,
       halfW = halfW, halfH = halfH,
     }
   end
+  local fraction = fallbackViewFraction()
   return {
     mode = "frac",
     mx = mx, my = my,
-    radius = FALLBACK_VIEW_FRACTION,
+    radius = fraction,
+    radiusUnit = "map fractions (fallback: no yard radius for this zone)",
     sinF = sinF, cosF = cosF,
     halfW = halfW, halfH = halfH,
   }
 end
 
 function M:_redraw()
+  self._lastQueued = 0
+  self._why = nil
+  self._proj = nil
   if not self.points or #self.points < 2 then
+    self._why = "no route"
     self:ReleaseVisuals()
     return
   end
   if not ns.GetDB().showMinimap then
+    self._why = "showMinimap is off"
     self:ReleaseVisuals()
     return
   end
   if Minimap and type(Minimap.IsVisible) == "function" then
     local ok, visible = pcall(Minimap.IsVisible, Minimap)
     if ok and not visible then
+      self._why = "the minimap is hidden"
       self:ReleaseVisuals()
       return
     end
@@ -365,11 +417,13 @@ function M:_redraw()
 
   local sample = self:_sample()
   if not sample or not sample.radius or sample.radius <= 0 then
+    self._why = "no projection: " .. tostring(self._sampleWhy or "the sample is unusable")
     self:ReleaseVisuals()
     return
   end
   local host = self:EnsureHost()
   if not host or not self.drawer then
+    self._why = "no overlay host (CreateFrame failed)"
     self:ReleaseVisuals()
     return
   end
@@ -378,13 +432,41 @@ function M:_redraw()
   self._segBuf = buf
   local count = 0
   local pts = self.points
-  for i = 1, #pts - 1 do
+  -- Recorded for /nt mapdiag: the same numbers the draw used, so "0 segments"
+  -- can be attributed to the projection, to the clip, or to the route being
+  -- outside the minimap's view instead of guessed at.
+  local proj = {
+    mode = sample.mode,
+    radius = sample.radius,
+    radiusUnit = sample.radiusUnit,
+    halfW = sample.halfW,
+    halfH = sample.halfH,
+    player = { x = sample.mx, y = sample.my, px = sample.px, py = sample.py },
+    points = {},
+    segs = {},
+  }
+  for i = 1, #pts do
     local ax, ay = pointDelta(sample, pts[i])
-    local bx, by = pointDelta(sample, pts[i + 1])
-    if ax ~= nil and bx ~= nil then
+    if ax ~= nil then
       local x1, y1 = toPixel(ax, ay, sample)
-      local x2, y2 = toPixel(bx, by, sample)
-      local cx1, cy1, cx2, cy2 = clipToMinimap(x1, y1, x2, y2, sample.halfW, sample.halfH)
+      local dist = math.sqrt((x1 or 0) * (x1 or 0) + (y1 or 0) * (y1 or 0))
+      local radiusPx = math.min(sample.halfW, sample.halfH) * ROUND_INSET
+      proj.points[i] = {
+        x = x1, y = y1,
+        dx = ax, dy = ay,
+        dist = dist,
+        ratio = (radiusPx > 0) and (dist / radiusPx) or nil,
+        inside = radiusPx > 0 and dist <= radiusPx,
+      }
+    else
+      proj.points[i] = { why = "no delta (point lacks the coordinate this mode needs)" }
+    end
+  end
+  for i = 1, #pts - 1 do
+    local a, b = proj.points[i], proj.points[i + 1]
+    local entry = { index = i }
+    if a and b and a.x and b.x then
+      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
       if cx1 then
         count = count + 1
         local seg = buf[count]
@@ -393,16 +475,33 @@ function M:_redraw()
           buf[count] = seg
         end
         seg[1], seg[2], seg[3], seg[4] = cx1, cy1, cx2, cy2
+        entry.queued = true
+        entry.len = math.sqrt((cx2 - cx1) * (cx2 - cx1) + (cy2 - cy1) * (cy2 - cy1))
+      else
+        entry.why = "clipped away: both endpoints outside the minimap circle"
       end
+    else
+      entry.why = "not drawn: a point has no projection"
     end
+    proj.segs[i] = entry
   end
 
   local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
   ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup")
   self._lastQueued = count
+  self._proj = proj
   if count > 0 then
     pcall(host.Show, host)
   else
+    local outside = 0
+    for i = 1, #proj.points do
+      local p = proj.points[i]
+      if p and p.inside == false then
+        outside = outside + 1
+      end
+    end
+    self._why = ("none of the %d segment(s) reach the minimap: %d of %d point(s) project outside the %.0fpx circle")
+      :format(#proj.segs, outside, #proj.points, math.min(sample.halfW, sample.halfH) * ROUND_INSET)
     pcall(host.Hide, host)
   end
 end
@@ -505,9 +604,15 @@ local function fact(build)
   say(text)
 end
 
-local function fmtNum(value)
+local function fmtNum(value, decimals)
   if type(value) ~= "number" or value ~= value then
     return "absent"
+  end
+  if value == 0 then
+    value = 0 -- never print "-0"
+  end
+  if decimals then
+    return string.format("%." .. decimals .. "f", value)
   end
   if value == math.floor(value) then
     return string.format("%d", value)
@@ -538,10 +643,15 @@ function M:Diag()
     end
     local okW, w = pcall(host.GetWidth, host)
     local okH, h = pcall(host.GetHeight, host)
-    local name = select(2, pcall(host.GetName, host))
+    local name = "<unnamed>"
+    if type(host.GetName) == "function" then
+      local okN, value = pcall(host.GetName, host)
+      if okN and type(value) == "string" and value ~= "" then
+        name = value
+      end
+    end
     return string.format("minimap host: parent=%s size=%sx%s",
-      type(name) == "string" and name or "<unnamed>",
-      okW and fmtNum(w) or "absent", okH and fmtNum(h) or "absent")
+      name, okW and fmtNum(w) or "absent", okH and fmtNum(h) or "absent")
   end)
   fact(function()
     local mode = self.drawer and self.drawer.mode or "absent"
@@ -558,6 +668,67 @@ function M:Diag()
     return string.format("minimap projection: points=%s useWorld=%s zone=%sx%s radius=%s",
       fmtNum(self.points and #self.points or 0), tostring(self.useWorld),
       fmtNum(self.zoneW), fmtNum(self.zoneH), fmtNum(viewRadiusYards()))
+  end)
+  fact(function()
+    local p = self._proj
+    if type(p) ~= "table" then
+      return "minimap projection used: not measured yet (no redraw with a usable sample)"
+    end
+    return string.format("minimap projection used: mode=%s radius=%s [%s] half=%sx%s",
+      tostring(p.mode), fmtNum(p.radius, 4), tostring(p.radiusUnit),
+      fmtNum(p.halfW, 1), fmtNum(p.halfH, 1))
+  end)
+  fact(function()
+    local p = self._proj
+    if type(p) ~= "table" then
+      return "minimap why: " .. tostring(self._why or "no redraw yet")
+    end
+    if p.player and (p.player.x or p.player.px) then
+      return string.format("minimap player: frac=(%s,%s) world=(%s,%s)",
+        fmtNum(p.player.x, 3), fmtNum(p.player.y, 3),
+        fmtNum(p.player.px, 1), fmtNum(p.player.py, 1))
+    end
+    return "minimap player: absent (no position this projection can use)"
+  end)
+  fact(function()
+    local p = self._proj
+    if type(p) ~= "table" or type(p.points) ~= "table" then
+      return "minimap points: not projected yet"
+    end
+    local out = {}
+    for i = 1, #p.points do
+      local pt = p.points[i]
+      if pt and pt.x then
+        out[#out + 1] = string.format("#%d px=(%s,%s) dist=%sx-radius%s",
+          i, fmtNum(pt.x, 1), fmtNum(pt.y, 1), fmtNum(pt.ratio, 2),
+          pt.inside and " inside" or " OUTSIDE")
+      else
+        out[#out + 1] = string.format("#%d %s", i, tostring(pt and pt.why or "absent"))
+      end
+    end
+    return "minimap points: " .. table.concat(out, "; ")
+  end)
+  fact(function()
+    local p = self._proj
+    if type(p) ~= "table" or type(p.segs) ~= "table" then
+      return "minimap segments: not projected yet"
+    end
+    local out = {}
+    for i = 1, #p.segs do
+      local s = p.segs[i]
+      if s.queued then
+        out[#out + 1] = string.format("seg%d queued (%spx)", i, fmtNum(s.len, 1))
+      else
+        out[#out + 1] = string.format("seg%d skipped: %s", i, tostring(s.why))
+      end
+    end
+    if #out == 0 then
+      return "minimap segments: none in the route"
+    end
+    return "minimap segments: " .. table.concat(out, "; ")
+  end)
+  fact(function()
+    return "minimap verdict: " .. tostring(self._why or "drew segments")
   end)
   fact(function()
     return "minimap drawError=" .. tostring(self._drawError or "none")
