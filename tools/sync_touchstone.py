@@ -256,6 +256,55 @@ def edit_chestadvisor(text: str) -> str:
         ),
     )
 
+    # ---- Load-order safety (live bug 2026-11-07) ----------------------------
+    # Upstream publishes these from the init function bodies and then CALLS the
+    # init functions at load, so the exports exist before `scan` captures them.
+    # The fold defers those calls to Enable(), which runs AFTER the captures —
+    # so a load-time `local f = ChestAdvisor._x` captured nil forever and every
+    # scan ended in "attempt to call a nil value" (client: ChestAdvisor.lua:4982).
+    # Resolve at call time instead; the wrappers keep the same names and arity.
+    text = replace_once(
+        text,
+        "ChestAdvisor/ChestAdvisor.lua",
+        "ca.capture-quest-exports",
+        (
+            "local readWornLinks = ChestAdvisor._readWornLinks\n"
+            "local judgeQuestReward = ChestAdvisor._judgeQuestReward\n"
+        ),
+        (
+            "-- Fold (load order): these are published by Enable(); capture them at\n"
+            "-- call time so a disabled-then-enabled module cannot leave nil behind.\n"
+            "local function readWornLinks(...)\n"
+            "\tlocal f = ChestAdvisor._readWornLinks\n"
+            "\tif type(f) == \"function\" then return f(...) end\n"
+            "end\n"
+            "local function judgeQuestReward(...)\n"
+            "\tlocal f = ChestAdvisor._judgeQuestReward\n"
+            "\tif type(f) == \"function\" then return f(...) end\n"
+            "end\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        "ChestAdvisor/ChestAdvisor.lua",
+        "ca.capture-scan-exports",
+        (
+            "local maybeToastUpgrades = ChestAdvisor._maybeToastUpgrades\n"
+            "local refreshQuestMarkers = ChestAdvisor.refreshQuestMarkers\n"
+        ),
+        (
+            "-- Fold (load order): same reason as above — Enable() publishes these.\n"
+            "local function maybeToastUpgrades(...)\n"
+            "\tlocal f = ChestAdvisor._maybeToastUpgrades\n"
+            "\tif type(f) == \"function\" then return f(...) end\n"
+            "end\n"
+            "local function refreshQuestMarkers(...)\n"
+            "\tlocal f = ChestAdvisor.refreshQuestMarkers\n"
+            "\tif type(f) == \"function\" then return f(...) end\n"
+            "end\n"
+        ),
+    )
+
     tail_marker = "-- Ensure the frame exists at load time.\n"
     if text.count(tail_marker) != 1:
         raise SyncError(

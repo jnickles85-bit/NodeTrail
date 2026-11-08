@@ -3395,8 +3395,16 @@ end
 
 -- Same function objects the quest surface just published. Bound once,
 -- so the vendor walk calls the quest walk's judge rather than a copy.
-local readWornLinks = ChestAdvisor._readWornLinks
-local judgeQuestReward = ChestAdvisor._judgeQuestReward
+-- Fold (load order): these are published by Enable(); capture them at
+-- call time so a disabled-then-enabled module cannot leave nil behind.
+local function readWornLinks(...)
+	local f = ChestAdvisor._readWornLinks
+	if type(f) == "function" then return f(...) end
+end
+local function judgeQuestReward(...)
+	local f = ChestAdvisor._judgeQuestReward
+	if type(f) == "function" then return f(...) end
+end
 
 local function refreshVendorMarkers()
 	-- Clear FIRST: this refresh is the only author of a vendor mark, so clearing
@@ -4430,8 +4438,15 @@ end
 --   6. Draw the marker for UPGRADE; explain the reason for every row.
 -- Captured once, here, under the names scan already calls. These are the
 -- function objects the surfaces published above, not live lookups.
-local maybeToastUpgrades = ChestAdvisor._maybeToastUpgrades
-local refreshQuestMarkers = ChestAdvisor.refreshQuestMarkers
+-- Fold (load order): same reason as above — Enable() publishes these.
+local function maybeToastUpgrades(...)
+	local f = ChestAdvisor._maybeToastUpgrades
+	if type(f) == "function" then return f(...) end
+end
+local function refreshQuestMarkers(...)
+	local f = ChestAdvisor.refreshQuestMarkers
+	if type(f) == "function" then return f(...) end
+end
 ChestAdvisor.scan = function()
 	-- B17 (card t_6696b35a): defer the scan while the client is in combat.
 	-- type() == "function" (not a bare `and` call) so this guard cannot be
