@@ -119,6 +119,57 @@ local function fmtNum(value, decimals)
   return string.format("%.2f", value)
 end
 
+--- Multiply a frame's own scale by every ancestor's. GetWidth/GetHeight are in
+--- the frame's OWN units while GetLeft/GetTop are the client's screen-space
+--- answer, so a 1002-px canvas shown at 0.696 occupies 697 px of screen. The
+--- diag compares the dots' screen rect with the map's visible rect, and without
+--- this conversion it would compare two different rulers — which is exactly how
+--- a route that is off the map can read as "inside".
+local function effectiveScale(frame)
+  local scale = 1
+  local node, guard = frame, 0
+  while node and guard < 16 do
+    local s = call(node, "GetScale")
+    if type(s) == "number" and s > 0 then
+      scale = scale * s
+    end
+    node = call(node, "GetParent")
+    guard = guard + 1
+  end
+  return scale
+end
+
+--- A frame's rect ON SCREEN. `left`/`top` come from the client's own
+--- GetLeft/GetTop (never derived from the anchors we asked for), the size is
+--- converted from the frame's units into screen px. Anything the client cannot
+--- answer reads as nil, so the diag prints "absent" instead of a made-up box.
+local function screenRect(frame)
+  if not frame then
+    return nil
+  end
+  local left = call(frame, "GetLeft")
+  local top = call(frame, "GetTop")
+  local w, h = frameSize(frame)
+  if type(left) ~= "number" or type(top) ~= "number"
+    or type(w) ~= "number" or type(h) ~= "number" then
+    return nil
+  end
+  local scale = effectiveScale(frame)
+  local sw, sh = w * scale, h * scale
+  return {
+    left = left, top = top, width = sw, height = sh,
+    right = left + sw, bottom = top - sh, scale = scale,
+  }
+end
+
+local function rectText(rect)
+  if type(rect) ~= "table" then
+    return "absent"
+  end
+  return string.format("%s,%s %sx%s (scale=%s)", fmtNum(rect.left, 1), fmtNum(rect.top, 1),
+    fmtNum(rect.width, 1), fmtNum(rect.height, 1), fmtNum(rect.scale, 3))
+end
+
 --- One frame as a diag fact: name, level, strata, shown, size.
 local function frameFact(frame)
   if not frame then
@@ -284,12 +335,25 @@ local function innerMapFrame(host)
   return nil
 end
 
-function M:ReleaseVisuals()
+--- Drop the drawn route, and — when a reason is given — record on the drawer that
+--- this redraw painted NOTHING. Without that, a client that hides the overlay
+--- (wrong map, route off, no host) leaves `lastApplied.paintedDots` holding the
+--- previous draw's count, and /nt mapdiag then reports dots on a map where none
+--- are drawn: the exact way a route that "is not anywhere on the screenshot"
+--- still reads as `painted=288 missing=0 outside=0`.
+function M:ReleaseVisuals(why)
   if self.drawer then
-    ns.LineDraw.Clear(self.drawer)
+    if why then
+      ns.LineDraw.MarkIdle(self.drawer, why)
+    else
+      ns.LineDraw.Clear(self.drawer)
+    end
   end
   if self.host then
     pcall(self.host.Hide, self.host)
+  end
+  if why then
+    self:RecordProbe()
   end
 end
 
@@ -566,12 +630,12 @@ function M:_redraw()
   self._drew = false
   if not self.path or #self.path < 2 then
     self._why = "no route"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
   if not ns.GetDB().showWorldMap then
     self._why = "showWorldMap is off"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -579,7 +643,7 @@ function M:_redraw()
   local shown = displayedMapID(mapFrame)
   if shown and self.mapID and shown ~= self.mapID then
     self._why = ("the open map is %s, the route is on %s"):format(tostring(shown), tostring(self.mapID))
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -588,7 +652,7 @@ function M:_redraw()
     self._why = "no map frame (canvas and legacy frames all absent)"
     self._parentLabel = nil
     self._hostSize = nil
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     self:RequestRetry()
     return
   end
@@ -596,7 +660,7 @@ function M:_redraw()
   local host = self:EnsureHost(parent, label)
   if not host or not self.drawer then
     self._why = "no overlay host (CreateFrame failed)"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -606,7 +670,7 @@ function M:_redraw()
     self._hostSize = nil
     self._rect = nil
     self._innerLabel = nil
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     self:RequestRetry()
     return
   end
@@ -621,7 +685,8 @@ function M:_redraw()
   self._rect = rect
   self._innerLabel = inner and frameName(inner) or nil
   if not rect then
-    self:ReleaseVisuals()
+    self._why = "the map rect could not be measured"
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -707,6 +772,7 @@ function M:_redraw()
   while #self._draws > 4 do
     table.remove(self._draws)
   end
+  self:RecordProbe()
   if count > 0 then
     pcall(host.Show, host)
   else
@@ -945,6 +1011,142 @@ local function objectDefects(self)
   return defects
 end
 
+function M:RecordProbe()
+  local db = type(ns.GetDB) == "function" and ns.GetDB() or nil
+  if type(db) ~= "table" then
+    return
+  end
+  local ok, audit = pcall(self.VisibleAudit, self)
+  if not ok or type(audit) ~= "table" then
+    return
+  end
+  local function pack(rect)
+    if type(rect) ~= "table" then
+      return nil
+    end
+    return { left = rect.left, top = rect.top, width = rect.width, height = rect.height, scale = rect.scale }
+  end
+  local mapFrame = _G.WorldMapFrame
+  db.mapProbe = {
+    at = (type(GetTime) == "function") and GetTime() or nil,
+    mapID = self.mapID,
+    pathPoints = self.path and #self.path or 0,
+    painted = audit.painted or 0,
+    measured = audit.measured or 0,
+    inside = audit.inside or 0,
+    idle = audit.idle and true or false,
+    why = self._why or audit.why,
+    first = audit.first,
+    bbox = audit.bbox,
+    disagree = audit.disagree,
+    disagreeWorst = audit.disagreeWorst,
+    visible = pack(audit.visible),
+    host = pack(audit.host or screenRect(self.host)),
+    canvas = pack(screenRect(mapFrame and getCanvas(mapFrame))),
+    scroll = pack(screenRect(mapFrame and mapFrame.ScrollContainer)),
+    frame = pack(screenRect(mapFrame)),
+    ui = pack(screenRect(_G.UIParent)),
+    canvasScale = call(mapFrame, "GetCanvasScale"),
+  }
+end
+
+--- Where the painted dots actually are, in SCREEN space, against the rect the
+--- player can actually see (the scroll container that clips the canvas, falling
+--- back to WorldMapFrame). Returned as data so the diag can print it AND the
+--- draw can persist it into SavedVariables — the same measurement, read two
+--- ways. A check against the dots' own host can never fail (they are its
+--- children), which is how `painted=288 outside=0` was printed for a route that
+--- was not on the screenshot at all.
+function M:VisibleAudit()
+  local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+  local out = { idle = applied.idle and true or false, why = applied.why, painted = tonumber(applied.paintedDots) or 0 }
+  if out.idle then
+    return out
+  end
+  local mapFrame = _G.WorldMapFrame
+  local visible = screenRect(mapFrame and mapFrame.ScrollContainer) or screenRect(mapFrame)
+  out.visible = visible
+  if not visible or out.painted < 1 then
+    return out
+  end
+  -- Each dot's centre, computed from the anchors the draw set and the host's own
+  -- measured rect — not from the region's GetLeft/GetTop. Both are printed by
+  -- `dot screen:`; this arithmetic cannot disagree with the primitive, because
+  -- it uses exactly the two numbers the primitive used (host rect + anchor
+  -- offset x effective scale).
+  local hostRect = screenRect(self.host)
+  out.host = hostRect
+  local hostScale = hostRect and hostRect.scale or 1
+  local function dotCentre(obj)
+    if not hostRect or type(obj) ~= "table" or type(obj.GetNumPoints) ~= "function" then
+      return nil
+    end
+    if (tonumber(call(obj, "GetNumPoints")) or 0) < 2 or type(obj.GetPoint) ~= "function" then
+      return nil
+    end
+    local ok1, _, rel1, rp1, x1, y1 = pcall(obj.GetPoint, obj, 1)
+    local ok2, _, rel2, rp2, x2, y2 = pcall(obj.GetPoint, obj, 2)
+    if not ok1 or not ok2 then
+      return nil
+    end
+    if rel1 ~= self.host or rel2 ~= self.host or rp1 ~= "TOPLEFT" or rp2 ~= "TOPLEFT" then
+      return nil
+    end
+    if type(x1) ~= "number" or type(y1) ~= "number"
+      or type(x2) ~= "number" or type(y2) ~= "number" then
+      return nil
+    end
+    local cx = (x1 + x2) * 0.5
+    local cy = -(y1 + y2) * 0.5
+    return hostRect.left + cx * hostScale, hostRect.top - cy * hostScale
+  end
+  local drawer = self.drawer
+  local inside, measured = 0, 0
+  local minL, maxR, maxT, minB
+  local disagree, disagreeWorst = 0, 0
+  local first
+  for d = 1, out.painted do
+    local obj = drawer and drawer.pool and drawer.pool[2 * d]
+    if obj then
+      local x, y = dotCentre(obj)
+      if x then
+        measured = measured + 1
+        first = first or { x = x, y = y }
+        if x >= visible.left and x <= visible.right and y <= visible.top and y >= visible.bottom then
+          inside = inside + 1
+        end
+        minL = (not minL or x < minL) and x or minL
+        maxR = (not maxR or x > maxR) and x or maxR
+        maxT = (not maxT or y > maxT) and y or maxT
+        minB = (not minB or y < minB) and y or minB
+        local got = screenRect(obj)
+        if got then
+          local worst = math.max(math.abs(got.left - x), math.abs(got.top - y))
+          if worst > 2 then
+            disagree = disagree + 1
+            if worst > disagreeWorst then disagreeWorst = worst end
+          end
+        end
+      end
+    end
+  end
+  out.inside, out.measured = inside, measured
+  out.first = first
+  if measured > 0 then
+    out.bbox = { minL, minB, maxR, maxT }
+  end
+  out.disagree, out.disagreeWorst = disagree, disagreeWorst
+  if measured == 0 then
+    out.verdict = " — the painted dots report no screen rect: their position cannot be checked"
+  elseif inside == 0 then
+    out.verdict = " — NO dot is inside the visible map: the route is drawn where the player cannot see it"
+  elseif inside < measured then
+    out.verdict = " — " .. fmtNum(measured - inside) .. " dot(s) fall outside the visible map (clipped)"
+  end
+  return out
+end
+
+
 function M:Diag()
   local mapFrame = _G.WorldMapFrame
 
@@ -1039,7 +1241,11 @@ function M:Diag()
     local drawer = self.drawer
     local a = (drawer and ns.LineDraw.Applied(drawer)) or {}
     if type(drawer) ~= "table" or not self._drew then
-      return "dots pool: no draw on this map yet"
+      local why = a.why or self._why or "no redraw has run yet"
+      local held = (type(drawer) == "table" and (drawer.poolHigh or 0)) or 0
+      return string.format(
+        "dots pool: no draw on this map (%s); objects held=%s, painted=0 (the previous draw's count is not this draw's)",
+        tostring(why), fmtNum(held))
     end
     local high = drawer.poolHigh or 0
     local existing, shown = 0, 0
@@ -1103,6 +1309,10 @@ function M:Diag()
       return "dots box: no painted dot on the last draw"
     end
     local box, host = a.dotBox, a.hostSize
+    if a.idle or not box then
+      return "dots box: no painted dot on the last redraw ("
+        .. tostring(a.why or self._why or "no reason recorded") .. ")"
+    end
     return string.format(
       "dots box: painted bbox=%s,%s..%s,%s host=%sx%s outside=%s/%s",
       fmtNum(box[1], 1), fmtNum(box[2], 1), fmtNum(box[3], 1), fmtNum(box[4], 1),
@@ -1110,24 +1320,60 @@ function M:Diag()
       fmtNum(a.dotOutside or 0), fmtNum(a.paintedDots or 0))
   end)
   fact(function()
-    -- t_86583cf2 / ara: one line that cannot pass while every dot is off the
-    -- visible map. `outside` is measured by the paint itself against the host
-    -- rect; a route that is entirely outside it is a route nobody can see, and
-    -- it must never be reported as `painted=288 missing=0 outside=0` plus a pass.
-    local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
-    local painted = tonumber(applied.paintedDots) or 0
-    local outside = tonumber(applied.dotOutside) or 0
-    local hostW = applied.hostSize and applied.hostSize.width
-    local hostH = applied.hostSize and applied.hostSize.height
+    -- t_86583cf2 / ara: every rect on the way from the screen to the dots, in
+    -- ONE line, each measured by the client (GetLeft/GetTop/GetWidth/GetHeight
+    -- and the scale chain), never derived from the anchors we asked for. If the
+    -- host's rect and the map's visible rect disagree, this line is the whole
+    -- bug; if they agree, no placement bug exists to fix.
     local mapFrame = _G.WorldMapFrame
-    local frameW, frameH = frameSize(mapFrame)
-    local verdict = ""
-    if painted > 0 and outside >= painted then
-      verdict = " — EVERY dot is outside the host rect: the route is drawn where the map cannot show it"
+    local canvas = getCanvas(mapFrame)
+    local scroll = mapFrame and mapFrame.ScrollContainer
+    local parts = {
+      "WorldMapFrame=" .. rectText(screenRect(mapFrame)),
+      "ScrollContainer=" .. rectText(screenRect(scroll)),
+      "canvas=" .. rectText(screenRect(canvas)),
+      "host=" .. rectText(screenRect(self.host)),
+      "UIParent=" .. rectText(screenRect(_G.UIParent)),
+    }
+    return "map on screen: " .. table.concat(parts, "; ")
+  end)
+--- Persist the placement measurement into SavedVariables, so the next run reads
+--- the numbers off disk instead of asking for a screenshot and a pasted line:
+---
+---   WTF/Account/<acct>/SavedVariables/MightiePack.lua -> NodeTrailDB.mapProbe
+---
+--- One small table, rewritten on every world-map redraw (those happen on show,
+--- zoom, pan and map change — not per frame). `why` is set when the overlay was
+--- hidden, so "no draw on this map" is recorded as such rather than as zeros
+--- that look like a drawn-but-empty route.
+  fact(function()
+    -- t_86583cf2 / ara: one line that cannot pass while every dot is off the
+    -- visible map. Measured in SCREEN space (see M:VisibleAudit).
+    local a = self:VisibleAudit()
+    if a.idle then
+      return "route dots on the visible map: 0/0 — no draw on this map ("
+        .. tostring(a.why or "idle") .. ")"
     end
-    return string.format("route dots inside the map's visible rect: %s/%s (host=%sx%s, WorldMapFrame=%sx%s, outside=%s)%s",
-      fmtNum(painted - outside), fmtNum(painted), fmtNum(hostW), fmtNum(hostH),
-      fmtNum(frameW), fmtNum(frameH), fmtNum(outside), verdict)
+    if not a.visible then
+      return "route dots on the visible map: absent (the client reports no screen rect for the map)"
+    end
+    if a.painted < 1 then
+      return "route dots on the visible map: 0/0 (nothing painted on the last draw; visible="
+        .. rectText(a.visible) .. ")"
+    end
+    local bbox = "absent"
+    if type(a.bbox) == "table" then
+      bbox = string.format("%s,%s..%s,%s", fmtNum(a.bbox[1], 1), fmtNum(a.bbox[2], 1),
+        fmtNum(a.bbox[3], 1), fmtNum(a.bbox[4], 1))
+    end
+    local note = ""
+    if (a.disagree or 0) > 0 then
+      note = (", %s dot(s) whose own GetLeft/GetTop disagree with that arithmetic by up to %s px")
+        :format(fmtNum(a.disagree), fmtNum(a.disagreeWorst, 1))
+    end
+    return string.format("route dots on the visible map: %s/%s inside (dots bbox=%s; visible=%s%s)%s",
+      fmtNum(a.inside or 0), fmtNum(a.measured or 0), bbox, rectText(a.visible), note,
+      tostring(a.verdict or ""))
   end)
   fact(function()
     local draws = self._draws
@@ -1461,7 +1707,8 @@ function M:Diag()
     local applied = dr.lastApplied or {}
     local painted = tonumber(applied.paintedDots) or 0
     if painted < 1 then
-      return "dot screen: nothing painted on the last redraw"
+      return "dot screen: nothing painted on the last redraw ("
+        .. tostring(applied.why or self._why or "no reason recorded") .. ")"
     end
     local function screenOf(obj)
       local d = ns.LineDraw.Describe(obj)
@@ -1488,7 +1735,12 @@ function M:Diag()
         hostText = string.format("%s,%s", fmtNum(left, 1), fmtNum(top, 1))
       end
     end
+    -- POOL order, not route order: after any re-plan the pool still holds the
+    -- previous plan's objects, so "dot 1" is not route point #1. Comparing the
+    -- two orders is how a route that is drawn correctly was read as being in the
+    -- wrong place.
     return "dot screen: " .. table.concat(parts, "; ") .. " host=" .. hostText
+      .. " (pool order, not route order: a re-plan leaves the previous plan's objects in the pool)"
   end)
   fact(function()
     local px = self._px

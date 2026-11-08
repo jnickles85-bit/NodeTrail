@@ -435,6 +435,36 @@ function D.Clear(drawer)
   end
 end
 
+--- Record that the last redraw painted NOTHING, and why. `lastApplied` is what
+--- /nt mapdiag reports as "the draw", so an overlay that was hidden (wrong map,
+--- showWorldMap off, no host) must not leave the previous draw's painted count
+--- standing: that is how a route that is nowhere on the screenshot still reads
+--- as "painted=288 missing=0 outside=0".
+function D.MarkIdle(drawer, why)
+  if not drawer then
+    return
+  end
+  local prev = drawer.lastApplied
+  local prevPainted = (type(prev) == "table" and tonumber(prev.paintedDots)) or 0
+  D.Clear(drawer)
+  drawer.lastApplied = {
+    mode = drawer.mode,
+    count = 0,
+    plannedDots = 0,
+    paintedDots = 0,
+    missingDots = 0,
+    hiddenDots = 0,
+    hiddenByHide = 0,
+    dotOutside = 0,
+    prevPainted = prevPainted,
+    planReplans = drawer.planReplans or 0,
+    replans = 0,
+    idle = true,
+    why = tostring(why or "not drawing"),
+    poolHigh = drawer.poolHigh or 0,
+  }
+end
+
 function D.Invalidate(drawer)
   D.Clear(drawer)
   if drawer then

@@ -48,15 +48,57 @@ local IMMEDIATE = {
   PLAYER_LOGIN = true,
 }
 
+--- HereBeDragons, from whichever addon on this client provides it — and the
+--- NAME of that source, because "no HBD" and "looked in one place only" are
+--- different answers and the diag has to tell them apart.
+---
+--- GatherMate2 embeds the library and exposes it as `GatherMate2.HBD`; RXPGuides
+--- ships the same library as a LibStub library (this client has it at
+--- RXPGuides/libs/HereBeDragons). The projection only needs the table, so any
+--- copy is usable — which is what makes the 0.075 fraction fallback avoidable
+--- on a client where RXPGuides is loaded.
+local function getHBDSourced()
+  if type(ns.GetGatherMate2) == "function" then
+    local ok, gm = pcall(ns.GetGatherMate2)
+    if ok and type(gm) == "table" and type(gm.HBD) == "table" then
+      return gm.HBD, "GatherMate2.HBD"
+    end
+  end
+  -- LibStub is a TABLE with a __call metamethod on the live client, so it is
+  -- callable but not `type(...) == "function"` — checking only for a function
+  -- is how a library that is right there reads as missing.
+  if type(LibStub) == "function" or type(LibStub) == "table" then
+    local names = { "HereBeDragons-2.0", "HereBeDragons-1.0" }
+    for i = 1, #names do
+      local ok, lib = pcall(LibStub, names[i], true)
+      if ok and type(lib) == "table" then
+        return lib, "LibStub:" .. names[i]
+      end
+    end
+  end
+  return nil, nil
+end
+
 local function getHBD()
-  if type(ns.GetGatherMate2) ~= "function" then
-    return nil
+  -- Parenthesised so the two-value helper truncates to the library alone.
+  return (getHBDSourced())
+end
+
+--- Which library answered, and the version it reports: printed by the diag so
+--- a report of "the scale could not be measured" names what was missing.
+local function hbdSourceText()
+  local lib, source = getHBDSourced()
+  if type(lib) ~= "table" then
+    return "absent (no GatherMate2.HBD and no LibStub HereBeDragons)"
   end
-  local ok, gm = pcall(ns.GetGatherMate2)
-  if ok and type(gm) == "table" and type(gm.HBD) == "table" then
-    return gm.HBD
+  local version = "?"
+  if type(lib.GetVersion) == "function" then
+    local ok, v = pcall(lib.GetVersion, lib)
+    if ok and v ~= nil then
+      version = tostring(v)
+    end
   end
-  return nil
+  return string.format("%s version=%s", tostring(source), version)
 end
 
 local function viewRadiusYards()
@@ -360,6 +402,14 @@ local function pointDelta(sample, point)
     end
     -- Same sign as HereBeDragons-Pins: positive xDist is east of the player,
     -- positive yDist is south. Screen Y flips that so north is up.
+    --
+    -- Player MINUS point, not the other way round: HBD world coordinates run
+    -- backwards from UI map fractions (`x = left - width * x` in
+    -- HereBeDragons-2.0.lua, GetWorldCoordinatesFromZone), so world x grows
+    -- WEST and world y grows NORTH. Subtracting the point from the player is
+    -- what turns that back into "east is +x, south is +y", which is the same
+    -- frame `pointDelta`'s fraction branch below uses — the two branches must
+    -- agree or the minimap mirrors the route the moment HBD loads.
     return sample.px - point.wx, sample.py - point.wy
   end
   if type(point.x) ~= "number" or type(point.y) ~= "number" then
@@ -1096,6 +1146,11 @@ function M:Diag()
     end
     return string.format("minimap redraw: queued=%s segment(s); LineDraw mode=%s; objects held=%s; ticker=%s",
       fmtNum(self._lastQueued or 0), tostring(mode), fmtNum(held), ticker)
+  end)
+  fact(function()
+    -- Which HereBeDragons answered, so "the scale is a guess" always names the
+    -- library it could not find rather than leaving the reader to assume.
+    return "minimap hereBeDragons: " .. hbdSourceText()
   end)
   fact(function()
     return string.format("minimap projection: points=%s useWorld=%s zone=%sx%s radius=%s",
