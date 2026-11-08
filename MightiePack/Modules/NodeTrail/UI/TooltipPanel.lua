@@ -618,17 +618,42 @@ function P:Update(lines, tooltip)
   --    that matters: the font used to size the panel is the font it draws with.
   fontSig = self:AdoptFont(tooltip)
 
-  -- 3) Measure the drawn rows.
-  local widest, widestText = 0, nil
+  -- 3) Measure the drawn rows. `widest` is the FULL row — name + column gap +
+  --    value — and it drives the panel's size. `widestTextPx` is TEXT ONLY, no
+  --    column gap and no padding, and it is the only figure the coverage
+  --    verdict may use. The distinction is not cosmetic: a herb block always
+  --    has a value column, so on a client whose GetStringWidth does not follow,
+  --    every glyph measures 0 while the 12 px gap still adds up — a verdict
+  --    built from the full row width would then report "12, covered" having
+  --    measured no text at all, and the live six-hover report would be spent on
+  --    an instrument that cannot say no.
+  local widest, widestTextPx, widestText = 0, 0, nil
+  local blind = false -- a row carrying text measured nothing
+  local function blindRow(l, lw, rw)
+    if l.left ~= "" and lw <= 0 then
+      return true
+    end
+    if l.right and l.right ~= "" and rw <= 0 then
+      return true
+    end
+    return false
+  end
   local lineH = 0
   for i, row in ipairs(rows) do
     local slot = pool[i]
     local lw = num(slot.left, "GetStringWidth") or 0
     local rw = row.right and (num(slot.right, "GetStringWidth") or 0) or 0
     local w = lw + (row.right and (P.COL_GAP + rw) or 0)
+    local tw = lw + rw
     row.width = w
     if w > widest then
       widest, widestText = w, row.left .. (row.right and (" | " .. row.right) or "")
+    end
+    if tw > widestTextPx then
+      widestTextPx = tw
+    end
+    if blindRow(row, lw, rw) then
+      blind = true
     end
     local h = num(slot.left, "GetHeight") or 0
     if h > lineH then
@@ -650,18 +675,27 @@ function P:Update(lines, tooltip)
   -- 4) An INDEPENDENT measurement, from the meter at the adopted font. The
   --    drawn width above and this one come from different widgets, so when the
   --    panel's width is compared against this figure the /nt ttdiag verdict can
-  --    actually be wrong — it is not the same call checking itself.
-  local widestMeasured, widestMeasuredText
+  --    actually be wrong — it is not the same call checking itself. The meter's
+  --    TEXT-ONLY figure is kept for the same reason as above: a column gap is
+  --    not evidence that a glyph was measured.
+  local widestMeasured, widestMeasuredText, widestMeasuredTextPx
   local remeasure = self:_Measure()
   if remeasure then
-    widestMeasured = 0
+    widestMeasured, widestMeasuredTextPx = 0, 0
     for _, row in ipairs(rows) do
       local lw = remeasure(row.left) or 0
       local rw = (row.right and remeasure(row.right)) or 0
       local w = lw + (row.right and (P.COL_GAP + rw) or 0)
+      local tw = lw + rw
       if w > widestMeasured then
         widestMeasured = w
         widestMeasuredText = row.left .. (row.right and (" | " .. row.right) or "")
+      end
+      if tw > widestMeasuredTextPx then
+        widestMeasuredTextPx = tw
+      end
+      if blindRow(row, lw, rw) then
+        blind = true
       end
     end
   end
@@ -696,22 +730,32 @@ function P:Update(lines, tooltip)
   self.width, self.height = width, height
   self.rows = rows
   self.widest, self.widestText = widest, widestText
+  self.widestTextPx = widestTextPx
   self.widestMeasured, self.widestMeasuredText = widestMeasured, widestMeasuredText
+  self.widestMeasuredTextPx = widestMeasuredTextPx
   self.needWidth = needWidth
-  self.covers = width + 0.01 >= widest + 2 * P.PAD_X
-    and (type(widestMeasured) ~= "number" or width + 0.01 >= widestMeasured + 2 * P.PAD_X)
-  if #rows > 0 and widest <= 0 then
-    -- Text was set and measures nothing: on this client the rows have no font,
-    -- and a panel sized from zeros is precisely the failure this card is about.
-    -- Say NO rather than declare a coverage that was never measured.
-    self.covers = false
+  self.blind = blind
+  -- The verdict is built from MEASURED TEXT only: no column gap, no padding,
+  -- and never from a row whose glyphs measured 0. On a client that cannot
+  -- measure, `covers` is false and /nt ttdiag says NO — it does not add a 12 px
+  -- gap to a 72 px minimum and call that coverage.
+  local measured = (not blind) and widestTextPx > 0
+  if type(widestMeasuredTextPx) == "number" then
+    measured = measured and widestMeasuredTextPx > 0
   end
+  self.covers = measured
+    and width + 0.01 >= widestTextPx + 2 * P.PAD_X
+    and (type(widestMeasuredTextPx) ~= "number"
+      or width + 0.01 >= widestMeasuredTextPx + 2 * P.PAD_X)
   self.meterUsed = remeasure ~= nil
   self.capScreen = budgetScreen
   self.fontSig = fontSig
   info.rows, info.width, info.height = #rows, width, height
   info.widest, info.widestText = widest, widestText
+  info.widestTextPx = widestTextPx
   info.widestMeasured, info.widestMeasuredText = widestMeasured, widestMeasuredText
+  info.widestMeasuredTextPx = widestMeasuredTextPx
+  info.blind = blind
   info.needWidth, info.covers = needWidth, self.covers
   info.cap = cap
   info.font = fontSig
@@ -795,8 +839,11 @@ function P:Diag()
     rows = type(self.rows) == "table" and #self.rows or 0,
     widest = self.widest,
     widestText = self.widestText,
+    widestTextPx = self.widestTextPx,
     widestMeasured = self.widestMeasured,
     widestMeasuredText = self.widestMeasuredText,
+    widestMeasuredTextPx = self.widestMeasuredTextPx,
+    blind = self.blind,
     needWidth = self.needWidth,
     covers = self.covers,
     meterUsed = self.meterUsed,

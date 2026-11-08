@@ -158,10 +158,14 @@ On top of that branch:
   `CreateFontString(nil, "ARTWORK", "GameFontNormal")` **and** with the tooltip's font applied at
   creation (`_ApplyFont`), `Update` re-adopts after layout, and only then measures: the font it
   sizes with is the font it draws with, in the same update.
-  **ttdiag's coverage verdict is independent:** `covers its widest line=` compares the panel's width
-  against a second measurement taken from the private meter font string at the adopted font (and
-  prints that figure, its padding and the drawn-row figure), instead of re-checking the same
-  `GetStringWidth` that produced the width.
+  **ttdiag's coverage verdict is built from measured TEXT (review round 2):** `covers its widest line=`
+  compares the panel's width against `widestTextPx` — each row's own columns, `lw + rw`, with no 12 px
+  column gap and no padding — and a second figure from the private meter font string at the adopted
+  font. It reports NO when any text-bearing row measured 0. That matters because a herb block always
+  has a value column: a verdict built from the full row width reports `text 12, covered` on a client
+  that measures no glyphs at all (12 px being only the gap, 72 px being `MIN_WIDTH`), so the live
+  six-hover report would prove nothing. Both figures are printed, and a blind update is named for
+  what it is (`a text-bearing row measured 0`, drawn rows report the gap).
   Visibility comes from the existing poll clock only — no `HookScript`, no replaced method, no
   `Show()` on the tooltip. `/nt ttdiag` prints `panel: SHOWN … rect …`, the width budget, the widest
   of our lines, whether the width covers it, the adopted font and the backdrop measurement.
@@ -317,7 +321,12 @@ Run from repo root with lua5.1:
   tooltip. T2b pins review round 1's defect: every row carries a font in the very update that set the
   width, and the width covers an INDEPENDENT meter measurement. RED at `007b919` with `T2: panel width
   72.0 >= widest line 150.6` and `T2b: … (got 4 fontless)` — the first hover sized the panel from
-  zero-width rows. RED on the installed build too, where `UI/TooltipPanel.lua` does not exist)
+  zero-width rows. **T8b pins review round 2's defect:** a client whose font strings all report 0
+  (`F.blindMeasure`, font intact) must produce `covers=false`, `info.covers=false`, `widestTextPx=0`
+  and a ttdiag line `covers its widest line=NO (panel 72 vs text 0 + padding 20 = 20 …; a text-bearing
+  row measured 0; drawn rows report 12)`, then cover again once the client measures. RED at `157f4da`
+  with 6 FAILs, the first being `T8b: an update that measured no text reports covers=false (got
+  true)`. RED on the installed build too, where `UI/TooltipPanel.lua` does not exist)
 - `tests/tooltip_no_gametooltip_writes_spec.lua` (t_f4ff9ea6: the grep gate — no field is assigned on
   GameTooltip anywhere in the addon, exactly one `GameTooltip:HookScript` exists in the whole tree and
   it is Touchstone's read-only `OnTooltipSetItem` fallback, zero tooltip method calls in
@@ -328,7 +337,8 @@ Run from repo root with lua5.1:
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
 - `tests/mapdraw_primitive_spec.lua` (t_a08cb3e0: the LIVE client shape — a `CreateLine` region whose `SetStartPoint`/`SetEndPoint` return and whose getters keep reading `TOPLEFT(0.0,absent)` at `size=0x0`, and a texture with no `SetWidth`/`SetHeight`/`SetRotation`. Pins: the line primitive is refused by measurement and the overlay falls back to `mode="dots"`; the dots are two-corner-anchored 2.5px quads every 3px that cover the segment end to end and reach both endpoints; the diag prints `primitive:` with both proofs, `anchor probe … two corner anchors -> 64x8 points=2`, and the held object's `object=`/`numpoints=`/`points=`/`methods=`; `verdict: PRIMITIVE` names the dropped endpoints instead of blaming a zero size; `mapdiag probe` draws the marker/border/diagonal with printed coordinates and is off by default; `mapdiag primitive <auto|line|dots|rotate>` reports the mode the measurement chose, not the one requested; and a client whose line region DOES keep its endpoints still uses `mode="line"`. Also unit-tests the pure `DotPlan`/`PlanDots` (coverage, both endpoints, the 1200-object cap, size/spacing scaled together). RED on `c220ec7` with 40 FAILs)
 All spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_f4ff9ea6` HEAD
-(the panel fix in review round 1 leaves the whole suite green).
+(the panel fixes in review rounds 1 and 2 leave the whole suite green; the passing
+numbers are unchanged — 177.2 px after six hovers, 274.0 px at font 20, cap 864 px).
 On `c220ec7` the four specs this card touched are RED with **51 FAILs**
 (`mapdraw_primitive_spec` 40, `diag_truthful_spec` 6, `draw_smoke` 3, `minimap_diag_spec` 2);
 the other 23 stay green.

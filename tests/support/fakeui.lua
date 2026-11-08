@@ -20,6 +20,13 @@ F.lineHeight = 1.35
 F.defaultFontSize = 12
 F.defaultScale = 1
 
+-- A switch for the client class this card exists for: one whose
+-- `GetStringWidth` returns nothing usable, so every glyph measures 0 even
+-- though the font string carries a font. With this on, a panel that reports
+-- "the width covers my text" is reporting on numbers it never measured, and
+-- the specs require the verdict to say NO instead.
+F.blindMeasure = false
+
 -- A font string is only MEASURABLE once it has a font, exactly like the client:
 -- `CreateFontString(nil, "ARTWORK")` with no template and no SetFont reports no
 -- width and no height. `CreateFontString(nil, "ARTWORK", "GameFontNormal")` is
@@ -56,10 +63,12 @@ local function newFontString(font)
     end
   end
   function fs:GetStringWidth()
+    if F.blindMeasure then return 0 end
     if not self.fontPath or type(self.size) ~= "number" then return 0 end
     return #self.text * self.size * F.charWidth
   end
   function fs:GetHeight()
+    if F.blindMeasure then return 0 end
     if not self.fontPath or type(self.size) ~= "number" then return 0 end
     return self.size * F.lineHeight
   end

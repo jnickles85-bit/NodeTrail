@@ -302,26 +302,37 @@ function T:Diag()
         d.shown and "SHOWN" or ("hidden — " .. tostring(d.hideReason or "?")),
         tostring(d.rows), px(d.left), px(d.bottom), px(d.right), px(d.top),
         tonumber(d.width) or 0, tonumber(d.height) or 0))
-      say(("panel: width budget=%s (45%% of the screen) widest of our lines=%s%s placement=%s%s"):format(
+      say(("panel: width budget=%s (45%% of the screen) widest of our lines=%s%s text-only=%s placement=%s%s"):format(
         px(d.cap), px(d.widest),
         type(d.widestText) == "string" and (" \"" .. d.widestText .. "\"") or "",
+        px(d.widestTextPx),
         tostring(d.placement or "?"), (d.clampedX or d.clampedY) and " (clamped into the screen)" or ""))
       say(("panel: font=%s applied=%s backdrop=%s"):format(
         tostring(d.font or "absent"), d.fontApplied and "yes" or "no",
         tostring(d.backdrop or "?")))
       if type(d.width) == "number" and type(d.needWidth) == "number" then
-        -- The verdict compares the panel against an INDEPENDENT measurement
-        -- (the meter, at the adopted font), not against the GetStringWidth that
-        -- produced the width. Both figures are printed so a mismatch is visible.
-        local how
-        if type(d.widestMeasured) == "number" then
-          how = ("text %s + padding %s = %s, measured independently with %s"):format(
-            px(d.widestMeasured), px(2 * (d.padX or 0)), px(d.needWidth), tostring(d.font or "?"))
+        -- The verdict is built from MEASURED TEXT only — no column gap, no
+        -- padding — and refuses to say yes when a text-bearing row measured 0.
+        -- Otherwise a client that cannot measure reports "text 12" (the column
+        -- gap) at a 72 px minimum and the six-hover report proves nothing. Both
+        -- figures are printed, and when the independent meter measured nothing
+        -- that is said too.
+        local textPx = tonumber(d.widestTextPx) or 0
+        local padX = 2 * (d.padX or 0)
+        local needText = textPx + padX
+        local how = ("panel %s vs text %s + padding %s = %s"):format(
+          px(d.width), px(textPx), px(padX), px(needText))
+        if type(d.widestMeasuredTextPx) == "number" then
+          how = how .. (", measured independently with %s (%s px)"):format(
+            tostring(d.font or "?"), px(d.widestMeasuredTextPx))
         else
-          how = ("no independent measurement on this client; rows report %s"):format(px(d.widest))
+          how = how .. "; no independent measurement on this client"
         end
-        say(("panel: covers its widest line=%s (panel %s vs %s; drawn rows report %s)"):format(
-          d.covers and "yes" or "NO", px(d.width), how, px(d.widest)))
+        if d.blind then
+          how = how .. "; a text-bearing row measured 0"
+        end
+        say(("panel: covers its widest line=%s (%s; drawn rows report %s)"):format(
+          d.covers and "yes" or "NO", how, px(d.widest)))
       end
     end
   else

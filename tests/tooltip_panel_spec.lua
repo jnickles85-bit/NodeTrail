@@ -296,6 +296,50 @@ check(rows[alchemyStart]:sub(1, 9) == "Alchemy: ",
 check(P.width + 0.01 >= (P.widest or 0),
   ("T8: width %.1f covers the widest row after wrapping (%.1f)"):format(P.width, P.widest or 0))
 
+-- ── T8b: a client that measures NOTHING must make the verdict say NO ─────
+-- The card exists because this client's geometry does not follow our writes,
+-- and the same client can report 0 for every string. A verdict built from the
+-- row width would then say "text 12, covered" — 12 px being only the column
+-- gap — with no glyph measured, and the live six-hover report would prove
+-- nothing. `covers` is built from measured TEXT and refuses to say yes when a
+-- text-bearing row measured 0.
+local measureTip = F.newTooltip({ lines = { "Mageroyal", "Herbalism" }, owner = UIParent,
+  left = 320, bottom = 720, width = 180, height = 60 })
+F.blindMeasure = true
+local blindInfo = P:Update({
+  { left = "Mageroyal", right = "100% (base)" },
+  { left = "Your picks: 5" },
+}, measureTip)
+check(blindInfo.covers == false,
+  "T8b: an update that measured no text reports covers=false (got "
+    .. tostring(blindInfo.covers) .. ")")
+check(P.covers == false,
+  "T8b: the panel's own verdict is false when a text-bearing row measured 0")
+check(blindInfo.widestTextPx == 0,
+  "T8b: the measured text width is 0 on a blind client (got "
+    .. tostring(blindInfo.widestTextPx) .. ")")
+local blindChat = {}
+local savedChat = DEFAULT_CHAT_FRAME
+DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) blindChat[#blindChat + 1] = msg end }
+local okBlindDiag, errBlindDiag = pcall(T.Diag, T)
+DEFAULT_CHAT_FRAME = savedChat
+local blindOut = table.concat(blindChat, "\n")
+check(okBlindDiag, "T8b: ttdiag does not raise on a blind client (" .. tostring(errBlindDiag) .. ")")
+check(blindOut:find("covers its widest line=NO", 1, true) ~= nil,
+  "T8b: ttdiag says the panel does NOT cover its widest line (got:\n" .. blindOut .. ")")
+check(blindOut:find("text 0", 1, true) ~= nil,
+  "T8b: ttdiag prints the measured-text figure (0) next to the panel width (got:\n" .. blindOut .. ")")
+check(blindOut:find("measured 0", 1, true) ~= nil,
+  "T8b: ttdiag names the row that measured 0 (got:\n" .. blindOut .. ")")
+-- The same block, on a client that can measure again, must still cover: the
+-- verdict is a measurement, not a hard-coded NO.
+F.blindMeasure = false
+P:Update({
+  { left = "Mageroyal", right = "100% (base)" },
+  { left = "Your picks: 5" },
+}, measureTip)
+check(P.covers == true, "T8b: the same block covers once the client measures again")
+
 -- ── T9: NOTHING is written into the tooltip ───────────────────────────────
 local guardTip, writes = F.readOnly(F.newTooltip({
   lines = { "Peacebloom", "Herbalism" }, owner = UIParent,
