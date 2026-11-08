@@ -289,6 +289,86 @@ check(switchVerdict and switchVerdict:find("the host is hidden", 1, true) ~= nil
   "C: the verdict reports the hidden host (got " .. tostring(switchVerdict) .. ")")
 check(afterSwitch:find("error:", 1, true) == nil, "C: the diag printed no error line")
 
+-- ═══ D. a raise the client REFUSES is not reported as a raise ══════════════
+-- A real client shape: SetFrameLevel exists, the pcall succeeds, and the frame
+-- stays where it was. The audit used to record the ATTEMPT, so mapdiag printed
+-- "RAISED from 45 to 45" / "it was raised to 45 on this redraw" while the same
+-- block said "-> NOT above the art" — claiming the invisible-line state fixed.
+displayedID = 1413
+M.host.SetFrameLevel = function(self) return end -- present, silently ignored
+art.level = 80
+M:Redraw()
+check(M._drawError == nil, "D: draw error: " .. tostring(M._drawError))
+check(M.host:GetFrameLevel() == 45,
+  "D: the client kept the frame at 45 (got " .. tostring(M.host:GetFrameLevel()) .. ")")
+check(M._zorder and M._zorder.raisedNow == false,
+  "D: a refused SetFrameLevel is not recorded as a raise")
+check(M._zorder and M._zorder.stillBelow == true,
+  "D: the audit records that the host is still below the art")
+local refusedDiag = diag()
+local refusedVerdict = lineStartingWith(refusedDiag, "verdict:")
+check(refusedVerdict and refusedVerdict:find("DRAW ORDER (still below after the raise attempt)", 1, true) ~= nil,
+  "D: the verdict reports draw order as still unfixed (got " .. tostring(refusedVerdict) .. ")")
+check(refusedVerdict and refusedVerdict:find("the client did not accept a higher level", 1, true) ~= nil,
+  "D: the verdict says the client refused the level (got " .. tostring(refusedVerdict) .. ")")
+check(refusedVerdict and refusedVerdict:find("it was raised to", 1, true) == nil,
+  "D: the verdict does not claim a raise that did not happen (got " .. tostring(refusedVerdict) .. ")")
+check(refusedDiag:find("RAISED from 45 to 45", 1, true) == nil,
+  "D: the z-order line does not print a raise from 45 to 45")
+check(refusedDiag:find("raise attempted; the frame still reads level=45", 1, true) ~= nil,
+  "D: the z-order line reports the MEASURED frame after the attempt")
+
+-- ═══ E. a refused SetFrameStrata must not be reported as the strata we asked for
+-- Art one strata up (HIGH at level 40 — the sharpest shape: the host's LEVEL is
+-- already above the art, so only the strata decides). SetFrameStrata is present
+-- but ignored: the audit used to overwrite hostStrata with topStrata and report
+-- "strata=HIGH -> above the art" on a frame that really is MEDIUM — the exact
+-- invisible-line state this card exists for, reported as fixed.
+art.level = 40
+art.strata = "HIGH"
+M.host.SetFrameLevel = function(self, l) self.level = l end -- working again
+M.host.SetFrameStrata = function(self) return end -- present, silently ignored
+M:Redraw()
+check(M._drawError == nil, "E: draw error: " .. tostring(M._drawError))
+check(M.host:GetFrameStrata() == "MEDIUM",
+  "E: the client kept the frame on MEDIUM (got " .. tostring(M.host:GetFrameStrata()) .. ")")
+check(M._zorder and M._zorder.hostStrata == "MEDIUM",
+  "E: the audit reports the MEASURED strata, not the one it asked for (got "
+    .. tostring(M._zorder and M._zorder.hostStrata) .. ")")
+check(M._zorder and M._zorder.stillBelow == true,
+  "E: MEDIUM under HIGH art is still below, whatever the levels say")
+local strataDiag = diag()
+check(strataDiag:find("host_level=45 strata=MEDIUM -> NOT above the art", 1, true) ~= nil,
+  "E: the z-order line says NOT above the art (diag: "
+    .. tostring(strataDiag:match("z%-order:[^\n]*")) .. ")")
+local strataVerdict = lineStartingWith(strataDiag, "verdict:")
+check(strataVerdict and strataVerdict:find("DRAW ORDER (still below after the raise attempt)", 1, true) ~= nil,
+  "E: the verdict names draw order as still unfixed (got " .. tostring(strataVerdict) .. ")")
+check(strataVerdict and strataVerdict:find("the client did not accept a higher strata", 1, true) ~= nil,
+  "E: the verdict says the client refused the strata (got " .. tostring(strataVerdict) .. ")")
+
+-- ═══ F. a strata raise that DID take is sticky across redraws ══════════════
+-- Same art (HIGH / level 40), but now SetFrameStrata works. The first redraw
+-- raises the host to HIGH; the next one must not "adopt the parent's strata"
+-- and drop it back to MEDIUM — that put the line under the art again and made
+-- mapdiag report a still-below host the overlay itself had just lowered.
+M.host.SetFrameStrata = function(self, s) self.strata = s end -- working again
+M:Redraw()
+check(M._drawError == nil, "F: draw error: " .. tostring(M._drawError))
+check(M.host:GetFrameStrata() == "HIGH",
+  "F: the host adopted the art's strata (got " .. tostring(M.host:GetFrameStrata()) .. ")")
+check(M._zorder and M._zorder.raisedNow == true and M._zorder.strataRose == true,
+  "F: the strata raise is recorded as measured")
+check(M._zorder and M._zorder.stillBelow == false, "F: the host is above the HIGH art now")
+M:Redraw()
+check(M.host:GetFrameStrata() == "HIGH",
+  "F: the strata raise survives the next redraw (got " .. tostring(M.host:GetFrameStrata()) .. ")")
+check(M._zorder and M._zorder.stillBelow == false,
+  "F: still above the art on the next redraw")
+local stickyVerdict = lineStartingWith(diag(), "verdict:")
+check(stickyVerdict and stickyVerdict:find("DRAW ORDER", 1, true) == nil,
+  "F: no draw-order claim once the host is above the art (got " .. tostring(stickyVerdict) .. ")")
+
 if failed > 0 then
   io.stderr:write(failed .. " diag truthfulness check(s) failed\n")
   os.exit(1)

@@ -352,7 +352,16 @@ function M:EnsureHost(parent, label)
   local host = self.host
   local strata = call(parent, "GetFrameStrata")
   if type(strata) == "string" and isFn(host.SetFrameStrata) then
-    pcall(host.SetFrameStrata, host, strata)
+    -- Only ever raise here, never reset — the same rule as the level below.
+    -- This used to set the host back to the PARENT's strata on every redraw,
+    -- which dropped a host AuditAndRaise had lifted to the art's (higher)
+    -- strata back to the map's MEDIUM, putting the line under the art again.
+    local currentStrata = call(host, "GetFrameStrata")
+    local currentRank = strataRank(currentStrata)
+    local wantedRank = strataRank(strata)
+    if not currentRank or not wantedRank or currentRank < wantedRank then
+      pcall(host.SetFrameStrata, host, strata)
+    end
   end
   local level = call(parent, "GetFrameLevel")
   if type(level) == "number" and isFn(host.SetFrameLevel) then
@@ -422,44 +431,89 @@ function M:AuditAndRaise(host, parent, width, height)
   if type(currentLevel) == "number" and currentLevel > wantedLevel then
     wantedLevel = currentLevel
   end
-  local raisedNow = false
-  if isFn(host.SetFrameLevel) and (currentLevel ~= wantedLevel) then
+  local levelBefore = currentLevel
+  local setLevelWanted = isFn(host.SetFrameLevel)
+    and (type(currentLevel) ~= "number" or currentLevel < wantedLevel)
+  if setLevelWanted then
     pcall(host.SetFrameLevel, host, wantedLevel)
-    raisedNow = type(currentLevel) == "number" and currentLevel < wantedLevel
-    if raisedNow then
-      -- Sticky, but recorded as HISTORY: `raisedInfo` says a raise happened,
-      -- `raisedNow` says it happened on THIS redraw. The verdict must not keep
-      -- claiming draw order on a redraw where the host is already on top —
-      -- otherwise the geometry/colour/unknown verdicts are unreachable.
-      self._raisedInfo = { from = currentLevel, to = wantedLevel, label = topLabel }
+  end
+  -- Measure the frame again. A raise is a fact about the FRAME, not about the
+  -- call we attempted: on clients where SetFrameLevel exists but does not take
+  -- effect (pcall succeeds, the level never moves) recording the attempt made
+  -- the diag report the invisible-line state as fixed ("RAISED from 45 to 45",
+  -- "-> above the art" with art on a higher strata). Only what the frame
+  -- reads back after the call may be reported as a raise.
+  local levelAfter = frameLevel(host)
+  local levelRose = type(levelBefore) == "number" and type(levelAfter) == "number"
+    and levelAfter > levelBefore
+
+  local strataBefore = call(host, "GetFrameStrata")
+  local strataRankBefore = strataRank(strataBefore)
+  local wantStrata
+  local topRank = strataRank(topStrata)
+  if type(topStrata) == "string" and topRank and (not strataRankBefore or topRank > strataRankBefore) then
+    wantStrata = topStrata
+  elseif type(parentStrata) == "string" and strataBefore ~= parentStrata then
+    -- Adopt the parent's strata only when there is nothing above it to hold:
+    -- never LOWER a host that a previous redraw already raised (that dropped a
+    -- HIGH host back to the map's MEDIUM on the next redraw and put the line
+    -- under the art again).
+    local parentRank = strataRank(parentStrata)
+    if not strataRankBefore or not parentRank or strataRankBefore < parentRank then
+      wantStrata = parentStrata
     end
   end
+  if wantStrata and isFn(host.SetFrameStrata) then
+    pcall(host.SetFrameStrata, host, wantStrata)
+  end
+  -- Same rule for strata: read it back, never assume the setter took effect
+  -- (the diag used to print the strata it ASKED for, so a refused
+  -- SetFrameStrata reported "strata=HIGH -> above the art" on a MEDIUM frame).
   local hostStrata = call(host, "GetFrameStrata")
-  local topRank = strataRank(topStrata)
-  local hostRank = strataRank(hostStrata)
-  if type(topStrata) == "string" and topRank and (not hostRank or topRank > hostRank) then
-    if isFn(host.SetFrameStrata) then
-      pcall(host.SetFrameStrata, host, topStrata)
-      hostStrata = topStrata
-      raisedNow = true
-    end
-  elseif type(parentStrata) == "string" and isFn(host.SetFrameStrata) and hostStrata ~= parentStrata then
-    pcall(host.SetFrameStrata, host, parentStrata)
-    hostStrata = parentStrata
+  if type(hostStrata) ~= "string" then
+    hostStrata = strataBefore -- unmeasurable: report the last measured value
+  end
+  local strataRose = type(hostStrata) == "string" and type(strataBefore) == "string"
+    and strataRank(hostStrata) and strataRank(strataBefore)
+    and strataRank(hostStrata) > strataRank(strataBefore)
+
+  local raisedNow = levelRose or strataRose
+  if raisedNow then
+    -- Sticky, but recorded as HISTORY: `raisedInfo` says a raise happened,
+    -- `raisedNow` says it happened on THIS redraw. The verdict must not keep
+    -- claiming draw order on a redraw where the host is already on top —
+    -- otherwise the geometry/colour/unknown verdicts are unreachable.
+    self._raisedInfo = {
+      label = topLabel,
+      levelFrom = levelRose and levelBefore or nil,
+      levelTo = frameLevel(host),
+      strataFrom = strataRose and strataBefore or nil,
+      strataTo = strataRose and hostStrata or nil,
+    }
   end
   local info = self._raisedInfo
   -- `raised` stays sticky: the raise is evidence that must survive later
   -- redraws (nothing needs raising any more, but it did happen). `raisedNow`
   -- and `raisedEarlier` say WHEN, so the verdict can fall through to the next
   -- candidate instead of repeating "draw order" forever.
-  local raisedEarlier = (not raisedNow) and type(info) == "table"
-    and info.to == wantedLevel and info.from ~= info.to
+  local raisedEarlier = false
+  if not raisedNow and type(info) == "table" then
+    raisedEarlier = info.label == topLabel
+      and ((info.levelTo == wantedLevel) or (info.strataTo ~= nil and info.strataTo == topStrata))
+  end
   audit.hostLevel = frameLevel(host)
   audit.hostStrata = hostStrata
   audit.raised = raisedNow or raisedEarlier
   audit.raisedNow = raisedNow
   audit.raisedEarlier = raisedEarlier
-  audit.raisedFrom = (type(info) == "table") and info.from or currentLevel
+  -- `and … or` would silently fall back to levelBefore when the history has no
+  -- level (a strata-only raise): keep nil so the verdict picks the strata text.
+  audit.raisedFrom = (type(info) == "table") and info.levelFrom or nil
+  audit.raisedStrataFrom = (type(info) == "table") and info.strataFrom or nil
+  audit.wantedLevel = wantedLevel
+  audit.wantedStrata = wantStrata
+  audit.levelRose = levelRose
+  audit.strataRose = strataRose
   audit.stillBelow = nil
   if type(audit.hostLevel) == "number" and type(topLevel) == "number" then
     local hostRankNow = strataRank(hostStrata)
@@ -886,17 +940,46 @@ function M:Diag()
       names[#names + 1] = string.format("%s=%s/%s%s", c.label, tostring(c.level), tostring(c.strata),
         c.shown == false and "(hidden)" or "")
     end
-    local verdict = "below the art" 
+    local verdict = "below the art"
     if type(z.hostLevel) == "number" and type(z.topLevel) == "number" then
-      verdict = z.hostLevel > z.topLevel and "above the art" or "NOT above the art"
+      -- Same comparison that produces stillBelow: across strata the strata
+      -- wins, so a level above the art on a lower strata is still "NOT above".
+      local hostRankNow = strataRank(z.hostStrata)
+      local artRank = strataRank(z.topStrata)
+      local above
+      if hostRankNow and artRank and hostRankNow ~= artRank then
+        above = hostRankNow > artRank
+      else
+        above = z.hostLevel > z.topLevel
+      end
+      verdict = above and "above the art" or "NOT above the art"
+    end
+    local suffix = ""
+    if z.stillBelow then
+      -- Measured, not attempted: the setter ran (or is absent) and the frame
+      -- still reads below the art. Never print "RAISED" here — the numbers
+      -- come from GetFrameLevel/GetFrameStrata after the call.
+      suffix = (" (raise attempted; the frame still reads level=%s strata=%s)")
+        :format(fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"))
+    elseif z.raisedNow and type(z.raisedFrom) == "number" then
+      suffix = (" (RAISED from %s to %s on this redraw)")
+        :format(fmtNum(z.raisedFrom), fmtNum(z.hostLevel))
+    elseif z.raisedNow then
+      suffix = (" (RAISED to strata %s on this redraw)"):format(tostring(z.hostStrata or "absent"))
+    elseif z.raised then
+      if type(z.raisedFrom) == "number" then
+        suffix = (" (RAISED from %s to %s on an earlier redraw; nothing left to raise)")
+          :format(fmtNum(z.raisedFrom), fmtNum(z.hostLevel))
+      else
+        suffix = (" (RAISED to strata %s on an earlier redraw; nothing left to raise)")
+          :format(tostring(z.hostStrata or "absent"))
+      end
     end
     return string.format(
       "z-order: canvas_level=%s canvas_strata=%s candidates=%s [%s] top=%s(lvl=%s) host_level=%s strata=%s -> %s%s",
       fmtNum(z.canvasLevel), tostring(z.canvasStrata or "absent"), fmtNum(#z.candidates),
       table.concat(names, ", "), tostring(z.topLabel), fmtNum(z.topLevel),
-      fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), verdict,
-      z.raised and (" (RAISED from " .. fmtNum(z.raisedFrom) .. " to " .. fmtNum(z.hostLevel)
-        .. (z.raisedNow and " on this redraw)" or " on an earlier redraw; nothing left to raise)")) or "")
+      fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), verdict, suffix)
   end)
   fact(function()
     if not self._drew then
@@ -996,25 +1079,46 @@ function M:Diag()
     end
     local z = self._zorder
     local history = ""
-    if type(z) == "table" and z.raised and type(z.raisedFrom) == "number" then
-      history = (" (draw order was raised earlier: %s -> %s)")
-        :format(fmtNum(z.raisedFrom), fmtNum(z.hostLevel))
+    if type(z) == "table" and z.raised then
+      if type(z.raisedFrom) == "number" then
+        history = (" (draw order was raised earlier: %s -> %s)")
+          :format(fmtNum(z.raisedFrom), fmtNum(z.hostLevel))
+      elseif type(z.raisedStrataFrom) == "string" then
+        history = (" (draw order was raised earlier: strata %s -> %s)")
+          :format(tostring(z.raisedStrataFrom), tostring(z.hostStrata or "absent"))
+      end
     end
     if shownState(self.host) == false then
       return "verdict: the host is hidden — " .. tostring(self._why or "no reason recorded") .. history
     end
-    if type(z) == "table" and z.raisedNow then
-      return string.format(
-        "verdict: DRAW ORDER — the host sat at level %s, below %s (level %s); it was raised to %s on this redraw. Re-run /nt mapdiag on the same map to confirm host_level > top and look for the line",
-        fmtNum(z.raisedFrom), tostring(z.topLabel), fmtNum(z.topLevel), fmtNum(z.hostLevel))
-    end
+    -- MEASURED state wins over intent: this branch is checked BEFORE the
+    -- "raised" one, so a client whose SetFrameLevel/SetFrameStrata exist but
+    -- do nothing is reported as still broken instead of as fixed. The old
+    -- order made this branch dead code whenever the setter existed.
     if type(z) == "table" and z.stillBelow then
+      local whyBelow
+      if not isFn(self.host.SetFrameLevel) then
+        whyBelow = "this client exposes no SetFrameLevel"
+      elseif z.wantedStrata and not z.strataRose then
+        whyBelow = "the client did not accept a higher strata"
+      else
+        whyBelow = "the client did not accept a higher level"
+      end
       return string.format(
-        "verdict: DRAW ORDER (still below after the raise attempt) — host is level=%s strata=%s, the art is %s level=%s strata=%s; %s. Next measurement: /nt mapdiag on this map, then report the two levels",
+        "verdict: DRAW ORDER (still below after the raise attempt) — host is measured at level=%s strata=%s, the art is %s level=%s strata=%s; %s. Next measurement: /nt mapdiag on this map, then report the two levels",
         fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), tostring(z.topLabel),
-        fmtNum(z.topLevel), tostring(z.topStrata or "absent"),
-        isFn(self.host.SetFrameLevel) and "the client did not accept a higher level"
-          or "this client exposes no SetFrameLevel")
+        fmtNum(z.topLevel), tostring(z.topStrata or "absent"), whyBelow)
+    end
+    if type(z) == "table" and z.raisedNow then
+      if type(z.raisedFrom) == "number" then
+        return string.format(
+          "verdict: DRAW ORDER — the host sat at level %s, below %s (level %s); it was raised to %s on this redraw. Re-run /nt mapdiag on the same map to confirm host_level > top and look for the line",
+          fmtNum(z.raisedFrom), tostring(z.topLabel), fmtNum(z.topLevel), fmtNum(z.hostLevel))
+      end
+      return string.format(
+        "verdict: DRAW ORDER — %s is on strata %s while the host was on %s; the host was raised to strata %s on this redraw. Re-run /nt mapdiag on the same map to confirm host strata > art strata and look for the line",
+        tostring(z.topLabel), tostring(z.topStrata or "absent"),
+        tostring(z.raisedStrataFrom or "absent"), tostring(z.hostStrata or "absent"))
     end
     local total = 0
     for i = 1, #(self._segLens or {}) do
