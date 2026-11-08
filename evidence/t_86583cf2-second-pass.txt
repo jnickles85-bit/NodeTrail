@@ -1,6 +1,6 @@
 t_86583cf2 second pass — evidence
 generated: 2026-11-08T19:06:30Z  host: Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
-commit: 9c81337 (wt/t_86583cf2)
+commit: b701d64 (wt/t_86583cf2)
 
 == 1. Mightie's four-stop walk, read off the live client's SavedVariables ==
 source: _forever_/WTF/Account/JERMTHE1/SavedVariables/MightiePack.lua -> NodeTrailDB.navwalk
@@ -18,7 +18,7 @@ back    773041.663   (0.46513,0.24672) (0.46513,0.24672) TOPRIGHT(-17.02,-5.14) 
    anchors move opposite the player in map space while the ground it marks does not move.
    Same route point (#27), same world reference, fresh draw stamp every stop.
 
-== 2. new specs at the tip (9c81337) ==
+== 2. new specs at the tip (b701d64) ==
 mapdiag_visible_spec: ok
 minimap_hbd_spec: ok
 
@@ -56,8 +56,8 @@ specs=45 failing=0
 == 5. deployed build vs the commit (sha256, first 16) ==
 fd51720a58e26c4b  commit    LineDraw.lua
 fd51720a58e26c4b  deployed  LineDraw.lua
-826c6cca3e490384  commit    MapOverlay.lua
-826c6cca3e490384  deployed  MapOverlay.lua
+29c1bd58615be1aa  commit    MapOverlay.lua
+29c1bd58615be1aa  deployed  MapOverlay.lua
 073e2af733c29cee  commit    MinimapPath.lua
 073e2af733c29cee  deployed  MinimapPath.lua
 
