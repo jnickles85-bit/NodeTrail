@@ -1110,6 +1110,26 @@ function M:Diag()
       fmtNum(a.dotOutside or 0), fmtNum(a.paintedDots or 0))
   end)
   fact(function()
+    -- t_86583cf2 / ara: one line that cannot pass while every dot is off the
+    -- visible map. `outside` is measured by the paint itself against the host
+    -- rect; a route that is entirely outside it is a route nobody can see, and
+    -- it must never be reported as `painted=288 missing=0 outside=0` plus a pass.
+    local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+    local painted = tonumber(applied.paintedDots) or 0
+    local outside = tonumber(applied.dotOutside) or 0
+    local hostW = applied.hostSize and applied.hostSize.width
+    local hostH = applied.hostSize and applied.hostSize.height
+    local mapFrame = _G.WorldMapFrame
+    local frameW, frameH = frameSize(mapFrame)
+    local verdict = ""
+    if painted > 0 and outside >= painted then
+      verdict = " — EVERY dot is outside the host rect: the route is drawn where the map cannot show it"
+    end
+    return string.format("route dots inside the map's visible rect: %s/%s (host=%sx%s, WorldMapFrame=%sx%s, outside=%s)%s",
+      fmtNum(painted - outside), fmtNum(painted), fmtNum(hostW), fmtNum(hostH),
+      fmtNum(frameW), fmtNum(frameH), fmtNum(outside), verdict)
+  end)
+  fact(function()
     local draws = self._draws
     if type(draws) ~= "table" or #draws == 0 then
       return "draws: none recorded yet"
@@ -1881,7 +1901,147 @@ function M:Probe(arg)
       type(d.width) == "number" and fmtNum(d.width) or "absent",
       type(d.height) == "number" and fmtNum(d.height) or "absent",
       tostring(d.shown), ns.LineDraw.PointText(d.start), ns.LineDraw.PointText(d.stop)))
-  say("probe: report which you can SEE: marker / border / diagonal (or none); '/nt mapdiag probe off' removes them")
+  -- 4. labelled route points and the player, so ONE screenshot identifies itself
+  -- (ara, t_86583cf2): #1, #10, #20, the last point and `P` for the player's own
+  -- projected position, each with its canvas coordinate AND the region's own
+  -- GetLeft/GetTop. A picture plus this line settles whether the dots sit where
+  -- the maths says, without anyone having to describe the picture.
+  local rect = self._rect
+  local function projectPoint(i)
+    if type(self._px) == "table" and type(self._px[i]) == "table" then
+      return self._px[i].x, self._px[i].y, "measured"
+    end
+    local p = self.path and self.path[i]
+    if rect and type(p) == "table" and ns.PathGeom.IsMapPoint(p) then
+      local x, y = ns.PathGeom.FractionToPixel(p.x, p.y, rect)
+      return x, y, "projected now"
+    end
+    return nil
+  end
+  local wanted, seen = {}, {}
+  if self.path and #self.path >= 2 then
+    local list = { 1, 10, 20, #self.path }
+    for k = 1, #list do
+      local i = list[k]
+      if i >= 1 and i <= #self.path and not seen[i] then
+        seen[i] = true
+        wanted[#wanted + 1] = i
+      end
+    end
+  end
+  local function markerWithLabel(text, x, y, size)
+    local tex = quad(x - size, y - size, x + size, y + size)
+    local left, top = "absent", "absent"
+    if tex then
+      if isFn(tex.GetLeft) then
+        local v = call(tex, "GetLeft")
+        left = fmtNum(v, 1)
+      end
+      if isFn(tex.GetTop) then
+        local v = call(tex, "GetTop")
+        top = fmtNum(v, 1)
+      end
+    end
+    local fs
+    if isFn(host.CreateFontString) then
+      local okF, created = pcall(host.CreateFontString, host, nil, "OVERLAY", "GameFontNormal")
+      if okF and created then
+        fs = created
+        probe.textures[#probe.textures + 1] = fs
+        pcall(fs.SetText, fs, tostring(text))
+        pcall(fs.SetPoint, fs, "BOTTOMLEFT", host, "TOPLEFT", x + size + 1, -(y - size))
+        pcall(fs.Show, fs)
+      end
+    end
+    return tex, left, top, fs ~= nil
+  end
+  local pointParts = {}
+  for k = 1, #wanted do
+    local i = wanted[k]
+    local x, y, how = projectPoint(i)
+    if x then
+      local tex, left, top, labelled = markerWithLabel(i, x, y, 5)
+      pointParts[#pointParts + 1] = string.format("#%s canvas=(%s,%s) %s region(left=%s,top=%s)%s",
+        fmtNum(i), fmtNum(x, 1), fmtNum(y, 1), how, left, top, labelled and " label=yes" or " label=absent")
+    else
+      pointParts[#pointParts + 1] = string.format("#%s canvas=absent (not projected)", fmtNum(i))
+    end
+  end
+  if #pointParts > 0 then
+    say("probe points: " .. table.concat(pointParts, "; "))
+  else
+    say("probe points: none (no route to label)")
+  end
+  -- The player's OWN projected position, labelled P: the one point on the
+  -- screenshot whose ground truth is the player standing there.
+  do
+    local mx, my = nil, nil
+    if rect and self.mapID then
+      if C_Map and isFn(C_Map.GetPlayerMapPosition) then
+        local ok, pos = pcall(C_Map.GetPlayerMapPosition, C_Map, self.mapID, "player")
+        if ok and type(pos) == "table" and isFn(pos.GetXY) then
+          local okXY, fx, fy = pcall(pos.GetXY, pos)
+          if okXY and type(fx) == "number" and fx == fx and not (fx == 0 and fy == 0) then
+            mx, my = fx, fy
+          end
+        end
+      end
+      if not mx and isFn(_G.GetPlayerMapPosition) then
+        local okP, fx, fy = pcall(_G.GetPlayerMapPosition, "player")
+        if okP and type(fx) == "number" and type(fy) == "number"
+          and not (fx == 0 and fy == 0) then
+          mx, my = fx, fy
+        end
+      end
+    end
+    if mx then
+      local x, y = ns.PathGeom.FractionToPixel(mx, my, rect)
+      if x then
+        local tex, left, top, labelled = markerWithLabel("P", x, y, 6)
+        say(("probe player: P frac=(%s,%s) canvas=(%s,%s) region(left=%s,top=%s)%s")
+          :format(fmtNum(mx, 4), fmtNum(my, 4), fmtNum(x, 1), fmtNum(y, 1), left, top,
+            labelled and " label=yes" or " label=absent"))
+      else
+        say("probe player: P frac measured but did not project")
+      end
+    else
+      say("probe player: P absent (this client gave no player map position for map " .. tostring(self.mapID) .. ")")
+    end
+  end
+  -- The frames, side by side, with the client's OWN rect for each. This is the
+  -- line that separates "the dots are wrong" from "the host the dots are drawn
+  -- into is somewhere else on screen".
+  local mapFrame = _G.WorldMapFrame
+  local function frameRectText(label, frame)
+    if not frame then
+      return label .. "=absent"
+    end
+    local l = call(frame, "GetLeft")
+    local t = call(frame, "GetTop")
+    local w, h = frameSize(frame)
+    local sc = call(frame, "GetScale")
+    return string.format("%s=%s left=%s top=%s size=%sx%s scale=%s shown=%s",
+      label, frameName(frame), fmtNum(l, 1), fmtNum(t, 1), fmtNum(w), fmtNum(h),
+      fmtNum(sc, 3), tostring(shownState(frame)))
+  end
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  say("probe rects: " .. table.concat({
+    frameRectText("WorldMapFrame", mapFrame),
+    frameRectText("ScrollContainer", scroll),
+    frameRectText("host", host),
+    frameRectText("UIParent", _G.UIParent),
+  }, "; "))
+  -- ara's rule: a route that is 100% outside the visible rect must never again
+  -- read as a pass.
+  do
+    local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+    local painted = tonumber(applied.paintedDots) or 0
+    local outside = tonumber(applied.dotOutside) or 0
+    say(("probe route dots inside the host rect: %s/%s (outside=%s)%s")
+      :format(fmtNum(painted - outside), fmtNum(painted), fmtNum(outside),
+        painted > 0 and outside >= painted and " — EVERY dot is outside the host: the dots are not on the visible map" or ""))
+  end
+  say("probe: report which you can SEE: marker / border / diagonal / numbered points / P; '/nt mapdiag probe off' removes them")
 end
 
 local events = CreateFrame("Frame")

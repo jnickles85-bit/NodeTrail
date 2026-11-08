@@ -232,6 +232,30 @@ check(stI:find("TouchTest: on (inert", 1, true) ~= nil,
 check(stI:find("TouchTest: on (loaded)", 1, true) == nil,
   "mpack status: an inert module never claims to be loaded")
 
+-- ── t_86583cf2: the two new commands are wired, and they never raise ────────
+-- `/nt minimap on|off` is the minimap line's own switch (the world map route is
+-- untouched); `/nt navwalk` records the four-stop walk and must degrade to a
+-- message — not an error — when the minimap module is not loaded.
+do
+  NodeTrailDB.navwalk = nil
+  local before = ns.GetDB().showMinimap
+  local off = run("minimap off")
+  check(ns.GetDB().showMinimap == false, "minimap off: the switch is off (" .. tostring(off) .. ")")
+  check(off:find("minimap route off", 1, true) ~= nil, "minimap off: it says so")
+  check(ns.GetDB().showWorldMap == true, "minimap off: the world map route is untouched")
+  run("minimap on")
+  check(ns.GetDB().showMinimap == true, "minimap on: the switch is on again")
+  check(before == true, "minimap: the default is on, as shipped")
+  local walk = run("navwalk mark start")
+  check(walk:find("navwalk", 1, true) ~= nil, "navwalk: the command is routed (got " .. tostring(walk) .. ")")
+  check(not walk:find("error", 1, true), "navwalk: no error when the minimap module is absent")
+  local walkOut = run("navwalk")
+  check(walkOut:find("navwalk", 1, true) ~= nil, "navwalk: a bare command prints its state")
+  local help2 = run("help")
+  check(help2:find("/nt minimap", 1, true) ~= nil, "help lists /nt minimap")
+  check(help2:find("/nt navwalk", 1, true) ~= nil, "help lists /nt navwalk")
+end
+
 if failed == 0 then
   print("slash_spec: ok")
 else

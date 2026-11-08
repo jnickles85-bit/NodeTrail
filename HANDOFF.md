@@ -5,6 +5,34 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
 **2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 
+- **The minimap route is now checked against the objects it drew, not against its own maths**
+  (t_86583cf2). The earlier check was circular: it compared the diag's fresh recalculation of the
+  player's map fraction with the previous recalculation. Now the drawer STAMPS every draw
+  (`drawer.lastApplied.time/.mapID/.playerFrac`, mirrored on `MinimapPath._stamp`) and
+  `/nt mapdiag` prints that stamp back verbatim — never recomputed — plus the anchors the client
+  reports for the nearest drawn dot (`GetPoint(1)`/`GetPoint(2)`), the centre they imply, its
+  distance from the minimap centre in px / radii / map fractions, the route segment and point that
+  dot belongs to, the world-map canvas anchor for the same index, drawn-vs-planned counts and
+  whether the ticker has fired since the last player move. New lines: `minimap stamp:`,
+  `minimap drawn dot:`, `minimap drawn dot route:`, `minimap drawn vs planned:`,
+  `minimap crosscheck:` (per index: world canvas anchor, minimap px, drawn/hidden + reason,
+  mapID equality) and `minimap scale audit:` (HereBeDragons yard distance ÷ drawn px = the real
+  yd/px, so the 0.075 fallback can be measured instead of assumed; prints `absent` without HBD).
+  The WORLD MAP half got the same treatment: `route dots inside the map's visible rect: N/M` (a
+  route that is 100% outside can no longer read as a pass) and `/nt mapdiag probe` now draws
+  labelled markers at #1/#10/#20/last plus `P` for the player, printing canvas, host and
+  WorldMapFrame/ScrollContainer rects. New `/nt minimap on|off` switches the minimap route alone
+  (world map untouched). New `/nt navwalk start|mark <label>|clear` records the four-stop walk
+  (client coords, draw-time stamp, drawn anchors, segment/point index, distances) into
+  `NodeTrailDB.navwalk`, which the client writes on `/reload` — so the live table can be read off
+  disk instead of transcribed. New `tests/minimap_walk_spec.lua` replays four stops on a synthetic
+  segment beside a landmark and asserts the DRAWN anchors (read from the regions) sit where the
+  stamp puts them, move opposite the player, keep a constant offset from the landmark, and that the
+  player's distance to the segment shrinks → ~0 → grows: **38 FAILs on `d34dcb3`**, green at this
+  commit; all 43 `tests/*.lua` pass under lua5.1. The live four-stop walk in Mightie's client is
+  still the operator's step — the numbers this card's acceptance needs come from `/nt navwalk`.
+  Route generation and the dot primitive (`UI/LineDraw.lua`) are untouched.
+
 - **The beast panel shows what SKINNING yields — the corpse loot is gone** (t_2c573dbf).
   Mightie on a Dire Mottled Boar: "beast tooltip doesnt need the actual items the mob can drop. Just
   what we obtain from skinning." `Data/SkinHints.lua` no longer aggregates or renders the corpse
