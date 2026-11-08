@@ -80,6 +80,29 @@ function D.Create()
   }
 end
 
+--- What one drawn object ACTUALLY carries, read back from the client after the
+--- draw — not what the draw asked for. `requested` is the colour the code
+--- passed, `vertex`/`alpha` are `GetVertexColor`/`GetAlpha` read from the
+--- region, so "the alpha never reached the texture" is a printed fact instead
+--- of a guess. `planned`/`screen` are the sizes the plan asked for.
+function D.ReadBack(obj, extra)
+  local d = D.Describe(obj)
+  local out = extra or {}
+  out.present = d.present
+  out.kind = d.kind
+  out.shown = d.shown
+  out.alpha = d.alpha
+  out.vertex = d.vertex
+  out.width = d.width
+  out.height = d.height
+  out.level = d.level
+  out.strata = d.strata
+  out.layer = d.layer
+  out.blend = d.blend
+  out.parent = d.parent
+  return out
+end
+
 --- Live state of one pool object, for /nt mapdiag. Every read is guarded, so a
 --- region missing a getter reports nil ("absent") instead of erroring. The
 --- point fields are the real 5-value region contract
@@ -136,6 +159,11 @@ function D.Describe(obj)
   -- (nil), not as level 0 — those two are very different draw orders.
   d.level = read("GetFrameLevel")
   d.strata = read("GetFrameStrata")
+  -- Which LAYER the region ended up in, and how it blends. A dot at the right
+  -- colour and size is still a ghost when it lands on a layer under the map art
+  -- or blends in a way the client does not honour.
+  d.layer = read("GetDrawLayer")
+  d.blend = read("GetBlendMode")
   d.parent = read("GetParent")
   local vr, vg, vb, va = read("GetVertexColor")
   if type(vr) == "number" then
@@ -385,11 +413,18 @@ function D.TextureProofText(p)
     type(p.numPoints) == "number" and string.format("%d", p.numPoints) or "absent")
 end
 
+--- Paint one object with the route colour, and report WHICH call the client
+--- actually took. Modern clients accept `SetColorTexture` and it wins over
+--- `SetVertexColor` — so `GetVertexColor` reads back 1,1,1,1 no matter what
+--- colour the dot is. "Which call carried the colour" is therefore part of the
+--- measurement: a diag that only reads the vertex colour is blind on exactly
+--- the clients this addon runs on.
+--- @return "SetColorTexture"|"SetVertexColor"|"none"
 local function applyColor(obj, r, g, b, a, texturePath)
   if obj.SetColorTexture then
     local ok = pcall(obj.SetColorTexture, obj, r, g, b, a)
     if ok then
-      return
+      return "SetColorTexture"
     end
   end
   if obj.SetTexture then
@@ -397,7 +432,9 @@ local function applyColor(obj, r, g, b, a, texturePath)
   end
   if obj.SetVertexColor then
     pcall(obj.SetVertexColor, obj, r, g, b, a)
+    return "SetVertexColor"
   end
+  return "none"
 end
 
 -- The probe in MapOverlay paints its marker/border with the SAME path the
@@ -526,7 +563,14 @@ end
 local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space, sublevel)
   local half = (size or 2) * 0.5
   obj:SetParent(parent)
-  applyColor(obj, r, g, b, a, WHITE)
+  local via = applyColor(obj, r, g, b, a, WHITE)
+  -- A pooled region can still carry an alpha from an earlier use, and an
+  -- inherited parent alpha multiplies whatever we set. The vertex colour is the
+  -- only alpha this draw means, so the region's own alpha is pinned to 1 (the
+  -- host asks the client to ignore the parent's — see MapOverlay.EnsureHost).
+  if obj.SetAlpha then
+    pcall(obj.SetAlpha, obj, 1)
+  end
   if obj.SetDrawLayer then
     -- The outline is drawn one sublevel BELOW the white dot, so a client that
     -- paints by sublevel agrees with the creation order the pool already has.
@@ -547,6 +591,7 @@ local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space, sublevel)
     obj:SetPoint("TOPRIGHT", parent, "TOPLEFT", cx + half, -(cy - half))
   end
   obj:Show()
+  return via
 end
 
 -- ── Dot sizing is a SCREEN measurement, not a canvas one ───────────────────
@@ -555,9 +600,16 @@ end
 -- over the Barrens' tan terrain that is invisible. The operator read that as
 -- "the line is somewhere else, across the zone". Dot geometry is therefore
 -- computed in screen px and divided by the surface scale.
-local DOT_MIN_SCREEN = 3     -- the white dot never renders narrower than this
-local DOT_OUTLINE_GROW = 2  -- screen px the dark outline adds (1px rim each side)
-local DOT_SPACING_MIN = 3   -- screen px between dots (screen units, like the size)
+local DOT_MIN_SCREEN = 4     -- the white dot never renders narrower than this
+local DOT_OUTLINE_GROW = 2   -- screen px the dark outline adds (1px rim on each side)
+local DOT_SPACING_MIN = 6    -- screen px between dots (screen units, like the size)
+-- The white dot is OPAQUE. pathColor's 0.9 alpha was measured as a ghost: 3
+-- screen px of white at 90 % over the Barrens' tan blends to a pale smear that
+-- is only legible if you are already looking at it, and the dark rim behind it
+-- is 1 px wide, so it dilutes too. A route that has to be followed is a solid
+-- stroke; the requested alpha is still recorded (`alphaRequested`) and printed
+-- by /nt mapdiag, so nothing is hidden — it is overridden, on purpose.
+local DOT_MIN_ALPHA = 1
 -- The dark dot behind the white one. Contrast, not brightness: white at 0.9
 -- over tan is ~invisible, and the map art's colour changes per zone, so a fixed
 -- light stroke cannot survive every zone. An opaque near-black rim does.
@@ -569,9 +621,11 @@ local DOT_MAX_TOTAL = 1200
 
 --- Pure: how big a dot has to be, in BOTH units.
 --- `canvasScale` is canvas px -> screen px (WorldMapFrame:GetCanvasScale()).
+--- `screenFloor` (optional) overrides DOT_MIN_SCREEN — the visibility ladder in
+--- /nt mapdiag drives it so one build can A/B a 3/4/5 px core without a deploy.
 --- @return { scale, pathWidth, screenSize, screenSpacing, screenOutline,
 ---           size, spacing, outline } — screen* in screen px, the rest in canvas px
-function D.DotMetrics(pathWidth, canvasScale)
+function D.DotMetrics(pathWidth, canvasScale, screenFloor)
   local scale = tonumber(canvasScale) or 1
   if scale ~= scale or scale <= 0 then
     scale = 1
@@ -582,15 +636,31 @@ function D.DotMetrics(pathWidth, canvasScale)
   if scale > DOT_SCALE_MAX then
     scale = DOT_SCALE_MAX
   end
+  local floor = tonumber(screenFloor)
+  if not floor or floor ~= floor or floor < 1 then
+    floor = DOT_MIN_SCREEN
+  end
   local width = tonumber(pathWidth) or 0
   if width ~= width or width < 0 then
     width = 0
   end
   local screenSize = width
-  if screenSize < DOT_MIN_SCREEN then
-    screenSize = DOT_MIN_SCREEN
+  if screenSize < floor then
+    screenSize = floor
   end
-  local screenSpacing = screenSize
+  -- ── The pitch is the RIM WIDTH, not the dot width ──────────────────────
+  -- Each dot is painted twice (a dark rim, then the white core). The rim is
+  -- bigger than the core by DOT_OUTLINE_GROW, so a pitch equal to the CORE
+  -- leaves the neighbouring rim reaching half a grow — 1 px — into this core.
+  -- That is not a theoretical worry: on the reported draw (2.02 canvas px core,
+  -- 2.02 pitch, 3.36 rim) the next dot's rim buried 33% of every white core on
+  -- a straight run and 39% on a 45° one, and the route — correct, opaque,
+  -- above the art — read as "extremely transparent". Spacing the dots by the
+  -- RIM width puts the neighbouring rim exactly one pixel clear of the core,
+  -- so no paint order, no sublevel and no region-creation order can bury a
+  -- white dot ever again. The chain stays continuous: the rims touch edge to
+  -- edge, which is the dark outline of the stroke.
+  local screenSpacing = screenSize + DOT_OUTLINE_GROW
   if screenSpacing < DOT_SPACING_MIN then
     screenSpacing = DOT_SPACING_MIN
   end
@@ -598,6 +668,7 @@ function D.DotMetrics(pathWidth, canvasScale)
   return {
     scale = scale,
     pathWidth = width,
+    screenFloor = floor,
     screenSize = screenSize,
     screenSpacing = screenSpacing,
     screenOutline = screenOutline,
@@ -1010,6 +1081,16 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     if type(m) ~= "table" then
       m = D.DotMetrics(thickness, 1)
     end
+    -- What the caller ASKED for vs what the white dot is painted with. The
+    -- requested alpha is kept so /nt mapdiag can print both; the core is
+    -- opaque (DOT_MIN_ALPHA) because 0.9-over-tan is the ghost this card is.
+    local dotRequested = tonumber(a) or 1
+    local dotAlpha = dotRequested
+    if dotAlpha < DOT_MIN_ALPHA then
+      dotAlpha = DOT_MIN_ALPHA
+    end
+    drawer.lastApplied.alphaRequested = dotRequested
+    drawer.lastApplied.a = dotAlpha
     -- When the allocation cap widened the dots, the rim widens with them, so
     -- the outlined stroke keeps the same weight-to-rim ratio everywhere.
     local rimRatio = (m.size > 0) and (m.outline / m.size) or 1
@@ -1037,6 +1118,10 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     local function paint(plans)
       local index, painted, missing = 1, 0, 0
       local first
+      -- A retry repaints the pool, so the sample must describe the LAST paint:
+      -- keeping the first paint's read-back would print a plan that is no longer
+      -- on screen.
+      drawer.lastApplied.sampleDot, drawer.lastApplied.sampleRim = nil, nil
       outside, box = 0, {}
       for i = 1, count do
         local seg, plan = buf[i], plans[i]
@@ -1046,23 +1131,48 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
           for k = 0, plan.steps do
             local t = k / plan.steps
             local cx, cy = seg[1] + dx * t, seg[2] + dy * t
-            -- Each dot is drawn TWICE. White at 0.9 alpha alone is invisible
-            -- over bright terrain (the Barrens' tan centre), which is what made
-            -- the route read as "somewhere else across the zone". The dark
-            -- outline is drawn first, one or two screen px larger, then the
-            -- white dot on top: that survives any terrain colour, which is the
-            -- actual requirement — the map art varies per zone.
+            -- Each dot is drawn TWICE: a dark rim, then the white core on top.
+            -- The rim is one screen px wider on each side, and the dots are
+            -- spaced by the RIM's width (DotMetrics), so the rim of the next
+            -- dot stops one pixel short of this core — the paint order, the
+            -- region-creation order and the client's sublevel support no longer
+            -- decide whether a white dot survives. Measured on the previous
+            -- geometry (pitch == core) the neighbouring rim buried a third of
+            -- every core, which is the ghost this card is about.
             local under = acquire(drawer, index, parent)
+            local rimVia
             if under then
-              paintDot(under, parent, cx, cy, plan.size * rimRatio,
+              rimVia = paintDot(under, parent, cx, cy, plan.size * rimRatio,
                 DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
+              if not drawer.lastApplied.sampleRim then
+                drawer.lastApplied.sampleRim = D.ReadBack(under, {
+                  requested = { DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A },
+                  via = rimVia,
+                  planned = plan.size * rimRatio,
+                  screen = (plan.size * rimRatio) * (m.scale > 0 and m.scale or 1),
+                })
+              end
             end
             index = index + 1
             local obj = acquire(drawer, index, parent)
             if obj then
-              paintDot(obj, parent, cx, cy, plan.size, r, g, b, a, space, 7)
+              local dotVia = paintDot(obj, parent, cx, cy, plan.size, r, g, b, dotAlpha, space, 7)
               painted = painted + 1
               measured(cx, cy)
+              -- ONE sampled dot, read back from the client at draw time. The
+              -- acceptance asks for the requested colour next to GetVertexColor:
+              -- a dot whose vertex alpha is not what the draw passed means the
+              -- alpha never reached the texture, which is a different bug from
+              -- a dot that is simply too small or under something.
+              if not drawer.lastApplied.sampleDot then
+                drawer.lastApplied.sampleDot = D.ReadBack(obj, {
+                  requested = { r, g, b, dotAlpha },
+                  via = dotVia,
+                  requestedAlpha = dotRequested,
+                  planned = plan.size,
+                  screen = plan.size * (m.scale > 0 and m.scale or 1),
+                })
+              end
             else
               -- No region for this dot: it is NOT painted, whatever the plan
               -- says. Counting it as painted is what made a route that stopped
@@ -1237,6 +1347,13 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     drawer.lastApplied.dotScreenSize = m.screenSize
     drawer.lastApplied.dotScreenSpacing = m.screenSpacing
     drawer.lastApplied.dotScreenOutline = m.screenOutline
+    -- The legibility invariant, as one number: the gap between the edge of the
+    -- NEIGHBOURING dot's rim and the edge of this core. Negative means that rim
+    -- crosses into the white dot (the ghost, whatever the paint order); zero or
+    -- more means no draw order and no sublevel support can bury a dot.
+    drawer.lastApplied.dotClearance =
+      m.screenSpacing - (m.screenOutline + m.screenSize) * 0.5
+    drawer.lastApplied.dotFloor = m.screenFloor
     drawer.lastApplied.dotPathWidth = m.pathWidth
     return
   end

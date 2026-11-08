@@ -269,33 +269,40 @@ else
   check(type(m) == "table", "A: DotMetrics returns a table")
   near(m.scale, CANVAS_SCALE, "A: the scale it was given is reported back", METRIC_TOL)
   near(m.pathWidth, 2, "A: pathWidth is reported", METRIC_TOL)
-  check(m.screenSize >= 3 - METRIC_TOL,
-    "A: the dot is at least 3 SCREEN px (got " .. tostring(m.screenSize) .. ")")
+  check(m.screenSize >= 4 - METRIC_TOL,
+    "A: the dot is at least 4 SCREEN px (got " .. tostring(m.screenSize) .. ")")
   near(m.size, m.screenSize / CANVAS_SCALE, "A: canvas px = screen px / canvas scale", 1e-9)
   check(m.outline > m.size,
     "A: the outline dot is larger than the white dot (" .. tostring(m.outline)
       .. " vs " .. tostring(m.size) .. ")")
   near(m.screenOutline - m.screenSize, 2,
     "A: the outline adds 2 screen px (a 1px rim on each side)", 1e-9)
-  near(m.screenSpacing, m.screenSize,
-    "A: dots are spaced by their own size, so the chain has no hole", METRIC_TOL)
+  near(m.screenSpacing, m.screenSize + 2,
+    "A: dots are spaced by the RIM width (core + 1px each side), so no rim reaches a core", METRIC_TOL)
 
-  -- The floor holds on any surface: a zoomed-in canvas (scale > 1) still gets 3
+  -- The floor holds on any surface: a zoomed-in canvas (scale > 1) still gets 4
   -- screen px, which means a SMALLER canvas dot.
   local zoomed = LD.DotMetrics(2, 2)
-  near(zoomed.size, 1.5, "A: at scale 2 the canvas dot is half the screen dot", 1e-9)
-  near(zoomed.screenSize, 3, "A: and still 3 screen px", 1e-9)
+  near(zoomed.size, 2, "A: at scale 2 the canvas dot is half the screen dot", 1e-9)
+  near(zoomed.screenSize, 4, "A: and still 4 screen px", 1e-9)
 
   -- A pathWidth above the floor is honoured in screen px, not overridden.
   local wide = LD.DotMetrics(8, 1)
   near(wide.size, 8, "A: a wide stroke is not shrunk to the floor", 1e-9)
-  near(wide.screenSpacing, 8, "A: a wide stroke spaces by its own width", 1e-9)
+  near(wide.screenSpacing, 10, "A: a wide stroke spaces by its rim width (8 + 2)", 1e-9)
 
   -- Unusable scales degrade to 1 (and never divide by zero).
-  near(LD.DotMetrics(2, nil).size, 3, "A: no scale reads as 1", 1e-9)
-  near(LD.DotMetrics(2, 0).size, 3, "A: scale 0 reads as 1", 1e-9)
-  near(LD.DotMetrics(nil, CANVAS_SCALE).screenSize, 3,
+  near(LD.DotMetrics(2, nil).size, 4, "A: no scale reads as 1", 1e-9)
+  near(LD.DotMetrics(2, 0).size, 4, "A: scale 0 reads as 1", 1e-9)
+  near(LD.DotMetrics(nil, CANVAS_SCALE).screenSize, 4,
     "A: a missing pathWidth falls back to the floor", 1e-9)
+  -- The ladder's floor override, used in game to A/B the core without a deploy.
+  near(LD.DotMetrics(2, CANVAS_SCALE, 6).screenSize, 6,
+    "A: an explicit screen floor is honoured", 1e-9)
+  near(LD.DotMetrics(2, CANVAS_SCALE, 3).screenSize, 3,
+    "A: the ladder can ask for a SMALLER floor too (the old 3px, for the A/B)", 1e-9)
+  near(LD.DotMetrics(4, CANVAS_SCALE, 3).screenSize, 4,
+    "A: a stroke above the floor is never shrunk by it", 1e-9)
 end
 
 -- ═══ B. a real draw on a 0.696 canvas ═════════════════════════════════════
@@ -332,12 +339,12 @@ end
 check(#whites > 20, "B: a chain of white dots covers the segment, got " .. #whites)
 check(applied.dots == #whites,
   "B: the draw recorded " .. tostring(applied.dots) .. " dots, the pool shows " .. #whites)
-near(applied.dotSize, 3 / CANVAS_SCALE, "B: the recorded canvas dot size", 1e-6)
+near(applied.dotSize, 4 / CANVAS_SCALE, "B: the recorded canvas dot size", 1e-6)
 near(applied.dotScale, CANVAS_SCALE, "B: the draw recorded the scale it divided by", 1e-6)
-near(applied.dotScreenSize, 3, "B: the recorded screen dot size", 1e-6)
-near(applied.dotScreenOutline, 5, "B: the recorded screen outline size", 1e-6)
+near(applied.dotScreenSize, 4, "B: the recorded screen dot size", 1e-6)
+near(applied.dotScreenOutline, 6, "B: the recorded screen outline size", 1e-6)
 
--- B1. every white dot renders at least 3 SCREEN px wide.
+-- B1. every white dot renders at least 4 SCREEN px wide.
 local worst = nil
 for i = 1, #whites do
   local o = pool[whites[i]]
@@ -346,12 +353,12 @@ for i = 1, #whites do
     worst = screen
   end
 end
-check(worst ~= nil and worst >= 3 - 0.01,
-  "B: the narrowest white dot is still >= 3 screen px (got " .. tostring(worst) .. ")")
+check(worst ~= nil and worst >= 4 - 0.01,
+  "B: the narrowest white dot is still >= 4 screen px (got " .. tostring(worst) .. ")")
 
 -- B2. the chain starts and ends on the projected points (nothing moved).
 local firstDot, lastDot = pool[whites[1]], pool[whites[#whites]]
-local HALF = (3 / CANVAS_SCALE) * 0.5
+local HALF = (4 / CANVAS_SCALE) * 0.5
 if firstDot and lastDot and #firstDot.points == 2 and #lastDot.points == 2 then
   near(firstDot.points[1][4], 403.6 - HALF, "B: the first dot's left edge sits on the first point", 0.05)
   near(lastDot.points[1][4], 581.6 - HALF, "B: the last dot's left edge sits on the segment end", 0.05)
@@ -394,8 +401,12 @@ check(notUnder == 0, "C: the outline never draws over the white dot (" .. notUnd
 check(wrongSide == 0, "C: the outline is centred on the same pixel as its dot (" .. wrongSide .. " off-centre)")
 
 local whiteDot = pool[whites[1]]
-check(whiteDot and whiteDot.color and math.abs(whiteDot.color[4] - 0.9) < 1e-9,
-  "C: the white dot still carries pathColor's alpha")
+check(whiteDot and whiteDot.color and math.abs(whiteDot.color[4] - 1) < 1e-9,
+  "C: the white dot is painted OPAQUE (1.0), not at pathColor's 0.9 alpha (got "
+    .. tostring(whiteDot and whiteDot.color and whiteDot.color[4]) .. ")")
+check(applied.alphaRequested ~= nil and math.abs(applied.alphaRequested - 0.9) < 1e-9,
+  "C: the alpha the settings asked for is still recorded (got "
+    .. tostring(applied.alphaRequested) .. ")")
 local outlineDot = pool[whites[1] - 1]
 check(outlineDot and outlineDot.color and outlineDot.color[4] >= 0.9,
   "C: the outline is near-opaque so it wins over any terrain colour")
@@ -413,11 +424,11 @@ if dotsLine then
     "D: the canvas scale it read is printed (got " .. dotsLine .. ")")
   check(dotsLine:find("canvas px", 1, true) ~= nil,
     "D: the dot size in canvas px is printed (got " .. dotsLine .. ")")
-  check(dotsLine:find("3.00 screen px", 1, true) ~= nil,
+  check(dotsLine:find("4.00 screen px", 1, true) ~= nil,
     "D: the computed dot size in screen px is printed (got " .. dotsLine .. ")")
   check(dotsLine:find("outline=", 1, true) ~= nil,
     "D: the outline size is printed (got " .. dotsLine .. ")")
-  check(dotsLine:find("5.00 screen px", 1, true) ~= nil,
+  check(dotsLine:find("6.00 screen px", 1, true) ~= nil,
     "D: the outline's screen size is printed (got " .. dotsLine .. ")")
 end
 
@@ -452,12 +463,12 @@ for i = 1, #miniWhites do
     miniWorst = w
   end
 end
-check(miniWorst ~= nil and miniWorst >= 3 - 0.01,
-  "E: the minimap dot is at least 3 screen px too (got " .. tostring(miniWorst) .. ")")
+check(miniWorst ~= nil and miniWorst >= 4 - 0.01,
+  "E: the minimap dot is at least 4 screen px too (got " .. tostring(miniWorst) .. ")")
 check(miniOutlines == #miniWhites,
   "E: the minimap dots carry the same outline (outlines=" .. miniOutlines
     .. " whites=" .. #miniWhites .. ")")
-near(miniApplied.dotScreenSize, 3, "E: and reports the same screen size", 1e-6)
+near(miniApplied.dotScreenSize, 4, "E: and reports the same screen size", 1e-6)
 
 if failed > 0 then
   io.stderr:write(failed .. " map dot scale check(s) failed\n")

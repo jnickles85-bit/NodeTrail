@@ -355,8 +355,30 @@ function ns.PrintMapDiag(arg)
     if not okS then
       say("primitive failed: " .. tostring(errS))
     end
+  elseif mode:match("^floor") then
+    -- The visibility ladder's rung 3, without a redeploy: same route, same
+    -- coordinates, only the dot's SCREEN size changes.
+    if type(overlay.SetDotFloor) ~= "function" then
+      say("floor switch unavailable (this MapOverlay has no SetDotFloor)")
+      return
+    end
+    local okF, errF = pcall(overlay.SetDotFloor, overlay, mode:match("^floor%s*(.*)$"))
+    if not okF then
+      say("floor failed: " .. tostring(errF))
+    end
+  elseif mode:match("^strata") then
+    -- Rung 2: raise the host above whatever is over the map, or prove it is
+    -- already above it.
+    if type(overlay.SetStrata) ~= "function" then
+      say("strata switch unavailable (this MapOverlay has no SetStrata)")
+      return
+    end
+    local okT, errT = pcall(overlay.SetStrata, overlay, mode:match("^strata%s*(.*)$"))
+    if not okT then
+      say("strata failed: " .. tostring(errT))
+    end
   elseif mode ~= "" then
-    say(("unknown option '%s' (try: probe | probe off | primitive <auto|line|dots|rotate>)"):format(mode))
+    say(("unknown option '%s' (try: probe | probe off | primitive <auto|line|dots|rotate> | floor <px|auto> | strata <MEDIUM|HIGH|DIALOG|auto>)"):format(mode))
     return
   end
   local ok, err = pcall(overlay.Diag, overlay)

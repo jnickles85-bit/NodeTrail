@@ -188,6 +188,100 @@ local function parentChainText(frame, limit)
   return table.concat(parts, " <- ")
 end
 
+--- The alpha the dots ACTUALLY paint with. A frame's drawn alpha is its own
+--- alpha multiplied by every ancestor's, so a host at alpha 1.00 inside a canvas
+--- at 0.40 can only ever paint at 0.40 — a ghost with every setting reading
+--- 1.00. Nothing in the old diag multiplied the chain: it printed the host's own
+--- `GetAlpha()` and stopped. Walks the real parent chain and names the frame that
+--- dims it.
+--- @return { text, effective, culprit, culpritAlpha, depth }
+local function alphaChain(frame, limit)
+  local parts = {}
+  local node = frame
+  local effective = 1
+  local culprit, culpritAlpha
+  local depth = 0
+  while node and depth < (limit or 12) do
+    depth = depth + 1
+    local alpha = tonumber(call(node, "GetAlpha"))
+    if alpha then
+      effective = effective * alpha
+      if alpha < 0.999 then
+        culprit, culpritAlpha = node, alpha
+      end
+    end
+    parts[#parts + 1] = frameName(node) .. "=" .. (alpha and fmtNum(alpha, 2) or "?")
+    local up = call(node, "GetParent")
+    if up == node then
+      break
+    end
+    node = up
+  end
+  return {
+    text = (#parts > 0) and table.concat(parts, " <- ") or "absent",
+    effective = effective,
+    culprit = culprit,
+    culpritAlpha = culpritAlpha,
+    depth = depth,
+  }
+end
+
+--- The frames that could COVER the host and were never in the audit: the z-order
+--- audit only compares the big map-art frames, so a parchment / fog / dialog
+--- child sitting at a higher level, or any frame carrying an alpha below 1 over
+--- the map, is invisible to it. This walks the canvas's ancestors, records the
+--- shown frames that outrank the host or are faded, and keeps the ones that cover
+--- at least half the map. A route drawn UNDER such a frame is exactly a ghost:
+--- present, in the right place, and diluted by whatever is on top of it.
+local function coverFrames(host, parent, width, height, hostLevel, hostStrata)
+  local out = {}
+  local seen = { [host] = true }
+  local hostRank = strataRank(hostStrata)
+  local node = parent
+  local depth, examined = 0, 0
+  while node and depth < 8 and examined < 400 do
+    depth = depth + 1
+    seen[node] = true
+    local kids = call(node, "GetChildren")
+    if type(kids) == "table" then
+      for i = 1, #kids do
+        local kid = kids[i]
+        examined = examined + 1
+        if kid and not seen[kid] and shownState(kid) ~= false then
+          seen[kid] = true
+          local level = frameLevel(kid)
+          local strata = call(kid, "GetFrameStrata")
+          local alpha = tonumber(call(kid, "GetAlpha"))
+          local rank = strataRank(strata)
+          local above = (type(level) == "number" and type(hostLevel) == "number" and level > hostLevel)
+          local highStrata = (rank ~= nil and hostRank ~= nil and rank > hostRank) or false
+          local faded = (alpha ~= nil and alpha < 0.999)
+          if above or highStrata or faded then
+            local w, h = frameSize(kid)
+            local covers = true
+            if type(width) == "number" and type(height) == "number" and w and h then
+              covers = (w >= width * 0.5) and (h >= height * 0.5)
+            end
+            if covers then
+              out[#out + 1] = {
+                frame = kid,
+                name = frameName(kid),
+                level = level,
+                strata = strata,
+                alpha = alpha,
+                faded = faded,
+                over = above or highStrata,
+              }
+            end
+          end
+        end
+      end
+    end
+    node = call(node, "GetParent")
+  end
+  return out
+end
+
 local function displayedMapID(mapFrame)
   if mapFrame and isFn(mapFrame.GetMapID) then
     local ok, id = pcall(mapFrame.GetMapID, mapFrame)
@@ -374,6 +468,31 @@ function M:EnsureHost(parent, label)
     local current = frameLevel(host)
     if type(current) ~= "number" or current < level + 10 then
       pcall(host.SetFrameLevel, host, level + 10)
+    end
+  end
+  -- Opacity, measured rather than assumed. A frame draws at ITS alpha times
+  -- every ancestor's, so the host is pinned opaque here and the client is asked
+  -- to ignore the chain above it (`SetIgnoreParentAlpha`): the world map fades
+  -- itself in and out, and while a parent chain is faded our dots are a ghost
+  -- whatever the vertex colour says. Both calls are read back, never trusted.
+  pcall(host.SetAlpha, host, 1)
+  if isFn(host.SetIgnoreParentAlpha) then
+    pcall(host.SetIgnoreParentAlpha, host, true)
+  end
+  self._hostAlpha = tonumber(call(host, "GetAlpha"))
+  self._ignoreParentAlpha = nil
+  if isFn(host.GetIgnoreParentAlpha) then
+    local ok, ignore = pcall(host.GetIgnoreParentAlpha, host)
+    if ok then
+      self._ignoreParentAlpha = ignore
+    end
+  end
+  -- The ladder's strata knob (only ever upward — the same rule as above).
+  if self._forceStrata and isFn(host.SetFrameStrata) then
+    local forced = strataRank(self._forceStrata)
+    local now = strataRank(call(host, "GetFrameStrata"))
+    if forced and (not now or now < forced) then
+      pcall(host.SetFrameStrata, host, self._forceStrata)
     end
   end
   return host
@@ -564,6 +683,8 @@ function M:_redraw()
   self._skipped = nil
   self._measured = false
   self._drew = false
+  self._alphaChain = nil
+  self._cover = nil
   if not self.path or #self.path < 2 then
     self._why = "no route"
     self:ReleaseVisuals()
@@ -683,9 +804,15 @@ function M:_redraw()
   -- Dot geometry is a SCREEN measurement: the canvas is shown at ~0.696 scale on
   -- this client, so a stroke expressed in canvas px shrinks below sight.
   local canvasScale = mapZoom(mapFrame)
-  local metrics = ns.LineDraw.DotMetrics(stroke, canvasScale)
+  local metrics = ns.LineDraw.DotMetrics(stroke, canvasScale, self._screenFloor)
   self._dotMetrics = metrics
   ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / canvasScale, r, g, b, a, "ydown", metrics)
+  -- Why it might still not READ, measured next to the draw: the alpha the whole
+  -- parent chain multiplies us down to, and any frame that outranks the host
+  -- over the map. Both are read here, on every redraw, because both change
+  -- (the map fades itself, the art frames are created late).
+  self._alphaChain = alphaChain(host)
+  self._cover = coverFrames(host, parent, width, height, frameLevel(host), call(host, "GetFrameStrata"))
   self._drew = true
   self._lastQueued = count
   -- One record per draw, newest first. The card's third suspect is a later pass
@@ -823,8 +950,13 @@ end
 -- missing any of these APIs prints "absent" (or "error: ..." for that one
 -- line) and never aborts the rest of the block.
 
+local captured   -- set while M:Diag() runs: its own output, kept for the SV
+
 local function say(text)
   local line = "NodeTrail mapdiag: " .. tostring(text)
+  if type(captured) == "table" then
+    captured[#captured + 1] = line
+  end
   if type(DEFAULT_CHAT_FRAME) == "table" and isFn(DEFAULT_CHAT_FRAME.AddMessage) then
     local ok = pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, line)
     if ok then
@@ -947,6 +1079,10 @@ end
 
 function M:Diag()
   local mapFrame = _G.WorldMapFrame
+  -- Every line this run prints is also kept, so the run can be read back from
+  -- SavedVariables after a /reload instead of being transcribed off a chat
+  -- frame by hand. The chat is unchanged; this is a copy.
+  captured = {}
 
   say("frame environment")
   fact(function()
@@ -1202,6 +1338,130 @@ function M:Diag()
     return "parent chain: " .. parentChainText(self.host and self._hostParent or nil)
   end)
   fact(function()
+    -- The card's question in one line: what alpha do these dots actually paint
+    -- at? Effective = the product up the real parent chain, plus whether the
+    -- client accepted the request to ignore it.
+    local c = self._alphaChain
+    if type(c) ~= "table" then
+      return "alpha chain: not measured yet (no redraw on a measurable map frame)"
+    end
+    local ignore = tostring(self._ignoreParentAlpha)
+    if ignore == "nil" then
+      ignore = "absent on this client"
+    end
+    local head = ("alpha chain: %s -> chain=%s; effective=%s; host alpha=%s; ignore-parent-alpha=%s")
+      :format(c.text, fmtNum(c.effective, 2),
+        fmtNum(self._ignoreParentAlpha == true and (self._hostAlpha or 1) or c.effective, 2),
+        fmtNum(self._hostAlpha, 2), ignore)
+    if c.effective < 0.99 and self._ignoreParentAlpha ~= true then
+      head = head .. (" (EFFECTIVE < 1: %s is at %s — the dots cannot paint more opaque than this)")
+        :format(frameName(c.culprit), fmtNum(c.culpritAlpha, 2))
+    end
+    return head
+  end)
+  fact(function()
+    -- Every shown frame that outranks the host over the map, or is faded. The
+    -- z-order audit only knows the big art frames: a parchment/fog/dialog child
+    -- above the host dilutes the route without ever appearing in that audit.
+    local list = self._cover
+    if type(list) ~= "table" then
+      return "cover: not measured yet (no redraw on a measurable map frame)"
+    end
+    if #list == 0 then
+      return "cover: none (no shown frame outranks the host over the map, and none is faded)"
+    end
+    local parts = {}
+    for i = 1, #list do
+      local c = list[i]
+      parts[#parts + 1] = ("%s(lvl=%s strata=%s alpha=%s%s)"):format(
+        c.name, fmtNum(c.level), tostring(c.strata or "?"), fmtNum(c.alpha, 2),
+        c.over and " ABOVE the host" or " faded")
+    end
+    return ("cover: %d frame(s) over the map that could dilute the route [%s]")
+      :format(#list, table.concat(parts, ", "))
+  end)
+  fact(function()
+    -- ONE sampled dot, read back from the client at draw time. Requested colour
+    -- next to GetVertexColor: if the alpha the draw passed is not the alpha the
+    -- region reports, the alpha never reached the texture — a different defect
+    -- from a dot that is merely small, or one that is covered.
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local s = type(applied) == "table" and applied.sampleDot or nil
+    if type(s) ~= "table" or not s.present then
+      return "sample dot: absent (the last draw painted no dot on this surface)"
+    end
+    local function triple(colour)
+      if type(colour) ~= "table" then
+        return "absent"
+      end
+      return ("%s,%s,%s,%s"):format(fmtNum(colour[1], 2), fmtNum(colour[2], 2),
+        fmtNum(colour[3], 2), fmtNum(colour[4], 2))
+    end
+    local vertex = triple(s.vertex)
+    local requested = triple(s.requested)
+    local via = tostring(s.via or "absent")
+    local landed = "not readable (this client exposes no GetVertexColor)"
+    if via == "SetColorTexture" then
+      -- This client carried the colour in a solid-colour texture, so the vertex
+      -- colour is not evidence about the dot at all — saying "landed=yes" off it
+      -- would be the same kind of lie the old diag told.
+      landed = "n/a (the colour went through SetColorTexture, not the vertex colour)"
+    elseif type(s.vertex) == "table" and type(s.requested) == "table" then
+      local same = true
+      for i = 1, 4 do
+        local want = tonumber(s.requested[i]) or 0
+        local got = tonumber(s.vertex[i])
+        if not got or math.abs(got - want) > 0.02 then
+          same = false
+        end
+      end
+      landed = same and "yes" or "NO (the client reports a different colour)"
+    end
+    local size = "absent"
+    if type(s.width) == "number" and type(s.height) == "number" then
+      size = fmtNum(s.width) .. "x" .. fmtNum(s.height)
+    end
+    local screenPx = "absent"
+    if type(s.screen) == "number" then
+      screenPx = fmtNum(s.screen, 2) .. " screen px"
+    end
+    local level = type(s.level) == "number" and fmtNum(s.level) or ("host " .. fmtNum(frameLevel(self.host)))
+    local strata = (type(s.strata) == "string" and s.strata ~= "") and s.strata
+      or tostring(call(self.host, "GetFrameStrata") or "?")
+    return ("sample dot: requested=(%s) alpha asked=%s | applied via=%s | GetVertexColor=(%s) alpha landed=%s | layer=%s blend=%s "
+      .. "measured=%s planned=%s -> %s | level=%s strata=%s | shown=%s region alpha=%s parent=%s")
+      :format(requested, fmtNum(s.requestedAlpha, 2), via, vertex, landed,
+        tostring(s.layer or "absent"), tostring(s.blend or "absent"),
+        size, fmtNum(s.planned, 2), screenPx, level, strata,
+        tostring(s.shown), fmtNum(s.alpha, 2), frameName(s.parent))
+  end)
+  fact(function()
+    -- The dark rim that makes the white dot survive any terrain colour: read the
+    -- same way, so "the rim is not painting" is a printed fact too.
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local s = type(applied) == "table" and applied.sampleRim or nil
+    if type(s) ~= "table" or not s.present then
+      return "sample rim: absent (the last draw painted no outline on this surface)"
+    end
+    local vertex = "absent"
+    if type(s.vertex) == "table" then
+      vertex = ("%s,%s,%s,%s"):format(fmtNum(s.vertex[1], 2), fmtNum(s.vertex[2], 2),
+        fmtNum(s.vertex[3], 2), fmtNum(s.vertex[4], 2))
+    end
+    local wanted = "absent"
+    if type(s.requested) == "table" then
+      wanted = ("%s,%s,%s,%s"):format(fmtNum(s.requested[1], 2), fmtNum(s.requested[2], 2),
+        fmtNum(s.requested[3], 2), fmtNum(s.requested[4], 2))
+    end
+    local size = "absent"
+    if type(s.width) == "number" and type(s.height) == "number" then
+      size = fmtNum(s.width) .. "x" .. fmtNum(s.height)
+    end
+    return ("sample rim: requested=(%s) applied via=%s | GetVertexColor=(%s) | layer=%s measured=%s planned=%s -> %s screen px | shown=%s")
+      :format(wanted, tostring(s.via or "absent"), vertex, tostring(s.layer or "absent"), size,
+        fmtNum(s.planned, 2), fmtNum(s.screen, 2), tostring(s.shown))
+  end)
+  fact(function()
     local z = self._zorder
     if type(z) ~= "table" then
       return "z-order: not measured yet (no redraw on a measurable map frame)"
@@ -1267,10 +1527,11 @@ function M:Diag()
     local drawn = type(applied) == "table" and type(applied.dotSize) == "number"
     if drawn then
       return string.format(
-        "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=3.00px; dots=%s object(s)=%s%s",
+        "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=%s px; dots=%s object(s)=%s%s",
         fmtNum(scale, 3), fmtNum(width), pair(applied.dotSize, applied.dotScreenSize),
         pair(applied.dotOutline, applied.dotScreenOutline),
         pair(applied.dotSpacing, applied.dotScreenSpacing),
+        fmtNum(applied.dotFloor, 2),
         fmtNum(applied.dots), fmtNum(applied.dotObjects or 0),
         tostring(applied.mode) ~= "dots" and (" (mode=" .. tostring(applied.mode) .. ", dots not used)") or "")
     end
@@ -1284,9 +1545,47 @@ function M:Diag()
       note = ("(not used: mode=" .. tostring(applied.mode) .. ")")
     end
     return string.format(
-      "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=3.00px %s",
+      "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=%s px %s",
       fmtNum(scale, 3), fmtNum(width), pair(m.size, m.screenSize),
-      pair(m.outline, m.screenOutline), pair(m.spacing, m.screenSpacing), note)
+      pair(m.outline, m.screenOutline), pair(m.spacing, m.screenSpacing),
+      fmtNum(m.screenFloor, 2), note)
+  end)
+  fact(function()
+    -- The ghost's arithmetic, printed instead of guessed at. Each dot is a dark
+    -- rim plus a white core, painted rim-then-core; the ONLY thing that decides
+    -- whether the neighbour's rim eats this core is the pitch between dots. The
+    -- old geometry spaced the dots by the CORE width, which left the next rim
+    -- 1 px inside every white dot — a route that was drawn, opaque and above the
+    -- art, and still read as "extremely transparent". The clearance below is
+    -- measured off the sizes the drawn regions reported, not off a constant.
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local m = self._dotMetrics
+    local src = (type(applied) == "table" and type(applied.dotClearance) == "number") and applied or nil
+    local clearance = src and src.dotClearance or (type(m) == "table" and m.screenSpacing
+      and (m.screenSpacing - (m.screenOutline + m.screenSize) * 0.5)) or nil
+    if type(clearance) ~= "number" then
+      return "draw order: not measured yet (no redraw on a measurable map frame)"
+    end
+    local pitch = src and src.dotScreenSpacing or m.screenSpacing
+    local rim = src and src.dotScreenOutline or m.screenOutline
+    local core = src and src.dotScreenSize or m.screenSize
+    local verdict
+    if clearance >= 0 then
+      verdict = ("no neighbouring rim can reach a core (%.2f px clear)"):format(clearance)
+    else
+      local buried = math.min(1, (-clearance * 2) / core)
+      verdict = ("A RIM STILL CROSSES EVERY CORE: %.2f px each side, %.0f%% of the white dot")
+        :format(-clearance, buried * 100)
+    end
+    -- Sublevels are the other half of draw order: a client that honours them
+    -- paints the rim (6) under the core (7) even when the regions were created
+    -- interleaved. Reported, because this client may not expose the call at all.
+    local sample = type(applied) == "table" and applied.sampleDot or nil
+    local layers = (type(sample) == "table" and sample.layer)
+      and ("sublevels rim/core 6/7 honoured (%s)"):format(tostring(sample.layer))
+      or "no SetDrawLayer on this client (creation order is draw order)"
+    return ("draw order: rim then core per dot; pitch=%s rim=%s core=%s screen px -> clearance=%s px; %s; %s")
+      :format(fmtNum(pitch, 2), fmtNum(rim, 2), fmtNum(core, 2), fmtNum(clearance, 2), verdict, layers)
   end)
   fact(function()
     if not self._drew then
@@ -1650,6 +1949,74 @@ function M:Diag()
   else
     say("MinimapPath: absent (minimap overlay not loaded)")
   end
+  -- The copy, for the next run to be read off disk. `mapDiagLast` is written
+  -- only by this command — a normal draw never touches it.
+  local okDb, db = pcall(ns.GetDB)
+  if okDb and type(db) == "table" then
+    local at
+    if type(GetTime) == "function" then
+      local okT, now = pcall(GetTime)
+      if okT then
+        at = now
+      end
+    end
+    db.mapDiagLast = { at = at, lines = captured }
+  end
+  captured = nil
+end
+
+--- /nt mapdiag floor <px|auto> — pin the white dot's SCREEN floor for the next
+--- redraw. The visibility ladder has to A/B the core size on the live client
+--- without another deploy: the same route, the same coordinates, only the dot's
+--- screen size changes. `auto` restores the shipped floor.
+function M:SetDotFloor(word)
+  local want = tostring(word or ""):lower():match("^%s*(.-)%s*$") or ""
+  if want == "" or want == "auto" or want == "default" then
+    self._screenFloor = nil
+    self:Redraw()
+    local m = self._dotMetrics or {}
+    say(("floor: auto -> dot=%s canvas px = %s screen px; outline=%s screen px")
+      :format(fmtNum(m.size, 2), fmtNum(m.screenSize, 2), fmtNum(m.screenOutline, 2)))
+    return
+  end
+  local px = tonumber(want)
+  if not px or px < 1 or px > 12 then
+    say(("floor: '%s' is not a pixel size (1..12, or auto)"):format(tostring(word)))
+    return
+  end
+  self._screenFloor = px
+  self:Redraw()
+  local m = self._dotMetrics or {}
+  say(("floor: %s screen px -> dot=%s canvas px = %s screen px; outline=%s canvas px = %s screen px")
+    :format(fmtNum(px, 2), fmtNum(m.size, 2), fmtNum(m.screenSize, 2),
+      fmtNum(m.outline, 2), fmtNum(m.screenOutline, 2)))
+end
+
+--- /nt mapdiag strata <MEDIUM|HIGH|DIALOG|auto> — raise the host for the next
+--- redraws. Rung 2 of the visibility ladder; the overlay never lowers a host on
+--- its own, so a strata asked for here sticks until `auto`.
+function M:SetStrata(word)
+  local want = tostring(word or ""):upper():match("^%s*(.-)%s*$") or ""
+  if want == "" or want == "AUTO" or want == "DEFAULT" then
+    self._forceStrata = nil
+    say(("strata: auto (the host is at %s)"):format(tostring(call(self.host, "GetFrameStrata") or "absent")))
+    return
+  end
+  if not strataRank(want) then
+    say(("strata: '%s' is not a frame strata (MEDIUM|HIGH|DIALOG, or auto)"):format(tostring(word)))
+    return
+  end
+  self._forceStrata = want
+  local host = self.host
+  if host and isFn(host.SetFrameStrata) then
+    pcall(host.SetFrameStrata, host, want)
+  end
+  self:Redraw()
+  -- Read back, never assume: a client that accepts the call and ignores it says
+  -- so here instead of looking fixed.
+  local now = call(host, "GetFrameStrata")
+  say(("strata: asked %s; the host reads %s%s"):format(want, tostring(now or "absent"),
+    (now == want) and "" or " (the client did not take it)"))
 end
 
 --- /nt mapdiag primitive <auto|line|dots|rotate> — pin the drawing primitive for

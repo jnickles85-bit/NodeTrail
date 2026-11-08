@@ -370,12 +370,12 @@ local firstDot, lastDot = whites[1], whites[#whites]
 if firstDot and lastDot and type(firstDot.points) == "table"
   and #firstDot.points >= 2 and #lastDot.points >= 2 then
   -- 800x600 canvas shown at scale 2, segment (200,300) -> (600,300): the white
-  -- dot is 1.5 canvas px (3 screen px) every 1.5 canvas px (3 screen px), so the
-  -- first spans [199.25,200.75] and the last [599.25,600.75].
-  near(firstDot.points[1][4], 199.25, "the first dot's left edge sits on the first point")
-  near(firstDot.points[2][4], 200.75, "the first dot's right edge")
-  near(lastDot.points[1][4], 599.25, "the last dot's left edge sits on the segment end")
-  near(lastDot.points[2][4], 600.75, "the last dot's right edge")
+  -- dot is 2 canvas px (4 screen px) every 2 canvas px (4 screen px), so the
+  -- first spans [199,201] and the last [599,601].
+  near(firstDot.points[1][4], 199, "the first dot's left edge sits on the first point")
+  near(firstDot.points[2][4], 201, "the first dot's right edge")
+  near(lastDot.points[1][4], 599, "the last dot's left edge sits on the segment end")
+  near(lastDot.points[2][4], 601, "the last dot's right edge")
   check(firstDot.width == 0 and firstDot.height == 0,
     "dots never call SetWidth/SetHeight — the anchors force the size")
   check(firstDot.rotation == nil, "dots never call SetRotation")
