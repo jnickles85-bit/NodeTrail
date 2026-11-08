@@ -260,13 +260,15 @@ local function runSlash(cmd)
 end
 
 -- panel block handles (found by the text Options.lua sets)
-local panelFsHeader, panelFsStatus, panelFsError, recButton = nil, nil, nil, nil
+local panelFsHeader, panelFsStatus, panelFsError, panelFsNote, recButton = nil, nil, nil, nil, nil
 do
   for i, f in ipairs(fonts) do
     if f.text == "Alchemy Recipes" then
       panelFsHeader = f
       panelFsStatus = fonts[i + 1]
       panelFsError = fonts[i + 2]
+      -- t_4ab7c230: the hidden-list note sits under the error line.
+      panelFsNote = fonts[i + 3]
       break
     end
   end
@@ -603,6 +605,47 @@ if type(savedClick) == "function" then
   check(not chatContains("scanned successfully"),
     "button does NOT claim a successful scan it did not get")
 end
+
+-- ════════════════════════════════════════════════════════════════════
+-- State 5 (t_4ab7c230): the client answers NO availability at all. The herb
+-- tooltip draws no Alchemy line; the options panel carries the one short
+-- reason — and hides it again on a client that CAN answer.
+-- ════════════════════════════════════════════════════════════════════
+C_TradeSkillUI = {
+  GetAllRecipeIDs = function() return { 301 } end,
+  GetRecipeInfo = function(id)
+    return { name = "Mystery Elixir " .. tostring(id), reagents = { { itemID = 2450 } } }
+  end,
+  GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+}
+freshDB()
+api.prof = "Alchemy"
+fire("TRADE_SKILL_SHOW")
+check(scannedSet(), "no-availability client: scan completed")
+check(NodeTrailDB.recipes.alchemyFilterable == false,
+  "no-availability client: nothing filterable")
+check(NodeTrailDB.recipes.alchemyAvailability == "none",
+  "no-availability client: availability recorded as none")
+
+openPanel()
+check(panelFsNote ~= nil, "panel has the hidden-list note line")
+local noteText = fsText(panelFsNote)
+check(type(noteText) == "string" and noteText:find("alchemy uses hidden", 1, true) ~= nil,
+  "panel note says the alchemy uses are hidden (got " .. tostring(noteText) .. ")")
+check(type(noteText) == "string" and noteText:find("no recipe-availability API", 1, true) ~= nil,
+  "panel note names the client API this version lacks")
+check(type(noteText) == "string" and noteText:find("GetCraftableCount", 1, true) ~= nil,
+  "panel note names GetCraftableCount")
+check(panelFsNote.shown == true, "panel note is visible when the list is hidden")
+
+-- Same saved recipes, a client that CAN answer: the note must disappear.
+C_TradeSkillUI.IsRecipeProfessionLearned = function() return true end
+fire("TRADE_SKILL_SHOW")
+check(NodeTrailDB.recipes.alchemyFilterable == true,
+  "filterable client: the gate is recorded")
+openPanel()
+check(fsText(panelFsNote) == "" and panelFsNote.shown == false,
+  "panel note is hidden when the client answers availability")
 
 -- ════════════════════════════════════════════════════════════════════
 if failed > 0 then

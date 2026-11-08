@@ -323,7 +323,8 @@ check(text5b:find("can't make yet", 1, true) == nil,
   "5b: nothing excluded → no tail (" .. text5b .. ")")
 skillLines[2].rank = 75
 
--- ═══ 6. the client exposes NEITHER field: label, never pretend ════════════
+-- ═══ 6. the client exposes NO availability signal: draw NOTHING, explain once
+--         in the options panel (t_4ab7c230) ═════════════════════════════════
 mode = "none"
 recipes = {
   { name = "Elixir of Wisdom" },
@@ -337,22 +338,32 @@ check(NodeTrailDB.recipes.alchemyFilterable == false,
 check(NodeTrailDB.recipes.alchemyAvailability == "none",
   "6: the scan records that availability was not available")
 hover("Briarthorn")
-local line6 = alchemyLine() or ""
-check(line6:find("Elixir of Wisdom", 1, true) ~= nil
-  and line6:find("Frenzy Potion", 1, true) ~= nil,
-  "6: the unfiltered list is printed whole (" .. line6 .. ")")
-local label6 = findLine(function(l) return l == "recipes (not filtered by skill)" end)
-check(label6 ~= nil, "6: the unfiltered list is LABELLED, not presented as gated")
-check(line6:find("can't make yet", 1, true) == nil,
-  "6: no excluded tail is invented when nothing could be excluded")
+check(alchemyLine() == nil,
+  "6: no Alchemy line is drawn when no signal answered (got " .. tostring(alchemyLine()) .. ")")
+check(findLine(function(l) return l == "recipes (not filtered by skill)" end) == nil,
+  "6: the unfiltered list is not printed with a caveat either")
+check(findLine(function(l)
+    return type(l) == "string" and l:find("Alchemy:", 1, true) ~= nil
+  end) == nil,
+  "6: nothing in the block advertises an Alchemy craft")
+local okHint6, hint6, why6 = pcall(function() return ns.Recipes:HiddenHint() end)
+check(okHint6, "6: the options panel reason exists (" .. tostring(hint6) .. ")")
+check(type(hint6) == "string" and hint6:find("hidden", 1, true) ~= nil,
+  "6: the options panel has the one short reason (got " .. tostring(hint6) .. ")")
+check(type(hint6) == "string" and hint6:find("no recipe-availability API", 1, true) ~= nil,
+  "6: the reason names the client API this version lacks (got " .. tostring(hint6) .. ")")
 
--- The diag says it once, and says why.
+-- The diag says it once, and says which signal was missing.
 local okRD6, rd6 = captureRecipeDiag()
 check(okRD6, "6: /nt ttdiag (recipes half) runs")
-check(rd6:find("availability:", 1, true) ~= nil,
-  "6: the diag carries an availability line (" .. rd6 .. ")")
-check(rd6:find("neither numAvailable nor requiredSkill", 1, true) ~= nil,
-  "6: the diag says the client exposed neither field")
+check(rd6:find("availability: none", 1, true) ~= nil,
+  "6: the diag carries an availability line (got " .. rd6 .. ")")
+check(rd6:find("no recipe-availability signal answered", 1, true) ~= nil,
+  "6: the diag names the missing signal")
+check(rd6:find("Alchemy line is hidden", 1, true) ~= nil,
+  "6: the diag says the line is hidden, not labelled")
+check(rd6:find("not filtered by skill", 1, true) == nil,
+  "6: the old unfiltered caveat is gone")
 
 -- ═══ 7. `item 249399` — the client's name, or an honest label ═════════════
 -- 25 gathers of Briarthorn, one of which also dropped the unknown 249399:

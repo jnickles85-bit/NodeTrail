@@ -112,6 +112,10 @@ local trade = { line = nil, rows = {} }
 GetTradeSkillLine = function() return trade.line, 1, 300 end
 GetNumTradeSkills = function() return #trade.rows end
 GetTradeSkillInfo = function(i) return trade.rows[i].name, trade.rows[i].type end
+-- t_4ab7c230: the legacy client model carries the availability count, so the
+-- scan can gate this fixture's Alchemy line (a client without it would have
+-- the line HIDDEN — see tests/alchemy_skill_gate_spec.lua §6).
+GetTradeSkillNumAvailable = function(i) return trade.rows[i].numAvailable or 1 end
 GetTradeSkillNumReagents = function(i) return #(trade.rows[i].reagents or {}) end
 GetTradeSkillReagentItemLink = function(i, r)
   return "|cffffffff|Hitem:" .. trade.rows[i].reagents[r] .. "::::::::1:::::::|h[x]|h|r"
@@ -333,6 +337,7 @@ check(stOutA:find("open your Alchemy window once", 1, true) ~= nil,
 GetTradeSkillLine = nil
 GetNumTradeSkills = nil
 GetTradeSkillInfo = nil
+GetTradeSkillNumAvailable = nil
 GetTradeSkillNumReagents = nil
 GetTradeSkillReagentItemLink = nil
 
@@ -363,6 +368,9 @@ C_TradeSkillUI = {
     return nil
   end,
   GetOpenTradeSkillLine = function() return "Alchemy" end,
+  -- t_4ab7c230: every recipe in this fixture is known, so the gated line keeps
+  -- the same expected content as before the availability gate existed.
+  IsRecipeProfessionLearned = function() return true end,
 }
 
 NodeTrailDB.recipes.alchemy = {}
@@ -624,6 +632,9 @@ C_TradeSkillUI = {
     return nil
   end,
   GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+  -- t_4ab7c230: these fixtures model recipes the character knows, so the
+  -- gated Alchemy line keeps the content the pre-gate spec expected.
+  IsRecipeProfessionLearned = function() return true end,
 }
 NodeTrailDB.recipes.alchemy = {}
 NodeTrailDB.recipes.alchemyScanned = nil
@@ -709,6 +720,9 @@ C_TradeSkillUI = {
     return nil
   end,
   GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+  -- t_4ab7c230: these fixtures model recipes the character knows, so the
+  -- gated Alchemy line keeps the content the pre-gate spec expected.
+  IsRecipeProfessionLearned = function() return true end,
 }
 NodeTrailDB.recipes.alchemy = {}
 NodeTrailDB.recipes.alchemyScanned = nil
@@ -812,6 +826,9 @@ C_TradeSkillUI = {
     }
   end,
   GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+  -- t_4ab7c230: these fixtures model recipes the character knows, so the
+  -- gated Alchemy line keeps the content the pre-gate spec expected.
+  IsRecipeProfessionLearned = function() return true end,
 }
 NodeTrailDB.recipes.alchemy = {}
 NodeTrailDB.recipes.alchemyScanned = nil
