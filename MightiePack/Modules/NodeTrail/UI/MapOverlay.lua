@@ -460,14 +460,13 @@ function M:AuditAndRaise(host, parent, width, height)
   audit.raisedNow = raisedNow
   audit.raisedEarlier = raisedEarlier
   audit.raisedFrom = (type(info) == "table") and info.from or currentLevel
-  audit.topLevel = topLevel
   audit.stillBelow = nil
   if type(audit.hostLevel) == "number" and type(topLevel) == "number" then
-    local hostRank = strataRank(hostStrata)
+    local hostRankNow = strataRank(hostStrata)
     local artRank = strataRank(topStrata)
-    if hostRank and artRank and hostRank ~= artRank then
+    if hostRankNow and artRank and hostRankNow ~= artRank then
       -- Across strata the strata wins, whatever the level says.
-      audit.stillBelow = hostRank < artRank
+      audit.stillBelow = hostRankNow < artRank
     else
       audit.stillBelow = audit.hostLevel <= topLevel
     end

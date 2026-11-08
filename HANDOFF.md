@@ -45,10 +45,15 @@ On top of that branch:
   `LineDraw` records the exact colour/thickness/space a draw applied, and `Describe()` reads a live
   line's shown/alpha/thickness/start/end back through the real region contract. `/nt mapdiag` now
   also prints: host level/strata/shown/size/alpha, the parent chain by name, the z-order audit with
-  every candidate and the verdict (`verdict: DRAW ORDER — the host sat at level 13, below
-  WorldMapDetailFrame (level 40) …`), the applied colour, both line objects, **every projected path
-  point with its pixel coordinates**, every segment's length and skip reason, and one `verdict:`
-  line that names draw-order, colour, geometry (a dot) or "cause still unknown, next measurement".
+  every candidate and whether the raise happened **on this redraw** or on an earlier one, the
+  applied colour, both line objects, **every projected path point with its pixel coordinates**,
+  every segment's length and skip reason, and one `verdict:` line naming the NEXT candidate — draw
+  order (with the level it was raised from), draw order still broken (the client refused the
+  raise), colour (alpha 0), geometry (a dot), or "cause unknown, next measurement". A raise is
+  history, not a verdict: `raisedNow` vs `raisedEarlier` keeps the geometry/colour verdicts
+  reachable, and `EnsureHost` never drops a raised host back to `canvas + 10`. Every per-redraw
+  measurement (`points`/`segments`/`colour`) is cleared on entry, so a redraw that early-returns
+  prints `not measured on the last redraw (<why>)` instead of the previous route's numbers.
   The minimap half prints the sample it actually used (mode, radius, unit), the player position,
   every point's pixel/`dist=x-radius inside|OUTSIDE`, every segment's clip decision, and its own
   verdict; the fraction fallback now follows the minimap zoom instead of drawing the same size at
@@ -179,8 +184,9 @@ Run from repo root with lua5.1:
 - `tests/tooltip_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched)
 - `tests/mapoverlay_spec.lua` (t_0f65b0b9: geometry with a Classic-era stub — WorldMapFrame WITHOUT GetCanvas, WorldMapDetailFrame 1002x1002 with the 986x986 WorldMapButton inset by 8: a known fraction lands at the expected pixel with and without the inset, an oversized inner frame is clamped, a zero-sized frame converts to nil with no division, the overlay parents to WorldMapDetailFrame, zero size queues nothing and asks for a retry, mismatched mapID and showWorldMap=off hide it, and mapdiag prints every line on that client)
 - `tests/mapdiag_spec.lua` (t_0f65b0b9: `/nt mapdiag` on a client missing WorldMapFrame, canvas, legacy frames, Minimap, GetCVar, GetCurrentMapAreaID, C_Timer, hooksecurefunc and the canvas mixin prints every labelled line with no error; throwing GetCanvas/GetMapID/GetWidth still print `absent`; no chat frame falls back to print; `/nt status` is unchanged)
-- `tests/mapdiag_zorder_spec.lua` (t_c0a68ed2: a canvas whose map art is a SIBLING frame at level 40 — the host must be measured above it, the level must not ratchet across redraws, the line must carry pathColor's alpha and the projected pixels, and mapdiag must print the host facts, the parent chain, the z-order audit with `RAISED from`, the applied colour, both line objects, every point's pixels, the segment lengths and the `verdict: DRAW ORDER` line)
-- `tests/minimap_diag_spec.lua` (t_c0a68ed2: a route inside the minimap view is drawn and the diag prints mode/radius/unit + per-point `inside`; a route 0.4 map away queues nothing and the diag names the OUTSIDE points and the per-segment clip reason; the fraction fallback follows the zoom (`dist` grows when zoomed in) and `/nt mapdiag` carries the minimap half)
+- `tests/mapdiag_zorder_spec.lua` (t_c0a68ed2: a canvas whose map art is a SIBLING frame at level 40 — the host must be measured above it, the level must not ratchet across redraws, the line must carry pathColor's alpha and the projected pixels, and mapdiag must print the host facts, the parent chain, the z-order audit with `RAISED from … on this redraw`, the applied colour, both line objects, every point's pixels, the segment lengths, the `verdict: DRAW ORDER` line on the raising redraw and — once the host is above the art — a verdict that names the NEXT candidate instead, with the raise carried as history)
+- `tests/diag_truthful_spec.lua` (t_c0a68ed2 round 2: a later redraw never raises again and the verdict stops claiming draw order; a host the client refuses to raise is reported as `DRAW ORDER (still below after the raise attempt)` with the two levels; and after a redraw that early-returns because another map is open, `points:`/`segments:`/`colour:` all read `not measured on the last redraw (<why>)` instead of printing the previous route's numbers)
+- `tests/minimap_diag_spec.lua` (t_c0a68ed2: with no redraw yet the minimap verdict says `no redraw on a usable minimap sample yet`; a route inside the view is drawn and the diag prints mode/radius/unit + per-point `inside`; a route 0.4 map away queues nothing and the diag names the OUTSIDE points and the per-segment clip reason; the fraction fallback follows the zoom (`dist` grows when zoomed in) and `/nt mapdiag` carries the minimap half)
 - `tests/ttdiag_minimal_spec.lua` (t_c0a68ed2: `/nt ttdiag` with no GameTooltip, a bare tooltip table, a shown-but-unreadable tooltip, readers that RAISE, a ring entry recorded from an empty tooltip, and a chat frame that raises — every read prints `absent`/`?`, nothing errors, and the ring is always printed)
 - `tests/tooltip_refresh_spec.lua` (nothing hooked at load, idempotent Enable, non-herb and unit tooltips ignored, baseline lines, header once per tooltip, secondary order, personal below/at the 10-gather threshold, non-Alchemy scan ignored, Alchemy scan + uses lines, rescan replaces, other SV keys untouched; t_c0a68ed2 adds the flicker invariants — five poll ticks while the same node is hovered touch nothing, a rewritten tooltip is re-appended without ever showing the frame, the re-layout is deferred and flushed on the next client show, the ring is bounded and printed by ttdiag)
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
@@ -270,11 +276,16 @@ All nineteen specs pass with lua5.1.
   displayed vs route mapID, what the last redraw queued, the measured draw order (host level vs the
   top art frame, with the raise recorded), the applied colour, both line objects, every projected
   point's pixels and a verdict line — that output is what closes the gap. t_c0a68ed2 added the
-  z-order audit; the next in-game run has to show `host_level` > `top` and, if the line is still
-  invisible, the `verdict:` line will say which measurement is next.
+  z-order audit (a raise that already happened is reported as history, not as the verdict) and the
+  next in-game run has to show `host_level` > `top`; if the line is still invisible, the `verdict:`
+  line now names the next candidate instead of repeating draw order. If the diag says
+  `DRAW ORDER (still below after the raise attempt)`, the client refused the raise and the two
+  levels printed on that line are the finding.
 - The minimap path's `queued=0` report is now explained per point/segment (inside/OUTSIDE vs the
   clipped circle, mode, radius and unit). If the in-game numbers say the route is simply farther
   than the view radius, nothing is wrong to fix — the diag says so instead of leaving it ambiguous.
+  With no redraw recorded it prints `minimap verdict: no redraw on a usable minimap sample yet`
+  rather than claiming a draw.
 - The tooltip flash is instrumented, not proven fixed: the ring in `/nt ttdiag` must show the real
   sequence on the minimap hover (who fired, how many lines, whether Show ran) before the fix is
   called confirmed.
