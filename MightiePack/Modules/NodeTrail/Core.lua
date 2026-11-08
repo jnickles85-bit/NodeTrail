@@ -26,6 +26,8 @@ local function printHelp()
   -- below so a new command needs no new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt autorefresh [on|off|<picks>] - on by default: one re-plan every <picks> gathers (default 5), never in combat or with a loot window open; off keeps the drawn route exactly as it is")
+  printL("HELP_MINIMAP",
+    "  /nt minimap [on|off] - the minimap line on its own; off clears it immediately, the world map route is unaffected")
   -- t_36412359. Inline like the ttdiag lines below: the new command is
   -- documented without a new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
@@ -232,6 +234,8 @@ local function handleSlash(msg)
     end
   elseif msg == "status" then
     ns.PrintStatus()
+  elseif msg == "minimap" or msg:match("^minimap%s") then
+    ns.ToggleMinimap(msg:match("^minimap%s+(.*)$"))
   elseif msg == "autorefresh" or msg:match("^autorefresh%s") then
     ns.SetAutoRefresh(msg:match("^autorefresh%s+(.*)$"))
   elseif msg == "scanrecipes" or msg == "recipes" then
@@ -411,6 +415,37 @@ function ns.ToggleNavArrow(arg)
     pcall(arrow.Redraw, arrow)
   end
   DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: waypoint arrow " .. (on and "on" or "off"))
+  return on
+end
+
+-- ── /nt minimap [on|off] ────────────────────────────────────────────
+-- The minimap half of the route, switchable on its own. A wrong line on the
+-- minimap is worse than no line, so this clears the objects immediately.
+function ns.ToggleMinimap(arg)
+  local db = ns.GetDB()
+  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  local on
+  if want == "on" or want == "1" or want == "true" then
+    on = true
+  elseif want == "off" or want == "0" or want == "false" then
+    on = false
+  elseif want == "" then
+    on = not (db.showMinimap ~= false)
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt minimap [on|off]")
+    return nil
+  end
+  db.showMinimap = on
+  -- Off means the objects go away now, not on the next redraw: a wrong line on
+  -- the minimap is worse than no line, and the player should not have to wait
+  -- for a tick that may never come.
+  if not on and type(ns.MinimapPath) == "table" and type(ns.MinimapPath.Clear) == "function" then
+    pcall(ns.MinimapPath.Clear, ns.MinimapPath)
+  elseif on and type(ns.MinimapPath) == "table" and type(ns.MinimapPath.Redraw) == "function" then
+    pcall(ns.MinimapPath.Redraw, ns.MinimapPath)
+  end
+  DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: minimap route " .. (on and "on" or "off")
+    .. " — the world map route is unaffected.")
   return on
 end
 
