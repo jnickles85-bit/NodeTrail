@@ -437,6 +437,30 @@ local function clientItemName(id)
   return name, nil
 end
 
+-- The character's records in the recorder's own insertion order. `pairs()` is
+-- not stable between runs, and this list decides which loot-slot name is kept
+-- for an id, so the same store must always print the same lines. A record the
+-- `order` list does not mention (a hand-written store) still resolves.
+local function orderedRecords(bucket)
+  local seen, out = {}, {}
+  if type(bucket.order) == "table" then
+    for _, guid in ipairs(bucket.order) do
+      local rec = bucket.records[guid]
+      if type(rec) == "table" and not seen[guid] then
+        seen[guid] = true
+        out[#out + 1] = rec
+      end
+    end
+  end
+  for guid, rec in pairs(bucket.records) do
+    if type(rec) == "table" and not seen[guid] then
+      seen[guid] = true
+      out[#out + 1] = rec
+    end
+  end
+  return out
+end
+
 -- One row per distinct item id across this character's records (corpse and
 -- skin alike: the corpse side is where the question came from, and it is the
 -- only place those ids appear now).
@@ -444,25 +468,29 @@ local function itemIDRows()
   local bucket = H.Bucket()
   if not bucket or type(bucket.records) ~= "table" then return nil end
   local byID, order = {}, {}
-  for _, rec in pairs(bucket.records) do
-    if type(rec) == "table" then
-      for _, side in ipairs({ { "corpseItems", "corpse" }, { "skinItems", "skin" } }) do
-        local list = rec[side[1]]
-        local n = type(list) == "table" and #list or 0
-        for i = 1, n do
-          local it = list[i]
-          local id = type(it) == "table" and it.itemID
-          if type(id) == "number" and id > 0 then
-            local row = byID[id]
-            if not row then
-              row = { id = id, sides = {}, slotName = nil }
-              byID[id] = row
-              order[#order + 1] = row
-            end
-            row.sides[side[2]] = true
-            if row.slotName == nil and it.name ~= nil then
-              row.slotName = it.name
-            end
+  for _, rec in ipairs(orderedRecords(bucket)) do
+    for _, side in ipairs({ { "corpseItems", "corpse" }, { "skinItems", "skin" } }) do
+      local list = rec[side[1]]
+      local n = type(list) == "table" and #list or 0
+      for i = 1, n do
+        local it = list[i]
+        local id = type(it) == "table" and it.itemID
+        if type(id) == "number" and id > 0 then
+          local row = byID[id]
+          if not row then
+            row = { id = id, sides = {}, slotName = nil, slotFromCorpse = false }
+            byID[id] = row
+            order[#order + 1] = row
+          end
+          row.sides[side[2]] = true
+          -- The name the loot slot itself reported for this id. A corpse-side
+          -- answer wins over a skin-side one (that is the list the question
+          -- came from); otherwise the earliest record wins and a later record
+          -- never overwrites it, so one store cannot print an arbitrary name.
+          if it.name ~= nil
+            and (row.slotName == nil or (side[2] == "corpse" and not row.slotFromCorpse)) then
+            row.slotName = it.name
+            row.slotFromCorpse = side[2] == "corpse"
           end
         end
       end
@@ -472,8 +500,12 @@ local function itemIDRows()
   return order
 end
 
-H.NAME_PROBE_CAP = 8 -- ids printed in full; the rest are counted
-
+-- EVERY distinct recorded id is resolved; there is no printed-line cap. The
+-- store is per character across every skinning record, so it passes 8 distinct
+-- ids in ordinary play, and the id this card asks about (211787) is the HIGHEST
+-- in a classic-era store — a cap dropped that line first and left no way to ask
+-- for it (review round 1, t_2c573dbf). The count is printed first so an operator
+-- can see that nothing was held back.
 function H.NameProbeLines()
   local rows = itemIDRows()
   local out = {}
@@ -485,8 +517,8 @@ function H.NameProbeLines()
     out[1] = "item names: the records carry no item ids yet"
     return out
   end
-  local shown = math.min(#rows, H.NAME_PROBE_CAP)
-  for i = 1, shown do
+  out[1] = ("item names: %d distinct id(s) in this character's records"):format(#rows)
+  for i = 1, #rows do
     local row = rows[i]
     local sides = (row.sides.corpse and row.sides.skin and "corpse+skin")
       or (row.sides.corpse and "corpse") or "skin"
@@ -511,10 +543,6 @@ function H.NameProbeLines()
       line = line .. ("the loot slot said \"" .. slotName .. "\" — DISAGREES (the keying is wrong, not the label)")
     end
     out[#out + 1] = line
-  end
-  if #rows > shown then
-    out[#out + 1] = ("item names: %d further id(s) not printed (cap %d)")
-      :format(#rows - shown, H.NAME_PROBE_CAP)
   end
   return out
 end

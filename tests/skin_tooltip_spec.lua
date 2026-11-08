@@ -735,6 +735,45 @@ check(measuredSecret == secretBefore,
   .. (measuredSecret - secretBefore) .. " attempt(s))")
 issecretvalue = nil
 
+-- ...and a store with MORE IDS THAN THE OLD PRINT CAP still resolves every one
+-- of them (t_2c573dbf review round 1). The store is per character across every
+-- skinning record, so it passes 8 distinct ids in ordinary play — and 211787,
+-- the id this card asks about, is the HIGHEST in it, i.e. the first line a cap
+-- would drop, with no way to ask for it. This case is red on `95aa115`.
+NodeTrailDB.skinning.chars = nil -- a known store: only what this section records
+R:GetDB()
+for i = 1, 9 do
+  seq = seq + 1
+  R:OnKill({ guid = guidOf(3200 + i, seq), t = 9000 + seq })
+  R:OnCorpseLoot({
+    guid = guidOf(3200 + i, seq), t = 9001 + seq,
+    items = { { id = 8000 + i, name = "Filler " .. i, qty = 1 } },
+  })
+end
+seq = seq + 1
+R:OnKill({ guid = guidOf(BOAR, seq), t = 9100 })
+R:OnCorpseLoot({ guid = guidOf(BOAR, seq), t = 9101, items = BOAR_ITEMS })
+local okD12b, errD12b, out12b = diagText()
+check(okD12b, "12b: ttdiag does not raise on a store of many ids (" .. tostring(errD12b) .. ")")
+check(out12b:find(
+  'item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same',
+  1, true) ~= nil,
+  "12b: the id the card asks about resolves even when the store holds 12 distinct ids (got:\n"
+  .. out12b .. ")")
+check(out12b:find("item names: 12 distinct id(s)", 1, true) ~= nil,
+  "12b: the count line says how many ids the store holds (got:\n" .. out12b .. ")")
+check(out12b:find("not printed", 1, true) == nil,
+  "12b: no id is held back for a cap (got:\n" .. out12b .. ")")
+local resolved12b = 0
+for _ in out12b:gmatch("item id: ") do resolved12b = resolved12b + 1 end
+check(resolved12b == 12,
+  "12b: every distinct id got its own line (" .. resolved12b .. " of 12)")
+-- The loot-slot name kept for an id must not depend on table order: 7009 is
+-- named by one corpse record only, and its line still reports that name.
+check(out12b:find('item id: 7009 -> GetItemInfo answered nothing · corpse · the loot slot said "Boar Ribs"', 1, true) ~= nil,
+  "12b: the slot name is the one the record carried, in a store of many ids (got:\n"
+  .. out12b .. ")")
+
 -- ═══ 13. NOTHING ERRORED, AND NO EVENT SURFACE WAS TOUCHED ════════════════
 check(T._error == nil, "13: ns.Tooltip recorded no error (" .. tostring(T._error) .. ")")
 check(P._error == nil, "13: the panel recorded no error (" .. tostring(P._error) .. ")")

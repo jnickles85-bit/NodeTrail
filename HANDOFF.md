@@ -18,20 +18,32 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   successful cast behind it is such a case: `Record:OnSkinLoot` does not set `rec.skinned`).
 - **`Scroll: LOWER PING WHOMEVER` is the CLIENT's own name for item 211787** — the id question
   (t_2c573dbf). That label came from `GetItemInfo(id)`, so it was checked against the id instead of
-  being "fixed": `/nt ttdiag` now prints one line per distinct recorded item id —
-  `beast: item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same`
-  — and says `DISAGREES (the keying is wrong, not the label)` when the client's name for that id is
-  not the name the loot slot reported, and `GetItemInfo answered nothing` / `answered a secret
-  string` when the client has no usable name. Item 211787 is a real world drop of **this** client's
+  being "fixed": `/nt ttdiag` now resolves EVERY distinct item id in the character's store — **no
+  print cap** (review round 1: an 8-line cap plus an ascending id sort silently dropped 211787, the
+  HIGHEST id in a classic-era store, and left no way to ask for it) — one line per id, in this shape:
+  `beast: item id: <id> -> <GetItemInfo(id)> · <corpse|skin|corpse+skin> · <what the loot slot said>`,
+  with `DISAGREES (the keying is wrong, not the label)` when the client's name for that id is not the
+  name the loot slot reported, and `GetItemInfo answered nothing` / `answered a secret string` when
+  the client has no usable name. The count leads the section
+  (`beast: item names: N distinct id(s) in this character's records`), so it is visible that nothing
+  was held back. Records are visited in the recorder's own `store.order`, never `pairs()`, so one
+  store always prints the same lines and the loot-slot name kept for an id is the corpse-side one —
+  not whichever record a hash table happened to visit first (review round 1, minor observation).
+  **The `211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot
+  said the same` line is the §12 SPEC STUB, not observed client output** — the spec sets
+  `ITEM_NAMES[211787]` to stand in for the client's answer; the live line for his own boar record is
+  still pending. Item 211787 is a real world drop of **this** client's
   data (WoW Forever 1.60.1 / build 16001 — wowhead `/forever/item=211787`,
   `warcraftforever.wiki`, `thewowdb`, `ahledger` all carry the same id and name), so the label stays
   and no keying change was made. A secret answer is reported, never concatenated (the same
   `issecretvalue` guard `ItemName` uses). `tests/skin_tooltip_spec.lua` pins all of it: §1b the block
-  line-for-line with no corpse trace, §2/§6 the thin and never-skinned cases, §12 the four id→name
-  answers, §11 the impossible-percentage guard moved to the skin side. **16 checks fail on `d34dcb3`**
-  (the new §1b/§2/§6/§12 checks, behavioural FAILs, no traceback); all 42 `tests/*.lua` pass under
-  lua5.1. **Not yet run in game**: the live `id -> name` line for his own boar record is the next
-  step — that is the one thing the specs cannot prove for this client.
+  line-for-line with no corpse trace, §2/§6 the thin and never-skinned cases, §11 the
+  impossible-percentage guard moved to the skin side, §12 the four id→name answers, and §12b a store
+  of 12 distinct ids (more than the old cap) in which the highest id, 211787, must still resolve and
+  nothing may be withheld. **20 checks fail on `d34dcb3`** (the new §1b/§2/§6/§12/§12b checks,
+  behavioural FAILs, no traceback), **4 of them — the §12b cap case — on `95aa115`**; all 42
+  `tests/*.lua` pass under lua5.1. **Not yet run in game**: the live `id -> name` line for his own
+  boar record is the next step — that is the one thing the specs cannot prove for this client.
 
 - **Hovering a BEAST now shows what its corpse and its skinning have yielded** (t_c0221fd7).
   Mightie: "we are missing the skinning tooltip ... says what we might get if we kill it and skin
