@@ -302,5 +302,17 @@ All twenty-one specs pass with lua5.1.
 - The tooltip flash is instrumented, not proven fixed: the ring in `/nt ttdiag` must show the real
   sequence on the minimap hover (who fired, how many lines, whether Show ran) before the fix is
   called confirmed.
+- The tooltip PANEL sizing was wrong for late appends, and the cause is measured, not assumed:
+  live `/nt ttdiag` on Forever prints `last relayout: show=ran layout=no` — that client has no
+  `Frame:Layout()` and its `Show()` does NOT re-run the padding sizing, so neither the relayout nor
+  the clamp (which measures the frame, not the text) could size the panel. The frame is now sized
+  from the measured text (`GetStringWidth` over the line font strings, plus the tooltip's own
+  padding measured as frameWidth minus its widest own row), grow-only, never shrinking and never
+  touching a tooltip without a NodeTrail block; height grows by the measured tail overflow of the
+  last line. `ttdiag` prints `content:` and `last fit:` with frame before -> after, the widest row
+  and whether it widened, so the next hover (including a RE-hover of the same node) is provable
+  from the log. Still unproven: the live client's font strings must expose `GetStringWidth` and
+  `GetBottom` for the measurement to work — if they do not, `ttdiag` says
+  `content: not measurable on this client` and the next measurement is that line.
 - Herb tooltip node names are matched in English only.
 - `/mpack status` reports `inert` for a module that refused to start (standalone Touchstone present).

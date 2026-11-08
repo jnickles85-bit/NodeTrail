@@ -105,7 +105,15 @@ local origGetLine = GT.GetLine -- restore point for tests that swap the stub
 -- font-string path holds the real text at any index — the title lookup and
 -- the whole block are visible exactly as the lines array holds them.
 local function makeFontString(i)
-  return { GetText = function() return GT.lines[i] end }
+  local fs = { GetText = function() return GT.lines[i] end }
+  -- The client's own text measurement — what the frame has to enclose. 7px per
+  -- character, the same scale the client model below uses to size the frame
+  -- (contentSizeOf), so a fit is measurable rather than a guess.
+  fs.GetStringWidth = function()
+    local t = GT.lines[i]
+    return type(t) == "string" and (#t * 7) or 0
+  end
+  return fs
 end
 for _ = 1, 40 do
   local idx = _
@@ -370,6 +378,10 @@ GT.Show = function(self)
 end
 GT.GetWidth = function(self) return self.fw or 0 end
 GT.GetHeight = function(self) return self.fh or 0 end
+-- Resizing the frame resizes the backdrop too (it is anchored to the frame):
+-- that is the panel the report says was too small for the block.
+GT.SetWidth = function(self, w) self.fw = w; self.bgW = w end
+GT.SetHeight = function(self, h) self.fh = h; self.bgH = h end
 
 -- Anchor storage + the real GetPoint contract (5 values, documented
 -- order): GetNumPoints / GetPoint / SetPoint behave like the real thing.
@@ -481,6 +493,124 @@ check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H,
   "Test 17: backdrop encloses all lines after the deferred re-layout (bgH="
     .. tostring(GT.bgH) .. " lines=" .. #GT.lines .. ")")
 check(headerCount() == 1, "Test 17: header still exactly once after the deferred re-layout")
+
+-- Tests 17b–17e: THE PANEL IS TOO SMALL FOR THE BLOCK (live, build 16e7954).
+-- Live /nt ttdiag from the client: `last relayout: show=ran layout=no` — this
+-- client has no Frame:Layout(), and its Show() does NOT re-run the padding
+-- sizing. So neither the relayout nor the clamp (which measures the FRAME, not
+-- the text overflowing it) can size the panel for lines appended late. The
+-- panel stayed as wide as the client's own two lines and "Alchemy: Elixir of"
+-- ran past the backdrop and was cut off. The frame must instead be sized from
+-- the MEASURED text (GetStringWidth over the line font strings).
+
+-- Test 17b: a poll append (the client never shows again) widens the panel to
+-- the widest line plus the tooltip's own padding — and still never Shows.
+GT.lines = { "Silverleaf", "Herbalism" }
+GT:sizeFromContent() -- client sized the panel for its own two lines
+local clientW = GT.fw
+local sc17b = GT.showCalls
+pollTick() -- late append, no client show afterwards
+check(GT.showCalls == sc17b,
+  "Test 17b: the poll append still never shows the frame (went "
+    .. tostring(GT.showCalls - sc17b) .. ")")
+local widest = 0
+for _, l in ipairs(GT.lines) do
+  if type(l) == "string" then widest = math.max(widest, #l * 7) end
+end
+check(widest > clientW,
+  "Test 17b: precondition — our block is wider than the panel the client sized (widest="
+    .. widest .. " panel=" .. tostring(clientW) .. ")")
+check(GT.fw > clientW,
+  "Test 17b: the panel was widened for the block (was " .. tostring(clientW)
+    .. " now " .. tostring(GT.fw) .. ")")
+check(GT.fw >= widest,
+  "Test 17b: the panel encloses the widest line (widest=" .. widest
+    .. " frame=" .. tostring(GT.fw) .. ")")
+check(GT.fw == widest + PAD,
+  "Test 17b: it grew by exactly the tooltip's own padding (frame=" .. tostring(GT.fw)
+    .. " expected " .. (widest + PAD) .. ")")
+check(GT.bgW == GT.fw, "Test 17b: the backdrop follows the frame")
+check(headerCount() == 1, "Test 17b: header still exactly once")
+
+-- Test 17c: the fit is grow-only and idempotent — a second evaluation leaves
+-- the width alone (it never ratchets, and it never shrinks).
+local fittedW = GT.fw
+pollTick()
+check(GT.fw == fittedW,
+  "Test 17c: a second evaluation leaves the fitted width alone (got " .. tostring(GT.fw) .. ")")
+
+-- Test 17d: the HEIGHT. The client's panel is shorter than the block, so the
+-- tail is clipped below the frame: the last line's measured bottom sits below
+-- the frame's bottom and the frame must grow by exactly that overflow.
+local linesNow = #GT.lines
+local lastFs = _G["GameTooltipTextLeft" .. linesNow]
+check(lastFs ~= nil, "Test 17d: the last line has a font string")
+local oldLastBottom = lastFs.GetBottom
+local oldGetBottom = GT.GetBottom
+GT.GetBottom = function() return 100 end
+lastFs.GetBottom = function() return 85 end
+local hBefore = GT.fh
+local fitH = type(T.FitContent) == "function" and T:FitContent(GT) or nil
+check(fitH and fitH.grew == true, "Test 17d: the fit grows a frame whose tail is clipped")
+check(GT.fh == hBefore + 15,
+  "Test 17d: ... by exactly the measured tail overflow (was " .. tostring(hBefore)
+    .. " now " .. tostring(GT.fh) .. ")")
+GT.GetBottom = oldGetBottom
+lastFs.GetBottom = oldLastBottom
+
+-- Test 17e: a tooltip with no NodeTrail block is never resized.
+GT.lines = { "Stone Vein", "Mining" }
+GT:sizeFromContent()
+local miningW = GT.fw
+local fitMining = type(T.FitContent) == "function" and T:FitContent(GT) or nil
+check(fitMining and fitMining.ran == false,
+  "Test 17e: a tooltip with no NodeTrail block is not fitted")
+check(GT.fw == miningW, "Test 17e: ... and its frame is left untouched")
+
+-- Test 17f: THE SHARP REPRO from the live client — hover a herb, leave it,
+-- hover the SAME herb again. The client re-shows a tooltip sized for its OWN
+-- lines (the OnShow fires before the node title is populated, so our block
+-- arrives from the poll afterwards). The panel must fit on the second hover
+-- exactly as it did on the first.
+GT.lines = { "Silverleaf", "Herbalism", "Requires Herbalism (1)" }
+local realShow = GT.Show
+GT.Show = function(self) -- client show, no NodeTrail hook this time
+  GT.showCalls = GT.showCalls + 1
+  self:sizeFromContent()
+  self.shown = true
+end
+GT:Show()
+GT.Show = realShow
+local rehoverW = GT.fw
+local rehoverH = GT.fh
+local widestRe
+do
+  local w = 0
+  for _, l in ipairs(GT.lines) do
+    if type(l) == "string" then w = math.max(w, #l * 7) end
+  end
+  widestRe = w
+end
+local sc17f = GT.showCalls
+pollTick() -- our block arrives late on the poll
+check(GT.showCalls == sc17f,
+  "Test 17f: the re-hover append still never shows the frame (went "
+    .. tostring(GT.showCalls - sc17f) .. ")")
+check(#GT.lines > 3, "Test 17f: the block was appended on the re-hover")
+check(GT.fw > rehoverW,
+  "Test 17f: the panel was widened on the SECOND hover (was " .. tostring(rehoverW)
+    .. " now " .. tostring(GT.fw) .. ")")
+do
+  local w = 0
+  for _, l in ipairs(GT.lines) do
+    if type(l) == "string" then w = math.max(w, #l * 7) end
+  end
+  check(GT.fw == w + PAD,
+    "Test 17f: the second-hover panel encloses the widest line plus padding (frame="
+      .. tostring(GT.fw) .. " expected " .. (w + PAD) .. ")")
+end
+check(rehoverH ~= nil, "Test 17f: the client sized the re-shown frame")
+check(headerCount() == 1, "Test 17f: exactly one header on the second hover")
 
 -- Test 18: bottom-right placement (the Silverleaf clip), in the card's
 -- anchor shape: a BOTTOMRIGHT anchor with NON-ZERO offsets, past the
@@ -662,6 +792,10 @@ check(diag3:find("show=", 1, true) ~= nil, "Test 25: ttdiag prints whether Show 
 check(diag3:find("clamp=", 1, true) ~= nil, "Test 25: ttdiag prints whether Clamp ran")
 check(diag3:find("appended=", 1, true) ~= nil, "Test 25: ttdiag prints whether the block was appended")
 check(diag3:find("last relayout:", 1, true) ~= nil, "Test 25: ttdiag prints the last relayout")
+check(diag3:find("content: frame=", 1, true) ~= nil,
+  "Test 25: ttdiag prints the measured frame and widest row (the content-fit evidence)")
+check(diag3:find("last fit:", 1, true) ~= nil,
+  "Test 25: ttdiag prints the last fit (frame before -> after, widest, widened)")
 
 -- Test 26 (final): still nothing errored after the flicker work.
 check(T._error == nil, "Test 26: ns.Tooltip._error == nil after the flicker tests")

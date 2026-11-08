@@ -336,6 +336,176 @@ function T:ClampOnly(tooltip)
   return clamped
 end
 
+-- ── Content fit: size the frame from MEASURED text ─────────────────────
+-- Live client evidence (build 16e7954, /nt ttdiag):
+--   eval #1424..#1431 src=poll name=Silverleaf lines=6-> intact=yes show=- …
+--   last relayout: show=ran layout=no clamp=ran
+--   skipped scripts: OnTooltipSetUnit, OnTooltipSetItem
+-- `layout=no` is the finding: this client has no Frame:Layout(), and its
+-- Show() does NOT re-run the padding/backdrop sizing. So the relayout could
+-- never size the panel for our block, and the clamp cannot either —
+-- GetRight() measures the FRAME, not the text overflowing it. The panel
+-- stayed as wide as the client's own lines and our longest line ran past
+-- the backdrop and off the screen edge.
+--
+-- The frame is therefore sized from what the client's own font strings
+-- measure, never from an assumption about the client's show path:
+--   * widest row = GetStringWidth of the left + right line fontstrings, our
+--     block included (rows are left+right, like the client's double lines);
+--   * padding    = frameWidth minus the widest CLIENT row — the client sized
+--     the frame for its own lines before our block existed, so that
+--     difference is this tooltip's real padding, not a constant;
+--   * grow only  = SetWidth/SetHeight run only when the content exceeds the
+--     frame, and never on a tooltip that holds no NodeTrail block;
+--   * height     = the LAST line's measured bottom edge against the frame's,
+--     so a clipped tail grows the frame by the real overflow.
+-- No Show() anywhere on this path: it is SetWidth/SetHeight and reads.
+local MAX_TOOLTIP_LINES = 40
+
+local function readNum(obj, method)
+  if type(obj) ~= "table" or type(obj[method]) ~= "function" then
+    return nil
+  end
+  local ok, value = pcall(obj[method], obj)
+  if ok and type(value) == "number" then
+    return value
+  end
+  return nil
+end
+
+local function stringWidth(fontString)
+  if type(fontString) ~= "table" or type(fontString.GetStringWidth) ~= "function" then
+    return nil
+  end
+  local ok, width = pcall(fontString.GetStringWidth, fontString)
+  if ok and type(width) == "number" and width >= 0 then
+    return width
+  end
+  return nil
+end
+
+--- Measure what the tooltip holds now. Pure reads (pcall-guarded), no
+--- writes: `FitContent` applies the result and /nt ttdiag prints it, so the
+--- in-game run proves the numbers instead of looking plausible.
+function T:Measure(tooltip)
+  local m = { present = false, rows = 0, widest = 0 }
+  if type(tooltip) ~= "table" then
+    return m
+  end
+  local n = MAX_TOOLTIP_LINES
+  local ok, count = pcall(function() return tooltip:NumLines() end)
+  if ok and type(count) == "number" and count > 0 then
+    n = math.min(count, MAX_TOOLTIP_LINES)
+  end
+  local widestAll, widestAllText = 0, nil
+  local widestClient, widestClientText = 0, nil
+  local headerIndex, lastIndex
+  for i = 1, n do
+    local text = lineText(tooltip, i)
+    local left = _G["GameTooltipTextLeft" .. i]
+    local right = _G["GameTooltipTextRight" .. i]
+    local lw = stringWidth(left)
+    local rw = stringWidth(right)
+    if type(text) == "string" and text ~= "" then
+      lastIndex = i
+      if text == HEADER and headerIndex == nil then
+        headerIndex = i
+      end
+    end
+    if lw ~= nil or rw ~= nil then
+      local row = (lw or 0) + (rw or 0)
+      m.rows = m.rows + 1
+      if row > widestAll then
+        widestAll, widestAllText = row, text
+      end
+      -- Rows before our header are the client's own: they are what the
+      -- frame was sized for, so they carry the padding measurement.
+      if headerIndex == nil and row > widestClient then
+        widestClient, widestClientText = row, text
+      end
+    end
+  end
+  m.frameW = readNum(tooltip, "GetWidth")
+  m.frameH = readNum(tooltip, "GetHeight")
+  m.widest = widestAll
+  m.widestText = widestAllText
+  m.hasBlock = headerIndex ~= nil
+  m.clientRow = widestClient
+  m.clientText = widestClientText
+  m.pad = 0
+  m.padFrom = "unmeasured (no row to measure it from)"
+  if type(m.frameW) == "number" then
+    if m.frameW >= widestAll then
+      -- The frame ALREADY encloses every row (the client re-sized after our
+      -- block, or a previous fit did): its padding is the difference between
+      -- the frame and the widest row, and neededW == frameW, so nothing is
+      -- widened. This is what keeps a second fit from ratcheting the width.
+      m.pad = m.frameW - widestAll
+      m.padFrom = "frame width minus the widest row (the frame already encloses the content)"
+    elseif widestClient > 0 and m.frameW > widestClient then
+      -- The frame was sized for the client's own rows, before our block
+      -- existed: this difference is the tooltip's real padding.
+      m.pad = m.frameW - widestClient
+      m.padFrom = "frame width minus the widest client row (frame sized before our block)"
+    end
+  end
+  m.neededW = widestAll + m.pad
+  -- Height: the last line's measured bottom against the frame's bottom edge.
+  m.neededH = nil
+  m.heightMeasured = false
+  if lastIndex then
+    local last = _G["GameTooltipTextLeft" .. lastIndex]
+    local lastBottom = last and readNum(last, "GetBottom")
+    local frameBottom = readNum(tooltip, "GetBottom")
+    if lastBottom and frameBottom then
+      m.heightMeasured = true
+      m.lastLineBottom = lastBottom
+      m.frameBottom = frameBottom
+      if type(m.frameH) == "number" and lastBottom < frameBottom - 0.5 then
+        m.neededH = m.frameH + (frameBottom - lastBottom)
+        m.tailOverflow = frameBottom - lastBottom
+      end
+    end
+  end
+  m.present = m.rows > 0
+  return m
+end
+
+--- Grow the frame to enclose the measured content. Never shrinks, never
+--- Shows, never touches a tooltip without our block. Returns what it did so
+--- the ring and /nt ttdiag can report it.
+function T:FitContent(tooltip)
+  local info = { ran = false }
+  local m = self:Measure(tooltip)
+  info.measure = m
+  if not m.present then
+    info.skip = "no measurable content on this client (no line fontstrings / GetStringWidth)"
+    self._lastFit = info
+    return info
+  end
+  if not m.hasBlock then
+    info.skip = "no NodeTrail block in this tooltip — not touched"
+    self._lastFit = info
+    return info
+  end
+  info.ran = true
+  info.beforeW, info.beforeH = m.frameW, m.frameH
+  info.widest, info.pad, info.neededW, info.neededH = m.widest, m.pad, m.neededW, m.neededH
+  if type(m.frameW) == "number" and m.neededW > m.frameW + 0.5 then
+    local ok = pcall(tooltip.SetWidth, tooltip, m.neededW)
+    info.widened = ok or nil
+  end
+  if type(m.frameH) == "number" and type(m.neededH) == "number"
+    and m.neededH > m.frameH + 0.5 then
+    local ok = pcall(tooltip.SetHeight, tooltip, m.neededH)
+    info.grew = ok or nil
+  end
+  info.afterW = readNum(tooltip, "GetWidth")
+  info.afterH = readNum(tooltip, "GetHeight")
+  self._lastFit = info
+  return info
+end
+
 -- ── Refresh decision ring ──────────────────────────────────────────────
 -- The in-client flicker report ("the block appears, then goes away super
 -- fast") cannot be diagnosed from a screenshot: what matters is who evaluated
@@ -412,10 +582,29 @@ function T:Diag()
         end
         return v and "yes" or "no"
       end
-      say(("eval #%s src=%s name=%s lines=%s->%s intact=%s appended=%s shown=%s show=%s clamp=%s — %s"):format(
+      local fitFlag = "-"
+      local fitFrame = "-"
+      if type(e.fit) == "table" then
+        if e.fit.ran and (e.fit.widened or e.fit.grew) then
+          fitFlag = (e.fit.widened and "widened" or "") .. (e.fit.grew and (e.fit.widened and "+grew" or "grew") or "")
+        elseif e.fit.ran then
+          fitFlag = "fits"
+        else
+          fitFlag = "no"
+        end
+        if e.fit.ran then
+          local function px(v)
+            return type(v) == "number" and string.format("%.0f", v) or "?"
+          end
+          fitFrame = px(e.fit.beforeW) .. "x" .. px(e.fit.beforeH) .. "->"
+            .. px(e.fit.afterW) .. "x" .. px(e.fit.afterH)
+        end
+      end
+      say(("eval #%s src=%s name=%s lines=%s->%s intact=%s appended=%s shown=%s show=%s clamp=%s fit=%s frame=%s — %s"):format(
         tostring(e.n or "?"), tostring(e.source or "?"), tostring(e.name or "-"),
         tostring(e.before or "-"), tostring(e.after or "-"),
         flag(e.intact), flag(e.appended), flag(e.shown), flag(e.show), flag(e.clamp),
+        fitFlag, fitFrame,
         tostring(e.skip or "")))
     end
   end
@@ -430,6 +619,40 @@ function T:Diag()
   if type(gt) ~= "table" then
     say("GameTooltip unavailable")
     return
+  end
+  -- Content fit: what the tooltip holds NOW (measured) plus what the last fit
+  -- did. This is the evidence that the panel is sized from measured text and
+  -- not from an assumption about the client's show path — the live client
+  -- printed show=ran layout=no while the block still overflowed.
+  local function fmtPx(v)
+    if type(v) == "number" then
+      return string.format("%.0f", v)
+    end
+    return "absent"
+  end
+  local measure = T:Measure(gt)
+  if type(measure) == "table" and measure.present then
+    say(("content: frame=%sx%s widest row=%s%s pad=%s (%s) needs width=%s%s"):format(
+      fmtPx(measure.frameW), fmtPx(measure.frameH), fmtPx(measure.widest),
+      type(measure.widestText) == "string" and (" \"" .. measure.widestText .. "\"") or "",
+      fmtPx(measure.pad), tostring(measure.padFrom or "?"), fmtPx(measure.neededW),
+      measure.hasBlock and "" or " — no NodeTrail block, this tooltip is never resized"))
+    if type(measure.neededH) == "number" then
+      say(("content height: last line %.0fpx below the frame bottom -> needs height=%s"):format(
+        measure.tailOverflow or 0, fmtPx(measure.neededH)))
+    end
+  else
+    say("content: not measurable on this client (no line font strings with GetStringWidth)")
+  end
+  if type(T._lastFit) == "table" then
+    local f = T._lastFit
+    say(("last fit: frame %sx%s -> %sx%s widest=%s pad=%s widened=%s grew=%s%s"):format(
+      fmtPx(f.beforeW), fmtPx(f.beforeH), fmtPx(f.afterW), fmtPx(f.afterH),
+      fmtPx(f.widest), fmtPx(f.pad),
+      f.widened and "yes" or "no", f.grew and "yes" or "no",
+      f.skip and (" (" .. tostring(f.skip) .. ")") or ""))
+  else
+    say("last fit: none yet (no evaluation measured the content)")
   end
   local last = T.last
   local function blockState()
@@ -597,15 +820,26 @@ function T:Refresh(tooltip, source)
   end
   entry.intact = blockIntact(tooltip, name)
   if entry.intact then
-    -- While the same node is hovered the block must stay put: this path
-    -- touches nothing at all. A deferred relayout from a poll append is
-    -- flushed here, on a real client show, where a Show is safe.
+    -- While the same node is hovered the block must stay put: no line is
+    -- touched. A deferred relayout from an earlier append is flushed here, on
+    -- a real client evaluation, where a Show is safe.
     if self._layoutPending and source ~= "poll" then
       self._layoutPending = false
       local info = self:Relayout(tooltip)
       entry.show = info and info.showed or false
       entry.clamp = info and info.clamped or false
       entry.skip = "block intact; flushed a deferred relayout"
+    elseif source ~= "poll" then
+      -- Event evaluations are rare (one per client populate), so the panel is
+      -- re-measured here too: a client that re-shows the tooltip with our
+      -- block still in it must not leave the frame sized for its own lines.
+      -- Reads + SetWidth/SetHeight only — this never Shows the frame.
+      local fit = self:FitContent(tooltip)
+      entry.fit = fit
+      if fit and (fit.widened or fit.grew) then
+        entry.clamp = self:ClampOnly(tooltip)
+      end
+      entry.skip = "block intact (no line touched); frame re-checked against the measured content"
     else
       entry.skip = "block intact (nothing touched)"
     end
@@ -628,20 +862,32 @@ function T:Refresh(tooltip, source)
     -- Late append: the client sized and anchored the tooltip BEFORE our
     -- lines existed, so its layout decisions don't account for them.
     if source == "poll" then
-      -- A poll tick never hides/re-shows the frame. Position is clamped now;
-      -- the backdrop re-layout waits for the next client show.
-      self._layoutPending = true
+      -- A poll tick never hides/re-shows the frame. It DOES size the panel
+      -- from the measured text (SetWidth/SetHeight — no Show, no flash), then
+      -- clamps using the measured edges: GetRight() measures the frame, so
+      -- the clamp has to run AFTER the width changed.
+      entry.fit = self:FitContent(tooltip)
       entry.clamp = self:ClampOnly(tooltip)
       entry.show = false
-      entry.skip = "poll append; relayout deferred to the next client show"
+      -- Kept from the relayout design: on a client whose Show DOES re-run the
+      -- padding sizing, the next real client evaluation still gets one. The
+      -- panel no longer depends on it (the fit above already sized it).
+      self._layoutPending = true
+      entry.skip = "poll append; frame fitted to measured content, no Show"
     else
-      -- Pull the client through its own show path once (that re-runs the
-      -- padding/backdrop sizing), then clamp the frame into the screen; the
-      -- client keeps ownership of any subsequent repositioning.
+      -- Pull the client through its own show path once. On this client that
+      -- show does NOT re-run the padding sizing (ttdiag: show=ran
+      -- layout=no), so the frame is then sized from the measured text and
+      -- clamped again for the new width. The client keeps ownership of any
+      -- subsequent repositioning.
       local info = self:Relayout(tooltip)
       entry.show = info and info.showed or false
       entry.clamp = info and info.clamped or false
-      entry.skip = "appended on " .. source .. "; relayout ran"
+      entry.fit = self:FitContent(tooltip)
+      if entry.fit and (entry.fit.widened or entry.fit.grew) then
+        entry.clamp = self:ClampOnly(tooltip)
+      end
+      entry.skip = "appended on " .. source .. "; relayout ran, frame fitted to measured content"
     end
   else
     entry.skip = "appended while hidden (client lays out on show)"
