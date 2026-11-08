@@ -3,6 +3,30 @@
 ## Status
 Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
+**2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
+
+- **The skinning dump no longer dies on a SECRET string** (t_1ed3b421). Live on build `c220ec7`
+  the whole dump was lost at the end of a run — `Probe.lua:908: attempt to get length of local
+  'line' (a secret string value, while execution tainted by 'MightiePack')` — because the client
+  hands back SECRET strings for creature names and the dump measured (`#`), sliced (`:sub`) and
+  formatted them. Rule now enforced in `Modules/Skinning/Probe.lua` and `Record.lua`: only text the
+  addon built itself is measured and capped; a client value travels in its own slot (a step's
+  `name`/`nameLabel`, or `{ pre, name, post }` from `R.Describe`) and is appended at the print site,
+  where the finished line goes straight to `AddMessage`. `issecretvalue` is checked before any read,
+  every remaining read is `pcall`'d, and one unprintable step line can no longer take the dump down.
+  `?x0` is gone too: the coin slot (no itemID) is never an item — it is shown as `money`.
+- **The dump's first line states the truth**: `capture on; sub-option off (NodeTrail); records:
+  session buffer only, nothing saved; steps=120/120` (or `sub-option ON ... NodeTrailDB.skinning,
+  saved`). The old `/mp skindiag` line "skinning is off ... nothing recorded" is gone: the
+  sub-option governs persistence, not capture, and a live run recorded 9 kills behind it.
+- **Audited the rest of the tree for the same read**: `Modules/NodeTrail/Data/Recorder.lua`
+  (loot links + loot-source GUID, and a secret item name is never written into the herb DB) and
+  `BugReport.lua` (unit name/zone/GUID chain). Touchstone already had the guard.
+- New spec `tests/skindiag_secret_spec.lua` models a secret faithfully (every read raises the
+  client's message) and pushes one through every dump path: kill step, record header, loot-source
+  name, cast name, item name, a secret GUID, a secret zone, a secret error object, and a 100+ step
+  run. Green at HEAD; **23 FAILs** on `c220ec7`.
+
 **2026-11-07 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 The herb smoke-test bugs are fixed and confirmed in game by Mightie: tooltip persistence, backdrop
 sizing, on-screen clamping, and Alchemy recipe uses (196 recipes read through `C_TradeSkillUI`).

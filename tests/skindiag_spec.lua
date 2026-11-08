@@ -230,12 +230,17 @@ clearChat()
 local okOff = pcall(SlashCmdList.MIGHTIEPACK, "skindiag dump")
 check(okOff, "/mp skindiag dump while skinning is off does not error")
 local offText = chatText()
-check(offText:find("skinning is off", 1, true) ~= nil,
-  "off-state line says skinning is off (got: " .. offText:gsub("\n", " | ") .. ")")
+check(offText:find("sub%-option off") ~= nil or offText:find("sub-option off", 1, true) ~= nil,
+  "off-state line says the sub-option is off (got: " .. offText:gsub("\n", " | ") .. ")")
 check(offText:find("NodeTrail", 1, true) ~= nil,
   "off-state line names the NodeTrail sub-option it lives under")
-check(offText:find("nothing recorded", 1, true) ~= nil,
-  "off-state line says nothing is recorded")
+-- t_1ed3b421: the line used to claim "nothing recorded" while a live run had
+-- 9 kills / 8 corpse windows / 5 skin windows in the buffer. It must now say
+-- WHERE the records went instead.
+check(offText:find("session buffer", 1, true) ~= nil,
+  "off-state line says the records go to the session buffer")
+check(offText:find("nothing recorded", 1, true) == nil,
+  "off-state line no longer claims that nothing is recorded")
 check(P.enabled == true, "the diagnostic armed the probe (registration only, no DB write)")
 
 local haveProbe = type(P) == "table" and type(P.frame) == "table"

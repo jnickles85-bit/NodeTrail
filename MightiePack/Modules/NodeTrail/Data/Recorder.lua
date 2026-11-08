@@ -29,6 +29,26 @@ local function round4(v)
   return math.floor(v * 10000 + 0.5) / 10000
 end
 
+-- ── SECRET strings (audit for t_1ed3b421) ─────────────────────────────
+-- Loot APIs can answer with a SECRET value (the skinning dump died on one).
+-- A secret may be shown but not measured, matched, sliced or converted, and
+-- it must never be written into SavedVariables — a secret in the herb DB
+-- would be an unreadable key for every later reader. So: recognise it first,
+-- and read only through pcall.
+local function isSecret(v)
+  if type(issecretvalue) ~= "function" then return false end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+-- A value the client marked secret is dropped from the DB (nil), never
+-- stored: the count and the position are what the herb record is for.
+local function storable(v)
+  if isSecret(v) then return nil end
+  if type(v) == "string" then return v end
+  return nil
+end
+
 function R:IsHerbSpell(spellID)
   if R.HERB_SPELL_IDS[spellID] then
     return true
@@ -36,7 +56,11 @@ function R:IsHerbSpell(spellID)
   if type(GetSpellInfo) == "function" and spellID then
     local herbName = GetSpellInfo(2366)
     local name = GetSpellInfo(spellID)
-    return herbName ~= nil and name == herbName
+    if type(herbName) ~= "string" or type(name) ~= "string" or isSecret(herbName) or isSecret(name) then
+      return false -- an unreadable name is not a match; nothing is invented
+    end
+    local ok, same = pcall(function() return name == herbName end)
+    return ok and same == true
   end
   return false
 end
@@ -84,22 +108,25 @@ function R:ReadLoot()
     local qty = 1
     if type(GetLootSlotInfo) == "function" then
       local icon, nm, q = GetLootSlotInfo(i)
-      name = nm
+      name = storable(nm)
       if type(q) == "number" then qty = q end
     end
     if link or name then
       local id = nil
-      if link then
-        local m = link:match("item:(%d+)")
-        if m then id = tonumber(m) end
+      if type(link) == "string" and not isSecret(link) then
+        local ok, m = pcall(function() return link:match("item:(%d+)") end)
+        if ok and type(m) == "string" then id = tonumber(m) end
       end
       items[#items + 1] = { id = id, name = name, count = qty }
     end
     if nodeID == nil and type(GetLootSourceInfo) == "function" then
       local guid = GetLootSourceInfo(i)
-      if type(guid) == "string" and guid:match("^GameObject%-") then
-        local m = guid:match("^GameObject%-[^%-]*%-[^%-]*%-[^%-]*%-[^%-]*%-(%d+)")
-        if m then nodeID = tonumber(m) end
+      if type(guid) == "string" and not isSecret(guid) then
+        local ok, m = pcall(function()
+          if not guid:match("^GameObject%-") then return nil end
+          return guid:match("^GameObject%-[^%-]*%-[^%-]*%-[^%-]*%-[^%-]*%-(%d+)")
+        end)
+        if ok and type(m) == "string" then nodeID = tonumber(m) end
       end
     end
   end

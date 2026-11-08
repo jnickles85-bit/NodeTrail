@@ -228,13 +228,20 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       return
     end
     local nt = pkg.NodeTrail
-    local skinOn = false
+    local subOn = false
     if type(nt) == "table" and type(nt.IsSkinningEnabled) == "function" then
       local okS, on = pcall(nt.IsSkinningEnabled)
-      skinOn = okS and on == true
+      subOn = okS and on == true
     end
-    if not skinOn then
-      pkg.Print("skindiag: skinning is off (NodeTrail sub-option) — diagnostics run, nothing recorded")
+    -- This line used to read "skinning is off (NodeTrail sub-option) —
+    -- diagnostics run, nothing recorded", and it was false: the diagnostic
+    -- starts capture either way, and a live c220ec7 run recorded 9 kills, 8
+    -- corpse windows and 5 skin windows behind that message. What the
+    -- sub-option governs is PERSISTENCE, so say that. It is printed for the
+    -- TOGGLE command only: a dump states its own state on its first line
+    -- (Probe:Diag), and two sentences saying it is one too many.
+    if not subOn and restL ~= "dump" then
+      pkg.Print("skindiag: sub-option is off (NodeTrail) — records go to the session buffer only")
     end
     if not P.enabled and type(P.Enable) == "function" then
       local okE, errE = pcall(P.Enable, P)
@@ -248,7 +255,7 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       if okT then
         if on then
           pkg.Print("skindiag: capture ON — kill + loot, cast Skinning, then loot again and dump")
-        elseif skinOn then
+        elseif subOn then
           -- t_80ffe952: with the sub-option on, capture IS recording. Turning
           -- the diagnostic off pauses recording too, and the line says so
           -- rather than letting the player think it still records.

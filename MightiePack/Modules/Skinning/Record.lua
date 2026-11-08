@@ -47,10 +47,38 @@ local function nowT()
   return os.clock()
 end
 
+-- ── SECRET strings (live, build c220ec7) ──────────────────────────────
+-- The client hands back SECRET strings for creature names (UnitName and
+-- friends) and can do so for a GUID. A secret may be SHOWN but not measured
+-- (#), sliced (:sub), formatted, searched or converted — so this file never
+-- does any of that to a client value: names travel to the printer in their
+-- own slot (see Describe) and a value that cannot be measured is left whole.
+-- Same rule as Modules/Touchstone/Probe.lua's describe().
+local function isSecret(v)
+  if type(issecretvalue) ~= "function" then return false end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+local function safeLen(v)
+  if type(v) ~= "string" then return nil end
+  if isSecret(v) then return nil end
+  local ok, n = pcall(function() return #v end)
+  if ok and type(n) == "number" then return n end
+  return nil
+end
+
+-- nil means "not measurable" (a secret): the caller omits the field instead
+-- of folding a value this file would later have to measure.
 local function cut(s, n)
+  if s == nil or isSecret(s) then return nil end
   if type(s) ~= "string" then s = tostring(s) end
-  if #s <= n then return s end
-  return s:sub(1, n - 2) .. ".."
+  local len = safeLen(s)
+  if len == nil then return nil end
+  if len <= n then return s end
+  local ok, out = pcall(function() return s:sub(1, n - 2) .. ".." end)
+  if ok then return out end
+  return nil
 end
 
 local function round2(v)
@@ -66,10 +94,18 @@ local function pct3(v)
   return (s:gsub("^0", ""))
 end
 
+-- nil for a GUID that cannot be measured: the caller then shows the value
+-- whole through the display channel rather than slicing it.
 local function guidSuffix(g)
-  if type(g) ~= "string" or g == "" then return "-" end
-  if #g <= 8 then return g end
-  return ".." .. g:sub(#g - 5)
+  if type(g) ~= "string" or isSecret(g) then return nil end
+  local ok, out = pcall(function()
+    local len = #g
+    if len == 0 then return nil end
+    if len <= 8 then return g end
+    return ".." .. g:sub(len - 5)
+  end)
+  if ok and type(out) == "string" then return out end
+  return nil
 end
 
 -- The creature (npc) entry is the SECOND-TO-LAST field of a creature GUID:
@@ -77,34 +113,45 @@ end
 --   Creature-0-7072-1-48-3124-F090F29C6F       -> 3124  (live, map 1411)
 -- Keying on position rather than a fixed index keeps both shapes right. A
 -- GUID with too few fields (a test stub, or a source the client did not
--- build) yields nil: no id is better than an invented one.
+-- build) yields nil: no id is better than an invented one. A secret GUID is
+-- never parsed at all.
 function R.CreatureID(guid)
-  if type(guid) ~= "string" then return nil end
-  local body = guid:match("^Creature%-(.+)$")
-  if not body then return nil end
-  local parts = {}
-  for p in body:gmatch("[^%-]+") do parts[#parts + 1] = p end
-  if #parts < 5 then return nil end
-  local id = tonumber(parts[#parts - 1])
-  return id
+  if type(guid) ~= "string" or isSecret(guid) then return nil end
+  local ok, id = pcall(function()
+    local body = guid:match("^Creature%-(.+)$")
+    if not body then return nil end
+    local parts = {}
+    for p in body:gmatch("[^%-]+") do parts[#parts + 1] = p end
+    if #parts < 5 then return nil end
+    return tonumber(parts[#parts - 1])
+  end)
+  if ok then return id end
+  return nil
 end
 
 -- The probe's item tuples are { id, name, qty, quality, link }; the model's
 -- are { itemID, name, quantity, quality, itemLink }. Convert once, here, so
 -- nothing downstream has to remember two spellings.
+--
+-- An entry with no itemID is NOT an item: on this client the coin slot
+-- arrives that way and the c220ec7 dump printed it as "?x0". It is dropped
+-- here too, so neither the record nor its rendering can carry it.
 local function mapItems(items)
   local out = {}
   if type(items) ~= "table" then return out end
   for i = 1, #items do
     local it = items[i]
     if type(it) == "table" then
-      out[#out + 1] = {
-        itemID = it.id or it.itemID,
-        name = it.name,
-        quantity = it.qty or it.quantity or 1,
-        quality = it.quality,
-        itemLink = it.link or it.itemLink,
-      }
+      local itemID = it.id or it.itemID
+      if type(itemID) == "number" and itemID > 0 then
+        out[#out + 1] = {
+          itemID = itemID,
+          name = it.name,
+          quantity = it.qty or it.quantity or 1,
+          quality = it.quality,
+          itemLink = it.link or it.itemLink,
+        }
+      end
     end
   end
   return out
@@ -113,12 +160,16 @@ end
 local function itemList(items, cap)
   local bits = {}
   local n = type(items) == "table" and #items or 0
+  if n == 0 then return "none seen" end
   local shown = math.min(n, cap or 3)
   for i = 1, shown do
     local it = items[i]
-    bits[i] = tostring(it.itemID or "?") .. "x" .. tostring(it.quantity or 1)
+    local id = it and it.itemID
+    if type(id) == "number" and id > 0 then
+      bits[#bits + 1] = tostring(id) .. "x" .. tostring(it.quantity or 1)
+    end
   end
-  if n == 0 then return "none seen" end
+  if #bits == 0 then return "none seen" end
   return table.concat(bits, ",") .. (n > shown and ("+" .. (n - shown)) or "")
 end
 
@@ -156,11 +207,12 @@ function R.CharKey()
   local name, realm = nil, nil
   if type(GetUnitName) == "function" then
     local ok, n = pcall(GetUnitName, "player", true)
-    if ok and type(n) == "string" and n ~= "" then name = n end
+    -- the secret check comes FIRST: comparing or measuring a secret raises
+    if ok and type(n) == "string" and not isSecret(n) and n ~= "" then name = n end
   end
   if type(GetRealmName) == "function" then
     local ok, r = pcall(GetRealmName)
-    if ok and type(r) == "string" and r ~= "" then realm = r end
+    if ok and type(r) == "string" and not isSecret(r) and r ~= "" then realm = r end
   end
   if name and realm then return name .. "-" .. realm end
   return name or "player"
@@ -428,6 +480,15 @@ end
 -- The lines the dump prints for the last corpse: what the RECORDER would
 -- store, so the next in-game run verifies the model without a second probe.
 -- Every line is kept short enough for the probe's 120-char chat cap.
+--
+-- CONTRACT (t_1ed3b421): a line that carries client text — the creature's
+-- name, a GUID — is returned as
+--     { pre = <text this file built>, name = <client text>, post = <text> }
+-- and NOT as one string. The client may mark a creature name SECRET, and a
+-- secret may be shown but never measured, sliced or formatted; joining it
+-- into a string here is what killed the c220ec7 dump at Probe.lua:908. The
+-- printer appends `name` and never measures the result. Lines with no client
+-- text are plain strings.
 function R:Describe(store)
   store = store or self:Store()
   local rec = self:Last(store)
@@ -436,15 +497,29 @@ function R:Describe(store)
     out[#out + 1] = "record: none yet (kill a skinnable, loot it, cast Skinning, loot again)"
     return out
   end
-  local head = "record " .. tostring(rec.name or "?")
-    .. " g=" .. guidSuffix(rec.guid)
-  if rec.creatureID then head = head .. " cid=" .. tostring(rec.creatureID) end
-  head = head .. " kill=" .. (rec.killObserved and "UNIT_DIED" or "loot-only")
-  if rec.zone then head = head .. " z=" .. cut(rec.zone, 14) end
-  if rec.map and type(rec.x) == "number" and type(rec.y) == "number" then
-    head = head .. " " .. tostring(rec.map) .. "@" .. pct3(rec.x) .. "," .. pct3(rec.y)
+  local headPre, headName = "record ?", nil
+  if type(rec.name) == "string" or isSecret(rec.name) then
+    headPre, headName = "record ", rec.name
   end
-  out[#out + 1] = head
+  local post = ""
+  local gs = guidSuffix(rec.guid)
+  -- A GUID this client marks secret cannot be sliced, so it is not shortened
+  -- here and not invented either: "g=?" says the value could not be read as
+  -- text. The name keeps the client slot (it is what a reader needs most).
+  if gs then post = post .. " g=" .. gs
+  elseif rec.guid ~= nil then post = post .. " g=?" end
+  if rec.creatureID then post = post .. " cid=" .. tostring(rec.creatureID) end
+  post = post .. " kill=" .. (rec.killObserved and "UNIT_DIED" or "loot-only")
+  local z = cut(rec.zone, 14)
+  if z then post = post .. " z=" .. z end
+  if rec.map and type(rec.x) == "number" and type(rec.y) == "number" then
+    post = post .. " " .. tostring(rec.map) .. "@" .. pct3(rec.x) .. "," .. pct3(rec.y)
+  end
+  if headName ~= nil then
+    out[#out + 1] = { pre = headPre, name = headName, post = post }
+  else
+    out[#out + 1] = headPre .. post
+  end
   out[#out + 1] = "  corpse items: " .. itemList(rec.corpseItems)
     .. (rec.corpseLootOpens and rec.corpseLootOpens > 1
       and (" (" .. rec.corpseLootOpens .. " windows)") or "")

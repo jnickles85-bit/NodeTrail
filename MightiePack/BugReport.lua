@@ -43,6 +43,24 @@ local state = {
   draft = nil,       -- description draft (session only)
 }
 
+-- ── reading a client string (audit for t_1ed3b421) ────────────────────
+-- The client may mark a value SECRET (unit names are the usual case). A
+-- secret may be shown but not compared, measured or joined into a longer
+-- string, and this report is one long chain of joins — so anything read from
+-- the client goes through readable(): a plain, non-empty string or nil.
+local function isSecret(v)
+  if type(issecretvalue) ~= "function" then return false end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+local function readable(v)
+  if type(v) ~= "string" then return nil end
+  if isSecret(v) then return nil end   -- the secret check precedes every read
+  if v == "" then return nil end
+  return v
+end
+
 local function channelInfo()
   local ch = pkg.bugReport or {}
   local name = (type(ch.channelName) == "string" and ch.channelName ~= "") and ch.channelName or "#mightiepack-bugs"
@@ -253,22 +271,22 @@ function pkg.BuildBugReportHeader(selectedName)
   local charName, realm, klass = "unknown", "unknown", "unknown"
   if type(GetUnitName) == "function" then
     local ok, n = pcall(GetUnitName, "player")
-    if ok and type(n) == "string" and n ~= "" then
+    if ok and readable(n) then
       charName = n
     end
   end
   if type(GetUnitGUID) == "function" and type(GetPlayerInfoByGUID) == "function" then
     local ok, guid = pcall(GetUnitGUID, "player")
-    if ok and type(guid) == "string" and guid ~= "" then
+    if ok and readable(guid) then
       local ok2, n2, r2, c2 = pcall(GetPlayerInfoByGUID, guid)
       if ok2 then
-        if type(n2) == "string" and n2 ~= "" and charName == "unknown" then
+        if readable(n2) and charName == "unknown" then
           charName = n2
         end
-        if type(r2) == "string" and r2 ~= "" then
+        if readable(r2) then
           realm = r2
         end
-        if type(c2) == "string" and c2 ~= "" then
+        if readable(c2) then
           klass = c2
         end
       end
@@ -276,7 +294,7 @@ function pkg.BuildBugReportHeader(selectedName)
   end
   if klass == "unknown" and type(UnitClass) == "function" then
     local ok, _, c = pcall(UnitClass, "player")
-    if ok and type(c) == "string" and c ~= "" then
+    if ok and readable(c) then
       klass = c
     end
   end
@@ -285,13 +303,13 @@ function pkg.BuildBugReportHeader(selectedName)
   local zone, subzone = "unknown", "unknown"
   if type(GetZone) == "function" then
     local ok, z = pcall(GetZone)
-    if ok and type(z) == "string" and z ~= "" then
+    if ok and readable(z) then
       zone = z
     end
   end
   if type(GetSubzone) == "function" then
     local ok, s = pcall(GetSubzone)
-    if ok and type(s) == "string" and s ~= "" then
+    if ok and readable(s) then
       subzone = s
     end
   end

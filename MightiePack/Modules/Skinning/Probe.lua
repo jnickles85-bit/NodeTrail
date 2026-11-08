@@ -150,10 +150,60 @@ local function nowT()
   return os.clock()
 end
 
+-- ── SECRET strings: what this file may do with client text ────────────
+-- Live, build c220ec7: the client hands back SECRET strings for creature
+-- names (UnitName and friends), and the dump died on one AFTER the run had
+-- already collected its data:
+--   "Modules/Skinning/Probe.lua:908: attempt to get length of local 'line'
+--    (a secret string value, while execution tainted by 'MightiePack')"
+-- A secret may be SHOWN. It may not be measured (#), sliced (:sub),
+-- formatted (string.format or :format), searched (:find), substituted
+-- (:gsub) or converted (tostring) — every one of those raises, and every one
+-- of them was reachable from a mob name on this path.
+--
+-- The rule this file now follows: OUR text is the only text we measure.
+-- Literals, numbers and separators built here are measurable, so the
+-- 120-char cap is applied to them; a value that came from the client is
+-- carried beside our text (a step's `name` field, or the `name` slot of a
+-- rendered line) and appended at the print site, where the finished line
+-- goes straight to AddMessage and is never measured again. Same rule
+-- Modules/Touchstone/Probe.lua's describe() already follows.
+local function isSecret(v)
+  if type(issecretvalue) ~= "function" then return false end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+-- A value the client answered with: an ordinary string, or a secret. Only
+-- membership is decided here; never the contents.
+local function isClientText(v)
+  return type(v) == "string" or isSecret(v)
+end
+
+-- Length of a value we are allowed to measure, or nil when we are not (a
+-- secret, or an operation the client refused). Callers must read nil as
+-- "leave it alone", never as "length 0".
+local function safeLen(v)
+  if type(v) ~= "string" then return nil end
+  if isSecret(v) then return nil end
+  local ok, n = pcall(function() return #v end)
+  if ok and type(n) == "number" then return n end
+  return nil
+end
+
+-- Trim OUR OWN text. nil means "this value is a secret" (or would not
+-- measure), so the caller must route it to the display channel instead of
+-- folding it into a line this file will later measure.
 local function cut(s, n)
+  if s == nil then return nil end
+  if isSecret(s) then return nil end
   if type(s) ~= "string" then s = tostring(s) end
-  if #s <= n then return s end
-  return s:sub(1, n - 2) .. ".."
+  local len = safeLen(s)
+  if len == nil then return nil end
+  if len <= n then return s end
+  local ok, out = pcall(function() return s:sub(1, n - 2) .. ".." end)
+  if ok then return out end
+  return nil
 end
 
 local function round4(v)
@@ -170,10 +220,14 @@ end
 local GUID_PREFIXES = { "Creature", "Player", "Pet", "Vehicle", "GameObject" }
 local function looksLikeGuid(s)
   if type(s) ~= "string" then return false end
-  for _, p in ipairs(GUID_PREFIXES) do
-    if s:match("^" .. p .. "%-%d") then return true end
-  end
-  return false
+  if isSecret(s) then return false end   -- a secret cannot be matched against
+  local ok, hit = pcall(function()
+    for _, p in ipairs(GUID_PREFIXES) do
+      if s:match("^" .. p .. "%-%d") then return true end
+    end
+    return false
+  end)
+  return ok and hit == true
 end
 
 -- " z=<zone> <mapID>@x,y" — the card requires zone/subzone and the
@@ -218,7 +272,11 @@ end
 
 local function locLine(w)
   local out = ""
-  if w.zone then out = out .. " z=" .. cut(w.zone, 14) end
+  -- zone/subzone are client strings too: cut() answers nil when the client
+  -- marks them secret, and the field is then omitted rather than folded into
+  -- a line that would be measured later.
+  local z = w.zone and cut(w.zone, 14)
+  if z then out = out .. " z=" .. z end
   if w.map and w.x and w.y then
     out = out .. " " .. tostring(w.map) .. "@" .. pct3(w.x) .. "," .. pct3(w.y)
   elseif w.map then
@@ -230,13 +288,27 @@ end
 -- a GUID is "Creature-0-4384-618-00712-00612-0000411A2B"; the last field
 -- is the instance-unique spawn, enough to pair a corpse loot window with
 -- its skin window on the printed line. The full GUID stays in the record.
+-- nil means the GUID could not be measured (a secret GUID): the caller then
+-- shows the value whole through the display channel instead of slicing it.
 local function guidSuffix(g)
-  if type(g) ~= "string" or g == "" then return "-" end
-  if #g <= 8 then return g end
-  return ".." .. g:sub(#g - 5)
+  if type(g) ~= "string" then return nil end
+  if isSecret(g) then return nil end
+  local ok, out = pcall(function()
+    local len = #g
+    if len == 0 then return nil end
+    if len <= 8 then return g end
+    return ".." .. g:sub(len - 5)
+  end)
+  if ok and type(out) == "string" then return out end
+  return nil
 end
 
 -- ── step recording ────────────────────────────────────────────────────
+-- `detail` is OUR text only: literals and numbers this file assembled. Client
+-- text (a mob's name, a GUID, a zone the client marks secret) travels in
+-- `extra.name` / `extra.nameLabel` and is appended to the printed line by
+-- Diag, which never measures the result. Nothing in the record is cut or
+-- formatted, so the buffer stays honest for a later reader as well.
 function P:Step(event, detail, extra)
   self._seq = self._seq + 1
   local s = { n = self._seq, t = nowT(), event = event, detail = detail or "" }
@@ -253,8 +325,14 @@ function P:Step(event, detail, extra)
 end
 
 -- ── loot reading (classic contract, every call pcall'd) ───────────────
+-- Returns items, src, money. `money` is the coin slot, which is NOT an item:
+-- the live c220ec7 dump printed it as "?x0" (no itemID, no quantity) and the
+-- card is right that an unnamed, id-less slot must never be recorded as an
+-- item. It is dropped from the item list; when the client reports an amount
+-- the amount is kept as money instead.
 function P:ReadLoot()
   local items = {}
+  local money = nil
   local n = 0
   if type(GetNumLootItems) == "function" then
     local ok, v = pcall(GetNumLootItems)
@@ -263,13 +341,13 @@ function P:ReadLoot()
   local src = nil
   if type(GetLootSourceInfo) == "function" and n > 0 then
     local ok, g = pcall(GetLootSourceInfo, 1)
-    if ok and type(g) == "string" then src = g end
+    if ok and isClientText(g) then src = g end
   end
   for i = 1, n do
     local link = nil
     if type(GetLootSlotLink) == "function" then
       local ok, l = pcall(GetLootSlotLink, i)
-      if ok and type(l) == "string" then link = l end
+      if ok and isClientText(l) then link = l end
     end
     local name, qty, qual = nil, 1, nil
     if type(GetLootSlotInfo) == "function" then
@@ -277,23 +355,30 @@ function P:ReadLoot()
       -- NodeTrail recorder uses; itemID is recovered from the link)
       local ok, a, b, c, d = pcall(GetLootSlotInfo, i)
       if ok then
-        if type(b) == "string" then name = b end
+        if isClientText(b) then name = b end
         if type(c) == "number" then qty = c end
         if type(d) == "number" then qual = d end
       end
     end
     local id = nil
     if link then
-      local m = link:match("item:(%d+)")
-      if m then id = tonumber(m) end
+      -- the link is client text: matching it is a read, so it is attempted
+      -- and never assumed
+      local ok, m = pcall(function() return link:match("item:(%d+)") end)
+      if ok and type(m) == "string" then id = tonumber(m) end
     end
-    if id or name then
+    if id ~= nil and id > 0 then
       items[#items + 1] = {
         id = id, name = name, qty = qty, quality = qual, link = link,
       }
+    else
+      -- no itemID at all: the coin slot, never an item. The client's own
+      -- amount is kept when it reports one; "?x0" is the shape that must not
+      -- appear again.
+      money = (money or 0) + (type(qty) == "number" and qty > 0 and qty or 0)
     end
   end
-  return items, src
+  return items, src, money
 end
 
 -- ── attribution (confirmed live, see the header) ─────────────────────
@@ -347,8 +432,9 @@ end
 
 -- ── spell / skinning detection ────────────────────────────────────────
 local function nameSkinny(name)
-  if type(name) ~= "string" then return false end
-  return name:lower():find("skin", 1, true) ~= nil
+  if type(name) ~= "string" or isSecret(name) then return false end
+  local ok, hit = pcall(function() return name:lower():find("skin", 1, true) ~= nil end)
+  return ok and hit == true
 end
 
 function P:IsSkinningSpell(spellID, spellName)
@@ -377,10 +463,13 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
   if not self.capturing then return end
   local t = nowT()
   local w = whereAmI()
-  local who = (unit == "player") and "player" or tostring(unit or "?")
+  -- the unit argument is a token ("player", "target"): our own vocabulary, and
+  -- it is only read when the client did not mark it secret
+  local isPlayer = type(unit) == "string" and not isSecret(unit) and unit == "player"
+  local who = isPlayer and "player" or "?"
   local id = type(spellID) == "number" and spellID or nil
-  local name = type(spellName) == "string" and spellName or nil
-  local isSkin = (who == "player")
+  local name = isClientText(spellName) and spellName or nil
+  local isSkin = isPlayer
     and event == "UNIT_SPELLCAST_SUCCEEDED"
     and self:IsSkinningSpell(id, name)
   if isSkin then
@@ -395,11 +484,12 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
   end
   local d = "k=" .. (isSkin and "skin-cast" or "cast")
   if id then d = d .. " s=" .. tostring(id) end
-  if name then d = d .. " n=" .. cut(name, 16) end
   d = d .. " who=" .. who
   d = d .. locLine(w)
+  -- the cast's name is client text (on this client it is a cast-bar name):
+  -- carried beside our text, appended at the print site, never cut here
   self:Step(event, d, {
-    who = who, spellID = id, name = name, skin = isSkin,
+    who = who, spellID = id, name = name, nameLabel = " n=", skin = isSkin,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   local R = self:Recorder()
@@ -418,35 +508,43 @@ function P:OnLootOpened()
   -- slot-cleared de-duplication restarts from this window
   self._pendingClose = nil
   self._slotTicks = {}
-  local items, src = self:ReadLoot()
+  local items, src, money = self:ReadLoot()
   local srcName = nil
   if type(GetLootSourceName) == "function" then
     local ok, nm = pcall(GetLootSourceName)
-    if ok and type(nm) == "string" and nm ~= "" then srcName = nm end
+    if ok and isClientText(nm) then srcName = nm end
   end
   local kind = self:Classify(src, t)
   self.lastLoot = { src = src, at = t, kind = kind }
   local d = "k=" .. kind
-  if src then d = d .. " g=" .. guidSuffix(src) end
-  if srcName then d = d .. " n=" .. cut(srcName, 12) end
+  local suffix = guidSuffix(src)
+  if suffix then d = d .. " g=" .. suffix end
   local shown = math.min(#items, self.MAX_ITEMS_SHOWN)
   local bits = {}
   for i = 1, shown do
     local it = items[i]
-    bits[i] = tostring(it.id or "?") .. "x" .. tostring(it.qty)
-    .. (type(it.quality) == "number" and ("q" .. tostring(it.quality)) or "")
+    -- every entry here has a real itemID (the coin slot never becomes one)
+    bits[i] = tostring(it.id) .. "x" .. tostring(it.qty)
+      .. (type(it.quality) == "number" and ("q" .. tostring(it.quality)) or "")
   end
-  d = d .. " i=" .. (table.concat(bits, ",") ~= "" and table.concat(bits, ",") or "-")
-    .. (#items > shown and ("+" .. (#items - shown)) or "")
+  local list = #bits > 0 and table.concat(bits, ",") or nil
+  if money then
+    -- the coin slot is named as money, not recorded as an unnamed item
+    list = list and (list .. ",money") or "money"
+  end
+  d = d .. " i=" .. (list or "-") .. (#items > shown and ("+" .. (#items - shown)) or "")
   d = d .. locLine(w)
+  -- the loot source's name is client text: carried beside our text
   self:Step("LOOT_OPENED", d, {
-    kind = kind, src = src, srcName = srcName, items = items,
+    kind = kind, src = src, srcName = srcName, name = srcName,
+    nameLabel = " n=", items = items, money = money,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   local R = self:Recorder()
   if R then
     local ev = {
-      guid = src, name = srcName, items = items, t = t, kind = kind,
+      guid = src, name = srcName, items = items, money = money, t = t,
+      kind = kind,
       zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
     }
     if kind == "corpse" and type(R.OnCorpseLoot) == "function" then
@@ -514,7 +612,10 @@ function P:OnUnitDied(unit)
   local t = nowT()
   local w = whereAmI()
   local name, guid = nil, nil
-  if looksLikeGuid(unit) then
+  local isPlayerDeath = type(unit) == "string" and not isSecret(unit) and unit == "player"
+  if isPlayerDeath then
+    -- the player's own death: nothing to attribute to a corpse
+  elseif looksLikeGuid(unit) then
     -- the live shape: the argument IS the corpse GUID. A GUID is not a unit
     -- token, so nothing here asks the client for a name it cannot give — the
     -- mob's name arrives from the target enrichment below or the loot source.
@@ -522,25 +623,48 @@ function P:OnUnitDied(unit)
     if type(self.lastKill) == "table" and self.lastKill.guid == guid then
       name = self.lastKill.name
     end
-  elseif type(unit) == "string" and unit ~= "player" then
-    if type(GetUnitName) == "function" then
-      local ok, nm = pcall(GetUnitName, unit)
-      if ok and type(nm) == "string" and nm ~= "" then name = nm end
-    end
-    if type(GetUnitGUID) == "function" then
-      local ok, g = pcall(GetUnitGUID, unit)
-      if ok and type(g) == "string" then guid = g end
+  elseif isClientText(unit) then
+    if type(unit) == "string" and not isSecret(unit) then
+      -- a unit token ("target", "party1"): resolvable
+      if type(GetUnitName) == "function" then
+        local ok, nm = pcall(GetUnitName, unit)
+        if ok and isClientText(nm) then name = nm end
+      end
+      if type(GetUnitGUID) == "function" then
+        local ok, g = pcall(GetUnitGUID, unit)
+        if ok and isClientText(g) then guid = g end
+      end
+    else
+      -- a GUID the client marked secret: still the death's identity, it just
+      -- cannot be parsed or sliced here. It is shown whole at the print site.
+      guid = unit
     end
   end
   if guid or name then self.lastKill = { guid = guid, name = name, at = t } end
   if guid then self._deadGuids[guid] = t end
-  local d = "k=death unit=" .. tostring(unit or "?")
-  if name then d = d .. " n=" .. cut(name, 16) end
-  if guid then d = d .. " g=" .. guidSuffix(guid) end
-  if unit == "player" then d = d .. " [YOU DIED]" end
+  -- our own description of the argument; the value itself is never measured
+  local argText = "?"
+  if isPlayerDeath then
+    argText = "player"
+  elseif looksLikeGuid(unit) then
+    argText = "creature"
+  elseif type(unit) == "string" and not isSecret(unit) then
+    argText = unit
+  end
+  local d = "k=death unit=" .. argText
+  local suffix = guidSuffix(guid)
+  if suffix then d = d .. " g=" .. suffix end
+  if isPlayerDeath then d = d .. " [YOU DIED]" end
   d = d .. locLine(w)
+  -- the mob's name is client text: carried beside our text and printed at the
+  -- end of the line. When the GUID itself is a secret that cannot be
+  -- shortened, the GUID is shown whole instead of a suffix.
+  local display, label = name, " n="
+  if display == nil and guid ~= nil and suffix == nil then
+    display, label = guid, " g="
+  end
   self:Step("UNIT_DIED", d, {
-    unit = unit, guid = guid, name = name,
+    unit = unit, guid = guid, name = display, nameLabel = label,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   local R = self:Recorder()
@@ -571,11 +695,11 @@ function P:OnTargetChanged()
   local name, guid
   if type(UnitName) == "function" then
     local ok, nm = pcall(UnitName, "target")
-    if ok and type(nm) == "string" and nm ~= "" then name = nm end
+    if ok and isClientText(nm) then name = nm end
   end
   if type(UnitGUID) == "function" then
     local ok, g = pcall(UnitGUID, "target")
-    if ok and type(g) == "string" then guid = g end
+    if ok and isClientText(g) then guid = g end
   end
   if not name and not guid then return end
   local t = nowT()
@@ -596,11 +720,17 @@ function P:OnTargetChanged()
   if guid then self._deadGuids[guid] = t end
   self.lastKill = { guid = guid, name = name, at = t }
   local w = whereAmI()
-  local d = "k=death target n=" .. cut(tostring(name or "?"), 16)
-  if guid then d = d .. " g=" .. guidSuffix(guid) end
+  local d = "k=death target"
+  local suffix = guidSuffix(guid)
+  if suffix then d = d .. " g=" .. suffix end
   d = d .. locLine(w)
+  -- the target's name is client text: carried beside our text, printed last
+  local display, label = name, " n="
+  if display == nil and guid ~= nil and suffix == nil then
+    display, label = guid, " g="
+  end
   self:Step("TARGET_DEAD", d, {
-    unit = "target", guid = guid, name = name,
+    unit = "target", guid = guid, name = display, nameLabel = label,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   local R = self:Recorder()
@@ -640,18 +770,23 @@ function P:OnCombat(...)
     return (f - math.floor(f / 2) * 2) == 1
   end
   local mine = (playerFlag(srcFlags) or playerFlag(destFlags)) and "yes" or "no"
-  if type(destGUID) == "string" and type(destName) == "string" then
+  if isClientText(destGUID) and isClientText(destName) then
     self.lastKill = { guid = destGUID, name = destName, at = nowT() }
   end
   local w = whereAmI()
   local d = "k=death cl=" .. tostring(ev or "?") .. " mine=" .. mine
   if spellID then d = d .. " s=" .. tostring(spellID) end
-  if spellName then d = d .. " n=" .. cut(tostring(spellName), 14) end
-  if destName then d = d .. " dest=" .. cut(destName, 14) end
-  if destGUID then d = d .. " g=" .. guidSuffix(destGUID) end
+  local suffix = guidSuffix(destGUID)
+  if suffix then d = d .. " g=" .. suffix end
   d = d .. locLine(w)
+  -- names are client text: kept beside our own text and printed at the end
+  -- (this handler is never registered — see P.EVENTS — but it is audited
+  -- with the rest: no read of a name is performed here)
+  local display, label = destName, " dest="
+  if display == nil then display, label = spellName, " n=" end
   self:Step("COMBAT_LOG_EVENT_UNFILTERED", d, {
-    destGUID = destGUID, destName = destName, spellID = spellID,
+    destGUID = destGUID, destName = display, name = display, nameLabel = label,
+    spellID = spellID, spellName = spellName,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
 end
@@ -685,11 +820,16 @@ function P:ReadSkinningSkill()
   if not okN or type(n) ~= "number" then return nil end
   for i = 1, n do
     local ok, name, rank, maxRank = pcall(GetSkillLineInfo, i)
-    if ok and type(name) == "string" and name:lower():find("skinn", 1, true) then
-      if type(rank) == "number" then
-        return { rank = rank, max = (type(maxRank) == "number" and maxRank or nil) }
+    if ok and type(name) == "string" and not isSecret(name) then
+      local isSkin, errS = pcall(function()
+        return name:lower():find("skinn", 1, true) ~= nil
+      end)
+      if isSkin and errS == true then
+        if type(rank) == "number" then
+          return { rank = rank, max = (type(maxRank) == "number" and maxRank or nil) }
+        end
+        return nil
       end
-      return nil
     end
   end
   return nil
@@ -792,7 +932,18 @@ function P:Enable()
   frame:SetScript("OnEvent", function(_, event, ...)
     local ok, err = pcall(dispatch, event, ...)
     if not ok then
-      self._error = tostring(err)
+      -- An error object need not be a string, and on this client an error
+      -- raised while handling a secret can carry the secret itself —
+      -- tostring() on that is another read. Reporting a failure must never
+      -- raise a second one.
+      if type(err) == "string" then
+        self._error = err
+      elseif isSecret(err) then
+        self._error = "a secret value (not read)"
+      else
+        local okS, txt = pcall(tostring, err)
+        self._error = (okS and type(txt) == "string" and txt) or "unprintable error"
+      end
     end
   end)
   note("step: OnEvent installed")
@@ -827,18 +978,53 @@ function P:Enable()
 end
 
 -- /mp skindiag dump — the in-client evidence channel. One line per step,
--- in capture order, every line hard-capped at LINE_CAP chars (the chat
--- line is the only evidence Forever 16001 gives us).
+-- in capture order. The cap applies to text THIS FILE built; a client value
+-- (a mob's name) is appended to the finished line and never measured, so a
+-- SECRET name can be shown without killing the dump (t_1ed3b421).
 function P:Diag()
-  local function say(m)
-    local line = "Skinning skindiag: " .. m
-    if #line > self.LINE_CAP then
-      line = line:sub(1, self.LINE_CAP)
+  local RESERVE = 20 -- room kept for a client value we are NOT allowed to measure
+  -- The ONE printer for the whole dump.
+  --   pre  our text (measurable, therefore capped)
+  --   value  client text that may be a SECRET: appended, never measured
+  --   post  our text after it
+  -- Nothing measures the concatenation, and the result goes straight to
+  -- AddMessage: a secret may be shown, not measured. Room for the value is
+  -- computed exactly when the client lets us measure it, and reserved
+  -- conservatively when it does not.
+  local function add(pre, value, post)
+    pre = pre or ""
+    local room = self.LINE_CAP
+    if value ~= nil then
+      room = self.LINE_CAP - (safeLen(post) or 0) - (safeLen(value) or RESERVE)
+    elseif post then
+      room = self.LINE_CAP - (safeLen(post) or 0)
     end
-    DEFAULT_CHAT_FRAME:AddMessage(line)
+    local len = safeLen(pre)
+    if len and len > room then pre = pre:sub(1, room) end
+    local out = pre
+    if value ~= nil then out = out .. value end
+    if post then out = out .. post end
+    DEFAULT_CHAT_FRAME:AddMessage(out)
+  end
+  local function say(m) add("Skinning skindiag: " .. m, nil, nil) end
+
+  -- First line: what is recording, whether the sub-option is on, and WHERE
+  -- the records went. The old first line only said "capture on"; the line the
+  -- card caught said "nothing recorded" while 9 kills were in the buffer
+  -- (live, c220ec7). Both are replaced by this one statement of fact.
+  local R = self:Recorder()
+  local db = false
+  if type(R) == "table" and type(R.IsEnabled) == "function" then
+    local okE, on = pcall(R.IsEnabled, R)
+    db = okE and on == true
   end
   say("capture " .. (self.capturing and "on" or "off")
+    .. "; sub-option " .. (db and "ON" or "off") .. " (NodeTrail)"
+    .. "; records: " .. (db
+      and "NodeTrailDB.skinning, saved"
+      or "session buffer only, nothing saved")
     .. "; steps=" .. #self.steps .. "/" .. self.MAX_STEPS)
+
   local valid, skipped = 0, {}
   for _, e in ipairs(self.EVENTS) do
     local r = self._events[e]
@@ -853,15 +1039,25 @@ function P:Diag()
   say("events: " .. valid .. "/" .. #self.EVENTS .. " valid"
     .. (skipped[1] and ("; " .. table.concat(skipped, "; ")) or "; none invalid"))
   if self._error then
-    say("last error: " .. cut(self._error, 60))
+    local errText = cut(self._error, 60)
+    say("last error: " .. (errText or "(a secret value - not read)"))
   end
   if self.lastSkin then
-    say("last skin cast: spell=" .. tostring(self.lastSkin.spellID or "?")
-      .. " name=" .. tostring(self.lastSkin.name or "?"))
+    local pre = "last skin cast: spell=" .. tostring(self.lastSkin.spellID or "?")
+      .. " name="
+    add("Skinning skindiag: " .. pre, self.lastSkin.name or "?", nil)
   end
   if self.lastKill then
-    say("last kill: " .. tostring(self.lastKill.name or self.lastKill.guid or "?")
-      .. " " .. tostring(self.lastKill.guid or ""))
+    local k = self.lastKill
+    -- a GUID we can shorten is printed as ..XXXXXX; one the client marks
+    -- secret is printed whole, because slicing it is exactly what is refused
+    local post = ""
+    if k.guid ~= nil then post = " g=" .. (guidSuffix(k.guid) or k.guid) end
+    if k.name ~= nil then
+      add("Skinning skindiag: last kill: ", k.name, post)
+    else
+      add("Skinning skindiag: last kill:", nil, post)
+    end
   end
   -- Duplicates named by the card are dropped before the recorder sees them;
   -- printing the counts is how the next in-game run proves the drop happened
@@ -878,13 +1074,25 @@ function P:Diag()
   end
   -- What the RECORDER would store for the last corpse. This is the model the
   -- next in-game run verifies, without needing a second probe session.
-  local R = self:Recorder()
+  -- A line that carries client text comes back as
+  --   { pre = <ours>, name = <client text>, post = <ours> }
+  -- (see R.Describe) so the name is appended here instead of into a string
+  -- this file would then measure — the c220ec7 crash was exactly that.
   if type(R) == "table" and type(R.Describe) == "function" then
     local okR, lines = pcall(R.Describe, R)
     if okR and type(lines) == "table" then
-      for _, l in ipairs(lines) do say(tostring(l)) end
+      for _, l in ipairs(lines) do
+        if type(l) == "table" then
+          add("Skinning skindiag: " .. tostring(l.pre or ""), l.name, l.post)
+        elseif type(l) == "string" and safeLen(l) ~= nil then
+          say(l)
+        else
+          say("record: a line could not be read (a secret value)")
+        end
+      end
     else
-      say("record: describe failed: " .. cut(tostring(lines), 60))
+      local why = (type(lines) == "string" and cut(lines, 60)) or "a secret value"
+      say("record: describe failed: " .. why)
     end
   else
     say("record: the recorder (Record.lua) did not load — nothing stored")
@@ -902,12 +1110,28 @@ function P:Diag()
   -- Step lines use a short "sk " tag instead of the full prefix so the
   -- required fields (kind, creature, items, zone, position) fit inside
   -- the 120-char cap; the header lines above already name the channel.
+  -- ONE bad line must not take the dump down: the card's failure was a whole
+  -- dump lost to the last line, after every step had already been collected.
   for i = from, n do
     local s = self.steps[i]
-    local line = string.format("sk %3d %.2f %s %s", s.n, s.t, s.event, s.detail or "")
-    if #line > self.LINE_CAP then
-      line = line:sub(1, self.LINE_CAP)
+    local okLine, lineErr = pcall(function()
+      local pre = string.format("sk %3d %.2f %s %s", s.n, s.t, s.event, s.detail or "")
+      local room = self.LINE_CAP
+      if s.name ~= nil then
+        local label = s.nameLabel or " n="
+        room = self.LINE_CAP - (safeLen(label) or 0)
+          - (safeLen(s.name) or RESERVE)     -- nil for a SECRET: reserve instead
+      end
+      local len = safeLen(pre)          -- our own text: safe to measure
+      if len and len > room then pre = pre:sub(1, room) end
+      if s.name ~= nil then
+        pre = pre .. (s.nameLabel or " n=") .. s.name   -- never measured after
+      end
+      DEFAULT_CHAT_FRAME:AddMessage(pre)
+    end)
+    if not okLine then
+      say("step " .. tostring(s.n) .. " not printable: "
+        .. (cut(tostring(lineErr), 50) or "a secret value"))
     end
-    DEFAULT_CHAT_FRAME:AddMessage(line)
   end
 end
