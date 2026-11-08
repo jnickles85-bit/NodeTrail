@@ -999,3 +999,54 @@ the figure), `tooltip_panel_spec` T2b (no raw row ⇒ floor 0, reported), `toolt
 (`raw rows=0 floor=0px` on a herb block): **4 checks, all red on `34d0510`** (2 + 1 + 1, behavioural
 FAILs, no traceback) and green here. The earlier commit message's "43 checks fail on `06984f6`" was a
 typo — the real count is **46**.
+
+### t_60e6e825 — the route renders as a ghost because its own rim covers the white dot
+
+**Mightie, on `7e3a329`:** "The path is being drawn on the map it is just extremely transparent."
+Placement was already right. This is legibility only: opacity, thickness, inherited parent alpha,
+draw order. Projection, anchoring and the coordinate space were not touched.
+
+**The defect is geometry, and it was measured off the regions the client was given.** Every dot is
+TWO regions: a dark rim, painted first, then the white core on top. `DotMetrics` spaced the dots by
+the CORE width — 2.02 canvas px on the reported draw — while the rim was 3.36 canvas px, so the next
+dot's rim reached 1 px into every white core: **33% of each core on a straight run, 39% at 45°**, and
+55%–62% of the core's area where the route turns. Pixel area of white surviving the whole chain, per
+distinct dot position, on this route at three canvas scales:
+
+| canvas scale | 0.6 | 1.0 | 1.5 |
+|---|---|---|---|
+| `7e3a329` (pitch = core) | 44% | 51% | 55% |
+| this build (pitch = rim) | 81% | 90% | 94% |
+
+That is the whole "extremely transparent": a white dot painted OPAQUE under a rim that covers half of
+it. It also explains why the alpha looked innocent — a 90% white square cannot read as a ghost by
+itself, which is what the card said — and why the probe diagonal was bright: a single region has no
+neighbour to paint over it.
+
+**Why draw order could not be the fix.** This client exposes no `SetDrawLayer`, so within a frame a
+region is painted in CREATION order; the two-pass "all rims, then all cores" ordering is available
+but it starves the cores on a client with a region ceiling (the rim pass eats the allowance and
+leaves black rims with nothing on top — reproduced on the 40-region client in
+`mapdot_capacity_spec`: `painted=0`, 39 rims). The fix is the pitch instead: `DotMetrics` spaces the
+dots by the RIM width (`core + DOT_OUTLINE_GROW`), so the neighbouring rim stops exactly 1 px short of
+the core. Legibility then no longer depends on paint order, sublevel support or creation order, and
+the chain still reads continuous because the rims touch edge to edge.
+
+Also in this card: the core is a 4 SCREEN px floor (was 3) painted opaque (`pathColor`'s 0.9 is still
+recorded as `alphaRequested` and printed, so the override is visible, not silent); the host is pinned
+opaque and asks the client to ignore the alpha it inherits, both read back; `/nt mapdiag` now prints
+`sample dot:` (requested colour next to the client's own `GetVertexColor`, layer/blend, measured vs
+planned size, screen px after scale, frame level, strata), `draw order:` (pitch, rim, core, the
+clearance in px, and whether any neighbouring rim can reach a core), `alpha chain:` (the product the
+dots actually paint at, naming the ancestor that dims them) and `cover:` (shown frames over the map
+that outrank the host or are faded); and `/nt mapdiag floor <px|auto>` plus
+`/nt mapdiag strata <MEDIUM|HIGH|DIALOG|auto>` drive the ladder in game without a redeploy.
+
+`tests/maplegibility_spec.lua` is new: it measures the surviving white pixels from the drawn regions
+at canvas scales 0.6/1.0/1.5, on a client with sublevels AND on a 1.12-shaped client with no
+`SetDrawLayer` at all. **66 checks fail on `7e3a329`**; 47/47 `tests/*.lua` pass under lua5.1 here.
+
+**Not yet seen in game.** The build is deployed (`b95fe61`), but the client had to be reloaded for it
+to load and the operator was mid-session, so the default-zoom screenshot and the live
+`GetVertexColor`/level/strata numbers are still pending one `/reload` + `/nt start` + map open. If the
+4 px core still reads thin, `/nt mapdiag floor 5` is the next rung and needs no deploy.
