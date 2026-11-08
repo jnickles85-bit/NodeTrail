@@ -816,7 +816,12 @@ end
 -- additive helpers in Verdict.lua — no second parser lives here). The reason
 -- text is the row's own stored reason, inherited rather than re-derived.
 
-local TOOLTIP_PREFIX = "Touchstone: "
+-- Fold (MightiePack, t_c2e67619): the addon's own name is not
+-- written into the player's tooltip. The verdict word leads the
+-- line. Every rendered surface reads this one constant, so they all
+-- lose the name together. The duplicate guard below needs a marker
+-- of its own now — see ca.tooltip-duplicate-guard.
+local TOOLTIP_PREFIX = ""
 local TOOLTIP_GREEN  = "|cff00ff00"
 local TOOLTIP_GREY   = "|cff9d9d9d"
 -- Card t_89440dfa: the trade-off line's own colour — amber, matching the chip
@@ -1296,13 +1301,22 @@ local function tooltipHasOurLine(tip)
 	for i = n, math.max(1, n - 3), -1 do
 		local fs = _G[name .. "TextLeft" .. i]
 		local ok2, text = pcall(function() return fs and fs.GetText and fs:GetText() end)
-		-- The prefix is searched for ANYWHERE in the line, not at position 1:
-		-- our line opens with a colour escape ("|cff...Touchstone: ..."), so the
-		-- text never starts at the prefix. (The client renders the escape, so on
-		-- screen the prefix IS the first visible word.)
-		if ok2 and type(text) == "string"
-			and text:find(TOOLTIP_PREFIX, 1, true) ~= nil then
-			return true
+		-- Fold (MightiePack, t_c2e67619): the rendered line carries no
+		-- addon name any more, so this guard cannot look for one. It looks
+		-- for what the line DOES lead with: a verdict word followed by the
+		-- headline separator, read from the same vocabulary the renderer
+		-- uses, so render and detection cannot drift. The colour escape the
+		-- line opens with is stripped first (the client hands back the
+		-- marked-up string), and the comparison is anchored at position 1 —
+		-- a verdict word appearing inside some other line never matches.
+		if ok2 and type(text) == "string" then
+			local plain = text:gsub("^%|c%x%x%x%x%x%x%x%x", ""):gsub("^%|r", "")
+			for _, word in pairs(TOOLTIP_UI.words) do
+				local marker = word .. " — "
+				if plain:sub(1, #marker) == marker then
+					return true
+				end
+			end
 		end
 	end
 	return false

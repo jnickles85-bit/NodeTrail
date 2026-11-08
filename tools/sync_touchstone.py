@@ -305,6 +305,67 @@ def edit_chestadvisor(text: str) -> str:
         ),
     )
 
+    # ---- No addon name in the rendered tooltip line (t_c2e67619) -----------
+    # The gear tooltip line read "Touchstone: Upgrade — …". The addon's own
+    # name is not wanted there: the verdict word leads. The display prefix is
+    # emptied rather than deleted, so every surface that renders it (the item
+    # tooltip's four headlines and the bag/quest hover explain lines) loses the
+    # name together and cannot drift apart.
+    text = replace_once(
+        text,
+        "ChestAdvisor/ChestAdvisor.lua",
+        "ca.tooltip-display-prefix",
+        'local TOOLTIP_PREFIX = "Touchstone: "\n',
+        (
+            "-- Fold (MightiePack, t_c2e67619): the addon's own name is not\n"
+            "-- written into the player's tooltip. The verdict word leads the\n"
+            "-- line. Every rendered surface reads this one constant, so they all\n"
+            "-- lose the name together. The duplicate guard below needs a marker\n"
+            "-- of its own now — see ca.tooltip-duplicate-guard.\n"
+            'local TOOLTIP_PREFIX = ""\n'
+        ),
+    )
+    # ... and the duplicate guard has to change WITH it: it searched the line
+    # for the prefix, which is now empty (an empty pattern matches every
+    # string, so the guard would answer "our line is here" for any tooltip and
+    # the verdict line would never appear at all). It keys on what the line
+    # DOES lead with instead: a verdict word from the renderer's own vocabulary
+    # followed by the headline separator, after the colour escape is stripped.
+    text = replace_once(
+        text,
+        "ChestAdvisor/ChestAdvisor.lua",
+        "ca.tooltip-duplicate-guard",
+        (
+            "\t\t-- The prefix is searched for ANYWHERE in the line, not at position 1:\n"
+            '\t\t-- our line opens with a colour escape ("|cff...Touchstone: ..."), so the\n'
+            "\t\t-- text never starts at the prefix. (The client renders the escape, so on\n"
+            "\t\t-- screen the prefix IS the first visible word.)\n"
+            '\t\tif ok2 and type(text) == "string"\n'
+            "\t\t\tand text:find(TOOLTIP_PREFIX, 1, true) ~= nil then\n"
+            "\t\t\treturn true\n"
+            "\t\tend\n"
+        ),
+        (
+            "\t\t-- Fold (MightiePack, t_c2e67619): the rendered line carries no\n"
+            "\t\t-- addon name any more, so this guard cannot look for one. It looks\n"
+            "\t\t-- for what the line DOES lead with: a verdict word followed by the\n"
+            "\t\t-- headline separator, read from the same vocabulary the renderer\n"
+            "\t\t-- uses, so render and detection cannot drift. The colour escape the\n"
+            "\t\t-- line opens with is stripped first (the client hands back the\n"
+            "\t\t-- marked-up string), and the comparison is anchored at position 1 —\n"
+            "\t\t-- a verdict word appearing inside some other line never matches.\n"
+            '\t\tif ok2 and type(text) == "string" then\n'
+            '\t\t\tlocal plain = text:gsub("^%|c%x%x%x%x%x%x%x%x", ""):gsub("^%|r", "")\n'
+            "\t\t\tfor _, word in pairs(TOOLTIP_UI.words) do\n"
+            '\t\t\t\tlocal marker = word .. " — "\n'
+            "\t\t\t\tif plain:sub(1, #marker) == marker then\n"
+            "\t\t\t\t\treturn true\n"
+            "\t\t\t\tend\n"
+            "\t\t\tend\n"
+            "\t\tend\n"
+        ),
+    )
+
     tail_marker = "-- Ensure the frame exists at load time.\n"
     if text.count(tail_marker) != 1:
         raise SyncError(
@@ -495,6 +556,19 @@ def audit_outputs(outputs: dict) -> list:
         problems.append("ChestAdvisor.lua has no ChestAdvisor.Enable()")
     if "function SF.EnableIntegrations()" not in outputs.get("Integration.lua", ""):
         problems.append("Integration.lua has no SF.EnableIntegrations()")
+
+    # t_c2e67619: the addon's own name is not rendered into the tooltip, and the
+    # duplicate guard must not still key on the prefix it used to carry.
+    advisor = outputs.get("ChestAdvisor/ChestAdvisor.lua", "")
+    if 'TOOLTIP_PREFIX = "Touchstone: "' in advisor:
+        problems.append(
+            "ChestAdvisor.lua still renders the addon's name into the tooltip line"
+        )
+    if "text:find(TOOLTIP_PREFIX" in advisor:
+        problems.append(
+            "ChestAdvisor.lua's duplicate guard still searches for the tooltip "
+            "prefix (empty since t_c2e67619 — it would match every line)"
+        )
     return problems
 
 

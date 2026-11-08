@@ -5,7 +5,10 @@ local ns = pkg.NodeTrail
 local T = {}
 ns.Tooltip = T
 
-local HEADER = "NodeTrail"
+-- The addon's own name is NOT written into the player's tooltip (t_c2e67619).
+-- It used to head every block, and that line doubled as the marker that said
+-- "our block is still here". The block now opens with the node name instead,
+-- so the marker moved to state that survives without it — see blockMarker().
 local POLL_INTERVAL = 0.2 -- at most ~5 refresh evaluations per second
 
 -- "Open Alchemy once to list recipe uses" is only truthful while a scan
@@ -29,7 +32,9 @@ function T.BuildLines(name)
   local node = ns.HerbData.GetNode(name)
   if not node then return nil end
   local lines = {}
-  table.insert(lines, { left = "NodeTrail" })
+  -- No header line: the block starts with the node name — the left column of
+  -- the first drop row (the node's own item, at 100%). The alchemy line and
+  -- the `Your picks:` line below it are unchanged.
   local drops, gathers = ns.HerbData.GetDropLines(name)
   if drops then
     for _, d in ipairs(drops) do
@@ -91,19 +96,20 @@ function T:GetHoveredNodeName(tooltip)
   return nil
 end
 
--- Content is the truth: the header line ("NodeTrail") is what marks our
--- block as intact, so read what the tooltip actually holds — prefer the
--- per-line text API, falling back to the font strings this addon already
--- relies on for the title.
+-- Content is the truth, but the block no longer carries a line with our own
+-- name on it: it OPENS with the node name. The client's tooltip carries that
+-- name too (its own first line), so "the text is there somewhere" can never
+-- answer "is our block still here?" — the answer is anchored by the line
+-- index we appended at, which is state only we have (blockMarker below).
 --
 -- BOTH sources are only accepted as a plain string. `GameTooltip:GetLine`
 -- is not a verified method on this client (Forever 16001); if it exists but
 -- returns a different shape (a table of segments, a colour-wrapped object —
--- anything non-string), treating it as line text would make `headerPresent`
--- never match, so `Refresh` would conclude the block is gone and append
--- another one every poll tick (~5/s). A non-string from `GetLine` is simply
--- discarded and the font string is used instead; the font-string path is
--- type-checked the same way.
+-- anything non-string), treating it as line text would make the marker never
+-- match, so `Refresh` would conclude the block is gone and append another one
+-- every poll tick (~5/s). A non-string from `GetLine` is simply discarded and
+-- the font string is used instead; the font-string path is type-checked the
+-- same way.
 local function isStringLine(x)
   return type(x) == "string"
 end
@@ -128,27 +134,53 @@ local function lineText(tooltip, i)
   return text
 end
 
-local function headerPresent(tooltip)
-  local n = tooltip:NumLines()
-  for i = 1, n do
-    if lineText(tooltip, i) == HEADER then
-      return true
-    end
-  end
-  return false
+-- Does a rendered line begin with `prefix`? A double line can reach us as one
+-- joined string (left column, then the right one) or as the left column
+-- alone, so the first line of our block is compared by PREFIX — which is
+-- exactly what makes the node name identifiable in both shapes.
+local function lineStartsWith(text, prefix)
+  return type(text) == "string" and type(prefix) == "string" and prefix ~= ""
+    and text:sub(1, #prefix) == prefix
 end
 
--- The block is intact only while our header is still in the tooltip, we
--- last appended it for the current title, and the tooltip still holds at
--- least as many lines as right after that append. A matching title with
--- no header means the client rewrote content through a path we never saw
--- (a C-side SetUnit / SetGameObject) — treat the block as gone, no matter
--- what our own clear wrappers recorded.
+-- The marker that identifies our block now that no line carries the addon's
+-- name (t_c2e67619). Three facts, all of them recorded at append time and
+-- checked against what the tooltip holds now:
+--   * the line count did not shrink below what the append left — a client
+--     rewrite that dropped our lines shows up here first, and a C-side
+--     SetUnit / SetGameObject never calls anything we could hook;
+--   * the line at the index we appended at still begins with the first line we
+--     wrote (the node name — the left column of the node's own drop row);
+--   * the client's own line just above it (the profession line, "Herbalism")
+--     is unchanged.
+-- The block therefore can never be confused with the client's own copy of the
+-- node name: that one sits at index 1, not at ours, and the line above ours
+-- would not match. Returns the block's start index, or nil when it is gone.
+local function blockMarker(tooltip)
+  local last = T.last
+  if type(last) ~= "table" then return nil end
+  local start = last.start
+  if type(start) ~= "number" or start < 1 or type(last.first) ~= "string" then
+    return nil
+  end
+  if tooltip:NumLines() < (last.after or 0) then return nil end
+  if not lineStartsWith(lineText(tooltip, start), last.first) then return nil end
+  if start > 1 and last.above ~= nil and lineText(tooltip, start - 1) ~= last.above then
+    return nil
+  end
+  return start
+end
+
+-- The block is intact only while its marker still holds and we last appended
+-- it for the current title. A matching title with no marker means the client
+-- rewrote content through a path we never saw (a C-side SetUnit /
+-- SetGameObject) — treat the block as gone, no matter what our own clear
+-- wrappers recorded.
 local function blockIntact(tooltip, title)
   if T.last == nil or T.last.title ~= title or T.last.after == nil then
     return false
   end
-  return tooltip:NumLines() >= T.last.after and headerPresent(tooltip)
+  return blockMarker(tooltip) ~= nil
 end
 
 -- ── Layout (backdrop + on-screen clamp) ────────────────────────────────
@@ -399,7 +431,11 @@ function T:Measure(tooltip)
   end
   local widestAll, widestAllText = 0, nil
   local widestClient, widestClientText = 0, nil
-  local headerIndex, lastIndex
+  local lastIndex
+  -- Where our block starts, by the marker (not by a header line: there is no
+  -- line with the addon's name in it any more). Rows before it are the
+  -- client's own and are what the frame was sized for.
+  local blockStart = blockMarker(tooltip)
   for i = 1, n do
     local text = lineText(tooltip, i)
     local left = _G["GameTooltipTextLeft" .. i]
@@ -408,9 +444,6 @@ function T:Measure(tooltip)
     local rw = stringWidth(right)
     if type(text) == "string" and text ~= "" then
       lastIndex = i
-      if text == HEADER and headerIndex == nil then
-        headerIndex = i
-      end
     end
     if lw ~= nil or rw ~= nil then
       local row = (lw or 0) + (rw or 0)
@@ -418,9 +451,7 @@ function T:Measure(tooltip)
       if row > widestAll then
         widestAll, widestAllText = row, text
       end
-      -- Rows before our header are the client's own: they are what the
-      -- frame was sized for, so they carry the padding measurement.
-      if headerIndex == nil and row > widestClient then
+      if (blockStart == nil or i < blockStart) and row > widestClient then
         widestClient, widestClientText = row, text
       end
     end
@@ -429,7 +460,7 @@ function T:Measure(tooltip)
   m.frameH = readNum(tooltip, "GetHeight")
   m.widest = widestAll
   m.widestText = widestAllText
-  m.hasBlock = headerIndex ~= nil
+  m.hasBlock = blockStart ~= nil
   m.clientRow = widestClient
   m.clientText = widestClientText
   m.pad = 0
@@ -782,11 +813,12 @@ end
 -- Re-ensure the NodeTrail block for the tooltip's current content. Appends
 -- at most one fresh block, and only when it is actually due:
 --   * the title is a known herb node, otherwise own nothing;
---   * the block is considered present only if the tooltip still contains
---     our header under the matching title — so a repopulate on ANY path
---     self-heals, and repeated calls with no client writes in between are
---     a no-op, so several hooks on one tooltip never produce duplicate
---     headers.
+--   * the block is considered present only if its marker still holds under
+--     the matching title (the node name at the index we appended it at, the
+--     line count, and the profession line above it — see blockMarker) — so a
+--     repopulate on ANY path self-heals, and repeated calls with no client
+--     writes in between are a no-op, so several hooks on one tooltip never
+--     produce duplicate blocks.
 --
 -- `source` says who is asking: "show" (the client's OnShow), "setunit",
 -- "setitem", or "poll" (our private clock). It decides whether a late append
@@ -846,6 +878,11 @@ function T:Refresh(tooltip, source)
     ringPush(entry)
     return
   end
+  -- The marker is recorded HERE, at append time: where the block starts, the
+  -- first line it opens with (the node name), the client's own line just above
+  -- it (the profession line), and the line count the append left behind.
+  local firstIndex = tooltip:NumLines() + 1
+  local above = firstIndex > 1 and lineText(tooltip, firstIndex - 1) or nil
   for _, line in ipairs(lines) do
     if line.right then
       tooltip:AddDoubleLine(line.left, line.right, 0.6, 0.8, 1, 1, 1, 1)
@@ -854,7 +891,14 @@ function T:Refresh(tooltip, source)
     end
   end
   local shown = type(tooltip.IsShown) == "function" and tooltip:IsShown() or false
-  self.last = { title = name, after = tooltip:NumLines(), shown = shown }
+  self.last = {
+    title = name,
+    start = firstIndex,
+    first = lines[1] and lines[1].left or nil,
+    above = above,
+    after = tooltip:NumLines(),
+    shown = shown,
+  }
   self.dirty = false
   entry.appended = true
   entry.after = self.last.after

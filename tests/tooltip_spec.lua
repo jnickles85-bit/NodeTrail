@@ -111,22 +111,29 @@ check(#GameTooltip.lines == 2, "Test 4: unit tooltip ignored")
 mouseoverUnit = false
 
 -- Test 5
+-- t_c2e67619: the block no longer opens with the addon's own name. The first
+-- line the addon appends is the node name (the drop row's left column), so the
+-- client's two lines are followed by it directly.
 hover("Peacebloom")
 local lines = GameTooltip.lines
-local found = { NodeTrail = false, Peacebloom = false, Picks = false, Alchemy = false }
-for _, l in ipairs(lines) do
-  if l == "NodeTrail" then found.NodeTrail = true end
-  if l == "Peacebloom | 100% (base)" then found.Peacebloom = true end
+local found = { Peacebloom = false, Picks = false, Alchemy = false }
+local addonNameLines, firstBlockIndex = 0, nil
+for i, l in ipairs(lines) do
+  if l == "NodeTrail" then addonNameLines = addonNameLines + 1 end
+  if l == "Peacebloom | 100% (base)" then
+    found.Peacebloom = true
+    firstBlockIndex = firstBlockIndex or i
+  end
   if l == "Your picks: none yet" then found.Picks = true end
   if l == "Open Alchemy once to list recipe uses" then found.Alchemy = true end
 end
-check(found.NodeTrail, "Test 5: header present")
+check(addonNameLines == 0, "Test 5: no line reads the addon's name (got " .. addonNameLines .. ")")
+check(firstBlockIndex == 3,
+  "Test 5: the block starts with the node name right after the client's two lines (index "
+    .. tostring(firstBlockIndex) .. ")")
 check(found.Peacebloom, "Test 5: Peacebloom line present")
 check(found.Picks, "Test 5: picks line present")
 check(found.Alchemy, "Test 5: alchemy hint present")
-local count = 0
-for _, l in ipairs(lines) do if l == "NodeTrail" then count = count + 1 end end
-check(count == 1, "Test 5: header appears exactly once")
 
 -- Test 6
 hover("Mageroyal")
@@ -418,13 +425,13 @@ local d16 = ns.Recipes._diag
 check(d16 ~= nil and d16.path == "none", "Test 16: scan diag records path=none")
 hover("Peacebloom")
 local foundHint16 = false
-local foundNT16 = false
+local foundBlock16 = false
 for _, l in ipairs(GameTooltip.lines) do
   if l == "Open Alchemy once to list recipe uses" then foundHint16 = true end
-  if l == "NodeTrail" then foundNT16 = true end
+  if type(l) == "string" and l:find("^Your picks: ") then foundBlock16 = true end
 end
 check(not foundHint16, "Test 16: tooltip drops the impossible instruction without an API")
-check(foundNT16, "Test 16: the rest of the NodeTrail block is still there")
+check(foundBlock16, "Test 16: the rest of the block is still there")
 local okSt16, stOut16 = captureStatus()
 check(okSt16, "Test 16: status runs on an API-less client")
 check(stOut16:find("unavailable", 1, true) ~= nil, "Test 16: status says the feature is unavailable")

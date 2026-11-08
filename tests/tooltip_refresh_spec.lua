@@ -169,10 +169,14 @@ local function pollTick(elapsed)
   end
 end
 
-local function headerCount()
+-- The block no longer opens with the addon's name (t_c2e67619), so it is
+-- counted by a line every block carries exactly once and the client never
+-- does: the picks line, which BuildLines always appends ("Your picks: N" or
+-- "Your picks: none yet").
+local function blockCount()
   local n = 0
   for _, l in ipairs(GT.lines) do
-    if l == "NodeTrail" then n = n + 1 end
+    if type(l) == "string" and l:find("^Your picks: ") then n = n + 1 end
   end
   return n
 end
@@ -201,7 +205,7 @@ check(GT.scripts.OnUpdate == nil, "Test 1: GameTooltip keeps its own scripts (no
 
 -- Test 2: baseline hover still works (the first hover of the session)
 hover("Peacebloom")
-check(headerCount() == 1, "Test 2: header present exactly once on first hover")
+check(blockCount() == 1, "Test 2: block present exactly once on first hover")
 check(has("Peacebloom | 100% (base)"), "Test 2: Peacebloom drop line present")
 check(has("Your picks: none yet"), "Test 2: picks line present")
 
@@ -210,7 +214,7 @@ check(has("Your picks: none yet"), "Test 2: picks line present")
 clientRepopulate("Peacebloom", true)
 pollTick()
 check(has("Peacebloom | 100% (base)"), "Test 3: block self-heals after same-herb repopulate")
-check(headerCount() == 1, "Test 3: header exactly once after same-herb repopulate")
+check(blockCount() == 1, "Test 3: block exactly once after same-herb repopulate")
 
 -- Test 4: move to a DIFFERENT herb after a repopulate (the 'Briarthorn shows
 -- nothing' symptom). New herb's block must appear, old lines must be gone.
@@ -219,14 +223,14 @@ pollTick()
 check(has("Briarthorn | 100% (base)"), "Test 4: Briarthorn drop line present")
 check(has("Swiftthistle | 10% (base)"), "Test 4: Briarthorn Swiftthistle line present")
 check(not has("Peacebloom | 100%"), "Test 4: stale Peacebloom line gone")
-check(headerCount() == 1, "Test 4: header exactly once after herb switch")
+check(blockCount() == 1, "Test 4: block exactly once after herb switch")
 
 -- Test 5: duplicate-hook case — the same population fires the OnShow hook(s)
--- again (several hooks for one tooltip); no duplicate headers may appear.
+-- again (several hooks for one tooltip); no duplicate blocks may appear.
 for _, fn in ipairs(GT.hooks.OnShow or {}) do fn(GT) end
 for _, fn in ipairs(GT.hooks.OnShow or {}) do fn(GT) end
 pollTick()
-check(headerCount() == 1, "Test 5: no duplicate header when several hooks fire")
+check(blockCount() == 1, "Test 5: no duplicate block when several hooks fire")
 check(has("Briarthorn | 100% (base)"), "Test 5: Briarthorn line still present")
 
 -- Test 6: unknown object adds nothing
@@ -243,40 +247,40 @@ check(not has("NodeTrail"), "Test 7: unit tooltip ignored")
 mouseoverUnit = false
 hover("Peacebloom")
 check(has("Peacebloom | 100% (base)"), "Test 7: block returns on the next real herb hover")
-check(headerCount() == 1, "Test 7: header exactly once")
+check(blockCount() == 1, "Test 7: block exactly once")
 
 -- Test 8: repeated clock ticks must not duplicate the block
 pollTick()
 pollTick()
-check(headerCount() == 1, "Test 8: clock pump is idempotent")
+check(blockCount() == 1, "Test 8: clock pump is idempotent")
 
 -- Test 9: UNSEEN CLEAR — the client wipes the tooltip without going through
 -- anything the addon wrapped: no ClearLines call, no clear hook, no Show.
 -- Content is the truth: one poll tick must re-append the block exactly once.
-check(headerCount() == 1, "Test 9: precondition — block present before unseen wipe")
+check(blockCount() == 1, "Test 9: precondition — block present before unseen wipe")
 GT.lines = { "Peacebloom", "Herbalism" }
-check(headerCount() == 0, "Test 9: unseen wipe took our block (header gone)")
+check(blockCount() == 0, "Test 9: unseen wipe took our block (block gone)")
 local callsBefore9 = refreshCalls
 pollTick()
 check(refreshCalls == callsBefore9 + 1,
   "Test 9: one recovery tick = exactly one append evaluation (a poll tick no longer re-enters: it does not Show the frame)")
 check(has("Peacebloom | 100% (base)"), "Test 9: Peacebloom drop line present after unseen wipe")
-check(headerCount() == 1, "Test 9: header present exactly once after one poll tick")
+check(blockCount() == 1, "Test 9: block present exactly once after one poll tick")
 
 -- Test 10: POPULATE-EVENT FAST PATH — firing OnTooltipSetUnit /
 -- OnTooltipSetItem after a client repopulate restores the block without
 -- waiting for a poll tick.
 GT.lines = { "Peacebloom", "Herbalism" }
-check(headerCount() == 0, "Test 10: unseen wipe took our block (header gone)")
+check(blockCount() == 0, "Test 10: unseen wipe took our block (block gone)")
 fire("OnTooltipSetUnit")
-check(headerCount() == 1, "Test 10: OnTooltipSetUnit restores the block without a poll")
+check(blockCount() == 1, "Test 10: OnTooltipSetUnit restores the block without a poll")
 check(has("Peacebloom | 100% (base)"), "Test 10: block content correct after SetUnit restore")
 GT.lines = { "Peacebloom", "Herbalism" }
 fire("OnTooltipSetItem")
-check(headerCount() == 1, "Test 10: OnTooltipSetItem restores the block without a poll")
+check(blockCount() == 1, "Test 10: OnTooltipSetItem restores the block without a poll")
 
 -- Test 11: the poll must do nothing while the tooltip is hidden
-check(headerCount() == 1, "Test 11: precondition — block present")
+check(blockCount() == 1, "Test 11: precondition — block present")
 GT:Hide()
 local callsBefore11 = refreshCalls
 local linesBefore11 = #GT.lines
@@ -285,7 +289,7 @@ pollTick(0.2)
 check(refreshCalls == callsBefore11, "Test 11: poll does nothing while tooltip hidden")
 check(#GT.lines == linesBefore11, "Test 11: hidden — no lines change")
 GT:Show()
-check(headerCount() == 1, "Test 11: re-show keeps exactly one header")
+check(blockCount() == 1, "Test 11: re-show keeps exactly one block")
 
 -- Test 12: polling is capped at ~5x/second
 local callsBefore12 = refreshCalls
@@ -293,29 +297,29 @@ for i = 1, 8 do
   pollTick(0.05)
 end
 check(refreshCalls == callsBefore12 + 2, "Test 12: 0.4s of ticks evaluates the refresh at most ~5x/s (exactly 2)")
-check(headerCount() == 1, "Test 12: no duplicate header from throttled polls")
+check(blockCount() == 1, "Test 12: no duplicate block from throttled polls")
 
 -- Test 13: GetLine returns a TABLE instead of line text (the likely shape if
 -- this client's unverified GameTooltip:GetLine is segment-based). lineText
 -- must reject the non-string and fall through to the font strings, which
--- still hold the real text — otherwise headerPresent never matches and
+-- still hold the real text — otherwise blockPresent never matches and
 -- every poll tick appends another NodeTrail block.
-GT.GetLine = function() return { "NodeTrail" } end
+GT.GetLine = function() return { "segments" } end
 hover("Peacebloom")
-check(headerCount() == 1, "Test 13: precondition — header exactly once after hover (table GetLine)")
+check(blockCount() == 1, "Test 13: precondition — block exactly once after hover (table GetLine)")
 for i = 1, 5 do pollTick() end
-check(headerCount() == 1, "Test 13: table-returning GetLine — header exactly once after five poll ticks")
+check(blockCount() == 1, "Test 13: table-returning GetLine — block exactly once after five poll ticks")
 check(has("Peacebloom | 100% (base)"), "Test 13: Peacebloom drop line present with table GetLine")
 check(has("Your picks: none yet"), "Test 13: picks line present with table GetLine")
 GT.GetLine = origGetLine
 
 -- Test 14: GetLine absent entirely — the font-string path alone must resolve
--- both the title and the header and stay idempotent across ticks.
+-- both the title and the block and stay idempotent across ticks.
 GT.GetLine = nil
 hover("Peacebloom")
-check(headerCount() == 1, "Test 14: precondition — header exactly once after hover (no GetLine)")
+check(blockCount() == 1, "Test 14: precondition — block exactly once after hover (no GetLine)")
 for i = 1, 5 do pollTick() end
-check(headerCount() == 1, "Test 14: missing GetLine — header exactly once via the font-string path")
+check(blockCount() == 1, "Test 14: missing GetLine — block exactly once via the font-string path")
 check(has("Peacebloom | 100% (base)"), "Test 14: Peacebloom drop line present via font strings")
 GT.GetLine = origGetLine
 
@@ -455,7 +459,7 @@ end
 -- re-sizes the backdrop to enclose every line.
 local sc16 = GT.showCalls
 clientHoverAt("Peacebloom", 960, 400)
-check(headerCount() == 1, "Test 16: block present after OnShow append")
+check(blockCount() == 1, "Test 16: block present after OnShow append")
 check(has("Peacebloom | 100% (base)"), "Test 16: drop line present (OnShow path)")
 check(GT.showCalls == sc16 + 2,
   "Test 16: hover = 1 client Show + exactly 1 addon re-layout Show (showCalls="
@@ -481,7 +485,7 @@ check(refreshCalls == rb17 + 1,
   "Test 17: one recovery tick = one append evaluation, no re-entry (got "
     .. (refreshCalls - rb17) .. ")")
 check(T._layoutPending == true, "Test 17: the backdrop re-layout is deferred, not dropped")
-check(headerCount() == 1, "Test 17: header exactly once after late append")
+check(blockCount() == 1, "Test 17: block exactly once after late append")
 -- The deferred re-layout runs on the next real client evaluation (here the
 -- SetUnit fast path the client fires on a repopulate), where a Show is safe.
 local sc17b = GT.showCalls
@@ -492,7 +496,7 @@ check(T._layoutPending == false, "Test 17: the deferred re-layout is cleared onc
 check(GT.bgH ~= nil and GT.bgH >= #GT.lines * LINE_H,
   "Test 17: backdrop encloses all lines after the deferred re-layout (bgH="
     .. tostring(GT.bgH) .. " lines=" .. #GT.lines .. ")")
-check(headerCount() == 1, "Test 17: header still exactly once after the deferred re-layout")
+check(blockCount() == 1, "Test 17: block still exactly once after the deferred re-layout")
 
 -- Tests 17b–17e: THE PANEL IS TOO SMALL FOR THE BLOCK (live, build 16e7954).
 -- Live /nt ttdiag from the client: `last relayout: show=ran layout=no` — this
@@ -530,7 +534,7 @@ check(GT.fw == widest + PAD,
   "Test 17b: it grew by exactly the tooltip's own padding (frame=" .. tostring(GT.fw)
     .. " expected " .. (widest + PAD) .. ")")
 check(GT.bgW == GT.fw, "Test 17b: the backdrop follows the frame")
-check(headerCount() == 1, "Test 17b: header still exactly once")
+check(blockCount() == 1, "Test 17b: block still exactly once")
 
 -- Test 17c: the fit is grow-only and idempotent — a second evaluation leaves
 -- the width alone (it never ratchets, and it never shrinks).
@@ -610,7 +614,7 @@ do
       .. tostring(GT.fw) .. " expected " .. (w + PAD) .. ")")
 end
 check(rehoverH ~= nil, "Test 17f: the client sized the re-shown frame")
-check(headerCount() == 1, "Test 17f: exactly one header on the second hover")
+check(blockCount() == 1, "Test 17f: exactly one block on the second hover")
 
 -- Test 18: bottom-right placement (the Silverleaf clip), in the card's
 -- anchor shape: a BOTTOMRIGHT anchor with NON-ZERO offsets, past the
@@ -622,7 +626,7 @@ GT.lines = { "Silverleaf", "Herbalism" }
 GT:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 40, -30)
 local sc18 = GT.showCalls
 GT:Show()
-check(headerCount() == 1, "Test 18: Silverleaf block present")
+check(blockCount() == 1, "Test 18: Silverleaf block present")
 check(has("Silverleaf | 100% (base)"), "Test 18: Silverleaf drop line present")
 check(GT.showCalls == sc18 + 2,
   "Test 18: client Show + one addon re-layout Show for the clamped append")
@@ -663,7 +667,7 @@ GT.Show = function(self)
 end
 local sc19 = GT.showCalls
 clientHoverAt("Peacebloom", 960, 400)
-check(headerCount() == 1, "Test 19: hostile Show re-firing OnShow — exactly one header")
+check(blockCount() == 1, "Test 19: hostile Show re-firing OnShow — exactly one block")
 check(GT.showCalls <= sc19 + 2,
   "Test 19: show calls bounded (client 1 + addon 1, no re-layout loop) (got " .. (GT.showCalls - sc19) .. ")")
 check(has("Peacebloom | 100% (base)"), "Test 19: block content intact after hostile re-entry")
@@ -719,7 +723,7 @@ cursorAnchorAt(300, 700)
 GT.lines = { "Peacebloom", "Herbalism" }
 local sc22 = GT.showCalls
 GT:Show() -- client show at the cursor
-check(headerCount() == 1, "Test 22: block present on a cursor-anchored minimap hover")
+check(blockCount() == 1, "Test 22: block present on a cursor-anchored minimap hover")
 check(GT.showCalls == sc22 + 2,
   "Test 22: the event path still re-layouts once (backdrop sizing is unchanged)")
 
@@ -734,7 +738,7 @@ check(GT.showCalls == sc22b,
   "Test 22: five poll ticks while the same node is hovered must not show the frame (went "
     .. tostring(GT.showCalls - sc22b) .. ")")
 check(#GT.lines == lines22, "Test 22: five poll ticks change no line")
-check(headerCount() == 1, "Test 22: header still exactly once after five poll ticks")
+check(blockCount() == 1, "Test 22: block still exactly once after five poll ticks")
 
 -- Test 23: the same node hovered but the client rewrites the text under us on
 -- every tick (the minimap's repopulate path). The block must be re-appended
@@ -747,7 +751,7 @@ end
 check(GT.showCalls == sc23,
   "Test 23: a poll append on a rewritten tooltip must not show the frame (went "
     .. tostring(GT.showCalls - sc23) .. ")")
-check(headerCount() == 1, "Test 23: exactly one header after five rewritten ticks")
+check(blockCount() == 1, "Test 23: exactly one block after five rewritten ticks")
 check(T._layoutPending == true, "Test 23: relayout stays deferred while only ticks arrive")
 
 -- Test 24: the ring records what actually happened. The last eight evaluations
@@ -785,7 +789,7 @@ DEFAULT_CHAT_FRAME.AddMessage = function(_, m) chat3[#chat3 + 1] = m end
 T:Diag()
 DEFAULT_CHAT_FRAME.AddMessage = origAdd3
 local diag3 = table.concat(chat3, "\n")
-check(diag3:find("refresh ring:", 1, true) ~= nil, "Test 25: ttdiag prints the refresh ring header")
+check(diag3:find("refresh ring:", 1, true) ~= nil, "Test 25: ttdiag prints the refresh ring block")
 check(diag3:find("src=poll", 1, true) ~= nil, "Test 25: ttdiag prints the evaluation source")
 check(diag3:find("intact=", 1, true) ~= nil, "Test 25: ttdiag prints the blockIntact decision")
 check(diag3:find("show=", 1, true) ~= nil, "Test 25: ttdiag prints whether Show ran")
@@ -799,6 +803,105 @@ check(diag3:find("last fit:", 1, true) ~= nil,
 
 -- Test 26 (final): still nothing errored after the flicker work.
 check(T._error == nil, "Test 26: ns.Tooltip._error == nil after the flicker tests")
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- Tests 27–29 (t_c2e67619): NO ADDON NAME IN THE BLOCK.
+--
+-- The block used to open with a "NodeTrail" header line, and that line was also
+-- the marker that told Refresh "our block is still here". Both are gone: the
+-- block now opens with the node name, and the marker moved to the line index +
+-- first-line text + the profession line above it (see blockMarker in
+-- UI/Tooltip.lua). These tests pin the two halves together — the rendered
+-- block carries no addon name, AND a second hover is still recognised (no
+-- second copy). They fail on 16e7954, where the header line is still there.
+
+-- Test 27: a hover of a known herb renders no addon name, and the block starts
+-- with the node name, right below the client's own profession line.
+GT.lines = { "Silverleaf", "Herbalism" }
+clientHoverAt("Silverleaf", 480, 300)
+check(blockCount() == 1, "Test 27: exactly one block on a Silverleaf hover")
+local addonNameLines = 0
+for _, l in ipairs(GT.lines) do
+  if l == "NodeTrail" then addonNameLines = addonNameLines + 1 end
+end
+check(addonNameLines == 0,
+  "Test 27: no line in the tooltip reads the addon's name (got " .. addonNameLines .. ")")
+local named27 = 0
+for _, l in ipairs(GT.lines) do
+  if type(l) == "string" and l:sub(1, #"Silverleaf") == "Silverleaf" then named27 = named27 + 1 end
+end
+check(named27 == 2,
+  "Test 27: the node name appears twice — the client's title and our first line (got "
+    .. named27 .. ")")
+local start27 = T.last and T.last.start
+check(type(start27) == "number", "Test 27: the append records where the block starts")
+check(start27 == 3, "Test 27: the block starts right after the client's two lines (start="
+  .. tostring(start27) .. ")")
+check(type(GT.lines[start27]) == "string" and GT.lines[start27]:sub(1, #"Silverleaf") == "Silverleaf",
+  "Test 27: the block opens with the node name (got " .. tostring(GT.lines[start27]) .. ")")
+check(T.last.first == "Silverleaf",
+  "Test 27: the marker records the node name as the block's first line (got "
+    .. tostring(T.last.first) .. ")")
+check(T.last.above == "Herbalism",
+  "Test 27: the marker records the profession line above the block (got "
+    .. tostring(T.last.above) .. ")")
+
+-- Test 28: a SECOND hover of the same herb. The client rebuilds the tooltip
+-- from its own two lines, so the old block is gone and exactly one fresh copy
+-- is appended — not two. Then every further evaluation of that same tooltip
+-- (duplicate hooks, poll ticks) appends nothing: the block is recognised by
+-- its marker, which is the whole point of not needing a header line.
+local picksAdded = 0
+local realAddLine, realAddDouble = GT.AddLine, GT.AddDoubleLine
+local function countPick(t)
+  if type(t) == "string" and t:find("^Your picks: ") then picksAdded = picksAdded + 1 end
+end
+GT.AddLine = function(self, t) countPick(t); realAddLine(self, t) end
+GT.AddDoubleLine = function(self, l, r) realAddDouble(self, l, r) end
+
+clientHoverAt("Silverleaf", 480, 300)
+check(picksAdded == 1, "Test 28: a second hover appends exactly one block (got " .. picksAdded .. ")")
+check(blockCount() == 1, "Test 28: ... and the tooltip holds exactly one")
+for _, fn in ipairs(GT.hooks.OnShow or {}) do fn(GT) end
+for _, fn in ipairs(GT.hooks.OnShow or {}) do fn(GT) end
+for _ = 1, 5 do pollTick() end
+check(picksAdded == 1,
+  "Test 28: re-evaluating an intact block appends nothing (got " .. picksAdded .. " appends)")
+check(blockCount() == 1, "Test 28: ... still exactly one block in the tooltip")
+local ring28 = T.RingEntries()
+local last28 = ring28[#ring28]
+check(last28 ~= nil and last28.intact == true,
+  "Test 28: the latest evaluation reports the block intact")
+check(last28 ~= nil and not last28.appended,
+  "Test 28: ... and appended nothing")
+-- The marker is not a lucky text hit: wiping the content behind our back still
+-- reads as "gone" and is repaired exactly once.
+GT.lines = { "Silverleaf", "Herbalism" }
+pollTick()
+check(picksAdded == 2, "Test 28: an unseen wipe is repaired by exactly one append (got " .. picksAdded .. ")")
+check(blockCount() == 1, "Test 28: ... leaving exactly one block")
+GT.AddLine, GT.AddDoubleLine = realAddLine, realAddDouble
+
+-- Test 29: the renderer itself. BuildLines is where the block is built, so no
+-- line it returns may carry the addon's name, the picks line must be untouched,
+-- and an alchemy line must still lead with "Alchemy: ".
+local built = T.BuildLines("Silverleaf")
+check(type(built) == "table" and #built >= 2, "Test 29: BuildLines returns the block")
+check(built[1] and built[1].left == "Silverleaf",
+  "Test 29: the first line is the node name (got " .. tostring(built[1] and built[1].left) .. ")")
+for i, l in ipairs(built) do
+  check(l.left ~= "NodeTrail",
+    "Test 29: line " .. i .. " carries no addon name (got " .. tostring(l.left) .. ")")
+end
+local picks29, alch29, alchWrong29 = false, false, false
+for _, l in ipairs(built) do
+  if type(l.left) == "string" and l.left:find("^Your picks: ") then picks29 = true end
+  if type(l.left) == "string" and l.left:find("Alchemy", 1, true) then
+    if l.left:find("^Alchemy: ") then alch29 = true else alchWrong29 = true end
+  end
+end
+check(picks29, "Test 29: the 'Your picks:' line is untouched")
+check(not alchWrong29, "Test 29: any alchemy line still leads with 'Alchemy: '")
 
 if failed > 0 then
   os.exit(1)
