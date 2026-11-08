@@ -521,5 +521,25 @@ scenario({ stopFires = true }, function(c)
     .. tostring(st2 and st2.fired) .. ")")
 end)
 
+-- ═══ 7. the setting can take a live toast down — and says so ══════════════
+-- /up toast off clears the panel through maybeToastUpgrades. That is a real end
+-- path, so it reads in the same vocabulary: a SavedVariables value that says
+-- "off" would otherwise look exactly like a flash.
+scenario({ stopFires = true }, function(c)
+  c.slash("toastdebug on")
+  c.slash("toasts")
+  c.advance(1.0)
+  check(c.visible() == true, "the toast is up before the setting changes")
+  ChestAdvisorDB.toast = ChestAdvisorDB.toast or {}
+  ChestAdvisorDB.toast.enabled = false
+  c.scan({})
+  check(c.visible() == false, "turning the toast off takes the panel down")
+  check(c.countLines("^expire id=%d+ reason=other ") > 0,
+    "the trace names the setting as the reason (lines: "
+      .. c.traceText():gsub("\n", " | "):sub(1, 300) .. ")")
+  c.advance(3.0)
+  check(c.visible() == false, "nothing revives a toast that the setting turned off")
+end)
+
 print((failed == 0 and "toast_trace_spec: ok" or (failed .. " check(s) failed")))
 if failed > 0 then os.exit(1) end

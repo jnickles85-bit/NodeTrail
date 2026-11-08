@@ -1072,6 +1072,56 @@ def edit_toast_trace(text: str) -> str:
         ),
     )
 
+    # ---- what /up diag reads ------------------------------------------------
+    text = replace_once(
+        text,
+        name,
+        "ca.toast-advance-reason",
+        (
+            "advanceToast = function()\n"
+            "\tif toastActive then\n"
+            "\t\ttoastExpire()\n"
+            "\t\treturn\n"
+            "\tend\n"
+        ),
+        (
+            "advanceToast = function()\n"
+            "\tif toastActive then\n"
+            "\t\t-- t_fe7a636a: not the countdown and not a scan — `other` is the\n"
+            "\t\t-- honest word for this path in the trace vocabulary.\n"
+            "\t\ttoastExpire(\"other\")\n"
+            "\t\treturn\n"
+            "\tend\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        name,
+        "ca.toast-disabled-expire-trace",
+        (
+            "\tif not toastIsEnabled() then\n"
+            "\t\ttoastQueue = {}\n"
+            "\t\tif toastFrame then toastFrame:Hide() end\n"
+            "\t\ttoastActive = false\n"
+            "\t\treturn\n"
+            "\tend\n"
+        ),
+        (
+            "\tif not toastIsEnabled() then\n"
+            "\t\ttoastQueue = {}\n"
+            "\t\t-- t_fe7a636a: this path takes a live toast off screen because the\n"
+            "\t\t-- SETTING says off. It is traced, because a bad SavedVariables value\n"
+            "\t\t-- would look exactly like a flash from the outside.\n"
+            "\t\tif toastActive then\n"
+            "\t\t\tTRACE.line(\"expire id=\" .. tostring(toastRT.showId) .. \" reason=other\")\n"
+            "\t\tend\n"
+            "\t\tif toastFrame then toastFrame:Hide() end\n"
+            "\t\ttoastActive = false\n"
+            "\t\treturn\n"
+            "\tend\n"
+        ),
+    )
+
     return text
 
 

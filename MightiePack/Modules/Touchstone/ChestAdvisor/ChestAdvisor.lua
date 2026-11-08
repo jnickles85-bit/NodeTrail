@@ -4524,7 +4524,9 @@ end
 -- showToastItem/toastExpire, so this is a thin shim over the same two paths.
 advanceToast = function()
 	if toastActive then
-		toastExpire()
+		-- t_fe7a636a: not the countdown and not a scan — `other` is the
+		-- honest word for this path in the trace vocabulary.
+		toastExpire("other")
 		return
 	end
 	local item = table.remove(toastQueue, 1)
@@ -4546,6 +4548,12 @@ end
 local function maybeToastUpgrades(verdicts)
 	if not toastIsEnabled() then
 		toastQueue = {}
+		-- t_fe7a636a: this path takes a live toast off screen because the
+		-- SETTING says off. It is traced, because a bad SavedVariables value
+		-- would look exactly like a flash from the outside.
+		if toastActive then
+			TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=other")
+		end
 		if toastFrame then toastFrame:Hide() end
 		toastActive = false
 		return
