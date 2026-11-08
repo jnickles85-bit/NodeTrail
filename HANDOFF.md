@@ -5,6 +5,25 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
 **2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 
+- **The record now carries the items its windows carried, and a skill-line storm no longer eats
+  the buffer** (t_67f26739). Live at Razor Hill the step log had `i=5466x1,4867x1` on the corpse
+  window and `i=2318x1` on the skin window while the RECORD for the same corpse `..10B81C` said
+  `corpse items: none seen (late read)` / `skin items: none seen`. Cause: a re-read of a LIVE loot
+  window sees the window after the player took the items out, so it is a SUBSET of the earlier
+  read — and `RereadWindow`/`R:SetWindowItems` REPLACED the window's list with it. Both layers now
+  ACCUMULATE within one window (an item once seen in that window is never un-seen; its quantity
+  only grows), and the probe writes the record on `LOOT_OPENED`, on **every** `LOOT_SLOT_CLEARED`
+  and once more just before `LOOT_CLOSED` — where `Describe` re-renders it from the window log.
+  The same run's 18 identical `SKILL_LINES_CHANGED` events on one timestamp (sk 181..200) each cost
+  a ring slot; identical consecutive events (same name, same argument, same or next tick) now fold
+  into one line with `(x18)`, and the duplicates line reports `SKILL_LINES_CHANGEDx17`. Money left
+  the item lists (`i=5466x1,4867x1 coin=57` — it is counted beside them, never inside), a
+  cast-bar's frame name never reaches the spell field (`last skin cast: spell=8613`; the name comes
+  from `GetSpellInfo` when the client gives one), and a missing unit name prints `unknown`, never
+  `?`. New spec `tests/skinning_items_spec.lua` replays the dump (burst + both item windows +
+  the 8613 cast + the 2.77s gap): green at HEAD, **28 FAILs** on `aed27bc`. `skindiag_secret_spec`'s
+  section I changed with it: `,money` in an item list is now the defect, not the fix.
+
 - **The skinning dump no longer dies on a SECRET string** (t_1ed3b421). Live on build `c220ec7`
   the whole dump was lost at the end of a run — `Probe.lua:908: attempt to get length of local
   'line' (a secret string value, while execution tainted by 'MightiePack')` — because the client

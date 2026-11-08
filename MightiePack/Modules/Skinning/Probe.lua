@@ -436,11 +436,11 @@ function P:ReadLoot()
       items[#items + 1] = {
         id = id, name = name, qty = qty, quality = qual, link = link,
       }
-    else
-      -- no itemID at all: the coin slot, never an item. The client's own
-      -- amount is kept when it reports one; "?x0" is the shape that must not
-      -- appear again.
-      money = (money or 0) + (type(qty) == "number" and qty > 0 and qty or 0)
+    elseif type(qty) == "number" and qty > 0 then
+      -- no itemID at all: the coin slot, never an item. Only a coin the client
+      -- actually counted is kept; the "?x0" shape (no id, no amount) is not a
+      -- money amount either and must not appear anywhere.
+      money = (money or 0) + qty
     end
   end
   return items, src, money
@@ -544,20 +544,64 @@ function P:IsSkinningSpell(spellID, spellName)
   return false
 end
 
+-- ── a cast's name is a spell name, never a frame name ─────────────────
+-- On this client the 4th UNIT_SPELLCAST_* argument is the CAST BAR's frame
+-- name ("CastBar-80CD3B37C39E3787"), not the spell's name, and the dump used
+-- to print it in the spell field: "last skin cast: spell=8613
+-- name=CastBar-80CD3B37C39E3787". A widget is not a spell. The name now comes
+-- from the spell ID (GetSpellInfo) and a client string is only used when it is
+-- a plain name — never measured, never sliced: the test runs behind a pcall,
+-- and a SECRET is never read at all.
+local FRAME_NAME_HINTS = { "CastBar", "StatusBar", "Frame", "Button" }
+local function looksLikeFrameName(v)
+  if type(v) ~= "string" then return false end
+  if isSecret(v) then return false end
+  local ok, hit = pcall(function()
+    for _, h in ipairs(FRAME_NAME_HINTS) do
+      if v:find(h, 1, true) then return true end
+    end
+    -- "CastBar-80CD3B37C39E3787", "Thing-1A2B3C4D": <word>-<hex tail>, no space
+    if not v:find(" ", 1, true) and v:match("^[%a_]+%-%x+$") then return true end
+    return false
+  end)
+  return ok and hit == true
+end
+P.looksLikeFrameName = looksLikeFrameName
+
+-- The spell name this file is allowed to show, or nil. Prefers the client's own
+-- answer for the ID; the event's 4th argument is only a fallback for builds
+-- that really send a name.
+function P:SpellDisplayName(spellID, clientName)
+  if type(GetSpellInfo) == "function" and type(spellID) == "number" then
+    local ok, nm = pcall(GetSpellInfo, spellID)
+    if ok and nm ~= nil and (isSecret(nm) or (safeLen(nm) or 0) > 0) then
+      return nm
+    end
+  end
+  if clientName == nil or isSecret(clientName) then return nil end
+  if looksLikeFrameName(clientName) then return nil end
+  return clientName
+end
+
 -- ── event handlers (each is a no-op until capture is toggled on) ─────
 function P:OnCast(event, unit, castGUID, spellID, spellName)
   if not self.capturing then return end
   local t = nowT()
   local w = whereAmI()
   -- the unit argument is a token ("player", "target"): our own vocabulary, and
-  -- it is only read when the client did not mark it secret
+  -- it is only read when the client did not mark it secret. A missing name is
+  -- `unknown` — it used to print `?`, which reads like a broken field rather
+  -- than a value the client did not give (live: "k=cast s=75 who=?").
   local isPlayer = type(unit) == "string" and not isSecret(unit) and unit == "player"
-  local who = isPlayer and "player" or "?"
+  local who = isPlayer and "player" or "unknown"
   local id = type(spellID) == "number" and spellID or nil
-  local name = isClientText(spellName) and spellName or nil
+  local clientName = isClientText(spellName) and spellName or nil
+  local name = self:SpellDisplayName(id, clientName)
   local isSkin = isPlayer
     and event == "UNIT_SPELLCAST_SUCCEEDED"
-    and self:IsSkinningSpell(id, name)
+    -- detection reads the CLIENT's argument (unchanged); display uses the
+    -- resolved spell name, so a cast bar can never be mistaken for a name
+    and self:IsSkinningSpell(id, clientName)
   if isSkin then
     -- Pin the cast to the corpse the player just looted. That is the live
     -- order (loot ..F29C6F at sk 14, cast at sk 20, loot ..F29C6F at sk 23),
@@ -582,10 +626,12 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
   if id then d = d .. " s=" .. tostring(id) end
   d = d .. " who=" .. who
   d = d .. locLine(w)
-  -- the cast's name is client text (on this client it is a cast-bar name):
-  -- carried beside our text, appended at the print site, never cut here
+  -- `name` is the resolved SPELL name (see P:SpellDisplayName): a cast-bar
+  -- frame name never travels to the line, and the raw client argument stays in
+  -- the record's own field for a later reader.
   self:Step(event, d, {
     who = who, spellID = id, name = name, nameLabel = " n=", skin = isSkin,
+    clientName = clientName,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   local R = self:Recorder()
@@ -597,8 +643,10 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
 end
 
 -- Compact item text for a printed line: "2934x1,7100x2" plus a "+N" overflow.
--- The coin slot is named as money, never recorded as an unnamed item.
-function P:ItemText(items, money)
+-- MONEY IS NOT AN ITEM (t_67f26739): the coin slot used to be appended to this
+-- list as ",money", which put a word in an item list where only items belong.
+-- It is counted BESIDE the list (see P:CoinText) and never inside it.
+function P:ItemText(items)
   items = type(items) == "table" and items or {}
   local shown = math.min(#items, self.MAX_ITEMS_SHOWN)
   local bits = {}
@@ -610,46 +658,88 @@ function P:ItemText(items, money)
     end
   end
   local list = #bits > 0 and table.concat(bits, ",") or nil
-  if money then
-    list = list and (list .. ",money") or "money"
-  end
   return (list or "-") .. (#items > shown and ("+" .. (#items - shown)) or "")
 end
 
--- Are two loot reads the same set? Only OUR converted values are touched
--- (itemID and quantity are numbers), never a client name or link.
-local function sameItems(a, b)
-  local na = type(a) == "table" and #a or 0
-  local nb = type(b) == "table" and #b or 0
-  if na ~= nb then return false end
-  for i = 1, na do
-    local x, y = a[i], b[i]
-    if type(x) ~= "table" or type(y) ~= "table" then return false end
-    if x.id ~= y.id or x.qty ~= y.qty then return false end
+-- The coin the client counted in this window, as its own field. Empty when the
+-- client reported no amount — nothing is invented for an empty coin slot.
+function P:CoinText(money)
+  if type(money) ~= "number" or money <= 0 then return "" end
+  return " coin=" .. tostring(money)
+end
+
+-- A re-read of a LIVE loot window can only ever show FEWER items than it did
+-- before: the player is taking them out, so the later read is a subset of the
+-- earlier one. REPLACING the window's list with that later read is what made
+-- the recorder store "none seen" for a corpse whose window had carried two
+-- items (live at Razor Hill):
+--
+--   sk 220 LOOT_OPENED k=corpse g=..10B81C i=5466x1,4867x1
+--   record  corpse items: none seen (late read)
+--
+-- A window therefore ACCUMULATES. An item once seen in this window is never
+-- un-seen by a read of the same window, and its quantity only grows (the client
+-- can report one stack twice). Only OUR converted values are compared (itemID
+-- and quantity are numbers), never a client name or link.
+-- Returns true when this read showed something the window had not seen yet.
+local function absorbItems(win, items, money)
+  local known = type(win.items) == "table" and win.items or {}
+  local seen = {}
+  for i = 1, #known do
+    local it = known[i]
+    if type(it) == "table" and it.id then seen[it.id] = it end
   end
-  return true
+  local added = false
+  local fresh = type(items) == "table" and items or {}
+  for i = 1, #fresh do
+    local it = fresh[i]
+    if type(it) == "table" and it.id then
+      local have = seen[it.id]
+      if not have then
+        known[#known + 1] = it
+        seen[it.id] = it
+        added = true
+      elseif type(it.qty) == "number" and it.qty > (tonumber(have.qty) or 0) then
+        have.qty = it.qty
+        added = true
+      end
+    end
+  end
+  if type(money) == "number" and money > (tonumber(win.money) or 0) then
+    win.money, added = money, true
+  end
+  win.items = known
+  return added
 end
 
 -- The client can fill the loot slots AFTER LOOT_OPENED: the live run printed
 -- "i=-" at the open and the items only showed up once the slots were being
 -- taken. So the open window is re-read (a) on every LOOT_SLOT_CLEARED and
--- (b) once more just before LOOT_CLOSED, and the recorder is handed the fresh
--- list. Nothing is re-read after the window closed: there is nothing to read.
+-- (b) once more just before LOOT_CLOSED, and EVERY one of those reads is
+-- written into the corpse's record — not just onto the step line. A read that
+-- only reaches the log is a read the player cannot see afterwards, which is
+-- exactly the blocker this card names.
 --
--- Returns the fresh items and money, or nil when there is nothing to add.
+-- The record is written with what the WINDOW has seen (the accumulated list),
+-- so an emptied window can never erase a populated one. Nothing is re-read
+-- after the window closed: there is nothing to read.
+--
+-- Returns the window's list and money when this read added something, nil when
+-- it did not (the step line then says nothing).
 function P:RereadWindow(why)
   local win = self._win
   if type(win) ~= "table" then return nil end
+  local t = nowT()
   local items, _, money = self:ReadLoot()
-  if sameItems(win.items, items) and win.money == money then return nil end
-  win.items, win.money = items, money
+  local added = absorbItems(win, items, money)
   win.rereads = (win.rereads or 0) + 1
   win.lastRead = why
   local R = self:Recorder()
   if R and win.guid and type(R.SetWindowItems) == "function" then
-    pcall(R.SetWindowItems, R, win.guid, win.kind, items, money, nowT())
+    pcall(R.SetWindowItems, R, win.guid, win.kind, win.items, win.money, t)
   end
-  return items, money
+  if not added then return nil end
+  return win.items, win.money
 end
 
 function P:OnLootOpened()
@@ -684,7 +774,7 @@ function P:OnLootOpened()
       d = d .. " (from " .. rule .. ")"
     end
   end
-  d = d .. " i=" .. self:ItemText(items, money)
+  d = d .. " i=" .. self:ItemText(items) .. self:CoinText(money)
   d = d .. locLine(w)
   -- the loot source's name is client text: carried beside our text
   local shownName = nil
@@ -738,7 +828,10 @@ function P:OnSlotCleared(...)
   -- here), so the open window is re-read before it is closed.
   local late = self:RereadWindow("slot-cleared")
   local d = "k=slot-cleared slot=" .. (type(a1) == "number" and tostring(a1) or "-")
-  if late then d = d .. " items+=" .. self:ItemText(late, self._win and self._win.money) end
+  if late then
+    d = d .. " items+=" .. self:ItemText(late)
+      .. self:CoinText(self._win and self._win.money)
+  end
   d = d .. locLine(w)
   self:Step("LOOT_SLOT_CLEARED", d, {
     slot = a1, lateItems = late and true or nil,
@@ -760,10 +853,15 @@ function P:OnLootClosed()
   self._pendingClose = t
   -- one last read of the window that is about to go away: a window the client
   -- filled but the player closed with nothing taken still has to be recorded
-  -- with what it showed.
+  -- with what it showed. This read WRITES THE RECORD (RereadWindow does), so
+  -- the record is re-rendered from what the window carried once the close is
+  -- over — the close is the last chance to store it.
   local late = self:RereadWindow("close")
   local d = "k=loot-closed prev=" .. (self.lastLoot and self.lastLoot.kind or "-")
-  if late then d = d .. " items-final=" .. self:ItemText(late, self._win and self._win.money) end
+  if late then
+    d = d .. " items-final=" .. self:ItemText(late)
+      .. self:CoinText(self._win and self._win.money)
+  end
   d = d .. locLine(w)
   self:Step("LOOT_CLOSED", d, {
     lateItems = late and true or nil,
@@ -821,7 +919,7 @@ function P:OnUnitDied(unit)
     self:RememberDeath(guid, t, "UNIT_DIED")
   end
   -- our own description of the argument; the value itself is never measured
-  local argText = "?"
+  local argText = "unknown"
   if isPlayerDeath then
     argText = "player"
   elseif looksLikeGuid(unit) then
@@ -958,7 +1056,7 @@ function P:OnCombat(...)
     self.lastKill = { guid = destGUID, name = destName, at = nowT() }
   end
   local w = whereAmI()
-  local d = "k=death cl=" .. tostring(ev or "?") .. " mine=" .. mine
+  local d = "k=death cl=" .. tostring(ev or "unknown") .. " mine=" .. mine
   if spellID then d = d .. " s=" .. tostring(spellID) end
   local suffix = guidSuffix(destGUID)
   if suffix then d = d .. " g=" .. suffix end
@@ -975,9 +1073,34 @@ function P:OnCombat(...)
   })
 end
 
+-- ── identical consecutive events ──────────────────────────────────────
+-- One skill update can land the SAME event 18 times on one timestamp (live:
+-- "sk 181..200 765670.55 SKILL_LINES_CHANGED k=skill-lines arg=-"). Each copy
+-- cost a ring slot and pushed real loot events out of the 120-slot window.
+-- This is the rule the card names — the one LOOT_CLOSED, LOOT_SLOT_CLEARED and
+-- TARGET_DEAD already get — applied to a run of identical events: same name,
+-- same argument, same or next tick collapses into the step already recorded,
+-- which counts how many events it stands for. Returns the step it folded into,
+-- or nil when this event is a new one.
+function P:CollapseIntoLast(event, argKey, t)
+  local last = self.steps[#self.steps]
+  if type(last) ~= "table" or last.event ~= event then return nil end
+  if (last.argKey or "-") ~= argKey then return nil end
+  if type(last.t) ~= "number" or type(t) ~= "number" then return nil end
+  if (t - last.t) > self.DUP_TICK then return nil end
+  if not self.capturing then return nil end
+  last.repeats = (last.repeats or 1) + 1
+  self:Suppressed(event)
+  return last
+end
+
 function P:OnSkillLines(...)
   if not self.capturing then return end
   local a1 = select(1, ...)
+  local t = nowT()
+  local argKey = (type(a1) == "number") and tostring(a1) or "-"
+  -- a burst of identical skill updates must not eat the ring buffer
+  if self:CollapseIntoLast("SKILL_LINES_CHANGED", argKey, t) then return end
   local w = whereAmI()
   local d = "k=skill-lines arg=" .. (type(a1) == "number" and tostring(a1) or "-")
   -- SKILL_LINES_CHANGED arrives with no usable argument on this client
@@ -989,7 +1112,7 @@ function P:OnSkillLines(...)
   end
   d = d .. locLine(w)
   self:Step("SKILL_LINES_CHANGED", d, {
-    arg = a1, skill = skill and skill.rank or nil,
+    arg = a1, argKey = argKey, skill = skill and skill.rank or nil,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
 end
@@ -1231,9 +1354,15 @@ function P:Diag()
     say("last error: " .. (errText or "(a secret value - not read)"))
   end
   if self.lastSkin then
-    local pre = "last skin cast: spell=" .. tostring(self.lastSkin.spellID or "?")
-      .. " name="
-    add("Skinning skindiag: " .. pre, self.lastSkin.name or "?", nil)
+    -- the spell's ID, and its NAME only when one was resolved from the ID. A
+    -- cast-bar frame name is never a spell field (live: "name=CastBar-80CD..").
+    local pre = "last skin cast: spell=" .. tostring(self.lastSkin.spellID or "unknown")
+    local nm = self.lastSkin.name
+    if nm ~= nil then
+      add("Skinning skindiag: " .. pre .. " name=", nm, nil)
+    else
+      say(pre)
+    end
   end
   if self.lastKill then
     local k = self.lastKill
@@ -1255,7 +1384,8 @@ function P:Diag()
   -- instead of having to trust that it did.
   local sup = self._suppressed or {}
   local supBits = {}
-  for _, k in ipairs({ "LOOT_CLOSED", "LOOT_SLOT_CLEARED", "TARGET_DEAD" }) do
+  for _, k in ipairs({ "LOOT_CLOSED", "LOOT_SLOT_CLEARED", "SKILL_LINES_CHANGED",
+    "TARGET_DEAD" }) do
     if (sup[k] or 0) > 0 then
       supBits[#supBits + 1] = k .. "x" .. tostring(sup[k])
     end
@@ -1306,7 +1436,13 @@ function P:Diag()
   for i = from, n do
     local s = self.steps[i]
     local okLine, lineErr = pcall(function()
-      local pre = string.format("sk %3d %.2f %s %s", s.n, s.t, s.event, s.detail or "")
+      -- a collapsed run says how many events it stands for (our own text:
+      -- measurable, so the cap below applies to it)
+      local detail = s.detail or ""
+      if type(s.repeats) == "number" and s.repeats > 1 then
+        detail = detail .. " (x" .. tostring(s.repeats) .. ")"
+      end
+      local pre = string.format("sk %3d %.2f %s %s", s.n, s.t, s.event, detail)
       local room = self.LINE_CAP
       if s.name ~= nil then
         local label = s.nameLabel or " n="

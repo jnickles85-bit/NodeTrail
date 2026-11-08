@@ -326,8 +326,14 @@ onlyIf(type(P) == "table" and type(R) == "table",
   check(out:find("i=?", 1, true) == nil, "no unnamed item in a step's item list")
   check(out:find("corpse items: 2589x1,117x1", 1, true) ~= nil,
     "the corpse list holds the two real items and nothing else (" .. out:gsub("\n", " | ") .. ")")
-  check(out:find(",money", 1, true) ~= nil,
-    "the coin slot is labelled as money on the loot step instead of as an item")
+  -- t_67f26739 supersedes the old `,money` label: MONEY IS NOT AN ITEM. The coin
+  -- slot used to be appended to the item list as ",money"; an item list now
+  -- carries items only, and the coin is counted in its own `coin=` field. This
+  -- client's coin slot reports no amount at all, so nothing is printed for it.
+  check(out:find(",money", 1, true) == nil,
+    "the coin slot is never appended to an item list (money is not an item)")
+  check(out:find("coin=", 1, true) == nil or out:find("coin=%d", 1, true) ~= nil,
+    "and a coin the client did not count is not invented either")
   check(out:find("?x", 1, true) == nil, "no id-less slot anywhere in the dump")
 
   -- ══════════════════════════════════════════════════════════════════

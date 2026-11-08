@@ -256,8 +256,12 @@ local function pushWindow(rec, kind, items, money, t)
 end
 
 -- The window that is currently open produced a fresh read (LOOT_SLOT_CLEARED,
--- or the read just before LOOT_CLOSED). Replace ITS snapshot — this is the
--- whole point: "none seen" at open time must not survive into the record.
+-- or the read just before LOOT_CLOSED). MERGE it into ITS snapshot — never
+-- replace it: a live loot window can only shrink as the player takes the items
+-- out, so a later read is a subset of the earlier one. Replacing is what made
+-- a corpse whose window carried 5466x1,4867x1 store "none seen" once the window
+-- emptied (live, ..10B81C). An item once seen in this window stays, and its
+-- quantity only grows; only OUR numbers are compared (itemID, quantity).
 -- With no window on the log (the recorder joined late) the read is appended.
 function R:SetWindowItems(guid, kind, items, money, t)
   local rec = self:Find(guid)
@@ -267,12 +271,38 @@ function R:SetWindowItems(guid, kind, items, money, t)
   if not win then
     win = pushWindow(rec, kind, items, money, t)
   else
-    win.items = mapItems(items)
-    win.money = money
+    local fresh = mapItems(items)
+    local known, byID = {}, {}
+    for _, it in ipairs(type(win.items) == "table" and win.items or {}) do
+      local copy = {
+        itemID = it.itemID, name = it.name, quantity = it.quantity or 1,
+        quality = it.quality, itemLink = it.itemLink,
+      }
+      known[#known + 1] = copy
+      byID[copy.itemID] = copy
+    end
+    for _, it in ipairs(fresh) do
+      local have = byID[it.itemID]
+      if have then
+        if (it.quantity or 1) > (have.quantity or 1) then
+          have.quantity = it.quantity or 1
+        end
+      else
+        known[#known + 1] = it
+        byID[it.itemID] = it
+      end
+    end
+    win.items = known
+    if type(money) == "number" and money > (tonumber(win.money) or 0) then
+      win.money = money
+    end
     win.rereads = (win.rereads or 0) + 1
     win.readAt = t
   end
   local field = (kind == "skin") and "skinItems" or "corpseItems"
+  -- re-rendered from the window log on EVERY write, so the record always shows
+  -- what the window has been seen to hold (this is what LOOT_CLOSED triggers
+  -- one last time before the window goes away)
   rec[field] = mergeWindows(log)
   return rec
 end
@@ -671,10 +701,11 @@ function R:Describe(store)
   local post = ""
   local gs = guidSuffix(rec.guid)
   -- A GUID this client marks secret cannot be sliced, so it is not shortened
-  -- here and not invented either: "g=?" says the value could not be read as
-  -- text. The name keeps the client slot (it is what a reader needs most).
+  -- here and not invented either: "g=unknown" says the value could not be read
+  -- as text (a SECRET GUID). The name keeps the client slot (it is what a reader
+  -- needs most).
   if gs then post = post .. " g=" .. gs
-  elseif rec.guid ~= nil then post = post .. " g=?" end
+  elseif rec.guid ~= nil then post = post .. " g=unknown" end
   if rec.creatureID then post = post .. " cid=" .. tostring(rec.creatureID) end
   post = post .. " kill=" .. (rec.killObserved and "UNIT_DIED" or "loot-only")
   local z = cut(rec.zone, 14)
