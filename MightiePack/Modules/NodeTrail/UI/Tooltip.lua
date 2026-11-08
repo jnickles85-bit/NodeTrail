@@ -44,16 +44,20 @@ local function recipeAPIAvailable()
   return info.available == true
 end
 
---- The character's herb profession, as the client reports it (t_d4848ce0).
---- Returns true (an herbalist), false (not an herbalist) or nil (this client
---- cannot say). The panel's data build is the only place the gate belongs:
---- nothing here touches the tooltip.
-local function professionAnswer()
+--- The character's profession, as the client reports it (t_d4848ce0).
+--- Returns true (has it), false (does not) or nil (this client cannot say).
+--- The panel's data build is the only place the gate belongs: nothing here
+--- touches the tooltip.
+local function professionAnswer(skill)
   local mod = ns.Profession
-  if type(mod) ~= "table" or type(mod.Herbalism) ~= "function" then
+  if type(mod) ~= "table" then
     return nil
   end
-  local ok, answer = pcall(mod.Herbalism, mod)
+  local fn = (skill == "skinning") and "Skinning" or "Herbalism"
+  if type(mod[fn]) ~= "function" then
+    return nil
+  end
+  local ok, answer = pcall(mod[fn], mod)
   if not ok then
     return nil
   end
@@ -62,6 +66,97 @@ local function professionAnswer()
   end
   return nil
 end
+
+-- ── secret values ─────────────────────────────────────────────────────────
+-- The live client hands back SECRET strings for creature names (a secret may
+-- be shown but never measured, sliced, formatted or converted). The beast block
+-- passes the name straight to the panel's display-only slot; every other read
+-- of a client string is guarded here first, and `issecretvalue` is the only
+-- operation that is always safe.
+local function isSecretValue(v)
+  if type(issecretvalue) ~= "function" then
+    return false
+  end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+-- The unit's GUID, or nil when this client will not give a readable one. A
+-- secret GUID is never parsed: the recorder's own parse refuses one too.
+local function unitGUID(unit)
+  if type(UnitGUID) ~= "function" then
+    return nil
+  end
+  local ok, g = pcall(UnitGUID, unit)
+  if not ok or type(g) ~= "string" or g == "" or isSecretValue(g) then
+    return nil
+  end
+  return g
+end
+
+-- The creature type as the client names it (lowercased for the comparison, so
+-- a client that says "beast" and one that says "Beast" both answer).
+local function creatureTypeOf(unit)
+  if type(UnitCreatureType) ~= "function" then
+    return nil, "UnitCreatureType absent"
+  end
+  local ok, t = pcall(UnitCreatureType, unit)
+  if not ok then
+    return nil, "UnitCreatureType raised: " .. tostring(t)
+  end
+  if isSecretValue(t) then
+    return nil, "UnitCreatureType answered a secret value, so it cannot be compared"
+  end
+  if type(t) ~= "string" or t == "" then
+    return nil, "UnitCreatureType answered nothing"
+  end
+  local okL, lower = pcall(string.lower, t)
+  if not okL or type(lower) ~= "string" or lower == "" then
+    return nil, "the creature type could not be read"
+  end
+  return lower, nil
+end
+
+-- The unit's name, or nil. A secret name is returned UNTOUCHED (it may be
+-- shown); a name that is really the GUID is dropped, because this client
+-- answers UnitName with the GUID for some units and printing a GUID where a
+-- name belongs is a lie (the recorder's usableName exists for the same reason).
+local function unitName(unit, guid)
+  if type(UnitName) ~= "function" then
+    return nil
+  end
+  local ok, name = pcall(UnitName, unit)
+  if not ok or name == nil then
+    return nil
+  end
+  if isSecretValue(name) then
+    return name
+  end
+  if type(name) ~= "string" or name == "" then
+    return nil
+  end
+  local okC, looksLikeGUID = pcall(function()
+    if type(guid) == "string" and name == guid then
+      return true
+    end
+    return name:match("^Creature%-%d") ~= nil
+  end)
+  if okC and looksLikeGUID then
+    return nil
+  end
+  return name
+end
+
+-- The creature types the beast block may speak about. A humanoid, mechanical,
+-- undead or elemental hover gets nothing at all — this block is about what a
+-- SKINNABLE BEAST's corpse and skinning gave (t_c0221fd7).
+--
+-- `UnitCreatureType` answers a LOCALIZED string this client keeps in its DBC
+-- (the exe carries no "Beast" literal), and this client's `textLocale` is
+-- enUS. A translated client needs its own entry here, exactly like
+-- Profession.NAMES; an entry this table does not know is not a beast, so the
+-- failure direction stays "draw nothing".
+local BEAST_TYPES = { beast = true, beasts = true }
 
 --- Where the picks count comes from: NodeTrailDB.herbs.maps is ONE saved table
 --- for every character on the account (Recorder.lua keys nothing by character),
@@ -129,6 +224,79 @@ function T.BuildLines(name)
     end
   end
   return lines
+end
+
+--- The BEAST block's content, as data (t_c0221fd7). Mightie: "we should have
+--- some information when hovering over beasts that says what we might get if we
+--- kill it and skin it. Same as herbing just another step in the middle."
+---
+--- Returns (lines, reason, cid). `lines` is nil when nothing may be drawn; the
+--- reason is nil too when the hover was simply not a creature, so the caller
+--- keeps its own "not a herb tooltip" answer for every other window.
+---
+--- The gates, in the order they are cheaper and more authoritative:
+---   * a mouseover unit must exist                (no unit → not ours, no reason)
+---   * its GUID must be a Creature GUID           (a player/pet/object → not ours)
+---   * its NPC id must parse                      (the records are keyed by it)
+---   * the client must call it a BEAST             (humanoids/mechanicals → nothing)
+---   * the character must have Skinning            (same gate as the herb block)
+---   * the client must not say "not skinnable"     (only when it actually answers)
+--- Then every number comes from our own recorded corpses (Data/SkinHints.lua).
+--- The creature is matched by NPC ID, NOT by the displayed name: names repeat
+--- across zones and the client can hand a name back as a secret value.
+function T.BuildBeastLines(unit)
+  unit = unit or "mouseover"
+  local H = ns.SkinHints
+  if type(H) ~= "table" or type(H.Rows) ~= "function" then
+    return nil, nil, nil
+  end
+  if type(UnitExists) ~= "function" then
+    return nil, nil, nil
+  end
+  local okE, exists = pcall(UnitExists, unit)
+  if not okE or exists ~= true then
+    return nil, nil, nil
+  end
+  local guid = unitGUID(unit)
+  if guid == nil then
+    return nil, nil, nil
+  end
+  -- A literal dash is %-, and Lua patterns have no alternation: one test.
+  local isCreature = false
+  local okP, matched = pcall(function() return guid:match("^Creature%-%d") ~= nil end)
+  if okP then
+    isCreature = matched == true
+  end
+  if not isCreature then
+    return nil, nil, nil
+  end
+  local cid = H.CreatureID(guid)
+  if type(cid) ~= "number" then
+    return nil, "the creature's GUID carries no readable NPC id", nil
+  end
+  local creatureType, typeWhy = creatureTypeOf(unit)
+  if creatureType == nil then
+    -- Cannot confirm it is a beast → say nothing (a hidden block is the safe
+    -- direction: appearing on a humanoid would be the worse mistake).
+    return nil, "not a beast: " .. tostring(typeWhy), cid
+  end
+  if not BEAST_TYPES[creatureType] then
+    return nil, "not a beast (" .. tostring(creatureType) .. ")", cid
+  end
+  local answer = professionAnswer("skinning")
+  if answer == false then
+    return nil, "no Skinning on this character — the beast block is hidden", cid
+  end
+  local skinnable = H.SkinFlag(unit)
+  if skinnable == false then
+    return nil, "the client reports this creature as not skinnable", cid
+  end
+  local name = unitName(unit, guid)
+  local lines = H.Rows(cid, name)
+  if type(lines) ~= "table" or #lines == 0 then
+    return nil, "no rows for this creature", cid
+  end
+  return lines, nil, cid
 end
 
 --- Is the hovered object one of our herb nodes? Reads only: the owner test and
@@ -214,24 +382,35 @@ function T:Refresh(tooltip, source)
   }
   local panel = panelModule()
   local name = self:GetHoveredNodeName(tooltip)
-  entry.name = name
-  if not name then
-    -- Not a herb tooltip (unknown object, unit tooltip, some other window):
-    -- whatever is in there is the client's, and our panel must not linger.
-    if type(panel) == "table" then
-      panel:Hide("not a herb tooltip")
+  local lines, why, kind, cid
+  if name then
+    kind = "herb"
+    lines, why = T.BuildLines(name)
+  else
+    -- Not one of our herb nodes. A UNIT hover may still be a beast with
+    -- recorded corpses (t_c0221fd7) — the beast block is the herb block's
+    -- "other step in the middle". Everything else falls through to the hide
+    -- below, unchanged.
+    kind = "beast"
+    lines, why, cid = T.BuildBeastLines("mouseover")
+    if lines == nil and why == nil then
+      kind = nil -- not a creature at all: not our tooltip, no beast decision
     end
-    entry.panelShown = false
-    entry.skip = "not a herb tooltip"
-    ringPush(entry)
-    return
   end
-  local lines, why = T.BuildLines(name)
+  entry.kind = kind
+  entry.name = name -- a herb node name (our own table); never a client string
+  if cid ~= nil then
+    entry.cid = cid
+  end
   if not lines then
-    -- `why` is the data build's own reason — "not one of our herb nodes", or
-    -- "no Herbalism on this character". Hiding is the decision; the ring and
-    -- /nt ttdiag record which rule produced it.
-    local reason = why or "no lines for this node"
+    -- Not a herb tooltip (unknown object, some other window) or a beast we may
+    -- not speak about. Whatever is in there is the client's, and our panel must
+    -- not linger.
+    local reason = why
+    if not reason and kind == nil then
+      reason = "not a herb tooltip"
+    end
+    reason = reason or "no lines for this node"
     if type(panel) == "table" then
       panel:Hide(reason)
     end
@@ -324,8 +503,9 @@ function T:Diag()
         end
         return v and "yes" or "no"
       end
-      say(("eval #%s src=%s name=%s panel=%s rows=%s width=%s widest=%s — %s"):format(
-        tostring(e.n or "?"), tostring(e.source or "?"), tostring(e.name or "-"),
+      say((("eval #%s src=%s kind=%s cid=%s name=%s panel=%s rows=%s width=%s widest=%s — %s")):format(
+        tostring(e.n or "?"), tostring(e.source or "?"), tostring(e.kind or "-"),
+        tostring(e.cid or "-"), tostring(e.name or "-"),
         flag(e.panelShown), tostring(e.rows or "-"), px(e.width), px(e.widest),
         tostring(e.skip or "")))
     end
@@ -350,7 +530,26 @@ function T:Diag()
     end
   end
 
-  -- 3) The panel: its rect, the width budget it computed against, whether it
+  -- 3) The beast block's own evidence (t_c0221fd7): which store it reads, how
+  --    many corpse records this character has, what the last beast hover
+  --    aggregated, and the MEASURED answer to "does this client know whether a
+  --    creature is skinnable". A hidden beast block has to be diagnosable from
+  --    here for the same reason as the herb gate above.
+  local hints = ns.SkinHints
+  if type(hints) ~= "table" or type(hints.Diag) ~= "function" then
+    say("beast block: module not loaded (Data/SkinHints.lua)")
+  else
+    local okH, hLines = pcall(hints.Diag, hints)
+    if not okH or type(hLines) ~= "table" then
+      say("beast block: diag raised — " .. tostring(hLines))
+    else
+      for _, l in ipairs(hLines) do
+        say("beast: " .. tostring(l))
+      end
+    end
+  end
+
+  -- 4) The panel: its rect, the width budget it computed against, whether it
   --    is on screen, and the widest of OUR lines. These are the numbers the
   --    next report has to quote.
   local panel = ns.TooltipPanel

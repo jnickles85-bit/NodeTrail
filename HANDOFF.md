@@ -5,6 +5,22 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
 **2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 
+- **Hovering a BEAST now shows what its corpse and its skinning have yielded** (t_c0221fd7).
+  Mightie: "we are missing the skinning tooltip ... says what we might get if we kill it and skin
+  it. Same as herbing just another step in the middle." The block is NodeTrail's own panel again
+  (the poller drives it; nothing is written into `GameTooltip`), it appears only on a hovered
+  `Creature` GUID whose `UnitCreatureType` is a beast and only when `Pr:Skinning()` does not say
+  "no", and every number in it is an aggregate of OUR recorded corpses for that NPC id —
+  `NodeTrailDB.skinning.chars[Name-Realm].records[*].creatureID` — never a researched table, because
+  no such table exists for a beast. Rows: the client's creature name, `skinnable · skin windows
+  recorded: N` (only when known), `corpse loot`, `skinned`, then `kills seen: N · skinned: M`.
+  A percentage is printed only at `PERSONAL_MIN` (reused from `HerbData`) and is labelled
+  `(yours)`; below that, and whenever an item was seen more often than the sample that would
+  divide it, the row is a count. New `tests/skin_tooltip_spec.lua` drives the REAL recorder to
+  build its records: **46 FAILs on `06984f6`**, green at this commit; all 42 `tests/*.lua` pass under
+  lua5.1. See the t_c0221fd7 section below for the measured client evidence and what is not yet
+  proven in game.
+
 - **The record now carries the items its windows carried, and a skill-line storm no longer eats
   the buffer** (t_67f26739). Live at Razor Hill the step log had `i=5466x1,4867x1` on the corpse
   window and `i=2318x1` on the skin window while the RECORD for the same corpse `..10B81C` said
@@ -808,3 +824,71 @@ minimap's yard radius is already measured on this client (`/nt mapdiag` reported
 What the strings cannot prove is the VALUE: whether `GetMapWorldSize(1413)` answers 1000x1000 or
 nothing, and whether `HereBeDragons-2.0` is registered in the session. `/nt navdiag` prints both,
 plus `HBD:GetWorldVector` to the route's ends for comparison.
+
+### t_c0221fd7 — the beast tooltip: what the corpse gave and what skinning gave
+
+**The complaint.** "we are missing the skinning tooltip. we should have some information when
+hovering over beasts that says what we might get if we kill it and skin it. Same as herbing just
+another step in the middle."
+
+**What shipped** (local commit on `fix/tooltip-refresh`, not pushed).
+
+- `Modules/NodeTrail/Data/SkinHints.lua` (new) — the data build. It READS
+  `NodeTrailDB.skinning.chars[<Name-Realm>].records[*]` (the recorder's own store, format untouched),
+  matches records by `creatureID` (the NPC id parsed by `R.CreatureID` from `UnitGUID`, never the
+  displayed name), and aggregates per creature: `kills` = records whose death was observed,
+  `skinned` = records a successful 8613 cast was pinned to, `skinWindows` = the sum of
+  `skinLootOpens`, plus per-item `count` (quantity) and `seen` (how many corpses carried it).
+  It never creates a bucket — hovering a beast on a character with no records leaves the saved
+  variables untouched (a spec pins that).
+- `UI/Tooltip.lua` — `T.BuildBeastLines()` is the gate and `T:Refresh` asks it for every hover that
+  is not one of our herb nodes: a `mouseover` unit must exist, its GUID must be a `Creature-` GUID,
+  the NPC id must parse, `UnitCreatureType` must be a beast, `Pr:Skinning()` must not answer "no",
+  and a client call that says "not skinnable" hides the block. The ring records `kind=beast cid=…`
+  and `/nt ttdiag` carries a `beast:` section (store, floor, last aggregate, the measured
+  skinnability probe).
+- `Data/Profession.lua` — the herb gate's three tiers now take a context (names + label + spell), so
+  Skinning is answered by the SAME code as Herbalism: `Pr:Skinning()`, cached per skill. Every
+  existing herbalism detail string is unchanged, which is why `profession_gate_spec` still passes.
+- `UI/TooltipPanel.lua` — a row may now be `{ name = <client string> }`: display-only, never
+  wrapped, never `tostring`'d, never measured (a creature name can be SECRET). Its width comes from
+  the tooltip's own rect (a frame read), not from a measurement, and it is excluded from the
+  `covers` verdict rather than counted as a blind row.
+
+**How the content is ordered** (the card's order): creature name · `skinnable · skin windows
+recorded: N` only when known · `corpse loot` rows · `skinned` rows · `kills seen: N · skinned: M`.
+An item row is `<client item name> x<count>` and gets `| <pct>% (yours)` only when the sample
+reaches `HerbData.PERSONAL_MIN` (10) — and never when the item was seen more often than that
+sample (a loot-only record would otherwise print 110%). Item names come from `GetItemInfo(id)`,
+then the name the loot slot reported, then our own `item <id>`; no leather/hide table is hardcoded.
+
+**Measured on the client, not assumed.** `strings -a Wow.exe` on
+`/mnt/c/Program Files (x86)/World of Warcraft/_forever_/Wow.exe` (build 16001, `textLocale enUS`):
+`UnitGUID`, `UnitName`, `UnitCreatureType`, `UnitExists`, `GetItemInfo`, `issecretvalue` are each
+compiled in (1 match); **`UnitIsSkinnable`, `IsUnitSkinnable`, `C_UnitInfo` are absent (0)** — so no
+call on this client answers "is this creature skinnable" as a boolean, and the line comes from our
+own skin windows instead. The client does carry the vanilla tooltip strings `UNIT_SKINNABLE_LEATHER`
+/ `_HERB` / `_ROCK` / `_BOLTS` and `SPELL_FAILED_TARGET_UNSKINNABLE`, i.e. it can draw a "Skinnable"
+line in ITS tooltip; reading that line means matching CLIENT text (the read a secret value raises
+on), so it is deliberately not done. `Beast` is not an exe literal — `UnitCreatureType` answers a
+localized DBC string, and `BEAST_TYPES` is enUS-only, like `Profession.NAMES`.
+
+**Proof.** `tests/skin_tooltip_spec.lua` builds its records by calling the real recorder
+(`R:OnKill` / `R:OnCorpseLoot` / `R:OnSkinCast` / `R:OnSkinLoot`), then drives the real poller over
+the fake client: 12 kills / 10 skins → labelled percentages + totals; 3 kills → counts only and no
+`%` anywhere; a beast with no records → `no observations here yet` and no totals line; five
+non-beast creature types, an unreadable type, a `Player-` and a `Pet-` GUID → hidden; a stubbed
+`UnitIsSkinnable=false` → hidden, `=true` → `skinnable`; a non-skinner → hidden with `Skinning` in
+the ring; an unreadable profession → the block still shows this character's own records; a
+same-name creature with no records is not given another NPC's numbers; a loot-only item that
+outnumbers its sample prints a count, not 110%; a SECRET name is carried to the panel whole with
+zero `#`/concat/`tostring` reads (a `newproxy` userdata whose `__len`/`__concat` count and raise);
+a hover on an empty store creates no bucket; and a write-hostile `GameTooltip` proxy records zero
+writes. **46 checks fail on `06984f6`**; all 42 `tests/*.lua` pass under lua5.1 here.
+
+**Still needs one in-game run.** Hover a Clattering Scorpid (id 3125) on the skinner and quote
+`/nt ttdiag`: the `beast:` lines must show `store: N corpse record(s) for <Name-Realm>`, the floor
+(10), and `last hover: cid=3125 records=… kills=… skinned=… skin-windows=…`. What the specs cannot
+prove on this client: that `UnitCreatureType("mouseover")` really answers `Beast` (vanilla DBC
+string), that `UnitName` for a beast is SECRET here (the panel handles both), and that the panel's
+width floor from the tooltip rect really covers a long secret name.

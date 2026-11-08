@@ -485,27 +485,38 @@ end
 -- Wrap our block to the cap. A drop row is a name and a value in two columns:
 -- the value ("100% (base)") is atomic and stays with the first line of its
 -- name, so a percentage can never be separated from the item it belongs to.
+--
+-- A row may instead carry `name` — a CLIENT string (the hovered creature's
+-- name, t_c0221fd7) that may be SECRET. Such a row is passed through whole: it
+-- is never converted with tostring, never wrapped, never split and never
+-- measured, because all four would read the value. Its own frame width comes
+-- from the tooltip's rect instead (see Update), which the client has already
+-- sized to fit that same name.
 function P:Wrap(lines, cap, measure)
   local rows = {}
   for i = 1, #lines do
     local line = lines[i]
-    local left = tostring(line.left or "")
-    local right = line.right and tostring(line.right) or nil
-    if right then
-      local rw = measure(right) or 0
-      local firstBudget = cap - P.COL_GAP - rw
-      if measure(left) <= firstBudget then
-        rows[#rows + 1] = { left = left, right = right }
-      else
-        local chunks = wrapText(left, math.max(firstBudget, P.MIN_WIDTH * 0.5), cap, measure)
-        for k, chunk in ipairs(chunks) do
-          rows[#rows + 1] = { left = chunk, right = (k == 1) and right or nil, wrapped = true }
-        end
-      end
+    if type(line) == "table" and line.name ~= nil then
+      rows[#rows + 1] = { raw = line.name }
     else
-      local chunks = wrapText(left, cap, cap, measure)
-      for _, chunk in ipairs(chunks) do
-        rows[#rows + 1] = { left = chunk, wrapped = #chunks > 1 }
+      local left = tostring(line.left or "")
+      local right = line.right and tostring(line.right) or nil
+      if right then
+        local rw = measure(right) or 0
+        local firstBudget = cap - P.COL_GAP - rw
+        if measure(left) <= firstBudget then
+          rows[#rows + 1] = { left = left, right = right }
+        else
+          local chunks = wrapText(left, math.max(firstBudget, P.MIN_WIDTH * 0.5), cap, measure)
+          for k, chunk in ipairs(chunks) do
+            rows[#rows + 1] = { left = chunk, right = (k == 1) and right or nil, wrapped = true }
+          end
+        end
+      else
+        local chunks = wrapText(left, cap, cap, measure)
+        for _, chunk in ipairs(chunks) do
+          rows[#rows + 1] = { left = chunk, wrapped = #chunks > 1 }
+        end
       end
     end
   end
@@ -601,7 +612,15 @@ function P:Update(lines, tooltip)
       self:Hide("unrenderable")
       return info
     end
-    call(slot.left, "SetText", row.left)
+    -- A raw row's text is the CLIENT's string (a creature name that may be
+    -- secret): it is handed to SetText whole and nothing else reads it. Written
+    -- out rather than `a and b or c`, which would take the fallback for a
+    -- falsy value.
+    local text = row.left
+    if row.raw ~= nil then
+      text = row.raw
+    end
+    call(slot.left, "SetText", text)
     if type(slot.right) == "table" then
       call(slot.right, "SetText", row.right or "")
     end
@@ -639,21 +658,30 @@ function P:Update(lines, tooltip)
     return false
   end
   local lineH = 0
+  local rawRows = 0 -- rows whose text is the client's, so not ours to measure
   for i, row in ipairs(rows) do
     local slot = pool[i]
-    local lw = num(slot.left, "GetStringWidth") or 0
-    local rw = row.right and (num(slot.right, "GetStringWidth") or 0) or 0
-    local w = lw + (row.right and (P.COL_GAP + rw) or 0)
-    local tw = lw + rw
-    row.width = w
-    if w > widest then
-      widest, widestText = w, row.left .. (row.right and (" | " .. row.right) or "")
-    end
-    if tw > widestTextPx then
-      widestTextPx = tw
-    end
-    if blindRow(row, lw, rw) then
-      blind = true
+    if row.raw ~= nil then
+      -- Not measured (a secret may be shown, never measured) and NOT counted
+      -- as a row whose glyphs measured 0: the coverage verdict is a statement
+      -- about the text WE measured, and an abstention is not a failure.
+      rawRows = rawRows + 1
+      row.width = 0
+    else
+      local lw = num(slot.left, "GetStringWidth") or 0
+      local rw = row.right and (num(slot.right, "GetStringWidth") or 0) or 0
+      local w = lw + (row.right and (P.COL_GAP + rw) or 0)
+      local tw = lw + rw
+      row.width = w
+      if w > widest then
+        widest, widestText = w, row.left .. (row.right and (" | " .. row.right) or "")
+      end
+      if tw > widestTextPx then
+        widestTextPx = tw
+      end
+      if blindRow(row, lw, rw) then
+        blind = true
+      end
     end
     local h = num(slot.left, "GetHeight") or 0
     if h > lineH then
@@ -683,19 +711,21 @@ function P:Update(lines, tooltip)
   if remeasure then
     widestMeasured, widestMeasuredTextPx = 0, 0
     for _, row in ipairs(rows) do
-      local lw = remeasure(row.left) or 0
-      local rw = (row.right and remeasure(row.right)) or 0
-      local w = lw + (row.right and (P.COL_GAP + rw) or 0)
-      local tw = lw + rw
-      if w > widestMeasured then
-        widestMeasured = w
-        widestMeasuredText = row.left .. (row.right and (" | " .. row.right) or "")
-      end
-      if tw > widestMeasuredTextPx then
-        widestMeasuredTextPx = tw
-      end
-      if blindRow(row, lw, rw) then
-        blind = true
+      if row.raw == nil then
+        local lw = remeasure(row.left) or 0
+        local rw = (row.right and remeasure(row.right)) or 0
+        local w = lw + (row.right and (P.COL_GAP + rw) or 0)
+        local tw = lw + rw
+        if w > widestMeasured then
+          widestMeasured = w
+          widestMeasuredText = row.left .. (row.right and (" | " .. row.right) or "")
+        end
+        if tw > widestMeasuredTextPx then
+          widestMeasuredTextPx = tw
+        end
+        if blindRow(row, lw, rw) then
+          blind = true
+        end
       end
     end
   end
@@ -704,6 +734,19 @@ function P:Update(lines, tooltip)
     needWidth = widestMeasured
   end
   needWidth = needWidth + 2 * P.PAD_X
+
+  -- The tooltip's rect, read-only, read BEFORE sizing: a raw (client-text) row
+  -- cannot be measured, so the width its text needs comes from the frame the
+  -- client already sized to fit that same name. Reading a frame rect is not
+  -- reading the string.
+  local rect, rectHow = self:TooltipRect(tooltip)
+  local rawFloor = 0
+  if rawRows > 0 and type(rect) == "table" then
+    local tw = rect.right - rect.left
+    if type(tw) == "number" and tw > 0 and type(scale) == "number" and scale > 0 then
+      rawFloor = tw / scale
+    end
+  end
 
   -- Place the rows. A font string with no anchor does not sit where it was
   -- "meant" to go on this client — it lands at the frame's centre and the block
@@ -721,7 +764,7 @@ function P:Update(lines, tooltip)
     end
   end
 
-  local width = math.max(P.MIN_WIDTH, needWidth)
+  local width = math.max(P.MIN_WIDTH, needWidth, rawFloor)
   local height = 2 * P.PAD_Y + #rows * lineH + math.max(0, #rows - 1) * P.LINE_GAP
   if not works(frame, "SetSize", width, height) then
     call(frame, "SetWidth", width)
@@ -735,6 +778,7 @@ function P:Update(lines, tooltip)
   self.widestMeasuredTextPx = widestMeasuredTextPx
   self.needWidth = needWidth
   self.blind = blind
+  self.rawRows = rawRows
   -- The verdict is built from MEASURED TEXT only: no column gap, no padding,
   -- and never from a row whose glyphs measured 0. On a client that cannot
   -- measure, `covers` is false and /nt ttdiag says NO — it does not add a 12 px
@@ -759,9 +803,12 @@ function P:Update(lines, tooltip)
   info.needWidth, info.covers = needWidth, self.covers
   info.cap = cap
   info.font = fontSig
+  info.rawRows = rawRows
+  info.rawFloor = rawFloor
 
-  -- Position from the tooltip's geometry, read-only.
-  local rect, how = self:TooltipRect(tooltip)
+  -- Position from the tooltip's geometry, read-only (the rect was read before
+  -- sizing: a raw row's width floor comes from it).
+  local rect, how = rect, rectHow
   if not rect then
     info.skip = "panel built but the tooltip rect is unreadable (" .. tostring(how) .. ")"
     info.position = "unreadable"
@@ -821,13 +868,21 @@ end
 -- The rendered rows, as the player sees them ("name | value" for a drop row).
 -- This is the single source of truth for the specs and for the diag's
 -- "widest of our lines" figure.
+--
+-- A raw row is returned WHOLE and alone: it carries a client string (a
+-- creature name) that may be secret, so it is never concatenated here. A caller
+-- that needs to print it must hand it to the display channel as-is.
 function P:TextLines()
   local out = {}
   if type(self.rows) ~= "table" then
     return out
   end
   for i, row in ipairs(self.rows) do
-    out[i] = row.right and (row.left .. " | " .. row.right) or row.left
+    if row.raw ~= nil then
+      out[i] = row.raw
+    else
+      out[i] = row.right and (row.left .. " | " .. row.right) or row.left
+    end
   end
   return out
 end
@@ -846,6 +901,8 @@ function P:Diag()
     blind = self.blind,
     needWidth = self.needWidth,
     covers = self.covers,
+    rawRows = self.rawRows,
+    rawFloor = self.rawFloor,
     meterUsed = self.meterUsed,
     padX = P.PAD_X,
     width = self.width,

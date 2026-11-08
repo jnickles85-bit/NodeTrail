@@ -18,6 +18,7 @@ Modules/NodeTrail/Data/Recorder.lua
 Modules/NodeTrail/Data/Density.lua
 Modules/NodeTrail/Data/HerbData.lua
 Modules/NodeTrail/Data/Profession.lua
+Modules/NodeTrail/Data/SkinHints.lua
 Modules/NodeTrail/Data/Recipes.lua
 Modules/NodeTrail/Route/Cluster.lua
 Modules/NodeTrail/Route/Build.lua

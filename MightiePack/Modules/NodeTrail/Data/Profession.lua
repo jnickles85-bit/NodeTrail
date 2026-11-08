@@ -53,6 +53,18 @@ Pr.NAMES = { "herbalism", "herb gathering" }
 -- The gathering spell, used only to derive an extra accepted name.
 Pr.SPELL_ID = 2366
 
+-- ── the SECOND skill this gate answers for (t_c0221fd7) ───────────────────
+-- The beast block is gated on Skinning exactly as the herb block is on
+-- Herbalism, and it reads the SAME three tiers — a second copy of them would
+-- drift the moment one side is fixed. So the tiers take a context: the names
+-- to match, the label to print, and the spell to ask GetSpellInfo about.
+-- Skinning is spell 8613 (the recorder's R.SKIN_SPELL_ID, live-confirmed on
+-- this client: the probe's dump carries "cast 8613").
+Pr.SKIN_NAMES = { "skinning" }
+Pr.SKIN_SPELL_ID = 8613
+Pr.LABEL = "Herbalism"
+Pr.SKIN_LABEL = "Skinning"
+
 -- A definitive answer is reused for this many seconds, so a client that
 -- intermittently fails the read cannot make the block flicker in and out of
 -- existence mid-hover. "Unknown" is never cached — it is retried, because it
@@ -94,15 +106,15 @@ local function addName(list, v)
   end
 end
 
--- The names this client itself uses for the herb profession: our two literals
--- plus whatever GetSpellInfo calls the gathering spell.
-local function herbNames()
+-- The names this client itself uses for the asked-about profession: our
+-- literals plus whatever GetSpellInfo calls its spell.
+local function wantNames(ctx)
   local names = {}
-  for _, n in ipairs(Pr.NAMES) do
+  for _, n in ipairs(ctx.names) do
     names[#names + 1] = n
   end
   if type(GetSpellInfo) == "function" then
-    local ok, name = pcall(GetSpellInfo, Pr.SPELL_ID)
+    local ok, name = pcall(GetSpellInfo, ctx.spell)
     if ok then
       addName(names, name)
     end
@@ -110,10 +122,35 @@ local function herbNames()
   return names
 end
 
+-- What the tiers are asked about. `FromSkillLines()` with no argument (or with
+-- `Pr` itself, the old call shape) still asks about Herbalism, which is what
+-- every caller before t_c0221fd7 meant.
+local function contextOf(kind)
+  if kind == "skinning" then
+    return {
+      id = "skinning", names = Pr.SKIN_NAMES,
+      spell = Pr.SKIN_SPELL_ID, label = Pr.SKIN_LABEL,
+    }
+  end
+  return {
+    id = "herbalism", names = Pr.NAMES,
+    spell = Pr.SPELL_ID, label = Pr.LABEL,
+  }
+end
+Pr.Context = contextOf
+
+local function ctxArg(arg)
+  if type(arg) == "table" and type(arg.names) == "table"
+    and type(arg.label) == "string" then
+    return arg
+  end
+  return contextOf("herbalism")
+end
+
 -- Match a client string against those names. A secret string is never read:
--- the answer is a plain false, and the caller's "no Herbalism row" conclusion
+-- the answer is a plain false, and the caller's "no <skill> row" conclusion
 -- stays a conclusion about the rows that WERE readable.
-local function isHerbName(name, names)
+local function isSkillName(name, names)
   if type(name) ~= "string" or name == "" or isSecret(name) then
     return false
   end
@@ -154,7 +191,8 @@ end
 --   * second return boolean  -> documented shape, rank is the 4th return;
 --   * second return number   -> short shape, rank is the 2nd return.
 -- A row whose shape cannot be read contributes the name only.
-function Pr:FromSkillLines()
+function Pr:FromSkillLines(ctx)
+  ctx = ctxArg(ctx)
   if type(GetNumSkillLines) ~= "function" then
     return nil, "GetNumSkillLines absent"
   end
@@ -168,7 +206,8 @@ function Pr:FromSkillLines()
   if type(n) ~= "number" or n <= 0 then
     return nil, "GetNumSkillLines returned " .. tostring(n)
   end
-  local names = herbNames()
+  local names = wantNames(ctx)
+  local label = ctx.label
   local rows, unreadable, shape = 0, 0, nil
   local raiseMsg = nil
   local found, foundRank = false, nil
@@ -190,7 +229,7 @@ function Pr:FromSkillLines()
       if thisShape then
         shape = shape or thisShape
       end
-      if isHerbName(a, names) then
+      if isSkillName(a, names) then
         found = true
         foundRank = type(rank) == "number" and rank or nil
         break
@@ -208,7 +247,7 @@ function Pr:FromSkillLines()
   if rows == 0 then
     return nil, raiseMsg
       and ("GetSkillLineInfo raised: " .. raiseMsg)
-      or ("GetSkillLineInfo answered no readable name in %d row(s)"):format(n)
+      or (("GetSkillLineInfo answered no readable name in %d row(s)"):format(n))
   end
   local detail = ("%d skill line(s) read (%s)"):format(rows, shape or "shape unreadable")
   if not found then
@@ -216,25 +255,26 @@ function Pr:FromSkillLines()
       -- SOME rows answered and some did not. "No Herbalism" would then be a
       -- guess about rows we never saw — the direction that hides the block on a
       -- real herbalist — so this tier abstains and the next one gets a turn.
-      return nil, detail .. ("; %d row(s) unreadable (%s) — Herbalism cannot be ruled out")
-        :format(unreadable, raiseMsg and ("raised: " .. raiseMsg) or "no readable name")
+      return nil, detail .. ("; %d row(s) unreadable (%s) — %s cannot be ruled out")
+        :format(unreadable, raiseMsg and ("raised: " .. raiseMsg) or "no readable name", label)
     end
-    return false, detail .. "; no Herbalism line"
+    return false, detail .. "; no " .. label .. " line"
   end
   if foundRank == nil then
-    return nil, detail .. "; Herbalism line present but its rank was unreadable"
+    return nil, detail .. "; " .. label .. " line present but its rank was unreadable"
   end
   if foundRank > 0 then
-    return true, detail .. ("; Herbalism rank %d"):format(foundRank)
+    return true, detail .. ("; %s rank %d"):format(label, foundRank)
   end
-  return false, detail .. "; Herbalism line present at rank 0"
+  return false, detail .. "; " .. label .. " line present at rank 0"
 end
 
 -- ── tier 2: the seven profession slots ────────────────────────────────────
 -- GetProfessions() gives the skill-line indices this character has learned;
 -- GetProfessionInfo(index) names each one. Definitive both ways once any slot
 -- is named: an empty or unnameable list is "unknown", not "no".
-function Pr:FromProfessions()
+function Pr:FromProfessions(ctx)
+  ctx = ctxArg(ctx)
   if type(GetProfessions) ~= "function" then
     return nil, "GetProfessions absent"
   end
@@ -253,7 +293,8 @@ function Pr:FromProfessions()
   else
     list = { a, b, c, d, e, f, g }
   end
-  local names = herbNames()
+  local names = wantNames(ctx)
+  local label = ctx.label
   local seen, herb, unreadable = 0, false, 0
   for slot = 1, 7 do
     local idx = list[slot]
@@ -272,19 +313,19 @@ function Pr:FromProfessions()
         unreadable = unreadable + 1
       else
         seen = seen + 1
-        if isHerbName(nm, names) then
+        if isSkillName(nm, names) then
           herb = true
         end
       end
     end
   end
   if herb then
-    return true, ("%d learned profession(s) read; Herbalism among them"):format(seen)
+    return true, ("%d learned profession(s) read; %s among them"):format(seen, label)
   end
   if seen == 0 then
     if unreadable > 0 then
-      return nil, ("no profession slot named anything readable; %d learned slot(s) unreadable — Herbalism cannot be ruled out")
-        :format(unreadable)
+      return nil, ("no profession slot named anything readable; %d learned slot(s) unreadable — %s cannot be ruled out")
+        :format(unreadable, label)
     end
     return nil, "GetProfessionInfo named none of the profession slots"
   end
@@ -292,17 +333,18 @@ function Pr:FromProfessions()
     -- Some slots were named and some were not readable: "no Herbalism" would be
     -- a guess about the slots we could not read, and a wrong "no" hides the
     -- block on a real herbalist.
-    return nil, ("%d learned profession(s) read; %d slot(s) unreadable — Herbalism cannot be ruled out")
-      :format(seen, unreadable)
+    return nil, ("%d learned profession(s) read; %d slot(s) unreadable — %s cannot be ruled out")
+      :format(seen, unreadable, label)
   end
-  return false, ("%d learned profession(s) read; no Herbalism"):format(seen)
+  return false, ("%d learned profession(s) read; no %s"):format(seen, label)
 end
 
 -- ── tier 3: the open profession window (positive only) ────────────────────
 -- These calls describe the window the player has OPEN, not the character's
 -- learned professions. A closed window says nothing, so only a Herbalism
 -- answer is usable here; anything else stays unknown.
-function Pr:FromOpenWindow()
+function Pr:FromOpenWindow(ctx)
+  ctx = ctxArg(ctx)
   local candidates = {}
   if type(GetTradeSkillLine) == "function" then
     candidates[#candidates + 1] = { fn = GetTradeSkillLine, label = "GetTradeSkillLine" }
@@ -318,7 +360,8 @@ function Pr:FromOpenWindow()
   if #candidates == 0 then
     return nil, "no open-window profession call exists on this client"
   end
-  local names = herbNames()
+  local names = wantNames(ctx)
+  local label = ctx.label
   local answered = nil
   for _, c in ipairs(candidates) do
     local ok, r = pcall(c.fn)
@@ -326,30 +369,35 @@ function Pr:FromOpenWindow()
       local name = profName(r)
       if name ~= nil then
         answered = c.label
-        if isHerbName(name, names) then
-          return true, "the open profession window reports Herbalism (" .. c.label .. ")"
+        if isSkillName(name, names) then
+          return true, "the open profession window reports " .. label .. " (" .. c.label .. ")"
         end
       end
     end
   end
   if answered then
-    return nil, ("%s named the OPEN window only, and it is not Herbalism — that says nothing about what this character has learned"):format(answered)
+    return nil, (("%s named the OPEN window only, and it is not %s — that says nothing about what this character has learned"))
+      :format(answered, label)
   end
   return nil, "the open-window calls answered no profession name"
 end
 
 -- ── the probe ─────────────────────────────────────────────────────────────
--- Returns info = { herbalism = true|false|nil, api = <tier id or nil>,
---                  detail = <what was read>, tried = { {id, answer, detail} } }
-function Pr:Probe()
-  local info = { herbalism = nil, api = nil, detail = nil, tried = {} }
+-- Returns info = { answer = true|false|nil, id = <skill>, label = <skill>,
+--                  api = <tier id or nil>, detail = <what was read>,
+--                  tried = { {id, answer, detail} } }
+-- `info.herbalism` / `info.skinning` mirror `answer` for the skill asked
+-- about, which is the field the tooltip gates and the specs read.
+function Pr:Probe(ctx)
+  ctx = ctxArg(ctx)
+  local info = { answer = nil, id = ctx.id, label = ctx.label, api = nil, detail = nil, tried = {} }
   local tiers = {
     { id = "skill-lines", fn = Pr.FromSkillLines },
     { id = "professions", fn = Pr.FromProfessions },
     { id = "open-window", fn = Pr.FromOpenWindow },
   }
   for _, t in ipairs(tiers) do
-    local ok, answer, detail = pcall(t.fn, Pr)
+    local ok, answer, detail = pcall(t.fn, Pr, ctx)
     if not ok then
       info.tried[#info.tried + 1] = {
         id = t.id, answer = "unknown", detail = "raised: " .. tostring(answer),
@@ -365,7 +413,7 @@ function Pr:Probe()
       end
       info.tried[#info.tried + 1] = { id = t.id, answer = label, detail = detail }
       if answer ~= nil then
-        info.herbalism = answer
+        info.answer = answer
         info.api = t.id
         info.detail = detail
         break
@@ -375,33 +423,50 @@ function Pr:Probe()
   if info.api == nil then
     info.detail = "no API on this client names the character's professions"
   end
+  info[ctx.id] = info.answer
   return info
+end
+
+-- One answer, cached per skill. Returns (answer, info, cached) where answer is
+-- true (has the skill), false (does not) or nil (unreadable on this client).
+local function answerFor(self, kind)
+  local ctx = contextOf(kind)
+  local now = (type(GetTime) == "function") and GetTime() or nil
+  local caches = self._cache
+  local last = type(caches) == "table" and caches[ctx.id] or nil
+  if last and now and type(last.at) == "number" and (now - last.at) < self.TTL then
+    return last.answer, last.info, true
+  end
+  local ok, info = pcall(self.Probe, self, ctx)
+  if not ok or type(info) ~= "table" then
+    -- A probe that raises is an unreadable client, never a verdict.
+    if type(caches) == "table" then caches[ctx.id] = nil end
+    local err = { answer = nil, id = ctx.id, label = ctx.label, api = nil, tried = {}, error = tostring(info) }
+    return nil, err, false
+  end
+  if type(self._cache) ~= "table" then self._cache = {} end
+  if now and info.answer ~= nil then
+    self._cache[ctx.id] = { at = now, answer = info.answer, info = info }
+  else
+    self._cache[ctx.id] = nil
+  end
+  return info.answer, info, false
 end
 
 -- The gate the tooltip asks. Returns (answer, info, cached) where answer is
 -- true (herbalist), false (not an herbalist), or nil (unreadable on this
 -- client). `cached` says whether the answer came from the reuse window.
 function Pr:Herbalism()
-  local now = (type(GetTime) == "function") and GetTime() or nil
-  local last = self._cache
-  if last and now and type(last.at) == "number" and (now - last.at) < self.TTL then
-    return last.info.herbalism, last.info, true
-  end
-  local ok, info = pcall(self.Probe, self)
-  if not ok or type(info) ~= "table" then
-    -- A probe that raises is an unreadable client, never a verdict.
-    self._cache = nil
-    return nil, { herbalism = nil, api = nil, tried = {}, error = tostring(info) }, false
-  end
-  if now and info.herbalism ~= nil then
-    self._cache = { at = now, info = info }
-  else
-    self._cache = nil
-  end
-  return info.herbalism, info, false
+  return answerFor(self, "herbalism")
 end
 
--- Forget the reuse window (a spec or a slash command may want a fresh read).
+-- The same gate for the beast block (t_c0221fd7): true (skinner), false (not
+-- a skinner), nil (unreadable).
+function Pr:Skinning()
+  return answerFor(self, "skinning")
+end
+
+-- Forget every reuse window (a spec or a slash command may want a fresh read).
 function Pr:Forget()
   self._cache = nil
 end
@@ -441,9 +506,9 @@ function Pr:Diagnose()
     return out
   end
   local verdict = "unknown"
-  if info.herbalism == true then
+  if info.answer == true then
     verdict = "yes"
-  elseif info.herbalism == false then
+  elseif info.answer == false then
     verdict = "no"
   end
   out[#out + 1] = ("this character: herbalism=%s (from %s) — %s"):format(
@@ -452,21 +517,52 @@ function Pr:Diagnose()
   -- answer is already quoted in the line above, so repeating it would be noise.
   for _, t in ipairs(info.tried) do
     if t.id ~= info.api then
-      out[#out + 1] = ("  %s: %s — %s"):format(tostring(t.id), tostring(t.answer), tostring(t.detail))
+      out[#out + 1] = (("  %s: %s — %s")):format(tostring(t.id), tostring(t.answer), tostring(t.detail))
     end
   end
-  if info.herbalism == false then
+  if info.answer == false then
     out[#out + 1] = "gate: this character cannot gather herbs — the herb block is hidden"
-  elseif info.herbalism == nil then
+  elseif info.answer == nil then
     out[#out + 1] = "gate: profession unreadable on this client — the block shows without a picks line"
   else
     out[#out + 1] = "gate: the block shows, with the account-wide picks line"
+  end
+
+  -- The beast block's gate (t_c0221fd7). The same three tiers, asked about
+  -- Skinning: a skinner sees the block, a non-skinner sees nothing, and an
+  -- unreadable client is told apart from a "no" so a hidden block on a real
+  -- skinner is diagnosable.
+  local okS, skin = pcall(self.Probe, self, contextOf("skinning"))
+  if not okS or type(skin) ~= "table" then
+    out[#out + 1] = "this character: skinning probe raised — " .. tostring(skin)
+  else
+    local sv = "unknown"
+    if skin.answer == true then
+      sv = "yes"
+    elseif skin.answer == false then
+      sv = "no"
+    end
+    out[#out + 1] = ("this character: skinning=%s (from %s) — %s"):format(
+      sv, tostring(skin.api or "no API"), tostring(skin.detail or "no detail"))
+    for _, t in ipairs(skin.tried) do
+      if t.id ~= skin.api then
+        out[#out + 1] = (("  skin %s: %s — %s")):format(tostring(t.id), tostring(t.answer), tostring(t.detail))
+      end
+    end
+    if skin.answer == false then
+      out[#out + 1] = "gate: this character has no Skinning — the beast block is hidden"
+    elseif skin.answer == nil then
+      out[#out + 1] = "gate: skinning unreadable on this client — the beast block shows (its records are this character's own)"
+    else
+      out[#out + 1] = "gate: the beast block shows on a beast hover"
+    end
   end
   -- The hover path reuses a definitive answer for Pr.TTL seconds. Say what is in
   -- that window: a hover that answered from it may be up to TTL older than this
   -- fresh read.
   if type(GetTime) == "function" then
-    local c = self._cache
+    local caches = self._cache
+    local c = type(caches) == "table" and caches.herbalism or nil
     if c and type(c.at) == "number" then
       out[#out + 1] = ("cache: hovers reuse an answer read %ds ago (TTL %ds)"):format(
         math.max(0, math.floor(GetTime() - c.at)), self.TTL)
