@@ -772,6 +772,12 @@ end
 local function buildSpec()
 	local token = classToken()
 	local role  = resolvedRole(token)
+	-- Card t_3a744b4a: resolvedRole above decides the ORDER (and keeps its
+	-- own rulings); this read only names the WEIGHT profile. The client's
+	-- word is the honest one — a Protection paladin is TANK even though the
+	-- order alias sends it to the "spell" order — so the tooltip can show
+	-- [Protection] instead of a label nobody can check.
+	local specIdentity = readSpecIdentity()
 	local order = (Verdict and Verdict.classRoleOrder) and Verdict.classRoleOrder(token, role) or nil
 	-- A hybrid without a resolved role is not "acting as its class token":
 	-- the display label must say the role is missing, not invent one.
@@ -784,7 +790,8 @@ local function buildSpec()
 		local ok, lv = pcall(UnitLevel, "player")
 		if ok and type(lv) == "number" then level = lv end
 	end
-	return { order = order, role = label, class = token, level = level }
+	return { order = order, role = label, class = token, level = level,
+	         clientRole = specIdentity and specIdentity.role or nil }
 end
 
 -- ---- Tooltip surface (card t_ed71a583) ---------------------------------------
@@ -866,6 +873,12 @@ local TOOLTIP_UI = {
 		UPGRADE     = "Upgrade",
 		NOT_UPGRADE = "Not an upgrade",
 		UNKNOWN     = "Can't judge",
+		-- Card t_3a744b4a: two DISPLAY words, not two new tokens. A weighted
+		-- row is still NOT_UPGRADE; which of these the player sees comes from
+		-- the sign of the weighted total. They live in this closed table so the
+		-- duplicate guard (tooltipHasOurLine) recognises them as our own line.
+		DOWNGRADE   = "Downgrade",
+		NO_CHANGE   = "No change",
 	},
 	detailDefault = "full",
 	details = { full = true, compact = true, upgrades = true },
@@ -1184,6 +1197,64 @@ local function colorTriple(esc)
 	return tonumber(r, 16) / 255, tonumber(g, 16) / 255, tonumber(b, 16) / 255
 end
 
+-- The weighted line (card t_3a744b4a). One rule: a row that carries a
+-- weighted total renders ITS number and ITS profile, so the verdict can be
+-- checked against the arithmetic beside it:
+--
+--     Downgrade — weighted -16 vs Lambent Scale Cloak [Retribution]
+--     -4 Str, +3 Sta, -3 Armor, -2 Spi
+--
+-- The word comes from the sign of the total (NOT_UPGRADE stays the token; a loss
+-- is a "Downgrade" and a weighted zero is "No change"); the profile is quoted so
+-- a wrong one is visible instead of silent. The detail line is the same
+-- statDeltas arithmetic every other branch prints, and it lists EVERY differing
+-- stat — a zero-weight stat like Stamina is supporting detail here, never the
+-- reason for the verdict above it.
+--
+-- Returns nil for a row with no weighted total (a weapon row, a legacy persisted
+-- row, an UNKNOWN), so every existing line renders byte-identically.
+function TOOLTIP_UI.weighted(row, order)
+	if type(row) ~= "table" or type(row.weighted) ~= "number" then return nil end
+	local total = row.weighted
+	local number = (Verdict and type(Verdict.numText) == "function")
+		and Verdict.numText(total) or tostring(total)
+	local head = "weighted " .. number
+	if type(row.wornLink) == "string" then
+		head = head .. " vs " .. itemNameOf(row.wornLink)
+	end
+	if type(row.profile) == "string" then
+		head = head .. " [" .. row.profile .. "]"
+	end
+	local word = TOOLTIP_UI.word(row.verdict)
+	if row.verdict == "NOT_UPGRADE" then
+		if total < 0 then word = TOOLTIP_UI.words.DOWNGRADE
+		else word = TOOLTIP_UI.words.NO_CHANGE end
+	end
+	local detail = nil
+	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
+		and Verdict and type(Verdict.statTable) == "function"
+		and type(Verdict.statDeltas) == "function"
+		and type(Verdict.deltaText) == "function" then
+		local api = apiBySideOf(row.id, type(row.wornLink) == "string"
+			and itemIDOf(row.wornLink) or nil)
+		local cand = Verdict.statTable(row.lines, "candidate", api and api.candidate or nil)
+		local eq = Verdict.statTable(row.chestWornLines, "worn", api and api.worn or nil)
+		-- The row's own stat order when this caller did not pass one: the bag walk
+		-- stores the character's class and role word, so the arithmetic reads in the
+		-- order the player's profile ranks — "-4 Str, +3 Sta, -3 Armor, -2 Spi" —
+		-- instead of alphabetically. classRoleOrder is the one resolver; there is no
+		-- second copy of the order here.
+		local deltaOrder = order
+		if deltaOrder == nil and type(row.class) == "string"
+			and Verdict and type(Verdict.classRoleOrder) == "function" then
+			deltaOrder = Verdict.classRoleOrder(row.class, row.role)
+		end
+		local dtext = Verdict.deltaText(Verdict.statDeltas(cand, eq, deltaOrder), TOOLTIP_DELTA_MAX)
+		if dtext ~= "" then detail = dtext end
+	end
+	return { word = word, head = head, detail = detail }
+end
+
 -- One verdict, as the tooltip renders it: a coloured HEADLINE (the verdict in
 -- the player's own words + the leading reason) and, when the setting allows, a
 -- muted DETAIL line (the read arithmetic). Two lines rather than one wall —
@@ -1207,7 +1278,23 @@ local function verdictLines(row, order)
 	local showDetail = (setting ~= "compact") or TOOLTIP_UI.shiftHeld()
 
 	local out = {}
-	if row.verdict == "UPGRADE" then
+	local weighted = TOOLTIP_UI.weighted(row, order)
+	if weighted ~= nil then
+		local esc = TOOLTIP_GREY
+		local colour = "grey"
+		if row.verdict == "UPGRADE" then
+			esc, colour = TOOLTIP_GREEN, "green"
+		elseif row.verdict == TRADE_OFF_VERDICT then
+			esc, colour = TOOLTIP_AMBER, "amber"
+		end
+		out[#out + 1] = {
+			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head,
+			colour = colour,
+		}
+		if weighted.detail and showDetail then
+			out[#out + 1] = { text = TOOLTIP_GREY .. weighted.detail, colour = "grey" }
+		end
+	elseif row.verdict == "UPGRADE" then
 		local head, detail = describeUpgradeParts(row, order)
 		out[#out + 1] = {
 			text = TOOLTIP_GREEN .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
@@ -2404,9 +2491,16 @@ end
 local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mainHandLoc, wornOffLoc)
 	local invSlot = wornSlotFor(loc)
 	local row = { link = link }
-	local function done(v, reason)
+	local function done(v, reason, weighted)
 		row.verdict = v
 		row.reason = reason
+		-- Card t_3a744b4a: the number and the profile the verdict came from,
+		-- so the reward-panel tooltip can quote both. nil when the outcome did
+		-- not come from the weights (a decline, an unresolved profile).
+		if type(weighted) == "table" then
+			row.weighted = weighted.total
+			row.profile = weighted.profile
+		end
 		return v, reason, row
 	end
 	if not invSlot then
@@ -2487,7 +2581,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 	-- row.id. A bag row needs no such key; this one does.
 	local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
 	row.api = api
-	local v, reason = Verdict.evaluate(
+	local v, reason, weighted = Verdict.evaluate(
 		{ canUse = canUseV, line = lines },
 		{ line = wornLines },
 		spec,
@@ -2498,7 +2592,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 	if reason == "no chest equipped; this item would fill the slot" then
 		reason = "no " .. slotWord(invSlot) .. " equipped; this item would fill the slot"
 	end
-	return done(v, reason)
+	return done(v, reason, weighted)
 end
 
 -- Clear every quest marker and every arrow texture we drew on a reward button.
@@ -5189,7 +5283,7 @@ ChestAdvisor.scan = function()
 						-- so empty legs read "no legs equipped; …". Only the gate-6
 						-- shape is rewritten; every other reason passes through.
 						local EMPTY_SLOT_SENTINEL = "no chest equipped; this item would fill the slot"
-						local v2, r2 = Verdict.evaluate(
+						local v2, r2, w2 = Verdict.evaluate(
 							{ canUse = canUseV, line = lines },
 							{ line = wornLines },
 							spec,
@@ -5209,6 +5303,12 @@ ChestAdvisor.scan = function()
 							verdict = v,
 							reason = reason,
 							role = roleLabel,
+							-- Card t_3a744b4a: the weighted total this row was decided on
+							-- and the profile that supplied the weights. Two scalars, so a
+							-- persisted diag row stays small; nil on every outcome that did
+							-- not come from the weights (a weapon row, a decline).
+							weighted = w2 and w2.total or nil,
+							profile = w2 and w2.profile or nil,
 							-- The richer diag row (t_9ad3d462 part 3): everything plan s4
 							-- PASS/FIX/KILL grades from, per item. Raw stat lines (<=30, already
 							-- capped by TooltipLines), raw CanUseItem type+value, the player level

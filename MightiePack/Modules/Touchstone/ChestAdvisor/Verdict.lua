@@ -1274,6 +1274,272 @@ local function tradeOffReason(candStats, eqStats, firstDiff)
 	return head
 end
 
+-- ---- The stat weights (card t_3a744b4a): the ONE scoring path --------------
+--
+-- WHY THIS EXISTS. The verdict used to be decided by DIRECTION: the dominance
+-- test over the relevance set answered "better on some, worse on others" for any
+-- pair with one stat up and one stat down, however lopsided. The live case
+-- (Retribution paladin, Mightie):
+--
+--     equipped  Lambent Scale Cloak   19 Armor  +4 Str  +2 Spi
+--     hovered   Barkeeper's Cloak     16 Armor  +3 Sta
+--     printed   "Trade-off — better on some stats, worse on others"
+--
+-- -4 Str and -3 Armor for +3 Sta is not a sidegrade on a damage profile. The
+-- owner's ruling: a gain in any secondary stat must never, on its own, force a
+-- trade-off; weigh the difference and show the secondary as supporting detail.
+--
+-- WHAT DECIDES NOW. One number:
+--
+--     weighted = sum over every stat that DIFFERS of (delta x weight(profile, stat))
+--
+-- and one named noise floor, Verdict.WEIGHT_EPSILON. In order:
+--
+--     weighted >= +epsilon                         -> UPGRADE
+--     weighted <= -epsilon                         -> NOT_UPGRADE (a downgrade)
+--     |weighted| < epsilon, a stat up AND one down  -> TRADE_OFF
+--     otherwise (every difference one-directional) -> NOT_UPGRADE (no change)
+--
+-- "No change" and "downgrade" are the same TOKEN — NOT_UPGRADE, the closed token
+-- vocabulary is untouched — and differ only in the player WORD the renderer
+-- chooses from the sign of `weighted` (ChestAdvisor.lua, TOOLTIP_UI.weighted).
+--
+-- THIS IS THE ONLY SCORING PATH. There is no second table, no per-item score and
+-- no separate "upgrade score" function anywhere in the addon: a number printed
+-- beside a verdict is this number. The documented ORDERS above keep their two
+-- jobs (they word a reason, and relevanceSet seeds the tiebreak set) and no
+-- longer decide anything.
+--
+-- THE WEIGHTS. One profile per class AND role. The values come from the stat
+-- order the corpus already documents for that class/role (stat-weights §8.1):
+-- the first term scores 4 points per point of stat, the second 1, the third 0.
+-- A stat the order does not name — Spirit on a warrior, Armor on a damage
+-- profile — scores 0, which is the whole point: a zero-weight stat is SUPPORTING
+-- DETAIL. It still appears in the delta list; it can never move the verdict.
+-- The two tank profiles are the exception the owner asked for explicitly: they
+-- put Stamina (and Armor/Block) on top, so the SAME item pair legitimately reads
+-- as an upgrade for a Protection character. That is the proof the weights drive
+-- the verdict — see tests/touchstone_weights_spec.lua.
+--
+-- `w` is points per point of the stat. A word absent from `w` is weight 0.
+Verdict.WEIGHTS = {
+	WARRIOR = {
+		melee = { name = "Arms/Fury", w = { Strength = 4, Stamina = 1 } },
+		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Strength = 1, Block = 1 } },
+	},
+	PALADIN = {
+		-- DAMAGER -> melee (str>int>sta). Stamina is the order's third term and the
+		-- survivability stat: weight 0, so it cannot decide a damage verdict.
+		melee = { name = "Retribution", w = { Strength = 4, Intellect = 1 } },
+		spell = { name = "Holy", w = { Intellect = 4, Stamina = 1 } },
+		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Intellect = 1, Strength = 1, Block = 1 } },
+	},
+	ROGUE = {
+		melee = { name = "Combat", w = { Agility = 4, Strength = 1 } },
+	},
+	HUNTER = {
+		melee = { name = "Hunter", w = { Agility = 4, Stamina = 1 } },
+	},
+	MAGE = {
+		spell = { name = "Mage", w = { Intellect = 4, Spirit = 1 } },
+	},
+	PRIEST = {
+		spell = { name = "Priest", w = { Intellect = 4, Spirit = 1 } },
+	},
+	WARLOCK = {
+		spell = { name = "Warlock", w = { Intellect = 4, Spirit = 1 } },
+	},
+	-- C1b (t_03a1196c): a feral Druid has no documented order, so it also has no
+	-- weights. Its rows already stop at "no stat order resolved" before the
+	-- comparator, and a caller that reaches the comparator gets the unavailable
+	-- verdict below — never a guessed feral model.
+	DRUID = {
+		spell = { name = "Balance", w = { Intellect = 4, Agility = 1 } },
+	},
+	SHAMAN = {
+		melee = { name = "Enhancement", w = { Strength = 4, Intellect = 1 } },
+		spell = { name = "Elemental", w = { Intellect = 4, Strength = 1 } },
+	},
+}
+
+-- The noise floor. Weights are whole points per point of stat, so with the
+-- tables above the only total inside the band is 0 — the constant exists so the
+-- band has ONE definition that a future fractional weight cannot silently
+-- collapse back into a strict `> 0` test.
+Verdict.WEIGHT_EPSILON = 1
+
+-- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a weights
+-- role key. This is NOT ROLE_ALIAS (the stat-order alias, whose conservative
+-- TANK -> spell proxy for a paladin is a separate ruling): here it only picks
+-- which weight table scores the row. A class absent from this table resolves
+-- from its own role word alone, so a pure class is unaffected.
+Verdict.PROFILE_ROLE = {
+	PALADIN = { TANK = "tank", HEALER = "spell", DAMAGER = "melee" },
+	WARRIOR = { TANK = "tank", DAMAGER = "melee" },
+}
+
+-- The active profile for a spec, or nil.
+--
+--   spec — { class = <CLASS token>, role = <melee|spell|nil>,
+--            clientRole = <TANK|HEALER|DAMAGER|nil> (optional) }
+--
+-- Resolution order: the CLIENT's role word when this class maps it, then the
+-- addon's own role word, then — for a class with exactly ONE profile — that
+-- profile (a pure class ignores the role argument, exactly as classRoleOrder
+-- does). A hybrid with no resolved role returns nil: no profile, no guess.
+function Verdict.profileFor(spec)
+	if type(spec) ~= "table" then return nil end
+	local class = spec.class
+	local byRole = (type(class) == "string") and Verdict.WEIGHTS[class] or nil
+	if type(byRole) ~= "table" then return nil end
+	local alias = (type(class) == "string") and Verdict.PROFILE_ROLE[class] or nil
+	local client = type(spec.clientRole) == "string" and spec.clientRole or nil
+	if client ~= nil and type(alias) == "table" then
+		local word = alias[client]
+		if type(word) == "string" and type(byRole[word]) == "table" then
+			return byRole[word]
+		end
+	end
+	if type(spec.role) == "string" and type(byRole[spec.role]) == "table" then
+		return byRole[spec.role]
+	end
+	-- A PURE class ignores the role argument (exactly as classRoleOrder does) and
+	-- resolves the profile keyed by its one documented order word. A HYBRID must
+	-- name a role: "no role resolved" is nil here too, never a default profile —
+	-- which is why a feral Druid (a documented role with no documented order, and
+	-- therefore no weights) resolves to nothing instead of silently scoring as
+	-- Balance.
+	if not isHybrid(class) then
+		local orders = Verdict.ORDERS[class]
+		if type(orders) == "table" then
+			for word in pairs(orders) do
+				if type(byRole[word]) == "table" then return byRole[word] end
+			end
+		end
+	end
+	return nil
+end
+
+-- A signed number as the tooltip and the reason print it: "+16", "-16", "0",
+-- "1.5". Only the sign is added; the value is the arithmetic itself.
+function Verdict.numText(n)
+	if type(n) ~= "number" then return tostring(n) end
+	local text
+	if n == math.floor(n) then
+		text = string.format("%d", n)
+	else
+		text = string.format("%.2f", n):gsub("0+$", ""):gsub("%.$", "")
+	end
+	if n > 0 and text:sub(1, 1) ~= "+" then text = "+" .. text end
+	return text
+end
+
+-- The weighted total for one pair under one profile.
+--
+--   returns { total = <number>,        the verdict's number
+--             parts = { { word, delta, weight, contribution }, ... },
+--             scored = <n>,           differing stats with a NON-ZERO weight
+--             up = <n>, down = <n> }  differing stats that rose / fell
+--
+-- A stat neither side carries is absent from both tables and contributes
+-- nothing; a stat one side carries is a KNOWN absence (the parse zero-fills it,
+-- gates 5 and 8 having already refused anything unclassifiable), so it weighs in
+-- at its full delta.
+function Verdict.weightedTotal(candStats, eqStats, profile)
+	local weights = (type(profile) == "table") and profile.w or nil
+	if type(weights) ~= "table" then return nil end
+	local cand = (type(candStats) == "table") and candStats or {}
+	local eq = (type(eqStats) == "table") and eqStats or {}
+	local words, seen = {}, {}
+	for word in pairs(cand) do
+		if not seen[word] then seen[word] = true; words[#words + 1] = word end
+	end
+	for word in pairs(eq) do
+		if not seen[word] then seen[word] = true; words[#words + 1] = word end
+	end
+	table.sort(words)
+	local total, parts, scored, up, down = 0, {}, 0, 0, 0
+	for _, word in ipairs(words) do
+		local delta = (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
+		if delta ~= 0 then
+			local weight = tonumber(weights[word]) or 0
+			local contribution = delta * weight
+			total = total + contribution
+			parts[#parts + 1] = {
+				word = word, delta = delta, weight = weight, contribution = contribution,
+			}
+			if weight ~= 0 then scored = scored + 1 end
+			if delta > 0 then up = up + 1 else down = down + 1 end
+		end
+	end
+	return { total = total, parts = parts, scored = scored, up = up, down = down }
+end
+
+-- The stored reason: the number the verdict came from, and the profile it came
+-- from, so a wrong profile is visible in the Upgrades tab and in /up diag
+-- instead of silent. `kind` adds the words for the two non-obvious outcomes.
+function Verdict.weightedReason(w, profile, kind)
+	local head = "weighted " .. Verdict.numText(w.total)
+		.. " [" .. tostring(type(profile) == "table" and profile.name or "no profile") .. "]"
+	if kind == "trade-off" then
+		return head .. " — better on some stats, worse on others"
+	elseif kind == "no change" then
+		return head .. " — no change"
+	end
+	return head
+end
+
+-- The verdict from the weights. Returns the same (verdict, reason) pair
+-- Verdict.evaluate returns, plus a THIRD value — { total, profile } — for a row
+-- that wants to render the number, or nil when the outcome did not come from
+-- the weights (an unavailable profile, or the armour-material veto below, which
+-- is a different reason entirely and must not be dressed as a weighted line).
+--
+-- `allow` is evaluate's own armour-material veto (a cloth item on a plate wearer
+-- is never an upgrade, however the weights add up); a caller outside evaluate
+-- passes nil and gets the raw weighted verdict.
+function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
+	if type(allow) ~= "function" then
+		allow = function(verdict, reason) return verdict, reason end
+	end
+	local profile = Verdict.profileFor(spec)
+	if profile == nil then
+		-- Requirement 5: NO WEIGHTS IS NOT A TRADE-OFF. Fall through to direction
+		-- counting and the player gets an amber "your call" for a pair nothing
+		-- weighed — the exact silence-with-an-answer this card removes.
+		local class = type(spec) == "table" and spec.class or nil
+		local role = type(spec) == "table" and spec.role or nil
+		return "UNKNOWN", "verdict unavailable: no stat weights for this character (class "
+			.. tostring(class or "unknown") .. ", role " .. tostring(role or "unresolved") .. ")"
+	end
+	local w = Verdict.weightedTotal(candStats, eqStats, profile)
+	if w == nil then
+		return "UNKNOWN", "verdict unavailable: the " .. tostring(profile.name)
+			.. " profile carries no weights"
+	end
+	local detail = { total = w.total, profile = profile.name }
+	local eps = Verdict.WEIGHT_EPSILON
+	if w.total >= eps then
+		local verdict, reason = allow("UPGRADE", Verdict.weightedReason(w, profile, "upgrade"))
+		if verdict ~= "UPGRADE" then return verdict, reason end
+		return verdict, reason, detail
+	end
+	if w.total <= -eps then
+		return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade"), detail
+	end
+	if w.up > 0 and w.down > 0 then
+		local verdict, reason = allow(TRADE_OFF, Verdict.weightedReason(w, profile, "trade-off"))
+		if verdict ~= TRADE_OFF then return verdict, reason end
+		return verdict, reason, detail
+	end
+	return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "no change"), detail
+end
+
+-- ⚠ TEST INSTRUMENTATION ONLY, exactly like Verdict.LEGACY_ORDER_DECIDES above.
+-- `true` restores the pre-card direction count so a fixture can be run through
+-- both comparators in one VM and diffed. No shipped path sets it.
+Verdict.LEGACY_DOMINANCE_DECIDES = false
+
 -- The tri-state comparator.
 --   candidate  — table { canUse = [nil|true|false], line = [raw lines or nil] }
 --                (a bag item; an empty slot is the caller's choice to send)
@@ -1522,6 +1788,21 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 		return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 	end
 
+-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
+-- the profile's weighted total, in the threshold order the card spells out. The
+-- number (and the profile's own name) travel back to the caller as the third
+-- return value so a rendered line can quote them.
+--
+-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
+-- which is test instrumentation (it exists so a fixture can be run through both
+-- comparators in one VM and diffed). It is read here, so the switch really does
+-- switch: with it set, the weighted path is skipped and the old block runs.
+if not Verdict.LEGACY_DOMINANCE_DECIDES then
+	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
+	if v ~= nil then return v, r, d end
+end
+
+if Verdict.LEGACY_DOMINANCE_DECIDES then
 	local outcome, firstDiff = Verdict.dominance(candStats, eqStats, order)
 
 	if outcome == "dominant" then
@@ -1582,6 +1863,7 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 		end
 	end
 	return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
+	end
 end
 
 -- ---- Tier B (t_73e20edb): the off-hand slot ----------------------------------
