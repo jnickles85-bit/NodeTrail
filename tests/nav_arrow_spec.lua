@@ -371,6 +371,8 @@ ns.GetDB().showNavArrow = false
 Arrow:Redraw()
 check(Arrow.why and Arrow.why:find("showNavArrow"), "E: the switch hides it ("
   .. tostring(Arrow.why) .. ")")
+check(Arrow.last == nil,
+  "E: a hidden arrow reports no measurement instead of the previous draw's")
 ns.GetDB().showNavArrow = true
 
 Arrow:Clear()

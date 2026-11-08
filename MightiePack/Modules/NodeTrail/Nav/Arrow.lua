@@ -316,6 +316,10 @@ end
 
 function A:_redraw()
   local profile, range, arrive = db()
+  -- Every redraw forgets what the last one measured and records only what THIS
+  -- one measured, so a hidden arrow can never be reported with the numbers of a
+  -- draw that succeeded earlier.
+  self.last = nil
   local host = self:EnsureFrames()
   if not host then
     self.why = "no overlay host (CreateFrame failed on the minimap)"
@@ -565,7 +569,7 @@ function A.Diag(app)
     ((app.last or {}).rotate and "minimap turned with the player" or "minimap north up")))
   put(string.format("arrow draw: %s dot(s) in %d texture object(s); host scale=%s; drawError=%s",
     tostring((app.last or {}).dots or 0),
-    #(app.dots or {}), S.Fmt(hostScale and hostScale or nil, 3),
+    #(app.dots or {}), S.Fmt((app.last or {}).hostScale, 3),
     tostring(app._drawError or "none")))
   if app.why then
     put("arrow verdict: hidden — " .. tostring(app.why))
