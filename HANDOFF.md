@@ -618,3 +618,51 @@ loop is still short and `painted == planned`, read `draws:` — a `count=2`/`cou
 a `count=16` one means a rebuild shrank the route and `hideFrom` cropped the pool (next fix).
 `shown` well below `2 × painted` means the client hid the objects; `clips: host clips=true` means
 it clipped them.
+
+### t_d17939c1 — a followable next-waypoint arrow with the yards counting down
+
+**The complaint.** "Visually the lines move across the minimap as i walk. I cant follow a route if
+it continues to move." A world-anchored line on a player-centred minimap slides by construction;
+no rendering fix can make it followable. What Zygor/RXP give the player is the NEXT point plus a
+distance, so the countdown is the feedback loop.
+
+**What shipped** (local commits `02ce8f3`, `20cb2d2`, branch `fix/tooltip-refresh`, not pushed):
+
+- `Nav/Target.lua` — pure, no WoW calls. Forward-only chooser: the target index can hold or
+  advance, never retreat; every point inside the 12yd arrival radius is stepped over; the target is
+  the far endpoint of the nearest FORWARD segment (or that segment's near end when the player is
+  short of it, so a route's first target is not already its second waypoint). Plus bearing, the
+  screen angle, `%d yd` and compass-word helpers.
+- `Nav/Source.lua` — the yard scale ladder: `HereBeDragons:GetZoneSize` when a lib is already
+  loaded (RXPGuides or GatherMate2 — never a dependency), then `C_Map.GetMapWorldSize`, then
+  NOTHING. With neither, no arrow and one visible message: a guessed scale would count down wrong.
+  Also builds `/nt navdiag`'s facts.
+- `Nav/Arrow.lua` — five dots at the bearing (arrowhead, two flanks, two shaft dots) drawn with the
+  primitive this client proved it keeps (two corner anchors, `LineDraw.TextureProof`), green with a
+  2px dark rim, plus the `123 yd` label with an outline. 5 Hz. Hidden with no route, out of range
+  (1200yd), minimap hidden, or `showNavArrow = false`. The arrowhead's TIP marks the waypoint and
+  is clamped to the ring when the point is outside the view, so the pointer never leaves the map.
+  `/nt arrow [on|off]` switches it without losing the line.
+- `/nt navdiag` — the Step-1 measurement, as plain numbers: `C_Map` surface, LibStub/HereBeDragons
+  reachability, `HBD:GetPlayerWorldPosition()`, zone size in yards, `HBD:GetWorldVector` to the
+  route's first and last points, `GetPlayerFacing()`, `rotateMinimap`, the minimap's yard radius,
+  and what the chooser picked (index, yards, bearing, projected px, clamped or not).
+
+**Why dots and not a rotated arrow texture.** `SetRotation` exists on this client (RXPGuides uses
+it on the same client), but its SIGN has not been established by eye here, and a pointer that
+points the wrong way is the same failure as a line that draws nothing. The dot chain's direction
+comes from arithmetic the specs check (`bearing - facing`, and the projection HereBeDragons-Pins
+already applies), so it cannot be mirrored. If the crisp rotated texture is wanted later, the
+transform is `Nav.Target.ScreenAngle`.
+
+**Proof.** `tests/nav_target_spec.lua` walks a 17-point loop and requires the targets 2..17 in
+order, zero backwards steps, zero targets behind the travel direction; it pins the 3-4-5 angle to
+`bearing - facing` and `bearing` on a north-up map. `tests/nav_arrow_spec.lua` pins the marker's
+pixel position against the yards/view-radius math, the countdown and the flip on arrival, the
+walking-back case, the yard-scale ladder (native → HBD → visible refusal), range/off/no-route
+hiding, and the diag's numbers. Both fail on `62c26b4`; all 36 `tests/*.lua` pass at HEAD.
+
+**Still needs one in-game run.** `/nt navdiag` on the live client to quote the numbers, then walk a
+route and confirm the arrow points at the next node and counts down. The diag prints the world
+vector HereBeDragons gives for the same points, so a scale mismatch shows up there rather than as
+a wrong number on the minimap.
