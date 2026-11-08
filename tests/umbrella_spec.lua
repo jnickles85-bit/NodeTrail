@@ -280,9 +280,9 @@ local cbCount = 0
 for _, f in ipairs(frames) do
   if f.template == "UICheckButtonTemplate" then cbCount = cbCount + 1 end
 end
-check(cbCount == #pkg.moduleOrder + 1,
-  "checkbox count = moduleOrder + 1 skinning sub-option, got " .. cbCount
-  .. " expected " .. (#pkg.moduleOrder + 1))
+check(cbCount == #pkg.moduleOrder + 2,
+  "checkbox count = moduleOrder + 2 NodeTrail sub-options (skinning, auto-refresh), got " .. cbCount
+  .. " expected " .. (#pkg.moduleOrder + 2))
 local boxes = pkg.optionsBoxes
 check(boxes ~= nil, "optionsBoxes exists")
 check(boxes.NodeTrail and boxes.NodeTrail:GetChecked() == true, "NodeTrail box checked")
@@ -316,6 +316,30 @@ if skinBox then
     "module rows keep the 32px pitch")
   check(skPt ~= nil and ntPt ~= nil and skPt[5] == ntPt[5] - 22,
     "the sub-option row sits 22px under the NodeTrail row")
+end
+
+-- t_2bc15917: "Auto-refresh route" is the second indented NodeTrail row —
+-- the visible control for the automatic rebuild-after-reload behaviour —
+-- and it is ON by default.
+local autoBox = boxes.AutoRefresh
+check(autoBox ~= nil, "an auto-refresh route sub-option checkbox exists")
+check(autoBox and autoBox.template == "UICheckButtonTemplate",
+  "the auto-refresh sub-option is a real checkbutton")
+if autoBox then
+  check(autoBox:GetChecked() == true, "auto-refresh sub-option is ON by default")
+  check(autoBox:IsEnabled() == true, "auto-refresh sub-option is usable while NodeTrail is on")
+  local function point1b(box)
+    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
+  end
+  local ap, sp = point1b(autoBox), point1b(skinBox)
+  check(ap ~= nil, "the auto-refresh row was positioned")
+  if ap and sp then
+    check(ap[4] == 36, "auto-refresh row is indented to x=36, got " .. tostring(ap[4]))
+    check(ap[5] == sp[5] - 22,
+      "auto-refresh row sits 22px under the skinning row (got " .. tostring(ap[5])
+      .. " vs " .. tostring(sp[5]) .. ")")
+  end
+  check(type(autoBox:GetScript("OnClick")) == "function", "auto-refresh row has an OnClick handler")
 end
 
 local popup

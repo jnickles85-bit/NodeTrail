@@ -26,3 +26,13 @@ L["STATUS_ALCHEMY"] = "  Alchemy recipes: %s"
 L["STATUS_MODULE"] = "  Module: %s"
 L["NO_HERB_DATA"] = "NodeTrail: no herbs recorded in this zone yet. Gather a few herbs here, then /nt start."
 L["NO_MAP"] = "NodeTrail: can't tell which map you are on."
+
+-- t_2bc15917: the route comes back by itself. These are the lines that say
+-- what happened, so an automatic rebuild is never a silent one.
+L["ROUTE_RESTORED"] = "NodeTrail: route restored (%d points from %d herb picks on map %s)."
+L["ROUTE_REFRESHED"] = "NodeTrail: route refreshed with your newest picks (%d points from %d herb picks)."
+L["ROUTE_KEPT"] = "NodeTrail: route not rebuilt (%s) — the previous route stays."
+L["ROUTE_STALE"] = "NodeTrail: route not rebuilt — it was started %s ago, older than the %s limit. Use /nt start."
+L["ROUTE_OTHER_MAP"] = "NodeTrail: route kept for map %s; nothing is drawn until you are back there (you are on %s)."
+L["STATUS_ROUTE_STATE"] = "  Route state: active %s, map %s, auto-refresh %s"
+L["STATUS_ROUTE_REBUILD"] = "  Last rebuild: %s, trigger %s, %d points"

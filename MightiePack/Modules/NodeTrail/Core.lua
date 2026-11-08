@@ -35,23 +35,68 @@ local function printHelp()
   printL("HELP_NOTES")
 end
 
+local function printReason(reason)
+  if type(reason) ~= "string" or reason == "" then
+    reason = "ROUTE_EMPTY"
+  end
+  if L[reason] then
+    printL(reason)
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: " .. reason)
+  end
+end
+
+-- /nt stop — clears BOTH the drawn route and the persisted intent, so the
+-- next login or /reload stays quiet (t_2bc15917).
 function ns.StopRoute()
   ns.activeRoute = nil
+  if type(ns.RouteAuto) == "table" and type(ns.RouteAuto.Cancel) == "function" then
+    pcall(ns.RouteAuto.Cancel, ns.RouteAuto)
+  end
+  local intent = ns.GetRouteDB()
+  intent.active = false
+  intent.mapID = nil
+  intent.startedAt = 0
   if ns.MapOverlay then ns.MapOverlay:Clear() end
   if ns.MinimapPath then ns.MinimapPath:Clear() end
   printL("ROUTE_STOPPED")
 end
 
-function ns.StartRoute()
+-- StartRoute / /nt reload — records the intent first, then rebuilds. The
+-- rebuild itself (and the "never replace a good route with nothing" guard)
+-- lives in Route/Auto.lua, so the manual, login and pick paths cannot drift
+-- apart.
+function ns.StartRoute(trigger)
   local mapID = ns.GetPlayerMapID()
-  local route, err = ns.BuildRouteForMap(mapID)
+  local intent = ns.GetRouteDB()
+  intent.active = true
+  intent.mapID = mapID
+  intent.startedAt = (type(time) == "function" and time() or 0)
+  if type(intent.autoRefresh) ~= "boolean" then
+    intent.autoRefresh = true
+  end
+
+  local route, err
+  if type(ns.RouteAuto) == "table" and type(ns.RouteAuto.Rebuild) == "function" then
+    route, err = ns.RouteAuto:Rebuild(trigger or "manual", mapID)
+  else
+    -- The controller did not load: keep the old direct path working.
+    route, err = ns.BuildRouteForMap(mapID)
+    if route then
+      ns.activeRoute = route
+      if ns.MapOverlay then ns.MapOverlay:SetRoute(route) end
+      if ns.MinimapPath then ns.MinimapPath:SetRoute(route) end
+    end
+  end
+
   if not route then
-    printL(err or "ROUTE_EMPTY")
+    -- No route is running, so nothing may claim otherwise on the next load.
+    intent.active = false
+    intent.mapID = nil
+    intent.startedAt = 0
+    printReason(err)
     return
   end
-  ns.activeRoute = route
-  if ns.MapOverlay then ns.MapOverlay:SetRoute(route) end
-  if ns.MinimapPath then ns.MinimapPath:SetRoute(route) end
   local stops = route.stops or math.max(0, #route.path - 1)
   printL("ROUTE_STARTED", stops, route.picks or stops)
 end
@@ -65,6 +110,22 @@ function ns.PrintStatus()
   local here = (mapID and herbs and herbs.maps and herbs.maps[mapID]) and #herbs.maps[mapID] or 0
   printL("STATUS_HERBS", mapID and tostring(mapID) or "unknown", here, (herbs and herbs.total) or 0)
   printL("STATUS_ROUTE", ns.activeRoute and (#(ns.activeRoute.path or {}) .. " points, " .. (ns.activeRoute.source or "?")) or "none")
+  -- t_2bc15917: the persisted intent and the last rebuild, so /nt status
+  -- answers "will my route come back?" without a reload to find out.
+  local intent = ns.GetRouteDB()
+  printL("STATUS_ROUTE_STATE", intent.active and "yes" or "no",
+    intent.mapID and tostring(intent.mapID) or "none",
+    (intent.autoRefresh == true) and "on" or "off")
+  local rstate = (type(ns.RouteAuto) == "table" and type(ns.RouteAuto.state) == "table")
+    and ns.RouteAuto.state or nil
+  local when = "never"
+  local at = rstate and tonumber(rstate.lastRebuildAt)
+  if at then
+    local okD, stamp = pcall(date, "%H:%M:%S", at)
+    when = (okD and type(stamp) == "string") and stamp or tostring(at)
+  end
+  printL("STATUS_ROUTE_REBUILD", when, (rstate and rstate.lastTrigger) or "none",
+    type(ns.activeRoute) == "table" and #(ns.activeRoute.path or {}) or 0)
   printL("STATUS_TOOLTIP", (ns.Tooltip and ns.Tooltip._enabled) and "on" or "off")
   local scanned = type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" and NodeTrailDB.recipes.alchemyScanned
   if scanned then
@@ -137,7 +198,7 @@ local function handleSlash(msg)
     ns.StopRoute()
   elseif msg == "reload" then
     if ns.activeRoute then
-      ns.StartRoute()
+      ns.StartRoute("manual")
     else
       printL("NO_ROUTE")
     end
@@ -298,6 +359,16 @@ function ns.Enable()
   -- herb route from starting (it reports through /mp skindiag instead).
   if ns.IsSkinningEnabled() then
     ns.EnableSkinning()
+  end
+  -- t_2bc15917: a route the player started earlier comes back by itself —
+  -- Enable() is what a login and a /reload both run. The restore never
+  -- speaks for a route that was stopped, is on another map, or is older
+  -- than routeMaxAgeHours; /nt status says which case it is in.
+  if type(ns.RouteAuto) == "table" and type(ns.RouteAuto.OnEnable) == "function" then
+    local okR, errR = pcall(ns.RouteAuto.OnEnable, ns.RouteAuto)
+    if not okR then
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: route restore failed: " .. tostring(errR))
+    end
   end
   SLASH_NODETRAIL1 = "/nodetrail"
   SLASH_NODETRAIL2 = "/nt"

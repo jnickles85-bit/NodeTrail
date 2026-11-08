@@ -16,17 +16,19 @@ pkg.optionsBoxes = boxes
 
 -- ── Row layout ──────────────────────────────────────────────────────
 -- Modules are 32px apart. NodeTrail — the only gathering module — also
--- owns a 22px indented sub-row for its skinning probe (t_5507a0ba), so
--- NodeTrail + its sub-option occupy one and a half rows and the recipe /
--- bug-report blocks below start after that, not after a fixed module
--- count. moduleOrder is complete by the time this file loads (the TOC
--- lists every module before Options.lua).
+-- owns 22px indented sub-rows for its own sub-options: the skinning probe
+-- (t_5507a0ba) and, under it, "Auto-refresh route" (t_2bc15917). Each is a
+-- user-facing capability of NodeTrail, so each has a visible control here;
+-- NodeTrail + its sub-options occupy one and a half rows and the recipe /
+-- bug-report blocks below start after that, not after a fixed module count.
+-- moduleOrder is complete by the time this file loads (the TOC lists every
+-- module before Options.lua).
 local ROW_H = 32
 local SUB_ROW_H = 22
 local SUB_INDENT = 36
 local FIRST_ROW_Y = -48
 
-local moduleY, skinY, lastRowY = {}, nil, FIRST_ROW_Y
+local moduleY, skinY, autoY, lastRowY = {}, nil, nil, FIRST_ROW_Y
 do
   local y = FIRST_ROW_Y
   for _, name in ipairs(pkg.moduleOrder or {}) do
@@ -35,8 +37,9 @@ do
     y = y - ROW_H
     if name == "NodeTrail" then
       skinY = y + (ROW_H - SUB_ROW_H)
-      lastRowY = skinY
-      y = y - SUB_ROW_H
+      autoY = skinY - SUB_ROW_H
+      lastRowY = autoY
+      y = autoY - ROW_H
     end
   end
 end
@@ -71,6 +74,20 @@ local function skinningOn()
     end
   end
   return false
+end
+
+-- t_2bc15917: ON by default — that is the whole point of the sub-option.
+-- When NodeTrail (or an older copy of it) cannot answer, the box shows on,
+-- matching the persisted default.
+local function autoRefreshOn()
+  local nt = ntModule()
+  if nt and type(nt.IsAutoRefreshRoute) == "function" then
+    local ok, on = pcall(nt.IsAutoRefreshRoute)
+    if ok then
+      return on == true
+    end
+  end
+  return true
 end
 
 -- Apply the sub-toggle: persist it, then start/stop the probe immediately.
@@ -230,6 +247,69 @@ local function syncCheckboxes()
       sb:Enable()
     else
       sb:Disable()
+    end
+  end
+
+  -- ── Auto-refresh route sub-option (t_2bc15917) ────────────────────
+  -- Mightie: "yes it needs to be automated for sure, at least on /reloads".
+  -- The automatic behaviour has to be visible and switchable, so it is a
+  -- checkbox beside the skinning one, persisted in
+  -- NodeTrailDB.route.autoRefresh and ON by default. It applies
+  -- immediately in both directions: switching it off keeps the line that
+  -- is drawn and stops pick-triggered rebuilds; switching it on lets the
+  -- next pick schedule one.
+  if autoY then
+    local ab = boxes.AutoRefresh
+    if not ab then
+      ab = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+      ab:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT, autoY)
+
+      local autoLabel
+      if ab.Text or ab.text then
+        autoLabel = ab.Text or ab.text
+      else
+        autoLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        autoLabel:SetPoint("LEFT", ab, "RIGHT", 4, 0)
+      end
+      autoLabel:SetText("Auto-refresh route")
+
+      ab:SetScript("OnClick", function(self)
+        local nt = ntModule()
+        if not nodeTrailOn() or not nt or type(nt.SetAutoRefreshRoute) ~= "function" then
+          self:SetChecked(autoRefreshOn())
+          return
+        end
+        local okS, value = pcall(nt.SetAutoRefreshRoute, self:GetChecked() and true or false)
+        if not okS then
+          pkg.Print("auto-refresh: could not save the sub-option: " .. tostring(value))
+        elseif value then
+          pkg.Print("Auto-refresh route on — the line follows your newest picks, a few seconds after each gather.")
+        else
+          pkg.Print("Auto-refresh route off — the route stays as it is until /nt start or /nt reload.")
+        end
+        syncCheckboxes()
+      end)
+      ab:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Auto-refresh route")
+        GameTooltip:AddLine("When on, a route you started is rebuilt and drawn again after a /reload or a login " ..
+          "(if it is younger than the saved-route limit and you are on its map), and the line follows the " ..
+          "herbs you gather — once, a few seconds after the last pick. Off keeps the line as it is.",
+          1, 1, 1, true)
+        GameTooltip:Show()
+      end)
+      ab:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+      end)
+
+      boxes.AutoRefresh = ab
+    end
+
+    ab:SetChecked(autoRefreshOn())
+    if nodeTrailOn() then
+      ab:Enable()
+    else
+      ab:Disable()
     end
   end
 end

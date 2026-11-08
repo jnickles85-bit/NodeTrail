@@ -20,6 +20,10 @@ ns.defaults = {
     densityWarm = 0.4,
     densityAnchorCell = 0.06,
     densitySmooth = 2,
+    -- t_2bc15917: how old a saved route intent may be before a login
+    -- refuses to resurrect it (hours). A route started three days ago is
+    -- not "the route you were running" any more.
+    routeMaxAgeHours = 24,
   },
   -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature, so its
   -- sub-toggle lives in NodeTrail's own saved variable (top level, NOT
@@ -27,6 +31,16 @@ ns.defaults = {
   -- event surface is still unverified on this client.
   skinning = {
     enabled = false,
+  },
+  -- t_2bc15917: the route INTENT, never its geometry. The points are
+  -- rebuilt from the recorded picks at every enable; only "was a route
+  -- running, on which map, since when, and does it follow new picks" is
+  -- written to SavedVariables.
+  route = {
+    active = false,
+    mapID = nil,
+    startedAt = 0,
+    autoRefresh = true,
   },
 }
 
@@ -64,4 +78,47 @@ end
 function ns.SetSkinningEnabled(on)
   ns.GetSkinDB().enabled = on and true or false
   return NodeTrailDB.skinning.enabled
+end
+
+-- ── Route intent (t_2bc15917) ────────────────────────────────────────
+-- NodeTrailDB.route records only what the player asked for: a route is
+-- running, on which mapID, since when (wall clock, seconds), and whether
+-- it should follow new picks. The computed points are deliberately NOT
+-- persisted — they are rebuilt from the recorded herbs at every enable,
+-- so the line always matches the picks that actually exist.
+--
+-- Filled in lazily, key by key, exactly like GetSkinDB: a NodeTrailDB
+-- written before this key existed keeps every other key it already has.
+function ns.GetRouteDB()
+  if type(NodeTrailDB) ~= "table" then
+    NodeTrailDB = CopyTable(ns.defaults)
+  end
+  if type(NodeTrailDB.route) ~= "table" then
+    NodeTrailDB.route = {}
+  end
+  local r = NodeTrailDB.route
+  if type(r.active) ~= "boolean" then r.active = false end
+  if type(r.autoRefresh) ~= "boolean" then r.autoRefresh = true end
+  if type(r.startedAt) ~= "number" then r.startedAt = 0 end
+  return r
+end
+
+function ns.IsAutoRefreshRoute()
+  return ns.GetRouteDB().autoRefresh == true
+end
+
+function ns.SetAutoRefreshRoute(on)
+  local r = ns.GetRouteDB()
+  r.autoRefresh = on and true or false
+  return r.autoRefresh
+end
+
+-- The configurable age ceiling for a resurrected route (hours, profile).
+function ns.GetRouteMaxAgeHours()
+  local db = ns.GetDB()
+  local hours = tonumber(db.routeMaxAgeHours)
+  if not hours or hours <= 0 then
+    hours = 24
+  end
+  return hours
 end

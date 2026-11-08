@@ -49,6 +49,41 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   no kill counted) where it used to be `unclassified` — that is the card's rule 3. **Not yet re-run
   in game.**
 
+- **The route comes back by itself, and follows the picks** (t_2bc15917). Mightie: "yes it needs to be
+  automated for sure, at least on /reloads". `ns.StartRoute()` used to run only from `/nt start` and
+  `/nt reload`, so a started route was gone after any reload and never reflected the herbs gathered
+  since. Now `NodeTrailDB.route = { active, mapID, startedAt, autoRefresh }` holds the **intent only**
+  — no path, no anchors, no points (the spec asserts all three stay nil) — and `Modules/NodeTrail/
+  Route/Auto.lua` (new, `ns.RouteAuto`, loaded right after `Route/Build.lua`) owns every automatic
+  path:
+  1. `Enable()` (a login and a `/reload` both run it) rebuilds and draws the saved route for its map
+     — no command — and says `route restored (13 points from 12 herb picks on map 1429)`
+     (trigger `login`). Off-map, the intent is kept and nothing is drawn until the player is back
+     there; a `PLAYER_ENTERING_WORLD` handler rebuilds on arrival (and only redraws when the route is
+     already in memory). A nil/unknown map at `ADDON_LOADED` is not "another map" and is not logged —
+     the world event right after login is the answer.
+  2. `ns.RecordHerb` now only **moves a due time** (`SchedulePick`: `GetTime() + 5`, pushed out by
+     each pick). The frame's `OnUpdate` calls `Pump`, which rebuilds once, a few seconds after the
+     last pick (trigger `pick`). Nothing is ever rebuilt inside the loot/gather event.
+  3. `/nt stop` clears the live route **and** the intent; `/nt start` and `/nt reload` record it
+     (trigger `manual`). A start that builds nothing leaves no false intent behind.
+  - **Never regress a drawn route**: a rebuild whose result has fewer than two path points, or fewer
+    than two anchors when the builder reports anchors, is refused — `ns.activeRoute`, the overlay and
+    the minimap keep what they have, and the reason is printed. The generation code (heat cells,
+    threshold, anchors, greedy NN, 2-opt, `maxStops`) is untouched.
+  - **No silent resurrection**: a `startedAt` older than `profile.routeMaxAgeHours` (default 24) is not
+    rebuilt — `route not rebuilt — it was started 25h ago, older than the 24h limit. Use /nt start.`
+  - `/nt status` gains `Route state: active yes, map 1429, auto-refresh on` and
+    `Last rebuild: 12:34:56, trigger login, 13 points`. The options panel gains an indented
+    **"Auto-refresh route"** checkbox under the skinning one (persisted at
+    `NodeTrailDB.route.autoRefresh`, **on by default**, greyed out while NodeTrail is off).
+  - New spec `tests/route_auto_spec.lua` (9 sections) drives the real files: restore-without-a-command,
+    stop-then-reload stays quiet, five picks → exactly **one** debounced rebuild with trigger `pick`,
+    a zero-anchor/one-anchor rebuild keeps the good route, another mapID draws nothing until the map
+    changes, stale intent refuses + a raised ceiling restores it, `/nt status` lines, auto-refresh off,
+    and `/nt start` → intent → reload. **Green at HEAD, 41 FAILs on `6254920`.** All 32 `tests/*.lua`
+    pass under lua5.1. **Not yet run in game.**
+
 **2026-11-07 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 The herb smoke-test bugs are fixed and confirmed in game by Mightie: tooltip persistence, backdrop
 sizing, on-screen clamping, and Alchemy recipe uses (196 recipes read through `C_TradeSkillUI`).

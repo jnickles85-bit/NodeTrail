@@ -146,6 +146,12 @@ function ns.RecordHerb(mapID, x, y, items, nodeID)
   end
   list[#list + 1] = entry
   db.total = db.total + 1
+  -- t_2bc15917: a pick on the active route's map makes the line stale. This
+  -- only moves a due time — the rebuild happens later, on the frame's
+  -- OnUpdate, never synchronously inside the loot/gather event.
+  if type(ns.RouteAuto) == "table" and type(ns.RouteAuto.SchedulePick) == "function" then
+    pcall(ns.RouteAuto.SchedulePick, ns.RouteAuto, mapID)
+  end
   return entry
 end
 
