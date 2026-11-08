@@ -283,6 +283,7 @@ function M:Clear()
   self.useWorld = nil
   self.zoneW, self.zoneH = nil, nil
   self._proj = nil
+  self._dotMetrics = nil
   self._why = nil
   self._sampleWhy = nil
   self:StopUpdates()
@@ -510,7 +511,18 @@ function M:_redraw()
   end
 
   local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
-  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup")
+  -- Same treatment as the world map: the dot is a screen measurement, divided
+  -- by whatever scale this host is drawn at, so both surfaces agree in px.
+  local hostScale = 1
+  if host and type(host.GetScale) == "function" then
+    local okS, s = pcall(host.GetScale, host)
+    if okS and type(s) == "number" and s > 0 then
+      hostScale = s
+    end
+  end
+  local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
+  self._dotMetrics = metrics
+  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
   self._lastQueued = count
   self._proj = proj
   if count > 0 then
@@ -794,6 +806,23 @@ function M:Diag()
       return "minimap verdict: no redraw on a usable minimap sample yet"
     end
     return "minimap verdict: drew segments"
+  end)
+  fact(function()
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local m = self._dotMetrics or (type(applied) == "table" and applied.mode == "dots" and applied)
+    if type(m) ~= "table" then
+      return "minimap dots: not measured yet (no redraw)"
+    end
+    local function pair(canvas, screen)
+      return string.format("%s canvas px = %s screen px", fmtNum(canvas, 2), fmtNum(screen, 2))
+    end
+    if type(applied) == "table" and type(applied.dotSize) == "number" then
+      return string.format("minimap dots: host scale=%s -> dot=%s; outline=%s; dots=%s",
+        fmtNum(applied.dotScale, 3), pair(applied.dotSize, applied.dotScreenSize),
+        pair(applied.dotOutline, applied.dotScreenOutline), fmtNum(applied.dots))
+    end
+    return string.format("minimap dots: host scale=%s -> dot=%s; outline=%s (nothing drawn yet)",
+      fmtNum(m.scale, 3), pair(m.size, m.screenSize), pair(m.outline, m.screenOutline))
   end)
   fact(function()
     return "minimap drawError=" .. tostring(self._drawError or "none")

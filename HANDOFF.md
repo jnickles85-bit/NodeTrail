@@ -84,6 +84,35 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
     and `/nt start` → intent → reload. **Green at HEAD, 41 FAILs on `6254920`.** All 32 `tests/*.lua`
     pass under lua5.1. **Not yet run in game.**
 
+- **The route was at the player all along; it was INVISIBLE over bright terrain** (t_7f6fdae4).
+  Mightie: "the mini map has a different 'line' than the actual map. Im far from the line in the map,
+  its across the zone." The two projections agree — the world-map points `#10 (560.3,241.2)` and
+  `#11 (537.5,235.5)` straddle his own frac `(0.543,0.364)` → canvas `(544,243)`. What disagreed was
+  legibility: 2.88 canvas px of white at 0.9 alpha on a canvas shown at **0.696** scale is **2.0
+  screen px**, and the Barrens' tan centre swallows it. Where the route crossed dark ground (the
+  north edge) it read as a line — hence "there's a line up there, not here".
+  - **Dot size is now a SCREEN measurement**: `LineDraw.DotMetrics(pathWidth, canvasScale)` puts a
+    **3px floor on screen** and divides by the scale (`2 / 0.696` → `4.31 canvas px = 3.00 screen px`).
+    Spacing matches the dot, so the chain stays continuous at any zoom. The `pathWidth` setting and
+    the `pathColor`/alpha path are untouched; the old canvas floor (`2.5px`) is gone.
+  - **Every dot is drawn twice**: an opaque near-black dot 2 screen px larger (a 1px rim, sublevel 6)
+    first, then the white dot (sublevel 7) — contrast, not brightness, because the map art's colour
+    changes per zone. This doubles the regions per draw (the allocation cap still counts DOTS, not
+    regions). Same treatment on the minimap, where the host's scale is read (`GetScale`) so both
+    surfaces agree at 3 screen px.
+  - **`/nt mapdiag` now says what it divided by**: `dots: canvas scale=0.696 pathWidth=2 px ->
+    dot=4.31 canvas px = 3.00 screen px; outline=7.18 canvas px = 5.00 screen px; spacing=4.31 canvas
+    px = 3.00 screen px; screen floor=3.00px; dots=51 object(s)=102`, and the minimap has its own
+    `minimap dots:` line. A size without the scale cannot be checked — that is why "2.88px" hid the
+    bug for four rounds.
+  - New spec `tests/mapdot_scale_spec.lua` (5 sections, real files, fake canvas **at 0.696**):
+    the pure metrics, ≥3 screen px measured off the drawn regions, **one outline object drawn before
+    every white dot** (lower sublevel, larger, same centre), the diag line, and the minimap agreeing.
+    **Green at HEAD, 16 FAILs before the fix.** Two existing specs pinned the old geometry
+    (`2.5px` dots / `size=2.50`) and were updated to the 3 screen px contract. All 33 `tests/*.lua`
+    pass under lua5.1. Line-mode clients are unchanged — this client draws dots only.
+    **Not yet seen in game.**
+
 **2026-11-07 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 The herb smoke-test bugs are fixed and confirmed in game by Mightie: tooltip persistence, backdrop
 sizing, on-screen clamping, and Alchemy recipe uses (196 recipes read through `C_TradeSkillUI`).
@@ -392,7 +421,16 @@ Run from repo root with lua5.1:
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
-- `tests/mapdraw_primitive_spec.lua` (t_a08cb3e0: the LIVE client shape — a `CreateLine` region whose `SetStartPoint`/`SetEndPoint` return and whose getters keep reading `TOPLEFT(0.0,absent)` at `size=0x0`, and a texture with no `SetWidth`/`SetHeight`/`SetRotation`. Pins: the line primitive is refused by measurement and the overlay falls back to `mode="dots"`; the dots are two-corner-anchored 2.5px quads every 3px that cover the segment end to end and reach both endpoints; the diag prints `primitive:` with both proofs, `anchor probe … two corner anchors -> 64x8 points=2`, and the held object's `object=`/`numpoints=`/`points=`/`methods=`; `verdict: PRIMITIVE` names the dropped endpoints instead of blaming a zero size; `mapdiag probe` draws the marker/border/diagonal with printed coordinates and is off by default; `mapdiag primitive <auto|line|dots|rotate>` reports the mode the measurement chose, not the one requested; and a client whose line region DOES keep its endpoints still uses `mode="line"`. Also unit-tests the pure `DotPlan`/`PlanDots` (coverage, both endpoints, the 1200-object cap, size/spacing scaled together). RED on `c220ec7` with 40 FAILs)
+- `tests/mapdot_scale_spec.lua` (t_7f6fdae4: the fake canvas is shown at **0.696** scale, the LIVE
+  proportion, and the route is the live one — canvas `(403.6,108.2)` → `(581.6,224.5)`. Pins: the dot
+  floor is 3 SCREEN px and canvas px = screen px / scale, on a zoomed-in canvas too and with a wide
+  `pathWidth`; the drawn white dots measure ≥ 3 screen px and still start/end on the projected
+  points; **every white dot has a dark outline object created before it, larger, centred on the same
+  pixel and on a lower draw sublevel**; `/nt mapdiag` prints `dots: canvas scale=0.696 … dot=4.31
+  canvas px = 3.00 screen px; outline=7.18 canvas px = 5.00 screen px …`; and the minimap lands on the
+  same 3 screen px with the same outline. RED on `c3cf817` with 16 FAILs, the first being
+  `the narrowest white dot is still >= 3 screen px (got 1.9999999999999)`)
+- `tests/mapdraw_primitive_spec.lua` (t_a08cb3e0: the LIVE client shape — a `CreateLine` region whose `SetStartPoint`/`SetEndPoint` return and whose getters keep reading `TOPLEFT(0.0,absent)` at `size=0x0`, and a texture with no `SetWidth`/`SetHeight`/`SetRotation`. Pins: the line primitive is refused by measurement and the overlay falls back to `mode="dots"`; the dots are two-corner-anchored 3px quads every 3px (t_7f6fdae4: the 3 SCREEN px floor; they were 2.5px when the floor was a canvas size) that cover the segment end to end and reach both endpoints, drawn twice (dark outline first, white on top); the diag prints `primitive:` with both proofs, `anchor probe … two corner anchors -> 64x8 points=2`, and the held object's `object=`/`numpoints=`/`points=`/`methods=`; `verdict: PRIMITIVE` names the dropped endpoints instead of blaming a zero size; `mapdiag probe` draws the marker/border/diagonal with printed coordinates and is off by default; `mapdiag primitive <auto|line|dots|rotate>` reports the mode the measurement chose, not the one requested; and a client whose line region DOES keep its endpoints still uses `mode="line"`. Also unit-tests the pure `DotMetrics`/`DotPlan`/`PlanDots` (coverage, both endpoints, the 1200-dot cap, size/spacing scaled together). RED on `c220ec7` with 40 FAILs)
 All spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_f4ff9ea6` HEAD
 (the panel fixes in review rounds 1 and 2 leave the whole suite green; the passing
 numbers are unchanged — 177.2 px after six hovers, 274.0 px at font 20, cap 864 px).
@@ -485,6 +523,12 @@ the other 23 stay green.
   position rather than node position.
 - Density tunables have never been tuned against real data.
 - MapOverlay/MinimapPath frames load even when NodeTrail is off.
+- **The legibility fix is measured but not yet SEEN in game** (t_7f6fdae4). The route is drawn at
+  3 screen px with a dark rim; one world-map screenshot over the **bright centre of the Barrens**
+  closes it, and the `dots:` line of `/nt mapdiag` states the scale and both sizes so the numbers can
+  be checked against what the eye sees. What the client still cannot be asked is whether it paints
+  the outline BELOW the white dot: the pool order and a lower draw sublevel both say "under", and if
+  a zone ever reads inverted, the sublevel pair (6/7) is the single place to change.
 - **The world-map line is fixed by measurement but not yet SEEN in game** (t_a08cb3e0). The client
   accepted every `SetStartPoint`/`SetEndPoint` and kept no geometry, so the route is now a chain of
   two-corner-anchored dots. The next in-game run answers two things with `/nt mapdiag probe`: which

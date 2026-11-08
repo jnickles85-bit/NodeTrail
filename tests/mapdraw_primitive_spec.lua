@@ -82,7 +82,7 @@ local function makeRegion(frame, kind)
   function r:SetTexture(path) self.texture = path end
   function r:SetColorTexture(cr, cg, cb, ca) self.color = { cr, cg, cb, ca } end
   function r:SetVertexColor(cr, cg, cb, ca) self.vertex = { cr, cg, cb, ca } end
-  function r:SetDrawLayer() end
+  function r:SetDrawLayer(layer, sub) self.layer, self.sublevel = layer, sub end
   function r:SetBlendMode() end
   function r:SetTexCoord() end
   function r:Show() self.shown = true end
@@ -254,28 +254,32 @@ check(M._probe == nil, "0: /nt mapdiag alone does not draw the probe")
 
 -- ═══ 0b. the pure planner: coverage, endpoints, and the allocation cap ════
 local LD = ns.LineDraw
-if type(LD.DotPlan) ~= "function" or type(LD.PlanDots) ~= "function" then
+if type(LD.DotPlan) ~= "function" or type(LD.PlanDots) ~= "function"
+  or type(LD.DotMetrics) ~= "function" then
   -- Older builds have no anchored-dot planner at all; report it instead of
   -- aborting the whole spec so the FAIL count stays meaningful.
-  check(false, "0b: LineDraw.DotPlan/PlanDots are missing")
+  check(false, "0b: LineDraw.DotMetrics/DotPlan/PlanDots are missing")
 else
-  local cover = LD.DotPlan(400, 2)
+  -- t_7f6fdae4: the dot is sized in SCREEN px (3px floor) and divided by the
+  -- surface scale. At scale 1 that is a 3px dot, spaced by its own width.
+  local m = LD.DotMetrics(2, 1)
+  local cover = LD.DotPlan(400, m.size, m.spacing)
   check(cover.count == cover.steps + 1, "0b: both endpoints of the segment are drawn")
   near(cover.spacing, 3, "0b: a 2px stroke is spaced 3px (the operator's chain)")
-  near(cover.size, 2.5, "0b: the dot is at least 2.5px wide, so 3px spacing leaves no hole")
+  near(cover.size, 3, "0b: the dot is 3 screen px, so the spacing leaves no hole")
   check(cover.steps * cover.spacing >= 400, "0b: the chain spans the segment")
   check((cover.steps - 1) * cover.spacing < 400, "0b: no more dots than the length needs")
-  local zero = LD.DotPlan(0, 2)
+  local zero = LD.DotPlan(0, m.size, m.spacing)
   check(zero.count == 0 and zero.steps == 0, "0b: a zero-length segment plans no dots")
 
   local big = {}
   for i = 1, 20 do
     big[i] = { 0, 0, 1000, 0 }
   end
-  local plans, total = LD.PlanDots(big, 20, 2)
+  local plans, total = LD.PlanDots(big, 20, m)
   check(total <= 1200 * 1.05, "0b: the plan respects the allocation cap (got " .. tostring(total) .. ")")
   check(plans[1].spacing > 3, "0b: the cap widens the spacing instead of dropping segments")
-  near(plans[1].size / plans[1].spacing, 2.5 / 3,
+  near(plans[1].size / plans[1].spacing, m.size / m.spacing,
     "0b: size and spacing scale together, so the stroke stays continuous")
 end
 
@@ -298,20 +302,33 @@ check(M._lastQueued == 2, "A: two segments queued, got " .. tostring(M._lastQueu
 check(M.host:IsShown(), "A: the host is shown")
 
 -- ═══ B. the dots are two-corner-anchored quads that cover the segment ═════
+local function isWhiteDot(o)
+  local c = o and o.color
+  return c ~= nil and c[1] == 1 and c[2] == 1 and c[3] == 1
+end
 local textures = {}
+local whiteDots = {}
 for i = 1, #M.host.children do
   local child = M.host.children[i]
   if child.kind == "texture" and child.shown then
     textures[#textures + 1] = child
+    if isWhiteDot(child) then
+      whiteDots[#whiteDots + 1] = child
+    end
   end
 end
-check(#textures > 40, "B: a chain of dots was created, got " .. #textures)
+-- t_7f6fdae4: every dot is two regions — a dark outline under a white dot — so
+-- the chain is half as many WHITE dots as objects.
+check(#whiteDots > 20, "B: a chain of white dots was created, got " .. #whiteDots)
+check(#textures == 2 * #whiteDots,
+  "B: each dot is drawn twice (outline + white), objects=" .. #textures
+    .. " dots=" .. #whiteDots)
 
 -- Segment 1: (0.2,0.2) -> (0.4,0.2) on a 1002x668 canvas = (200.4,133.6) ->
--- (400.8,133.6). Stroke 2px -> a 2.5px dot every 3px, so the first dot spans
--- [199.15,201.65] x [132.35,134.85] and the last one sits on the second point.
-local HALF = 1.25
-local first = textures[1]
+-- (400.8,133.6). At scale 1 the dot is the 3px screen floor, so the first dot
+-- spans [198.9,201.9] x [132.1,135.1] and the last one sits on the second point.
+local HALF = 1.5
+local first = whiteDots[1]
 check(first ~= nil, "B: the first dot exists")
 if first then
   check(#first.points == 2, "B: a dot carries exactly two corner anchors, got "
@@ -326,14 +343,29 @@ if first then
     "B: the dot is solid white through the route's colour path")
   near(first.color and first.color[4] or -1, 0.9, "B: the dot carries pathColor's alpha")
   check(first.rotation == nil, "B: no SetRotation on a dot")
+  near(first.sublevel, 7, "B: the white dot is drawn on the top sublevel")
+  -- The dark outline underneath it: larger, and drawn first.
+  local under
+  for i = 1, #M.host.children do
+    if M.host.children[i] == first then
+      under = M.host.children[i - 1]
+      break
+    end
+  end
+  check(under ~= nil and under.color and under.color[1] <= 0.1,
+    "B: the object drawn directly before the first white dot is the dark outline")
+  check(under ~= nil and under:GetWidth() > first:GetWidth(),
+    "B: the outline is larger than the white dot it backs")
+  check(under ~= nil and (under.sublevel or 7) < 7,
+    "B: the outline sits on a lower sublevel than the white dot")
 end
 
--- Every dot sits on its segment, spaced ~3px apart, and the chain reaches the
--- second point.
+-- Every white dot sits on its segment, spaced ~3px apart, and the chain reaches
+-- the second point.
 local seg1 = {}
-for i = 1, #textures do
-  local t = textures[i]
-  if t.points[1] and math.abs(t.points[1][5] + 133.6) <= 1.3 then
+for i = 1, #whiteDots do
+  local t = whiteDots[i]
+  if t.points[1] and math.abs(t.points[1][5] + (133.6 + HALF)) <= 0.05 then
     seg1[#seg1 + 1] = t
   end
 end
@@ -395,7 +427,7 @@ check(verdict and verdict:find("verdict: PRIMITIVE", 1, true) ~= nil,
     .. tostring(verdict) .. ")")
 check(verdict and verdict:find("kept no geometry (reads start=TOPLEFT(0.0,absent) end=TOPLEFT(0.0,absent))", 1, true) ~= nil,
   "C: the verdict quotes the endpoint read-back (got " .. tostring(verdict) .. ")")
-check(verdict and verdict:find("anchored dots (size=2.50 spacing=3.00)", 1, true) ~= nil,
+check(verdict and verdict:find("anchored dots (size=3.00 spacing=3.00)", 1, true) ~= nil,
   "C: the verdict says how the route is drawn instead (got " .. tostring(verdict) .. ")")
 check(joined:find("error:", 1, true) == nil, "C: the diag printed no error line")
 

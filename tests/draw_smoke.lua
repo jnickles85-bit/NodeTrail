@@ -349,15 +349,32 @@ check(ns.MapOverlay.drawer.mode == "dots", "anchored-dots fallback, got "
   .. tostring(ns.MapOverlay.drawer.mode))
 local dots = shown(ns.MapOverlay.host, "texture")
 check(#dots > 50, "a chain of dots covers the segment, got " .. #dots)
-local firstDot, lastDot = dots[1], dots[#dots]
+-- t_7f6fdae4: the dot is sized in SCREEN px (3px floor) and divided by the
+-- surface scale, and every dot is drawn twice (outline, then white). On this
+-- canvas (scale 2) the white dot is 1.5 canvas px wide = 3 screen px.
+local function isWhite(o)
+  local c = o and (o.colorTexture or o.color)
+  return type(c) == "table" and c[1] == 1 and c[2] == 1 and c[3] == 1
+end
+local whites = {}
+for i = 1, #dots do
+  if isWhite(dots[i]) then
+    whites[#whites + 1] = dots[i]
+  end
+end
+check(#whites > 20, "a chain of white dots covers the segment, got " .. #whites)
+check(#dots == 2 * #whites, "each dot is drawn twice (outline + white), got "
+  .. #dots .. " objects for " .. #whites .. " dots")
+local firstDot, lastDot = whites[1], whites[#whites]
 if firstDot and lastDot and type(firstDot.points) == "table"
   and #firstDot.points >= 2 and #lastDot.points >= 2 then
-  -- 800x600 canvas, segment (200,300) -> (600,300), thickness 1 -> a 2.5px dot
-  -- every 3px, so the first spans [198.75,201.25] and the last [598.75,601.25].
-  near(firstDot.points[1][4], 198.75, "the first dot's left edge sits on the first point")
-  near(firstDot.points[2][4], 201.25, "the first dot's right edge")
-  near(lastDot.points[1][4], 598.75, "the last dot's left edge sits on the segment end")
-  near(lastDot.points[2][4], 601.25, "the last dot's right edge")
+  -- 800x600 canvas shown at scale 2, segment (200,300) -> (600,300): the white
+  -- dot is 1.5 canvas px (3 screen px) every 1.5 canvas px (3 screen px), so the
+  -- first spans [199.25,200.75] and the last [599.25,600.75].
+  near(firstDot.points[1][4], 199.25, "the first dot's left edge sits on the first point")
+  near(firstDot.points[2][4], 200.75, "the first dot's right edge")
+  near(lastDot.points[1][4], 599.25, "the last dot's left edge sits on the segment end")
+  near(lastDot.points[2][4], 600.75, "the last dot's right edge")
   check(firstDot.width == 0 and firstDot.height == 0,
     "dots never call SetWidth/SetHeight — the anchors force the size")
   check(firstDot.rotation == nil, "dots never call SetRotation")

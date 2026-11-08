@@ -307,6 +307,7 @@ function M:Clear()
   self._drew = false
   self._zorder = nil
   self._raisedInfo = nil
+  self._dotMetrics = nil
   self._why = nil
   self:ClearProbe()
   self:ReleaseVisuals()
@@ -679,8 +680,12 @@ function M:_redraw()
   self:AuditAndRaise(host, parent, width, height)
 
   local r, g, b, a, stroke = ns.LineDraw.ColorWidth()
-  local thickness = stroke / mapZoom(mapFrame)
-  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, b, a, "ydown")
+  -- Dot geometry is a SCREEN measurement: the canvas is shown at ~0.696 scale on
+  -- this client, so a stroke expressed in canvas px shrinks below sight.
+  local canvasScale = mapZoom(mapFrame)
+  local metrics = ns.LineDraw.DotMetrics(stroke, canvasScale)
+  self._dotMetrics = metrics
+  ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / canvasScale, r, g, b, a, "ydown", metrics)
   self._drew = true
   self._lastQueued = count
   if count > 0 then
@@ -1099,6 +1104,41 @@ function M:Diag()
       fmtNum(z.canvasLevel), tostring(z.canvasStrata or "absent"), fmtNum(#z.candidates),
       table.concat(names, ", "), tostring(z.topLabel), fmtNum(z.topLevel),
       fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), verdict, suffix)
+  end)
+  fact(function()
+    -- The card's requirement: report the canvas scale, the dot size in BOTH
+    -- units, and the outline size. A dot size without the scale it was divided
+    -- by cannot be checked ("2.88px" was 2.0 screen px and nobody could tell).
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local m = self._dotMetrics
+    local function pair(canvas, screen)
+      return string.format("%s canvas px = %s screen px", fmtNum(canvas, 2), fmtNum(screen, 2))
+    end
+    local scale = (type(applied) == "table" and tonumber(applied.dotScale)) or (type(m) == "table" and m.scale) or nil
+    local width = (type(applied) == "table" and tonumber(applied.dotPathWidth)) or (type(m) == "table" and m.pathWidth) or nil
+    local drawn = type(applied) == "table" and type(applied.dotSize) == "number"
+    if drawn then
+      return string.format(
+        "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=3.00px; dots=%s object(s)=%s%s",
+        fmtNum(scale, 3), fmtNum(width), pair(applied.dotSize, applied.dotScreenSize),
+        pair(applied.dotOutline, applied.dotScreenOutline),
+        pair(applied.dotSpacing, applied.dotScreenSpacing),
+        fmtNum(applied.dots), fmtNum(applied.dotObjects or 0),
+        tostring(applied.mode) ~= "dots" and (" (mode=" .. tostring(applied.mode) .. ", dots not used)") or "")
+    end
+    if type(m) ~= "table" then
+      return "dots: not measured yet (no redraw on a measurable map frame)"
+    end
+    local note = "(nothing drawn yet)"
+    if type(applied) == "table" and applied.mode and applied.mode ~= "dots" then
+      -- A client that proved its Line primitive draws that instead; the dot
+      -- sizes below are what WOULD be drawn, not what is on screen.
+      note = ("(not used: mode=" .. tostring(applied.mode) .. ")")
+    end
+    return string.format(
+      "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=3.00px %s",
+      fmtNum(scale, 3), fmtNum(width), pair(m.size, m.screenSize),
+      pair(m.outline, m.screenOutline), pair(m.spacing, m.screenSpacing), note)
   end)
   fact(function()
     if not self._drew then

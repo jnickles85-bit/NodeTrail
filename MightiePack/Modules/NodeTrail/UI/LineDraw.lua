@@ -482,12 +482,14 @@ end
 --- One dot of the chain: a square forced to its size by two corner anchors.
 --- `space` "ydown" anchors from the host's TOPLEFT (+y down, the world map);
 --- "yup" anchors from its CENTER (+y up, the minimap).
-local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space)
+local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space, sublevel)
   local half = (size or 2) * 0.5
   obj:SetParent(parent)
   applyColor(obj, r, g, b, a, WHITE)
   if obj.SetDrawLayer then
-    pcall(obj.SetDrawLayer, obj, "OVERLAY", 7)
+    -- The outline is drawn one sublevel BELOW the white dot, so a client that
+    -- paints by sublevel agrees with the creation order the pool already has.
+    pcall(obj.SetDrawLayer, obj, "OVERLAY", sublevel or 7)
   end
   if obj.SetBlendMode then
     pcall(obj.SetBlendMode, obj, "BLEND")
@@ -506,43 +508,88 @@ local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space)
   obj:Show()
 end
 
-local DOT_MIN_SIZE = 2.5
--- The operator's prescription: a chain of small quads spaced ~3px apart, so the
--- stroke reads continuous without any SetWidth/SetRotation.
-local DOT_SPACING_MIN = 3
--- A long route on a big canvas must not allocate thousands of regions.
+-- ── Dot sizing is a SCREEN measurement, not a canvas one ───────────────────
+-- The world map draws into a 1002x668 canvas that the client shows at ~0.696
+-- scale, so a 2.88 canvas px dot was 2.0 screen px of white at 0.9 alpha — and
+-- over the Barrens' tan terrain that is invisible. The operator read that as
+-- "the line is somewhere else, across the zone". Dot geometry is therefore
+-- computed in screen px and divided by the surface scale.
+local DOT_MIN_SCREEN = 3     -- the white dot never renders narrower than this
+local DOT_OUTLINE_GROW = 2  -- screen px the dark outline adds (1px rim each side)
+local DOT_SPACING_MIN = 3   -- screen px between dots (screen units, like the size)
+-- The dark dot behind the white one. Contrast, not brightness: white at 0.9
+-- over tan is ~invisible, and the map art's colour changes per zone, so a fixed
+-- light stroke cannot survive every zone. An opaque near-black rim does.
+local DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A = 0, 0, 0, 1
+local DOT_SCALE_MIN, DOT_SCALE_MAX = 0.05, 100
+-- A long route on a big canvas must not allocate thousands of regions. This is
+-- the number of DOTS; each dot holds two regions (outline + white).
 local DOT_MAX_TOTAL = 1200
 
---- Pure: how many dots cover `length` px at stroke width `thickness`.
---- @return { length, size, spacing, steps, count }
-function D.DotPlan(length, thickness, scale)
-  local base = tonumber(thickness) or DOT_MIN_SIZE
-  if base < DOT_MIN_SIZE then
-    base = DOT_MIN_SIZE
-  end
-  scale = tonumber(scale) or 1
-  if scale < 1 then
+--- Pure: how big a dot has to be, in BOTH units.
+--- `canvasScale` is canvas px -> screen px (WorldMapFrame:GetCanvasScale()).
+--- @return { scale, pathWidth, screenSize, screenSpacing, screenOutline,
+---           size, spacing, outline } — screen* in screen px, the rest in canvas px
+function D.DotMetrics(pathWidth, canvasScale)
+  local scale = tonumber(canvasScale) or 1
+  if scale ~= scale or scale <= 0 then
     scale = 1
   end
-  -- Both the dot and its spacing scale together, so a capped route keeps the
-  -- same dot-to-gap ratio (a continuous stroke) instead of turning into dashes.
-  local size = base * scale
-  local spacing = base
-  if spacing < DOT_SPACING_MIN then
-    spacing = DOT_SPACING_MIN
+  if scale < DOT_SCALE_MIN then
+    scale = DOT_SCALE_MIN
   end
-  spacing = spacing * scale
+  if scale > DOT_SCALE_MAX then
+    scale = DOT_SCALE_MAX
+  end
+  local width = tonumber(pathWidth) or 0
+  if width ~= width or width < 0 then
+    width = 0
+  end
+  local screenSize = width
+  if screenSize < DOT_MIN_SCREEN then
+    screenSize = DOT_MIN_SCREEN
+  end
+  local screenSpacing = screenSize
+  if screenSpacing < DOT_SPACING_MIN then
+    screenSpacing = DOT_SPACING_MIN
+  end
+  local screenOutline = screenSize + DOT_OUTLINE_GROW
+  return {
+    scale = scale,
+    pathWidth = width,
+    screenSize = screenSize,
+    screenSpacing = screenSpacing,
+    screenOutline = screenOutline,
+    size = screenSize / scale,
+    spacing = screenSpacing / scale,
+    outline = screenOutline / scale,
+  }
+end
+
+--- Pure: how many dots of `size` px, `spacing` px apart, cover `length` px.
+--- `capScale` widens both together, so a capped route keeps the same
+--- dot-to-gap ratio (a continuous stroke) instead of turning into dashes.
+--- @return { length, size, spacing, steps, count }
+function D.DotPlan(length, size, spacing, capScale)
+  local k = tonumber(capScale) or 1
+  if k ~= k or k < 1 then
+    k = 1
+  end
   local plan = {
     length = tonumber(length) or 0,
-    size = size,
-    spacing = spacing,
+    size = (tonumber(size) or DOT_MIN_SCREEN) * k,
+    spacing = (tonumber(spacing) or DOT_SPACING_MIN) * k,
     steps = 0,
     count = 0,
   }
+  if plan.spacing <= 0.0001 then
+    -- A degenerate spacing would ask for an infinite number of dots.
+    plan.spacing = 0.0001
+  end
   if plan.length <= 0 then
     return plan
   end
-  plan.steps = math.ceil(plan.length / spacing)
+  plan.steps = math.ceil(plan.length / plan.spacing)
   if plan.steps < 1 then
     plan.steps = 1
   end
@@ -552,7 +599,11 @@ end
 
 --- Pure: a dot plan per segment, with one global scale so the whole route
 --- stays inside DOT_MAX_TOTAL. Both endpoints are always drawn.
-function D.PlanDots(buf, count, thickness)
+function D.PlanDots(buf, count, metrics)
+  local m = metrics
+  if type(m) ~= "table" then
+    m = D.DotMetrics(nil, 1)
+  end
   local function build(scale)
     local plans, total = {}, 0
     for i = 1, count do
@@ -562,7 +613,7 @@ function D.PlanDots(buf, count, thickness)
         local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
         len = math.sqrt(dx * dx + dy * dy)
       end
-      plans[i] = D.DotPlan(len, thickness, scale)
+      plans[i] = D.DotPlan(len, m.size, m.spacing, scale)
       total = total + plans[i].count
     end
     return plans, total
@@ -742,7 +793,10 @@ end
 --- Draw `count` segments from `buf[i] = {x1,y1,x2,y2}`.
 --- space "ydown": pixels from parent TOPLEFT, +y down.
 --- space "yup": pixels from parent CENTER, +y up.
-function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space)
+--- `metrics` (optional) is the DotMetrics table for THIS surface: the dot chain
+--- is sized in screen px and divided by the surface scale. Without it the
+--- thickness is treated as already being in screen px.
+function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metrics)
   if not drawer or not parent then
     return
   end
@@ -772,29 +826,56 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space)
     -- Chain of small two-corner-anchored quads. No SetWidth, no SetHeight, no
     -- SetRotation: the size is forced by the anchors alone, which is the only
     -- primitive the live client proved it accepts.
-    local plans, total = D.PlanDots(buf, count, thickness)
+    local m = metrics
+    if type(m) ~= "table" then
+      m = D.DotMetrics(thickness, 1)
+    end
+    local plans, total = D.PlanDots(buf, count, m)
+    -- When the allocation cap widened the dots, the rim widens with them, so
+    -- the outlined stroke keeps the same weight-to-rim ratio everywhere.
+    local rimRatio = (m.size > 0) and (m.outline / m.size) or 1
     local index = 1
+    local first
     for i = 1, count do
       local seg, plan = buf[i], plans[i]
       if seg and plan and plan.steps > 0 then
+        first = first or plan
         local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
         for k = 0, plan.steps do
           local t = k / plan.steps
+          local cx, cy = seg[1] + dx * t, seg[2] + dy * t
+          -- Each dot is drawn TWICE. White at 0.9 alpha alone is invisible over
+          -- bright terrain (the Barrens' tan centre), which is what made the
+          -- route read as "somewhere else across the zone". The dark outline is
+          -- drawn first, one or two screen px larger, then the white dot on top:
+          -- that survives any terrain colour, which is the actual requirement —
+          -- the map art varies per zone.
+          local under = acquire(drawer, index, parent)
+          if under then
+            paintDot(under, parent, cx, cy, plan.size * rimRatio,
+              DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
+          end
+          index = index + 1
           local obj = acquire(drawer, index, parent)
           if obj then
-            paintDot(obj, parent, seg[1] + dx * t, seg[2] + dy * t,
-              plan.size, r, g, b, a, space)
+            paintDot(obj, parent, cx, cy, plan.size, r, g, b, a, space, 7)
           end
           index = index + 1
         end
       end
     end
     hideFrom(drawer, index)
-    local first = plans[1]
-    drawer.lastApplied.dots = (total > 0) and (index - 1) or 0
+    drawer.lastApplied.dots = (total > 0) and math.floor((index - 1) / 2) or 0
+    drawer.lastApplied.dotObjects = (total > 0) and (index - 1) or 0
     drawer.lastApplied.plannedDots = total
     drawer.lastApplied.dotSize = first and first.size or nil
     drawer.lastApplied.dotSpacing = first and first.spacing or nil
+    drawer.lastApplied.dotOutline = first and (first.size * rimRatio) or nil
+    drawer.lastApplied.dotScale = m.scale
+    drawer.lastApplied.dotScreenSize = m.screenSize
+    drawer.lastApplied.dotScreenSpacing = m.screenSpacing
+    drawer.lastApplied.dotScreenOutline = m.screenOutline
+    drawer.lastApplied.dotPathWidth = m.pathWidth
     return
   end
   for i = 1, count do
