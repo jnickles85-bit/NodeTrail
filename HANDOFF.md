@@ -1054,3 +1054,53 @@ part of the route unexamined, and the walk is replayed in the projection this bu
    exist on disk (SavedVariables mtime 13:57, pre-deploy), and the client is in active use while this
    runs: `Wow` pid 33436 running, `GetLastInputInfo` idle **0 s**. Opening the world map and taking
    the two screenshots therefore needs the operator, once, after a `/reload`.
+
+**2026-11-08 (fourth pass, `wt/t_86583cf2`) — review round 3: one ruler per check.**
+
+Both defects were space/unit errors in the *instrument*, not projection errors, plus one real
+robustness defect in the minimap's world-coordinate handling.
+
+1. **World map: the visible-map check is now in CANVAS units.** `route dots on the visible map:`
+   compared the host's `GetLeft/GetTop` with `ScrollContainer`'s rect. On this client the canvas is
+   the scroll frame's child, so those are different rulers (canvas top 699.4 while the map frame it
+   sits in reported 1084; the two rects did not even overlap) — which is why it printed `0/319` for a
+   route drawn across the map. `VisibleAudit` now takes each painted dot's centre straight from the
+   anchors the draw set (canvas units, no host rect, no scale multiplication) and compares it with a
+   window measured from the scroll frame's own horizontal/vertical scroll offsets, converted into
+   canvas units through the scale chain (`canvasWindow`). A client that exposes neither measurement
+   prints `UNMEASURED: <reason>` — never a zero that reads as "nothing is visible".
+   The printed line names the window and the method:
+   `route dots on the visible map: 36/72 inside (measured 72 of 72 painted; dots bbox=… canvas px;
+   window=300.0,200.0 400.0x300.0 in canvas units (ScrollContainer scroll offsets; canvas=1002.0x668.0))`.
+2. **World map: `host on the canvas:` is a separate assertion.** A host re-anchored or resized moves
+   every dot off the ground *while the canvas-unit count still reads inside*, so the host/canvas
+   relation is checked in its own space (parent chain + size): `host on the canvas: yes (parented to
+   the canvas, same size)` / `NO — <why>`. This is the assert ara asked for, without reparenting the
+   overlay: on this client the proven placement is `WorldMapFrame:GetCanvas()` with canvas-unit
+   coordinates (`RXPGuides/map.lua:466`, `HereBeDragons-Pins-2.0.lua:350` in the same game install).
+3. **Minimap: one label per space.** The crosscheck printed the world map's canvas pixel as `world=`,
+   which reads as a yards position. It now prints `#n frac=(…) canvas=(…) worldYd=(…) mini=(…) state`,
+   and the summary says `world-map canvas N on this map`.
+4. **Minimap: `useWorld` requires ALL points to convert.** Before, one converted point was enough and
+   the rest produced no delta and vanished with no line saying so (the live diag showed
+   `useWorld=true` with points that had no world position). A partial set now falls back to the
+   zone/fraction projection and the header says why:
+   `world projection OFF: HereBeDragons converted 1 of 2 point(s); 1 have no world position, so the
+   world projection would drop them`. `tests/minimap_units_spec.lua` §1 drives exactly that.
+5. **Minimap: the world-mode stamp carries the player fraction again.** It read
+   `frac=(absent,absent)`; the four-stop table compares "player fraction" with "the fraction the draw
+   was built from" on both surfaces, so the fraction is recorded (the projection still uses yards).
+6. **Minimap: "nothing drawn" names the distance that decided it.**
+   `minimap verdict: none of the 36 segment(s) reach the minimap: 37 of 37 point(s) project outside
+   the 95px circle; nearest point #1 is 559.1px = 1317.8 yd = 5.64x-radius (the minimap covers 233.3 yd)`.
+   A player five radii off the line and a wrong projection no longer read the same.
+7. **The projection maths were NOT changed** (constraint): same world/zone/fraction projection, same
+   yards, same radius. What changed is which space the check counts in, and what happens when a point
+   cannot be converted.
+
+Specs: `tests/minimap_units_spec.lua` (new) — 16 behavioural FAILs on `d855247`, green here;
+`tests/mapdiag_visible_spec.lua` §8 (new) — the scroll window is set to 400×300 at 300,200 and the
+expected inside count is computed in the spec from the objects' own anchors; 10 behavioural FAILs on
+`d855247`. 46/46 `tests/*.lua` pass under lua5.1 at `9441e46`. Deployed byte-identical to
+`_forever_/Interface/AddOns/MightiePack` (sha256 in `evidence/t_86583cf2-fourth-pass.txt`); the client
+needs one `/reload` before any live line describes this build.
