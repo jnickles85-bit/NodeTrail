@@ -26,6 +26,10 @@ end
 
 -- ── Chat capture ─────────────────────────────────────────────────────
 local chat = {}
+-- Events this harness's fake client refuses to register. Validity is never
+-- asked of C_EventUtils (restricted namespace — see event_gate_spec); the
+-- client decides by raising on RegisterEvent.
+local unknownEvents = {}
 DEFAULT_CHAT_FRAME = {
   AddMessage = function(_, m) chat[#chat + 1] = tostring(m) end,
 }
@@ -104,7 +108,12 @@ local function mkBase(kind)
   o.Disable = function(self) self.enabled = false end
   o.SetChecked = function(self, b) self.checked = b and true or false end
   o.GetChecked = function(self) return self.checked end
-  o.RegisterEvent = function(self, n) self.events[n] = true end
+  o.RegisterEvent = function(self, n)
+    if unknownEvents[n] then
+      error('Attempt to register unknown event "' .. tostring(n) .. '"', 2)
+    end
+    self.events[n] = true
+  end
   o.UnregisterEvent = function(self, n) self.events[n] = nil end
   return o
 end
@@ -479,9 +488,7 @@ check(type(outScan) == "string" and outScan:find("scanned successfully", 1, true
 -- NEW_RECIPE_LEARNED: never register what the client rejects
 -- (RED on c0ed9cd: the event is never considered)
 -- ════════════════════════════════════════════════════════════════════
-C_EventUtils = {
-  IsEventValid = function(e) return e == "TRADE_SKILL_SHOW" end,
-}
+unknownEvents = { NEW_RECIPE_LEARNED = true }
 Rec._enabled = false
 local okEn, enErr = pcall(Rec.Enable, Rec)
 check(okEn, "Recipes:Enable with NEW_RECIPE_LEARNED invalid: " .. tostring(enErr))
@@ -505,7 +512,7 @@ check(not wiredLearned, "NEW_RECIPE_LEARNED NOT registered on the event frame")
 -- NEW_RECIPE_LEARNED valid: rescan when Alchemy is open, pending flag
 -- otherwise, flush on the next open
 -- ════════════════════════════════════════════════════════════════════
-C_EventUtils = { IsEventValid = function() return true end }
+unknownEvents = {}
 Rec._enabled = false
 okEn, enErr = pcall(Rec.Enable, Rec)
 check(okEn, "Recipes:Enable with NEW_RECIPE_LEARNED valid: " .. tostring(enErr))
@@ -542,7 +549,7 @@ fire("TRADE_SKILL_SHOW")
 check(api.scanCalls == callsBefore + 1, "next Alchemy open runs the flush scan")
 check(Rec._pendingRescan == false, "pending flag cleared by the flush scan")
 check(mapHas(3371, "Mystery Extract"), "the learned recipe appears on the next open")
-C_EventUtils = nil
+unknownEvents = {}
 
 -- ════════════════════════════════════════════════════════════════════
 -- State 4: "last scan found no reagents" + the real (truncated) error

@@ -29,10 +29,19 @@ time = time or os.time
 CopyTable = function(t) local c = {} for k, v in pairs(t) do c[k] = type(v) == table and CopyTable(v) or v end return c end
 DEFAULT_CHAT_FRAME = { AddMessage = function() end }
 local frames = {}
+-- Events this fake client refuses, per test. Validity is never asked of
+-- C_EventUtils (restricted — see event_gate_spec); the client answers by
+-- raising on RegisterEvent.
+local unknownEvents = {}
 CreateFrame = function()
   local f = { scripts = {}, events = {} }
   f.SetScript = function(self, name, fn) self.scripts[name] = fn end
-  f.RegisterEvent = function(self, name) self.events[name] = true end
+  f.RegisterEvent = function(self, name)
+    if unknownEvents[name] then
+      error('Attempt to register unknown event "' .. tostring(name) .. '"', 2)
+    end
+    self.events[name] = true
+  end
   table.insert(frames, f)
   return f
 end
@@ -730,9 +739,12 @@ local diagText = table.concat(diagCap, "\n")
 check(diagText:find("skipped scripts", 1, true) ~= nil
   and diagText:find("OnTooltipSetItem", 1, true) ~= nil,
   "Test 21: diag names the skipped script (OnTooltipSetItem)")
--- Events: the live client only knows TRADE_SKILL_SHOW.
-C_EventUtils = {
-  IsEventValid = function(e) return e == "TRADE_SKILL_SHOW" end,
+-- Events: the live client only knows TRADE_SKILL_SHOW; everything else is
+-- refused at registration time.
+unknownEvents = {
+  TRADE_SKILL_UPDATE = true,
+  TRADE_SKILLS_SHOW = true,
+  TRADE_SKILLS_UPDATE = true,
 }
 ns.Recipes._enabled = false
 local okRe21, reErr21 = pcall(ns.Recipes.Enable, ns.Recipes)
@@ -745,7 +757,7 @@ check(ev21 and ev21.TRADE_SKILLS_SHOW == "invalid event",
   "Test 21: TRADE_SKILLS_SHOW recorded as 'invalid event'")
 check(ev21 and ev21.TRADE_SKILLS_UPDATE == "invalid event",
   "Test 21: TRADE_SKILLS_UPDATE recorded as 'invalid event'")
-C_EventUtils = nil
+unknownEvents = {}
 GameTooltip.HookScript = origHook
 
 -- Test 22: the zero-reagent scan on the live client — 196 recipes read,

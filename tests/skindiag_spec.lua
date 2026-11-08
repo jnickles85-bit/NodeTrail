@@ -127,26 +127,14 @@ end
 GetLootSourceInfo = function() return lootSource end
 GetLootSourceName = function() return lootSourceName end
 
--- C_EventUtils: every card event is valid except LOOT_SLOT_CLEARED —
--- the one deliberately invalid event that pins the "invalid event" path.
-local validEvents = {
-  UNIT_SPELLCAST_SUCCEEDED = true,
-  UNIT_SPELLCAST_START = true,
-  UNIT_SPELLCAST_STOP = true,
-  LOOT_OPENED = true,
-  LOOT_SLOT_CLEARED = false,
-  LOOT_CLOSED = true,
-  UNIT_DIED = true,
-  COMBAT_LOG_EVENT_UNFILTERED = true,
-  SKILL_LINES_CHANGED = true,
-  PLAYER_ENTERING_WORLD = true,
-}
-C_EventUtils = {
-  IsEventValid = function(e)
-    if validEvents[e] == nil then error("unknown event: " .. tostring(e)) end
-    return validEvents[e]
-  end,
-}
+-- Event validity comes from the CLIENT, by trying to register: this harness
+-- refuses exactly one card event, LOOT_SLOT_CLEARED, the same way the live
+-- client answers an event it does not know
+-- ("Attempt to register unknown event"). Validity is NOT asked of
+-- C_EventUtils — that namespace is restricted, and calling it pops the
+-- "blocked from an action only available to the Blizzard UI" modal
+-- (see event_gate_spec).
+local unknownEvents = { LOOT_SLOT_CLEARED = true }
 
 -- ── frame harness ───────────────────────────────────────────────────
 local frames = {}
@@ -154,7 +142,12 @@ CreateFrame = function()
   local f = { scripts = {}, events = {} }
   f.SetScript = function(self, n, fn) self.scripts[n] = fn end
   f.GetScript = function(self, n) return self.scripts[n] end
-  f.RegisterEvent = function(self, n) self.events[n] = true end
+  f.RegisterEvent = function(self, n)
+    if unknownEvents[n] then
+      error('Attempt to register unknown event "' .. tostring(n) .. '"', 2)
+    end
+    self.events[n] = true
+  end
   f.UnregisterEvent = function(self, n) self.events[n] = nil end
   frames[#frames + 1] = f
   return f
@@ -247,7 +240,7 @@ check(#frames == before, "Probe:Enable is idempotent (no second frame)")
 -- Card test 1a: only the valid events are registered.
 for _, e in ipairs(P.EVENTS) do
   if e == "LOOT_SLOT_CLEARED" then
-    check(frame.events[e] == nil, "LOOT_SLOT_CLEARED NOT registered (IsEventValid=false)")
+    check(frame.events[e] == nil, "LOOT_SLOT_CLEARED NOT registered (the client refuses it)")
     check(P._events[e] == "invalid event", "invalid event recorded as the literal 'invalid event'")
   else
     check(frame.events[e] == true, "registered valid event: " .. e)
@@ -500,38 +493,38 @@ end
 check(onlyModules, "no new SavedVariables: the probe buffer is session-only")
 
 -- ════════════════════════════════════════════════════════════════════
--- Section H: a client with no C_EventUtils at all (the pre-guard path)
+-- Section H: a client that accepts every event (no event refused)
 -- ════════════════════════════════════════════════════════════════════
-local savedCEU = C_EventUtils
-C_EventUtils = nil
+local savedUnknown = unknownEvents
+unknownEvents = {}
 local pkg2 = {}
 local framesBefore = #frames
 loadPackage(pkg2, "MightiePack2")
 boot(pkg2, "MightiePack2")
 check(pkg2.modules == nil or pkg2.modules.Skinning == nil,
-  "no C_EventUtils: still no Skinning module entry")
-check(type(pkg2.Skinning) == "table", "no C_EventUtils: skinning namespace loads")
+  "all-events client: still no Skinning module entry")
+check(type(pkg2.Skinning) == "table", "all-events client: skinning namespace loads")
 if type(pkg2.Skinning) == "table" then
   pkg2.Skinning.Enable()
   local P2 = pkg2.Skinning.Probe
-  check(P2 and P2.enabled == true, "no C_EventUtils: probe still enables")
+  check(P2 and P2.enabled == true, "all-events client: probe still enables")
   if P2 and P2.frame then
-    check(#frames > framesBefore, "no C_EventUtils: a frame was created")
+    check(#frames > framesBefore, "all-events client: a frame was created")
     check(P2.frame.events.LOOT_SLOT_CLEARED == true,
-      "no C_EventUtils: all events registered (no validity gate available)")
+      "all-events client: every event registers when the client accepts it")
     local allTrue = true
     for _, e in ipairs(P2.EVENTS) do
       if P2._events[e] ~= true then allTrue = false end
     end
-    check(allTrue, "no C_EventUtils: no event is wrongly marked invalid")
+    check(allTrue, "all-events client: no event is wrongly marked invalid")
     clearChat()
     local ok2 = pcall(SlashCmdList.MIGHTIEPACK, "skindiag")
-    check(ok2, "no C_EventUtils: /mp skindiag still does not error")
+    check(ok2, "all-events client: /mp skindiag still does not error")
   end
 else
-  check(false, "no C_EventUtils: Skinning namespace missing")
+  check(false, "all-events client: Skinning namespace missing")
 end
-C_EventUtils = savedCEU
+unknownEvents = savedUnknown
 
 -- ════════════════════════════════════════════════════════════════════
 -- Section I: turning the sub-option off is immediate — no UI reload
