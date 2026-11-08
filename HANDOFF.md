@@ -964,3 +964,58 @@ the figure), `tooltip_panel_spec` T2b (no raw row ⇒ floor 0, reported), `toolt
 (`raw rows=0 floor=0px` on a herb block): **4 checks, all red on `34d0510`** (2 + 1 + 1, behavioural
 FAILs, no traceback) and green here. The earlier commit message's "43 checks fail on `06984f6`" was a
 typo — the real count is **46**.
+
+**2026-11-08 (second pass, `d1c2e78` on `wt/t_86583cf2`) — the diag measures the dots on
+screen; the minimap stops guessing its scale.**
+
+The first pass instrumented the DRAW (stamp, drawn anchors, crosscheck) but left two things
+that could lie. Both are fixed, and both are covered by specs that fail on `d6f2a31`.
+
+1. **A bailed redraw no longer reports the previous draw.** `MapOverlay:ReleaseVisuals(why)` now
+   calls `LineDraw.MarkIdle(drawer, why)`: the drawer's `lastApplied` says `painted=0` and names the
+   reason. Before, opening a map that is not the route's map hid the overlay and left
+   `paintedDots` at the old value, so `/nt mapdiag` printed `painted=288 missing=0 outside=0` for a
+   route that was nowhere on the screen. Three diag lines now read `no draw on this map (<why>)`
+   instead of quoting the stale count.
+2. **The placement check is in SCREEN space, against the rect the player can see.**
+   `MapOverlay:VisibleAudit()` computes each painted dot's centre from the anchors the draw set
+   plus the host's measured rect (exactly the numbers the primitive used), counts how many fall
+   inside `WorldMapFrame.ScrollContainer`'s screen rect (falling back to `WorldMapFrame`), and
+   prints `route dots on the visible map: N/M inside (dots bbox=…; visible=…)<verdict>`. The old
+   line compared the dots with their own host, which they are parented to and therefore always
+   fit inside — a check that could not fail. New line `map on screen:` prints WorldMapFrame /
+   ScrollContainer / canvas / host / UIParent rects side by side, with sizes converted through
+   the scale chain, so the canvas-vs-visible-rect question is one line away.
+   `dot screen:` now says "pool order, not route order": after a re-plan the pool still holds the
+   previous plan's objects, so "dot 1" is not route point #1 — comparing those two orders is how a
+   correctly drawn route was read as being in the wrong place.
+3. **The same audit is persisted**: every world-map redraw writes `NodeTrailDB.mapProbe`
+   (`at`, `mapID`, `painted`/`inside`/`measured`, `bbox`, `first dot screen pos`, `visible`/`host`/
+   `canvas`/`scroll`/`frame`/`ui` rects, `canvasScale`, `idle`+`why`). The client writes SavedVariables
+   on `/reload`, so the placement numbers are readable off
+   `WTF/Account/JERMTHE1/SavedVariables/MightiePack.lua` instead of a pasted chat line.
+4. **The minimap scale is measured when HereBeDragons is there.** `MinimapPath.getHBD` only looked at
+   `GatherMate2.HBD`, and GatherMate2 is not installed on this client — so every draw printed
+   `radius=0.0750 [map fractions (fallback: no yard radius for this zone)]` while RXPGuides was
+   shipping the same library at `_forever_/Interface/AddOns/RXPGuides/libs/HereBeDragons`. It now
+   also resolves it through LibStub (a TABLE with `__call`, not a function — the first cut of the
+   check got that wrong and still read "absent"). With the library present the draw uses world
+   coordinates and `C_Minimap.GetViewRadius()` yards, the diag names the source and version
+   (`minimap hereBeDragons: LibStub:HereBeDragons-2.0 version=…`), and the scale audit prints yd/px
+   plus the radius those pixels imply. Without it, the fallback is still used and still says so.
+   Also documented the sign convention: HBD world coordinates run backwards from UI map fractions
+   (`x = left - width * x` in `GetWorldCoordinatesFromZone`), so player-minus-point is what restores
+   "east is +x" and keeps `pointDelta`'s two branches consistent — otherwise the minimap would
+   mirror the route the moment HBD loads.
+
+**Proof.** `tests/mapdiag_visible_spec.lua`: 10 behavioural FAILs on `d6f2a31` (no `map on screen:`
+line, no visible-rect measurement, no idle record, stale count reported), green at `d1c2e78`.
+`tests/minimap_hbd_spec.lua`: 12 behavioural FAILs on `d6f2a31` (HBD not found, radius stays 0.075,
+dots at 18.67 px instead of 6.00 px for a 20 yd offset), green here. 45/45 `tests/*.lua` pass under
+lua5.1. Route generation, the dot primitive and the projection maths are unchanged.
+
+**Still needs the client (one step).** `/reload` loads `d1c2e78`; open the world map once (that is
+what triggers a redraw) and `/reload` again. `NodeTrailDB.mapProbe` then holds, for that map, the
+rects and the `inside/measured` count — the numbers that say whether the route is inside the map
+the player can see, and whether the host rect and the visible rect agree. `/nt mapdiag` prints the
+same lines live, and `/nt mapdiag probe` labels #1/#10/#20/last plus `P` for one screenshot.
