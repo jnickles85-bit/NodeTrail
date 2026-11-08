@@ -666,3 +666,19 @@ hiding, and the diag's numbers. Both fail on `62c26b4`; all 36 `tests/*.lua` pas
 route and confirm the arrow points at the next node and counts down. The diag prints the world
 vector HereBeDragons gives for the same points, so a scale mismatch shows up there rather than as
 a wrong number on the minimap.
+
+**Step-1 measurement, as far as it can be taken without the client running.** The API names are
+compiled into this build (`Wow.exe`, 16001) — measured with
+`strings -a Wow.exe | grep -x <name> | wc -l`, every one of these returns 1:
+
+`GetBestMapForUnit`, `GetMapInfo`, `GetWorldPosFromMapPos`, `GetMapWorldSize`,
+`GetPlayerMapPosition`, `GetMapRectOnMap`, `GetViewRadius`, `UnitPosition`, `GetPlayerFacing`,
+`GetMapChildrenInfo`; namespaces `C_Map` and `C_Minimap` are both present. `CreateVector2D` is NOT
+a named symbol — which only matters to HereBeDragons' own load path, not to the arrow: the native
+rung calls `C_Map.GetMapWorldSize(mapID)` and never needs a vector. `WTF/…/config-cache.wtf` has no
+`rotateMinimap` entry, so the north-up path (the one the specs pin exactly) is the live one, and the
+minimap's yard radius is already measured on this client (`/nt mapdiag` reported `radius=233.33`).
+
+What the strings cannot prove is the VALUE: whether `GetMapWorldSize(1413)` answers 1000x1000 or
+nothing, and whether `HereBeDragons-2.0` is registered in the session. `/nt navdiag` prints both,
+plus `HBD:GetWorldVector` to the route's ends for comparison.
