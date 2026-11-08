@@ -48,6 +48,20 @@ end
 UnitExists = function() return false end
 SlashCmdList = {}
 
+-- t_d4848ce0: the herb block is gated on the character's profession, so the
+-- fixture character has to BE an herbalist — the client's skill lines say so.
+-- (Documented GetSkillLineInfo shape: name, isHeader, isExpanded, skillRank.)
+local skillLines = {
+  { name = "Herbalism", rank = 300 },
+  { name = "Alchemy", rank = 300 },
+}
+GetNumSkillLines = function() return #skillLines end
+GetSkillLineInfo = function(i)
+  local row = skillLines[i]
+  if not row then return nil end
+  return row.name, false, true, row.rank
+end
+
 local pkg = {}
 local function loadFile(path)
   local f = assert(loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. path))
@@ -58,6 +72,7 @@ loadFile("locale/enUS.lua")
 loadFile("Config.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
+loadFile("Data/Profession.lua")
 loadFile("Data/Recipes.lua")
 loadFile("UI/TooltipPanel.lua")
 loadFile("UI/Tooltip.lua")

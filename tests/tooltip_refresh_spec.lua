@@ -51,6 +51,20 @@ local mouseoverUnit = false
 UnitExists = function(u) return u == "mouseover" and mouseoverUnit end
 SlashCmdList = {}
 
+-- t_d4848ce0: the block is gated on the character's profession. This spec's
+-- character is an herbalist (the client's skill lines say so), which is why the
+-- block shows at all; the picks wording is account-wide because the store is.
+local skillLines = {
+  { name = "Herbalism", rank = 300 },
+  { name = "Alchemy", rank = 300 },
+}
+GetNumSkillLines = function() return #skillLines end
+GetSkillLineInfo = function(i)
+  local row = skillLines[i]
+  if not row then return nil end
+  return row.name, false, true, row.rank
+end
+
 local pkg = {}
 local function loadFile(path)
   local f = assert(loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. path))
@@ -61,6 +75,7 @@ loadFile("locale/enUS.lua")
 loadFile("Config.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
+loadFile("Data/Profession.lua")
 loadFile("Data/Recipes.lua")
 loadFile("UI/TooltipPanel.lua")
 loadFile("UI/Tooltip.lua")
@@ -141,7 +156,7 @@ check(P:IsShown() == true, "T4: the panel is shown for a herb")
 local rows = P:TextLines()
 check(rows[1] == "Peacebloom | 100% (base)", "T4: the block opens with the node's drop row (got \""
   .. tostring(rows[1]) .. "\")")
-check(#rows >= 1 and rows[#rows]:find("^Your picks: ") ~= nil,
+check(#rows >= 1 and rows[#rows]:find("^Picks: ") ~= nil,
   "T4: the picks row is the last row (got " .. #rows .. " row(s))")
 check(type(P.width) == "number" and P.width + 0.01 >= (P.widest or 0),
   ("T4: panel width %s covers the widest line %s"):format(tostring(P.width), tostring(P.widest)))

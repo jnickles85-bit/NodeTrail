@@ -22,6 +22,7 @@ loadFile("locale/enUS.lua")
 loadFile("Config.lua")
 loadFile("Data/Recorder.lua")
 loadFile("Data/HerbData.lua")
+loadFile("Data/Profession.lua")
 loadFile("Data/Recipes.lua")
 loadFile("UI/TooltipPanel.lua")
 loadFile("UI/Tooltip.lua")
@@ -59,6 +60,22 @@ local mouseoverUnit = false
 UnitExists = function(u) return u == "mouseover" and mouseoverUnit end
 UIParent = {}
 WorldFrame = {}
+
+-- t_d4848ce0: the herb block is gated on THIS character's profession. This
+-- spec's character is an herbalist — the client's own skill lines say so — so
+-- the block is expected to show here; the picks row then reads account-wide
+-- because NodeTrailDB.herbs.maps is one table for every character.
+local skillLines = {
+  { name = "Herbalism", rank = 300 },
+  { name = "Alchemy", rank = 300 },
+}
+GetNumSkillLines = function() return #skillLines end
+GetSkillLineInfo = function(i)
+  local row = skillLines[i]
+  if not row then return nil end
+  return row.name, false, true, row.rank
+end
+
 
 GameTooltip = F.newTooltip({
   lines = {},
@@ -150,7 +167,7 @@ for i, l in ipairs(lines) do
     found.Peacebloom = true
     firstBlockIndex = firstBlockIndex or i
   end
-  if l == "Your picks: none yet" then found.Picks = true end
+  if l == "Picks: none yet (all characters)" then found.Picks = true end
   if l == "Open Alchemy once to list recipe uses" then found.Alchemy = true end
 end
 check(addonNameLines == 0, "Test 5: no line reads the addon's name (got " .. addonNameLines .. ")")
@@ -183,7 +200,7 @@ hover("Peacebloom")
 local pLines = panelLines()
 local foundPicks3 = false
 for _, l in ipairs(pLines) do
-  if l == "Your picks: 3" then foundPicks3 = true end
+  if l == "Picks: 3 (all characters)" then foundPicks3 = true end
 end
 check(foundPicks3, "Test 7: picks 3 present")
 local foundBase = false
@@ -206,7 +223,7 @@ local found100, found40, found10 = false, false, false
 for _, l in ipairs(pLines8) do
   if l == "Peacebloom | 100%" then found100 = true end
   if l == "Swiftthistle | 40%" then found40 = true end
-  if l == "Your picks: 10" then found10 = true end
+  if l == "Picks: 10 (all characters)" then found10 = true end
 end
 check(found100, "Test 8: Peacebloom 100% present")
 check(found40, "Test 8: Swiftthistle 40% present")
@@ -464,7 +481,7 @@ local foundHint16 = false
 local foundBlock16 = false
 for _, l in ipairs(panelLines()) do
   if l == "Open Alchemy once to list recipe uses" then foundHint16 = true end
-  if type(l) == "string" and l:find("^Your picks: ") then foundBlock16 = true end
+  if type(l) == "string" and l:find("^Picks: ") then foundBlock16 = true end
 end
 check(not foundHint16, "Test 16: tooltip drops the impossible instruction without an API")
 check(foundBlock16, "Test 16: the rest of the block is still there")

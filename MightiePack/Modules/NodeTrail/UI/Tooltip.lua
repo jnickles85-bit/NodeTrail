@@ -44,12 +44,51 @@ local function recipeAPIAvailable()
   return info.available == true
 end
 
+--- The character's herb profession, as the client reports it (t_d4848ce0).
+--- Returns true (an herbalist), false (not an herbalist) or nil (this client
+--- cannot say). The panel's data build is the only place the gate belongs:
+--- nothing here touches the tooltip.
+local function professionAnswer()
+  local mod = ns.Profession
+  if type(mod) ~= "table" or type(mod.Herbalism) ~= "function" then
+    return nil
+  end
+  local ok, answer = pcall(mod.Herbalism, mod)
+  if not ok then
+    return nil
+  end
+  if answer == true or answer == false then
+    return answer
+  end
+  return nil
+end
+
+--- Where the picks count comes from: NodeTrailDB.herbs.maps is ONE saved table
+--- for every character on the account (Recorder.lua keys nothing by character),
+--- so the wording says so. Calling it "your picks" on a character that never
+--- gathered a single herb is the lie this card exists to remove.
+local function picksLine(gathers)
+  if gathers and gathers > 0 then
+    return "Picks: " .. gathers .. " (all characters)"
+  end
+  return "Picks: none yet (all characters)"
+end
+
 --- The block's content, as data. Rows are { left = <name>, right = <value> } —
 --- two columns, exactly like the client's own double lines. No header line: the
 --- block opens with the node name (the left column of the node's own drop row).
+---
+--- Returns (lines, reason). `lines` is nil — and `reason` says why — when the
+--- block must not be drawn at all: this character has no Herbalism, so an herb
+--- node has no personal history to show and the node knowledge is not theirs to
+--- see (t_d4848ce0).
 function T.BuildLines(name)
   local node = ns.HerbData.GetNode(name)
-  if not node then return nil end
+  if not node then return nil, "not one of our herb nodes" end
+  local answer = professionAnswer()
+  if answer == false then
+    return nil, "no Herbalism on this character — the herb block is hidden"
+  end
   local lines = {}
   local drops, gathers = ns.HerbData.GetDropLines(name)
   if drops then
@@ -59,10 +98,11 @@ function T.BuildLines(name)
       table.insert(lines, { left = itemName, right = right })
     end
   end
-  if gathers and gathers > 0 then
-    table.insert(lines, { left = "Your picks: " .. gathers })
-  else
-    table.insert(lines, { left = "Your picks: none yet" })
+  -- The picks line only appears when the client CONFIRMED this character can
+  -- gather: an unreadable profession (nil) keeps the node knowledge below but
+  -- claims no personal history at all.
+  if answer == true then
+    table.insert(lines, { left = picksLine(gathers) })
   end
   local uses = ns.Recipes:GetUses(node.item)
   if uses and #uses > 0 then
@@ -186,13 +226,17 @@ function T:Refresh(tooltip, source)
     ringPush(entry)
     return
   end
-  local lines = T.BuildLines(name)
+  local lines, why = T.BuildLines(name)
   if not lines then
+    -- `why` is the data build's own reason — "not one of our herb nodes", or
+    -- "no Herbalism on this character". Hiding is the decision; the ring and
+    -- /nt ttdiag record which rule produced it.
+    local reason = why or "no lines for this node"
     if type(panel) == "table" then
-      panel:Hide("no lines for this node")
+      panel:Hide(reason)
     end
     entry.panelShown = false
-    entry.skip = "no lines for this node"
+    entry.skip = reason
     ringPush(entry)
     return
   end
@@ -287,7 +331,26 @@ function T:Diag()
     end
   end
 
-  -- 2) The panel: its rect, the width budget it computed against, whether it
+  -- 2) The profession gate (t_d4848ce0): which API this client exposes for the
+  --    character's professions, what it said about THIS character, and which
+  --    rule the block's visibility came from. A hidden herb block has to be
+  --    diagnosable from here — otherwise "no block on my skinner" and "the
+  --    feature is broken" look identical.
+  local profMod = ns.Profession
+  if type(profMod) ~= "table" or type(profMod.Diagnose) ~= "function" then
+    say("profession: module not loaded (Data/Profession.lua) — the block cannot tell whether this character has Herbalism, so it shows without a picks line")
+  else
+    local okProf, profLines = pcall(profMod.Diagnose, profMod)
+    if not okProf or type(profLines) ~= "table" then
+      say("profession: diag raised — " .. tostring(profLines))
+    else
+      for _, l in ipairs(profLines) do
+        say("profession: " .. tostring(l))
+      end
+    end
+  end
+
+  -- 3) The panel: its rect, the width budget it computed against, whether it
   --    is on screen, and the widest of OUR lines. These are the numbers the
   --    next report has to quote.
   local panel = ns.TooltipPanel
@@ -339,7 +402,7 @@ function T:Diag()
     say("panel: module not loaded (UI/TooltipPanel.lua)")
   end
 
-  -- 3) What the tooltip itself holds. Read-only, every read pcall-guarded.
+  -- 4) What the tooltip itself holds. Read-only, every read pcall-guarded.
   local gt = GameTooltip
   local function blockState()
     if type(panel) == "table" and type(panel.TextLines) == "function" then
