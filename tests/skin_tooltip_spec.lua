@@ -460,8 +460,12 @@ reset()
 hoverBeast({ guid = guidOf(CID, 1) })
 check(P:IsShown() == true, "7: the skinner sees the block")
 
--- An UNREADABLE profession (no skill API at all) still shows it: these records
--- are bucketed per character, so they cannot be somebody else's numbers.
+-- An UNREADABLE profession (no skill API at all) HIDES it (t_5ba9b43c). An
+-- unreadable answer is not a licence to render: every row in this block is an
+-- aggregate of this character's own observations, so a panel shown without a
+-- confirmed Skinning promises a step the character may not be able to take.
+-- The gate only hides on a definitive "no" for the HERB block (which keeps its
+-- non-personal node knowledge); the beast block abstains.
 local savedNum, savedInfo = GetNumSkillLines, GetSkillLineInfo
 local savedProf, savedProfInfo = GetProfessions, GetProfessionInfo
 GetNumSkillLines, GetSkillLineInfo = nil, nil
@@ -469,11 +473,18 @@ GetProfessions, GetProfessionInfo = nil, nil
 C_TradeSkillUI = nil
 reset()
 hoverBeast({ guid = guidOf(CID, 1) })
-check(P:IsShown() == true, "7: an unreadable profession still shows this character's own records")
+check(P:IsShown() == false, "7: an unreadable profession hides the beast panel (t_5ba9b43c)")
+local lastRing7 = T.RingEntries()
+local lastEntry7 = lastRing7[#lastRing7]
+check(lastEntry7 and type(lastEntry7.skip) == "string"
+  and lastEntry7.skip:find("Skinning", 1, true) ~= nil,
+  "7: the ring says the reason is Skinning (got " .. tostring(lastEntry7 and lastEntry7.skip) .. ")")
 local okD7, errD7, out7 = diagText()
 check(okD7, "7: ttdiag does not raise (" .. tostring(errD7) .. ")")
 check(out7:find("skinning=unknown", 1, true) ~= nil,
   "7: ttdiag reports the skinning read as unknown (got:\n" .. out7 .. ")")
+check(out7:find("hidden", 1, true) ~= nil or out7:find("abstains", 1, true) ~= nil,
+  "7: ttdiag says why the beast block is not shown (got:\n" .. out7 .. ")")
 GetNumSkillLines, GetSkillLineInfo = savedNum, savedInfo
 GetProfessions, GetProfessionInfo = savedProf, savedProfInfo
 skillLines = { { name = "Skinning", rank = 300 } }
