@@ -37,12 +37,21 @@ A.DEFAULT_MAX_AGE_HOURS = 24
 -- Read by /nt status and by the specs. lastRebuildAt/lastTrigger describe the
 -- last SUCCESSFUL rebuild; lastSkip describes the last rebuild that refused
 -- to replace the drawn route (so the reason is answerable after the fact).
+--
+-- pendingPicks counts the picks recorded since the route on screen was built,
+-- whether or not they triggered one (t_57550700). With the debounce off they
+-- are the answer to "why is my line missing that herb", and they are what the
+-- one-line notice reports. noticeShown makes that notice once per ROUTE, not
+-- once per pick and not once per frame.
 A.state = {
   dueAt = nil,
   lastRebuildAt = nil,
   lastTrigger = nil,
   lastSkip = nil,
+  lastHold = nil,
   rebuilds = 0,
+  pendingPicks = 0,
+  noticeShown = false,
 }
 
 -- ── clocks ────────────────────────────────────────────────────────────
@@ -108,6 +117,41 @@ local function durationText(seconds)
   return ("%ds"):format(s)
 end
 A.DurationText = durationText
+
+-- ── the loot gate ─────────────────────────────────────────────────────
+-- The card forbids speaking while a loot window is open: a route line printed
+-- on top of a loot roll is noise, and the gather event that records a pick is
+-- exactly when that window is up. The check is pcall'd and only ever READS a
+-- frame that already exists — this addon creates no loot frame.
+local function lootWindowOpen()
+  local lf = _G.LootFrame
+  if type(lf) ~= "table" then
+    return false
+  end
+  if type(lf.IsShown) == "function" then
+    local ok, shown = pcall(lf.IsShown, lf)
+    if ok and shown then
+      return true
+    end
+  end
+  local okV, visible = pcall(function()
+    return type(lf.IsVisible) == "function" and lf:IsVisible()
+  end)
+  return (okV and visible) and true or false
+end
+A.LootWindowOpen = lootWindowOpen
+
+--- In combat? A re-plan mid-fight is the same defect as a re-plan mid-loot: the
+--- line moves while the player is using it. Absent/refusing API = not in combat
+--- (the route must never be held hostage by an API this client does not have).
+local function inCombat()
+  if type(UnitAffectingCombat) ~= "function" then
+    return false
+  end
+  local ok, fighting = pcall(UnitAffectingCombat, "player")
+  return (ok and fighting) and true or false
+end
+A.InCombat = inCombat
 
 -- ── usable-route guard ─────────────────────────────────────────────────
 -- A route is only allowed to replace the drawn one when it has geometry:
@@ -204,29 +248,116 @@ function A:Rebuild(trigger, mapID, opts)
   self.state.lastTrigger = trigger
   self.state.rebuilds = (self.state.rebuilds or 0) + 1
   self.state.lastSkip = nil
+  -- t_57550700: the plan on screen is now built from every pick there is, so
+  -- there is nothing waiting and the "picks are waiting" notice is armed again
+  -- for the NEXT route. This is what makes the notice once per route rather
+  -- than once per session.
+  self.state.pendingPicks = 0
+  self.state.noticeShown = false
   return route
 end
 
 -- ── debounced refresh on picks ─────────────────────────────────────────
 -- Called from ns.RecordHerb AFTER the pick is stored. It never builds
 -- synchronously inside the loot/gather event — it only moves the due time.
--- Each pick pushes the due time out, so a run of picks is one rebuild.
+--
+-- t_57550700 (Mightie's final decision: "change from minutes to every 5 gathers")
+-- — a re-plan is triggered by PICKS, not by a clock. A pick counts; when the
+-- count reaches autoRefreshPicks the window is armed. Picks 6, 7, 8 … of the same
+-- tranche only push the due time out, so a burst of gathers is ONE re-plan.
 function A:SchedulePick(mapID)
   local intent = ns.GetRouteDB()
   if intent.active ~= true then
     return false, "no route is running"
   end
-  if intent.autoRefresh ~= true then
-    return false, "auto-refresh is off"
-  end
   if not mapID or tonumber(mapID) ~= tonumber(intent.mapID) then
     return false, "the pick is on another map"
   end
+  self.state.pendingPicks = (self.state.pendingPicks or 0) + 1
+  if intent.autoRefresh ~= true then
+    self.state.lastHold = "auto-refresh is off"
+    return false, "auto-refresh is off"
+  end
+  if not self:IsTrancheDue() then
+    self.state.lastHold = ("%d of %d picks since the last plan")
+      :format(self.state.pendingPicks, ns.GetAutoRefreshPicks())
+    return false, self.state.lastHold
+  end
+  -- The window is armed even when the hold gates are shut (combat, a loot
+  -- window, the 30-second floor): Pump looks again a beat later, so the route
+  -- catches up as soon as the hold ends instead of waiting for a sixth pick.
   self.state.dueAt = clock() + (tonumber(self.DEBOUNCE) or 5)
   return true
 end
 
--- The frame's OnUpdate. One rebuild at most per due window.
+-- ── the gate ─────────────────────────────────────────────────────────────
+-- `IsTrancheDue` is the trigger: autoRefreshPicks new picks since the plan on
+-- screen was built. `Gate` is permission to fire, and returns nil or a short
+-- reason. Manual rebuilds (/nt reload, /nt start) never pass through here —
+-- the player's own click is always allowed.
+A.MIN_GAP = 30   -- seconds; the absolute floor between two automatic plans
+A.GATE_RETRY = 1 -- seconds a shut gate waits before looking again
+
+function A:IsTrancheDue()
+  return (tonumber(self.state.pendingPicks) or 0) >= ns.GetAutoRefreshPicks()
+end
+
+function A:Gate(nowWall)
+  nowWall = tonumber(nowWall) or wallClock()
+  if ns.GetRouteDB().autoRefresh ~= true then
+    return "auto-refresh is off"
+  end
+  if not self:IsTrancheDue() then
+    return ("%d of %d picks since the last plan")
+      :format(tonumber(self.state.pendingPicks) or 0, ns.GetAutoRefreshPicks())
+  end
+  local last = tonumber(self.state.lastRebuildAt)
+  if last then
+    local since = nowWall - last
+    if since < (tonumber(A.MIN_GAP) or 30) then
+      return ("only %ds since the last plan"):format(math.floor(since))
+    end
+  end
+  if lootWindowOpen() then
+    return "a loot window is open"
+  end
+  if inCombat() then
+    return "you are in combat"
+  end
+  return nil
+end
+
+-- One short line, at most once per route, and never with a loot window open.
+-- Only when auto-refresh is OFF: with it on, a re-plan is coming by itself, so
+-- "/nt reload to include them" would be telling the player to do by hand what
+-- the addon is about to do. Rare on purpose — Mightie gets one line per route,
+-- not one per herb.
+function A:NoticePending()
+  if self.state.noticeShown then
+    return nil
+  end
+  local waiting = tonumber(self.state.pendingPicks) or 0
+  if waiting < 1 then
+    return nil
+  end
+  if ns.GetRouteDB().autoRefresh == true then
+    return nil
+  end
+  if lootWindowOpen() then
+    return nil
+  end
+  self.state.noticeShown = true
+  local plural = (waiting == 1) and "" or "s"
+  return say("ROUTE_NEW_PICKS", waiting, plural)
+end
+
+--- The frame's OnUpdate. One rebuild at most per due window.
+--
+-- t_57550700: a due window is not permission. The gates are re-checked HERE,
+-- because a rebuild that fires while a loot window is open or while the player
+-- is in combat is exactly the "line fills in under me" complaint. A shut gate
+-- keeps the intent and looks again a beat later, so a loot window that closes
+-- does not swallow the rebuild.
 function A:Pump(t)
   local due = self.state.dueAt
   if not due then
@@ -236,7 +367,14 @@ function A:Pump(t)
   if t < due then
     return false
   end
+  local why = self:Gate(wallClock())
+  if why then
+    self.state.lastHold = why
+    self.state.dueAt = t + (tonumber(self.GATE_RETRY) or 1)
+    return false
+  end
   self.state.dueAt = nil
+  self.state.lastHold = nil
   local route, err = self:Rebuild("pick")
   if route then
     say("ROUTE_REFRESHED", #(route.path or {}), route.picks or 0)
@@ -277,6 +415,16 @@ function A:EnsureFrame()
 end
 
 function A:OnUpdate()
+  -- t_57550700: the "picks are waiting" line is printed HERE, in the frame
+  -- loop, not inside the gather event — a loot window is up at that moment and
+  -- the card forbids speaking then. By the next frame the window is closed and
+  -- the line lands once.
+  if (self.state.pendingPicks or 0) > 0 and not self.state.noticeShown then
+    local intent = ns.GetRouteDB()
+    if intent.active == true then
+      self:NoticePending()
+    end
+  end
   if not self.state.dueAt then
     return
   end

@@ -318,15 +318,16 @@ if skinBox then
     "the sub-option row sits 22px under the NodeTrail row")
 end
 
--- t_2bc15917: "Auto-refresh route" is the second indented NodeTrail row —
--- the visible control for the automatic rebuild-after-reload behaviour —
--- and it is ON by default.
+-- t_2bc15917 / t_57550700: "Auto-refresh route" is the second indented NodeTrail
+-- row — the visible control for the pick-triggered rebuild. It is ON by default
+-- (Mightie's final call); what changed is that a re-plan now needs a tranche of
+-- gathers, not one per herb. (The /reload restore is not this switch.)
 local autoBox = boxes.AutoRefresh
 check(autoBox ~= nil, "an auto-refresh route sub-option checkbox exists")
 check(autoBox and autoBox.template == "UICheckButtonTemplate",
   "the auto-refresh sub-option is a real checkbutton")
 if autoBox then
-  check(autoBox:GetChecked() == true, "auto-refresh sub-option is ON by default")
+  check(autoBox:GetChecked() == true, "auto-refresh sub-option is ON by default (Mightie's final call)")
   check(autoBox:IsEnabled() == true, "auto-refresh sub-option is usable while NodeTrail is on")
   local function point1b(box)
     return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil

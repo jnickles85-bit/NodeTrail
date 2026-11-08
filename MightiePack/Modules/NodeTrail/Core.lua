@@ -22,6 +22,10 @@ local function printHelp()
   printL("HELP_STOP")
   printL("HELP_RELOAD")
   printL("HELP_STATUS")
+  -- t_57550700: the route-stability switch, documented inline like the lines
+  -- below so a new command needs no new locale entry.
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt autorefresh [on|off|<picks>] - on by default: one re-plan every <picks> gathers (default 5), never in combat or with a loot window open; off keeps the drawn route exactly as it is")
   -- t_36412359. Inline like the ttdiag lines below: the new command is
   -- documented without a new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
@@ -128,6 +132,11 @@ function ns.PrintStatus()
     (intent.autoRefresh == true) and "on" or "off")
   local rstate = (type(ns.RouteAuto) == "table" and type(ns.RouteAuto.state) == "table")
     and ns.RouteAuto.state or nil
+  -- t_57550700: both gate values, so "why has my line not moved" is answerable
+  -- without a reload: the switch and "3 of 5 picks since the last plan".
+  local need = ns.GetAutoRefreshPicks()
+  printL("STATUS_ROUTE_GAP", (intent.autoRefresh == true) and "on" or "off",
+    need, (rstate and tonumber(rstate.pendingPicks)) or 0, need)
   local when = "never"
   local at = rstate and tonumber(rstate.lastRebuildAt)
   if at then
@@ -136,6 +145,12 @@ function ns.PrintStatus()
   end
   printL("STATUS_ROUTE_REBUILD", when, (rstate and rstate.lastTrigger) or "none",
     type(ns.activeRoute) == "table" and #(ns.activeRoute.path or {}) or 0)
+  -- t_57550700: with the debounce off, picks pile up instead of re-planning, so
+  -- say how many are waiting instead of leaving it silent.
+  local waiting = (rstate and tonumber(rstate.pendingPicks)) or 0
+  if waiting > 0 then
+    printL("STATUS_ROUTE_PENDING", waiting)
+  end
   printL("STATUS_TOOLTIP", (ns.Tooltip and ns.Tooltip._enabled) and "on" or "off")
   local scanned = type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" and NodeTrailDB.recipes.alchemyScanned
   if scanned then
@@ -214,6 +229,8 @@ local function handleSlash(msg)
     end
   elseif msg == "status" then
     ns.PrintStatus()
+  elseif msg == "autorefresh" or msg:match("^autorefresh%s") then
+    ns.SetAutoRefresh(msg:match("^autorefresh%s+(.*)$"))
   elseif msg == "scanrecipes" or msg == "recipes" then
     ns.ScanRecipes()
   elseif msg == "mapdiag" or msg:match("^mapdiag%s") then
@@ -375,6 +392,63 @@ function ns.ToggleNavArrow(arg)
   end
   DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: waypoint arrow " .. (on and "on" or "off"))
   return on
+end
+
+-- ── /nt autorefresh [on|off|<picks>] (t_57550700) ─────────────────────
+-- The switch that decides whether a route keeps following your picks, and how
+-- many gathers make a re-plan due. Mightie's final decision: "change from
+-- minutes to every 5 gathers. doesnt need to come off by default." So the
+-- trigger is a COUNT of picks, and the switch ships on.
+--
+-- Asking by hand (/nt reload, /nt start) is never gated: the player's own click
+-- is always permission.
+function ns.SetAutoRefresh(arg)
+  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  if want:match("^%d+$") then
+    local picks = ns.SetAutoRefreshPicks(tonumber(want))
+    DEFAULT_CHAT_FRAME:AddMessage(("NodeTrail: re-plan gate set to every %d gather%s. The switch is %s.")
+      :format(picks, (picks == 1) and "" or "s", ns.IsAutoRefreshRoute() and "on" or "off"))
+    if not ns.IsAutoRefreshRoute() then
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt autorefresh on to enable it.")
+    end
+    return nil
+  end
+  local on
+  if want == "on" or want == "true" then
+    on = true
+  elseif want == "off" or want == "false" then
+    on = false
+  elseif want == "" then
+    on = not ns.IsAutoRefreshRoute()
+  else
+    DEFAULT_CHAT_FRAME:AddMessage(
+      "NodeTrail: /nt autorefresh [on|off|<picks>]  (e.g. /nt autorefresh 5)")
+    return nil
+  end
+  ns.SetAutoRefreshRoute(on)
+  if not on then
+    -- A pending debounce belongs to a setting that is no longer on. Dropping it
+    -- is what keeps the line still.
+    if type(ns.RouteAuto) == "table" and type(ns.RouteAuto.Cancel) == "function" then
+      pcall(ns.RouteAuto.Cancel, ns.RouteAuto)
+    end
+    DEFAULT_CHAT_FRAME:AddMessage(
+      "NodeTrail: auto-refresh off — the route stays exactly as drawn until /nt reload.")
+    return false
+  end
+  -- No rebuild here: switching it on does not make a tranche due. The counter
+  -- since the last plan does.
+  local rstate = (type(ns.RouteAuto) == "table" and type(ns.RouteAuto.state) == "table")
+    and ns.RouteAuto.state or nil
+  local waiting = (rstate and tonumber(rstate.pendingPicks)) or 0
+  local need = ns.GetAutoRefreshPicks()
+  DEFAULT_CHAT_FRAME:AddMessage(("NodeTrail: auto-refresh on — one re-plan every %d gathers, never in combat or with a loot window open.")
+    :format(need))
+  if waiting > 0 then
+    DEFAULT_CHAT_FRAME:AddMessage(("NodeTrail: %d of %d picks since the last plan%s.")
+      :format(waiting, need, (waiting < need) and "" or " — the next one is due"))
+  end
+  return true
 end
 
 -- ── Skinning probe ownership (t_5507a0ba) ───────────────────────────

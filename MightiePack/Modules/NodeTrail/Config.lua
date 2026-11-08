@@ -44,15 +44,31 @@ ns.defaults = {
   skinning = {
     enabled = false,
   },
-  -- t_2bc15917: the route INTENT, never its geometry. The points are
-  -- rebuilt from the recorded picks at every enable; only "was a route
+  -- t_2bc15917 / t_57550700: the route INTENT, never its geometry. The points
+  -- are rebuilt from the recorded picks at every enable; only "was a route
   -- running, on which map, since when, and does it follow new picks" is
   -- written to SavedVariables.
+  --
+  -- Mightie, gathering south of Crossroads, watched a second line start to fill
+  -- in with no reload: every pick used to move a debounced re-plan of the WHOLE
+  -- zone route, so the ground he was walking changed under his feet.
+  --
+  -- His final decision (2026-11-08): "change from minutes to every 5 gathers.
+  -- doesnt need to come off by default." So:
+  --   * autoRefresh stays ON by default (it is the feature he asked for);
+  --   * a re-plan is triggered by PICKS, not by a clock: autoRefreshPicks (=5)
+  --     new picks since the plan on screen was built;
+  --   * at most one re-plan per tranche of five — the counter resets with the
+  --     plan, so a burst of gathers is one re-plan, not one per herb;
+  --   * never in combat, never with a loot window open, never inside the
+  --     30-second floor after the previous plan.
+  -- /nt autorefresh on|off|<picks>.
   route = {
     active = false,
     mapID = nil,
     startedAt = 0,
     autoRefresh = true,
+    autoRefreshPicks = 5,
   },
 }
 
@@ -110,9 +126,35 @@ function ns.GetRouteDB()
   end
   local r = NodeTrailDB.route
   if type(r.active) ~= "boolean" then r.active = false end
-  if type(r.autoRefresh) ~= "boolean" then r.autoRefresh = true end
   if type(r.startedAt) ~= "number" then r.startedAt = 0 end
+  if type(r.autoRefresh) ~= "boolean" then r.autoRefresh = true end
+  -- The tranche size: how many new picks make a re-plan due. Clamped and
+  -- written back, so what /nt status prints is what is in force. 1 would be
+  -- "one re-plan per pick" again, which is the bug; the floor is 2.
+  local n = tonumber(r.autoRefreshPicks)
+  if not n or n ~= n then n = 5 end
+  n = math.floor(n + 0.5)
+  if n < 2 then n = 2 end
+  if n > 100 then n = 100 end
+  r.autoRefreshPicks = n
   return r
+end
+
+function ns.GetAutoRefreshPicks()
+  return tonumber(ns.GetRouteDB().autoRefreshPicks) or 5
+end
+
+function ns.SetAutoRefreshPicks(count)
+  local r = ns.GetRouteDB()
+  local n = tonumber(count)
+  if not n or n ~= n then
+    return r.autoRefreshPicks
+  end
+  n = math.floor(n + 0.5)
+  if n < 2 then n = 2 end
+  if n > 100 then n = 100 end
+  r.autoRefreshPicks = n
+  return n
 end
 
 function ns.IsAutoRefreshRoute()

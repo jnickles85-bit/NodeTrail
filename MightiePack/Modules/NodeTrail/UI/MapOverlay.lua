@@ -699,7 +699,10 @@ function M:_redraw()
     dots = (self.drawer.lastApplied or {}).paintedDots,
     planned = (self.drawer.lastApplied or {}).plannedDots,
     hideFrom = (self.drawer.lastApplied or {}).hideFromIndex,
-    hidden = (self.drawer.lastApplied or {}).hiddenByHide,
+    hidden = (self.drawer.lastApplied or {}).hiddenDots,
+    hiddenObjects = (self.drawer.lastApplied or {}).hiddenByHide,
+    prevPainted = (self.drawer.lastApplied or {}).prevPainted,
+    replans = (self.drawer.lastApplied or {}).planReplans,
   })
   while #self._draws > 4 do
     table.remove(self._draws)
@@ -1016,7 +1019,10 @@ function M:Diag()
   end)
   fact(function()
     local mode = self.drawer and self.drawer.mode or "absent"
-    local held = (self.drawer and self.drawer.pool and #self.drawer.pool) or 0
+    -- t_57550700: the pool's own high-water mark, not `#pool`. A pool with a nil
+    -- slot has an unspecified length, so `#pool` could report a number that no
+    -- loop would ever visit — the live run printed 908 for a 480-object plan.
+    local held = (self.drawer and (self.drawer.poolHigh or 0)) or 0
     return string.format("redraw: queued=%s segment(s); LineDraw mode=%s; objects held=%s",
       fmtNum(self._lastQueued or 0), tostring(mode), fmtNum(held))
   end)
@@ -1062,17 +1068,28 @@ function M:Diag()
         end
       end
     end
+    local painted = tonumber(a.paintedDots) or 0
+    local planned = tonumber(a.plannedDots) or 0
+    -- t_57550700: `stale` is the pool-ratchet tripwire — objects held above two
+    -- per painted dot. It used to print `capacityStale` (a re-measured region
+    -- ceiling), which read false in a session whose pool held 428 objects of
+    -- earlier plans. The ceiling flag now says `capStale=`.
+    local stale = (planned > 0) and (high > (2 * painted))
     return string.format(
-      "dots pool: planned=%s painted=%s sized=%s/%s anchored=%s/%s missing=%s objects=%s shown=%s highest=%s capacity=%s widen=%s replans=%s hideFrom=%s hidden=%s createFailed=%s reverted=%s stale=%s",
+      "dots pool: planned=%s painted=%s sized=%s/%s anchored=%s/%s missing=%s objects=%s shown=%s highest=%s capacity=%s widen=%s replans=%s refits=%s prevPainted=%s hideFrom=%s hidden=%s hiddenObjects=%s createFailed=%s reverted=%s capStale=%s stale=%s",
       fmtNum(a.plannedDots), fmtNum(a.paintedDots),
       fmtNum(sized), fmtNum(checked), fmtNum(anchored), fmtNum(checked),
       fmtNum(a.missingDots),
       fmtNum(existing), fmtNum(shown), fmtNum(high),
       a.capacity and fmtNum(a.capacity) or "none",
-      fmtNum(a.widen or 1, 2), fmtNum(a.replans or 0),
+      fmtNum(a.widen or 1, 2),
+      fmtNum(a.planReplans or 0), fmtNum(a.replans or 0),
+      fmtNum(a.prevPainted or 0),
       a.hideFromIndex and fmtNum(a.hideFromIndex) or "none",
-      fmtNum(a.hiddenByHide or 0), fmtNum(a.createFailed or 0),
-      tostring(a.reverted and true or false), tostring(a.capacityStale and true or false))
+      fmtNum(a.hiddenDots or 0), fmtNum(a.hiddenByHide or 0),
+      fmtNum(a.createFailed or 0),
+      tostring(a.reverted and true or false), tostring(a.capacityStale and true or false),
+      tostring(stale and true or false))
   end)
   fact(function()
     -- Where the painted dots LAND. A dot painted outside the host (or outside
@@ -1100,9 +1117,11 @@ function M:Diag()
     local parts = {}
     for i = 1, #draws do
       local d = draws[i]
-      parts[#parts + 1] = ("#%s count=%s dots=%s/%s hideFrom=%s hid=%s"):format(
+      parts[#parts + 1] = ("#%s count=%s dots=%s/%s prev=%s hideFrom=%s hid=%s hidObj=%s"):format(
         fmtNum(d.seq), fmtNum(d.count), fmtNum(d.dots or 0), fmtNum(d.planned or 0),
-        d.hideFrom and fmtNum(d.hideFrom) or "none", fmtNum(d.hidden or 0))
+        fmtNum(d.prevPainted or 0),
+        d.hideFrom and fmtNum(d.hideFrom) or "none", fmtNum(d.hidden or 0),
+        fmtNum(d.hiddenObjects or 0))
     end
     return string.format("draws: %s draw(s) recorded, newest first: %s",
       fmtNum(#draws), table.concat(parts, "; "))

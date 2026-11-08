@@ -71,10 +71,11 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 - **The route comes back by itself, and follows the picks** (t_2bc15917). Mightie: "yes it needs to be
   automated for sure, at least on /reloads". `ns.StartRoute()` used to run only from `/nt start` and
   `/nt reload`, so a started route was gone after any reload and never reflected the herbs gathered
-  since. Now `NodeTrailDB.route = { active, mapID, startedAt, autoRefresh }` holds the **intent only**
-  — no path, no anchors, no points (the spec asserts all three stay nil) — and `Modules/NodeTrail/
-  Route/Auto.lua` (new, `ns.RouteAuto`, loaded right after `Route/Build.lua`) owns every automatic
-  path:
+  since. Now `NodeTrailDB.route = { active, mapID, startedAt, autoRefresh, autoRefreshPicks }` holds
+  the **intent only** — no path, no anchors, no points (the spec asserts all three stay nil) — and
+  `Modules/NodeTrail/Route/Auto.lua` (new, `ns.RouteAuto`, loaded right after `Route/Build.lua`) owns
+  every automatic path (the per-pick trigger was replaced by a 5-gather tranche — see
+  **t_57550700**):
   1. `Enable()` (a login and a `/reload` both run it) rebuilds and draws the saved route for its map
      — no command — and says `route restored (13 points from 12 herb picks on map 1429)`
      (trigger `login`). Off-map, the intent is kept and nothing is drawn until the player is back
@@ -83,7 +84,8 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
      the world event right after login is the answer.
   2. `ns.RecordHerb` now only **moves a due time** (`SchedulePick`: `GetTime() + 5`, pushed out by
      each pick). The frame's `OnUpdate` calls `Pump`, which rebuilds once, a few seconds after the
-     last pick (trigger `pick`). Nothing is ever rebuilt inside the loot/gather event.
+     last pick (trigger `pick`). Nothing is ever rebuilt inside the loot/gather event. (Since
+     t_57550700 the window is only armed by the 5th pick of a tranche.)
   3. `/nt stop` clears the live route **and** the intent; `/nt start` and `/nt reload` record it
      (trigger `manual`). A start that builds nothing leaves no false intent behind.
   - **Never regress a drawn route**: a rebuild whose result has fewer than two path points, or fewer
@@ -623,7 +625,10 @@ paints all 130 dots (260 regions) on a permissive client, so the geometry/plan i
 
 **Instrumentation, so one run answers the card.** `/nt mapdiag` on the world map now also prints:
 - `dots pool: planned=… painted=… sized=…/… anchored=…/… missing=… objects=… shown=… highest=…
-  capacity=… widen=… replans=… hideFrom=… hidden=… createFailed=… reverted=… stale=…` — planned
+  capacity=… widen=… replans=… refits=… prevPainted=… hideFrom=… hidden=… hiddenObjects=…
+  createFailed=… reverted=… capStale=… stale=…` (t_57550700: `replans` = plans that replaced a
+  different plan, `refits` = capacity re-fits, `hidden` = the DROP in painted dots with
+  `hiddenObjects` behind it, `stale` = the ratchet tripwire `highest > 2 × painted`) — planned
   vs painted vs *measured* (`sized`/`anchored` read every painted object's `GetWidth`/`GetHeight`
   and `GetNumPoints`, so "created, shown, and 0x0" can no longer pass as painted).
 - `dots box: painted bbox=… host=…x… outside=…/…` — where the painted dots LAND. A dot outside the
@@ -676,6 +681,69 @@ draw order or clipping), then `dot mid:`/`dot last:` (`size=0x0` = the client ke
 `shown=true` with a real size = it is drawn and something covers it), then `draws:` (a
 `count=2`/`count=3` pass on top of a `count=16` one means a rebuild shrank the route and `hideFrom`
 cropped the pool).
+
+### t_57550700 — the route re-planned under the player while gathering
+
+**The complaint.** Mightie, gathering south of Crossroads: *"while i gather south of crossroads another
+line as started to fill in?"* — a second line on the world map, no reload. Cause: `autoRefresh`
+defaulted to TRUE and **every pick** moved a debounced re-plan of the whole zone route, so the ground
+the line told him to walk changed under his feet. Then, from the live diag of a second re-plan in the
+same session (no reload):
+
+```
+redraw: queued=36 segment(s); LineDraw mode=dots; objects held=908
+dots pool: planned=240 painted=240 ... objects=908 shown=480 highest=908 replans=0
+           hideFrom=481 hidden=0 ... stale=false
+```
+
+**What shipped** (branch `fix/tooltip-refresh`, local only — no push/merge/tag/deploy):
+
+- **The trigger is a TRANCHE of gathers, not a clock.** Mightie's final ruling: *"change from minutes
+  to every 5 gathers. doesnt need to come off by default."* `NodeTrailDB.route.autoRefreshPicks = 5`.
+  `SchedulePick` counts every pick; the 5th (and any later one in the same tranche) arms the
+  debounce; `Pump` rebuilds once, a few seconds after the last one. The counter resets with the plan,
+  so a tranche is one re-plan, never one per herb. `autoRefresh` stays **ON by default**.
+- **Guards** (`RouteAuto:Gate`): never while a loot window is open (`LootFrame:IsShown`), never in
+  combat (`UnitAffectingCombat("player")`), never within 30 s of the previous plan. A shut gate keeps
+  the armed window and looks again every second, so a loot window that closes or a fight that ends
+  does not swallow the rebuild. Manual rebuilds (`/nt reload`, `/nt start`) are never gated.
+- **`/nt autorefresh [on|off|<picks>]`** — switch, or how many gathers make a re-plan due (clamped
+  2..100: 1 would be one re-plan per herb again). `/nt status` gains
+  `Auto re-plan: switch on, every 5 gathers — 3 of 5 picks since the last plan`, and prints
+  `New picks since that rebuild: N` when there are any.
+- **The `/reload` restore is untouched.** Persisted intent, rebuild at `Enable()` — the requirement
+  that started this, and the spec still proves it with the switch off.
+- **The notice** when the switch is OFF and picks land: one short line, once per route
+  (`3 new picks since this route was built — /nt reload to include them.`), printed from the frame
+  loop, never inside the gather event, never with a loot window open. With the switch on it stays
+  quiet: a re-plan is coming by itself.
+
+**The pool was a one-way ratchet, and the counters lied about it.** `hideFrom` hid the surplus and
+KEPT it: 428 objects of earlier plans stayed parented to the map host, `objects held=908` for a
+480-object plan, `highest=908` against `shown=480`, `hideFrom=481 hidden=0` (the surplus had already
+been hidden by the previous pass, so the hide count was bookkeeping noise), and `replans=0` through a
+session whose route went 33 points/208 dots → 37 points/240 dots because the field counted capacity
+re-fits. Now:
+
+- surplus objects are hidden **and released** — hidden, un-anchored, re-parented onto a hidden
+  retire frame (a region cannot be destroyed on this client) and dropped from the pool — so after
+  every draw the pool holds exactly `painted × 2` objects;
+- `hidden=` is the DROP in painted dots (same unit as `planned`/`painted`/`missing`, on purpose),
+  `hiddenObjects=` is the objects behind it, and `prevPainted=` records the plan being replaced, so
+  `hidden + painted == prevPainted` is checkable;
+- `replans=` counts plans that REPLACED A DIFFERENT PLAN (an exact integer fingerprint of the pixel
+  geometry), not capacity re-fits — those are now `refits=`;
+- `stale=` is the ratchet tripwire (`highest > 2 × painted`) — it used to print the capacity flag,
+  which reads false through all of the above. `capStale=` is that flag now.
+
+**Spec.** New `tests/route_stability_spec.lua` (A–F) drives the real files end to end: defaults
+(on, tranche 5, clamped), a burst of 9 gathers inside a tranche arming nothing and the 5th producing
+exactly ONE re-plan, the loot/combat/30-second holds, `/nt autorefresh <picks>`, the shrink re-plan
+(`hidden` == the drop, pool == painted×2, nothing stale shown, `replans` incremented, `stale=false`)
+and the `stale=true` tripwire. **42 FAILs on `5ecc88f`** — including, verbatim from that run, the live shape:
+`objects=200 ... painted=8 ... hideFrom=17 hidden=184 ... replans=0`. All 40 `tests/*.lua` pass
+under lua5.1. `route_auto_spec` section (3) now gathers five picks and (8) checks
+the tranche; `umbrella_spec` keeps "on by default". **Not yet run in game.**
 
 ### t_d17939c1 — a followable next-waypoint arrow with the yards counting down
 

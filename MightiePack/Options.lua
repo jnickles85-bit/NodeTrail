@@ -76,9 +76,9 @@ local function skinningOn()
   return false
 end
 
--- t_2bc15917: ON by default — that is the whole point of the sub-option.
--- When NodeTrail (or an older copy of it) cannot answer, the box shows on,
--- matching the persisted default.
+-- t_57550700: ON by default (Mightie's final call: "doesnt need to come off by
+-- default"). What the box turns on is a re-plan every `autoRefreshPicks`
+-- gathers — not one per herb, which is what made the line move under him.
 local function autoRefreshOn()
   local nt = ntModule()
   if nt and type(nt.IsAutoRefreshRoute) == "function" then
@@ -250,14 +250,16 @@ local function syncCheckboxes()
     end
   end
 
-  -- ── Auto-refresh route sub-option (t_2bc15917) ────────────────────
+  -- ── Auto-refresh route sub-option (t_2bc15917, default flipped t_57550700)
   -- Mightie: "yes it needs to be automated for sure, at least on /reloads".
   -- The automatic behaviour has to be visible and switchable, so it is a
   -- checkbox beside the skinning one, persisted in
-  -- NodeTrailDB.route.autoRefresh and ON by default. It applies
-  -- immediately in both directions: switching it off keeps the line that
-  -- is drawn and stops pick-triggered rebuilds; switching it on lets the
-  -- next pick schedule one.
+  -- NodeTrailDB.route.autoRefresh. It is OFF by default: ON is what re-planned
+  -- the whole zone route under him while he gathered, and the line he was
+  -- following is the ground he is walking. The /reload restore is NOT this
+  -- switch — that always happens. It applies immediately in both directions:
+  -- switching it off keeps the line that is drawn and stops pick-triggered
+  -- rebuilds; switching it on rebuilds now and lets the next pick schedule one.
   if autoY then
     local ab = boxes.AutoRefresh
     if not ab then
@@ -275,17 +277,27 @@ local function syncCheckboxes()
 
       ab:SetScript("OnClick", function(self)
         local nt = ntModule()
-        if not nodeTrailOn() or not nt or type(nt.SetAutoRefreshRoute) ~= "function" then
+        if not nodeTrailOn() or not nt then
           self:SetChecked(autoRefreshOn())
           return
         end
-        local okS, value = pcall(nt.SetAutoRefreshRoute, self:GetChecked() and true or false)
+        -- t_57550700: one implementation of the switch, shared with
+        -- /nt autorefresh — so the box also rebuilds at once when turned on.
+        local okS, value
+        if type(nt.SetAutoRefresh) == "function" then
+          okS, value = pcall(nt.SetAutoRefresh, self:GetChecked() and "on" or "off")
+        elseif type(nt.SetAutoRefreshRoute) == "function" then
+          okS, value = pcall(nt.SetAutoRefreshRoute, self:GetChecked() and true or false)
+        else
+          self:SetChecked(autoRefreshOn())
+          return
+        end
         if not okS then
           pkg.Print("auto-refresh: could not save the sub-option: " .. tostring(value))
         elseif value then
-          pkg.Print("Auto-refresh route on — the line follows your newest picks, a few seconds after each gather.")
+          pkg.Print("Auto-refresh route on — the route is rebuilt a few seconds after each gather.")
         else
-          pkg.Print("Auto-refresh route off — the route stays as it is until /nt start or /nt reload.")
+          pkg.Print("Auto-refresh route off — the route stays as it is until /nt reload.")
         end
         syncCheckboxes()
       end)

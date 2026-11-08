@@ -195,6 +195,8 @@ local function savedWithIntent(map, opts)
     active = true,
     mapID = map,
     startedAt = opts.startedAt or (wall - 60),
+    -- t_57550700: ON by default (Mightie's final call); a case that wants it
+    -- off says so.
     autoRefresh = opts.autoRefresh ~= false,
   }
   if opts.maxAgeHours then
@@ -240,7 +242,7 @@ local st = status()
 check(st:find("Route state: active yes", 1, true) ~= nil,
   "(7) status shows active yes (got: " .. st:gsub("\n", " | ") .. ")")
 check(st:find("map 1429", 1, true) ~= nil, "(7) status shows the stored mapID")
-check(st:find("auto-refresh on", 1, true) ~= nil, "(7) status shows auto-refresh on")
+check(st:find("auto-refresh on", 1, true) ~= nil, "(7) status shows auto-refresh on (the default)")
 check(st:find("Last rebuild: 12:00:00", 1, true) ~= nil, "(7) status shows the last rebuild time")
 check(st:find("trigger login", 1, true) ~= nil, "(7) status shows the rebuild trigger")
 check(st:find("points", 1, true) ~= nil, "(7) status shows the point count")
@@ -275,7 +277,7 @@ check(st:find("Route state: active no", 1, true) ~= nil, "(2) status says active
 --     never synchronously inside the gather event.
 -- ════════════════════════════════════════════════════════════════════
 mapID = 1429
-local pkg3, ns3, draw3 = loadClient(savedWithIntent(1429))
+local pkg3, ns3, draw3 = loadClient(savedWithIntent(1429, { autoRefresh = true }))
 pcall(ns3.Enable)
 check(ns3.RouteAuto.state.rebuilds == 1, "(3) the login rebuild ran once")
 local buildsAfterLogin = ns3.RouteAuto.state.rebuilds
@@ -283,6 +285,11 @@ local picksBefore = ns3.activeRoute and ns3.activeRoute.picks or 0
 check(picksBefore == 12, "(3) the restored route was built from the 12 seeded picks (got " .. tostring(picksBefore) .. ")")
 
 clock = 200
+-- t_57550700: an automatic re-plan needs a tranche of `autoRefreshPicks` (5)
+-- new picks, so this section gathers five — the number the counter requires
+-- before a window is armed. The wall clock moves past the 30-second floor so
+-- the frame's gate lets it through.
+wall = wall + 40
 for i = 1, 5 do
   clock = clock + 1
   ns3.RecordHerb(1429, 0.1 + i * 0.01, 0.1 + i * 0.01, {})
@@ -452,9 +459,18 @@ if type(ns8.SetAutoRefreshRoute) == "function" then
 end
 check(type(NodeTrailDB.route) == "table" and NodeTrailDB.route.autoRefresh == true,
   "(8) turning it on persists at NodeTrailDB.route.autoRefresh")
+-- t_57550700: a re-plan is triggered by a TRANCHE of picks — five by default —
+-- so it takes five gathers to arm one, not one. The pick recorded above while
+-- the switch was off already counts (a pick is a pick).
+while (ns8.RouteAuto.state.pendingPicks or 0) < 4 do
+  clock = clock + 1
+  local n = ns8.RouteAuto.state.pendingPicks or 0
+  ns8.RecordHerb(1429, 0.52 + n * 0.001, 0.52, {})
+end
+check(ns8.RouteAuto.state.dueAt == nil, "(8) four gathers are one short of the tranche")
 clock = clock + 1
-ns8.RecordHerb(1429, 0.52, 0.52, {})
-check(ns8.RouteAuto.state.dueAt ~= nil, "(8) with it on again the next pick schedules a rebuild")
+ns8.RecordHerb(1429, 0.53, 0.53, {})
+check(ns8.RouteAuto.state.dueAt ~= nil, "(8) with it on again, five gathers schedule a rebuild")
 
 -- ════════════════════════════════════════════════════════════════════
 -- (9) /nt start SETS the intent (and a start that builds nothing leaves

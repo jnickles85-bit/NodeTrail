@@ -36,3 +36,6 @@ L["ROUTE_STALE"] = "NodeTrail: route not rebuilt — it was started %s ago, olde
 L["ROUTE_OTHER_MAP"] = "NodeTrail: route kept for map %s; nothing is drawn until you are back there (you are on %s)."
 L["STATUS_ROUTE_STATE"] = "  Route state: active %s, map %s, auto-refresh %s"
 L["STATUS_ROUTE_REBUILD"] = "  Last rebuild: %s, trigger %s, %d points"
+L["STATUS_ROUTE_PENDING"] = "  New picks since that rebuild: %d (/nt reload to include them)"
+L["STATUS_ROUTE_GAP"] = "  Auto re-plan: switch %s, every %d gathers — %d of %d picks since the last plan"
+L["ROUTE_NEW_PICKS"] = "NodeTrail: %d new pick%s since this route was built — /nt reload to include them."

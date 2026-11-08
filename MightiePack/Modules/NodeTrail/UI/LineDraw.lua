@@ -424,7 +424,13 @@ function D.Clear(drawer)
   if not drawer or not drawer.pool then
     return
   end
-  for i = 1, #drawer.pool do
+  -- t_57550700: iterate to the HIGH-WATER index, never `#pool`. A pool that ever
+  -- failed to create an object has a nil slot in it, and `#` on such a table is
+  -- unspecified — the old loop could stop before the tail and leave the
+  -- previous route's dots on the map. hideFrom below had the same bug and was
+  -- fixed; this is the same fix applied to Clear.
+  local high = drawer.poolHigh or #drawer.pool
+  for i = 1, high do
     hideObj(drawer.pool[i])
   end
 end
@@ -444,8 +450,12 @@ function D.Invalidate(drawer)
     drawer.widenHint = nil
     drawer.hideFromIndex = nil
     drawer.hiddenCount = nil
+    drawer.hiddenDots = nil
     drawer.dotOutside = nil
     drawer.dotBox = nil
+    -- The plan fingerprint belonged to the previous parent: a draw onto a new
+    -- surface is not a re-plan, it is the first plan there.
+    drawer.planSig = nil
   end
 end
 
@@ -700,24 +710,77 @@ local function acquire(drawer, index, parent)
   return created
 end
 
---- Hide every held object from `index` on. Iterates to the HIGH-WATER index
---- rather than `#drawer.pool`: a pool that ever failed to create an object has
---- a nil slot in it, and `#` on such a table is unspecified — the old loop
---- could stop early and leave the previous route's dots on screen.
---- @return number of objects hidden
-local function hideFrom(drawer, index)
+--- The frame surplus regions are moved onto once they are no longer part of a
+--- plan. It is created once and left hidden: a region cannot be destroyed on
+--- this client, so "released" means "off the map surface and out of the pool",
+--- not "gone".
+local function retireHolder(drawer)
+  if type(drawer.retireTo) == "table" then
+    return drawer.retireTo
+  end
+  if type(CreateFrame) ~= "function" then
+    return nil
+  end
+  local ok, frame = pcall(CreateFrame, "Frame", "MightiePackNodeTrailRetiredDots")
+  if not ok or type(frame) ~= "table" then
+    return nil
+  end
+  pcall(frame.Hide, frame)
+  drawer.retireTo = frame
+  return frame
+end
+
+--- Hide every held object from `index` on AND take it out of the pool.
+---
+--- Iterating to the HIGH-WATER index rather than `#drawer.pool`: a pool that ever
+--- failed to create an object has a nil slot in it, and `#` on such a table is
+--- unspecified — the old loop could stop early and leave the previous route's
+--- dots on screen.
+---
+--- t_57550700: this used to hide the surplus but KEEP it. The pool was a one-way
+--- ratchet — two live plans in one session reported `objects held=908` for a
+--- 480-object plan, and `highest=908` with `hideFrom=481 hidden=0` could not be
+--- reconciled with `shown=480`. A hidden object stays parented to the map host,
+--- is counted as "held", and is silently re-shown by the next grow at the
+--- position it was left at. Released objects cannot do any of that: the pool
+--- after every draw is exactly `painted * 2`, and `stale` (highest > 2*painted)
+--- says so if it ever is not.
+---
+--- @param paired true for the dot chain, where a dot is two objects (rim, dot)
+--- @return hidden objects, hidden dots
+local function hideFrom(drawer, index, paired)
   local high = drawer.poolHigh or #drawer.pool
-  local hidden = 0
+  local hidden, dots = 0, 0
+  local holder
   for i = index, high do
     local obj = drawer.pool[i]
-    if obj and (not obj.IsShown or obj:IsShown() ~= false) then
-      hidden = hidden + 1
+    if obj then
+      local shown = (not obj.IsShown) or (obj:IsShown() ~= false)
+      if shown then
+        hidden = hidden + 1
+        -- Even pool indices are the white dot of each pair (odd = its rim), so
+        -- the dots that disappear are the EVEN objects in the surplus range.
+        -- That is the drop in `painted`, in painted's own unit.
+        if not paired or (i % 2 == 0) then
+          dots = dots + 1
+        end
+      end
+      hideObj(obj)
+      -- The holder is only created when there is something to release.
+      if holder == nil then
+        holder = retireHolder(drawer) or false
+      end
+      if holder and type(obj.SetParent) == "function" then
+        pcall(obj.SetParent, obj, holder)
+      end
+      drawer.pool[i] = nil
     end
-    hideObj(obj)
   end
+  drawer.poolHigh = (index > 1) and (index - 1) or 0
   drawer.hideFromIndex = index
   drawer.hiddenCount = hidden
-  return hidden
+  drawer.hiddenDots = dots
+  return hidden, dots
 end
 
 local function paintLine(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
@@ -857,6 +920,27 @@ local function toBottomLeft(parent, x1, y1, x2, y2, space)
   return x1, h - y1, x2, h - y2
 end
 
+--- A cheap, exact fingerprint of the plan a draw is about to paint, in the
+--- pixels it will paint them at. `replans=` in /nt mapdiag must count drawings
+--- that REPLACED A DIFFERENT DRAWING — it read 0 through a live session in which
+--- the route visibly went from 33 points (208 dots) to 37 points (240 dots),
+--- because the only counter on that line counted capacity re-fits instead.
+--- Integers only, so the same plan always fingerprints the same.
+local function planSignature(buf, count)
+  local h = 7
+  h = (h * 1000003 + (count or 0)) % 2147483647
+  for i = 1, (count or 0) do
+    local s = buf[i]
+    if type(s) == "table" then
+      for k = 1, 4 do
+        local v = tonumber(s[k]) or 0
+        h = (h * 1000003 + math.floor(v * 100 + 0.5)) % 2147483647
+      end
+    end
+  end
+  return h
+end
+
 --- Draw `count` segments from `buf[i] = {x1,y1,x2,y2}`.
 --- space "ydown": pixels from parent TOPLEFT, +y down.
 --- space "yup": pixels from parent CENTER, +y up.
@@ -875,6 +959,20 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     detect(drawer, parent)
   end
   count = count or 0
+  -- t_57550700: what the previous draw reported, captured BEFORE this one
+  -- overwrites it. Together with `hidden` it is the shrink proof:
+  -- hidden + painted == prevPainted, or a dot of the old plan is unaccounted for.
+  local prevApplied = drawer.lastApplied
+  local prevSig, prevPainted = drawer.planSig, 0
+  if type(prevApplied) == "table" and prevSig ~= nil then
+    prevPainted = tonumber(prevApplied.paintedDots) or 0
+  end
+  local sig = (count > 0) and planSignature(buf, count) or nil
+  local replanned = (sig ~= nil) and (prevSig ~= nil) and (sig ~= prevSig)
+  if replanned then
+    drawer.planReplans = (drawer.planReplans or 0) + 1
+  end
+  drawer.planSig = sig
   -- Record what this draw applies: the in-client diag can read the pool
   -- objects' geometry but not their colour, so the values the code actually
   -- passed are the only truthful answer to "is alpha 0 / did pathColor apply".
@@ -884,9 +982,24 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     thickness = thickness,
     r = r, g = g, b = b, a = a,
     space = space,
+    prevPainted = prevPainted,
+    planReplans = drawer.planReplans or 0,
+    replanned = replanned,
   }
   if drawer.mode == "none" or count < 1 then
+    -- No plan on screen. Hiding (not releasing) keeps the pool as a cache: the
+    -- minimap redraws with count 0 every time the player leaves its radius, and
+    -- releasing there would re-create hundreds of regions each time.
     D.Clear(drawer)
+    drawer.lastApplied.plannedDots = 0
+    drawer.lastApplied.paintedDots = 0
+    drawer.lastApplied.missingDots = 0
+    drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+    drawer.lastApplied.hideFromIndex = nil
+    drawer.lastApplied.hiddenByHide = 0
+    drawer.lastApplied.hiddenDots = 0
+    drawer.lastApplied.replans = 0
+    drawer.lastApplied.stale = false
     return
   end
   if drawer.mode == "dots" then
@@ -1092,15 +1205,22 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     if (replans > 0 or fitted) and not reverted then
       drawer.widenHint = (widen and widen > 1) and widen or nil
     end
-    hideFrom(drawer, index)
-    drawer.lastApplied.dots = (total > 0) and painted or 0
+    hideFrom(drawer, index, true)
+    painted = (total > 0) and painted or 0
+    drawer.lastApplied.dots = painted
     drawer.lastApplied.paintedDots = painted
     drawer.lastApplied.dotObjects = (total > 0) and (index - 1) or 0
     drawer.lastApplied.plannedDots = total
     drawer.lastApplied.missingDots = missing
     drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+    -- t_57550700: the tripwire. After every draw the pool holds exactly the
+    -- objects of the plan on screen (two per dot). A `highest` above that is the
+    -- one-way ratchet that left 428 objects of earlier plans parented to the
+    -- map — say so instead of hiding it behind a flag that never fired.
+    drawer.lastApplied.stale = (tonumber(drawer.poolHigh) or 0) > (2 * painted)
     drawer.lastApplied.capacity = drawer.capacity
     drawer.lastApplied.replans = replans
+    drawer.lastApplied.hiddenDots = drawer.hiddenDots
     drawer.lastApplied.reverted = reverted
     drawer.lastApplied.capacityStale = capacityStale
     drawer.lastApplied.createFailed = drawer.createFailed
@@ -1135,5 +1255,5 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
       end
     end
   end
-  hideFrom(drawer, count + 1)
+  hideFrom(drawer, count + 1, false)
 end
