@@ -728,7 +728,16 @@ function M:Diag()
     return "minimap segments: " .. table.concat(out, "; ")
   end)
   fact(function()
-    return "minimap verdict: " .. tostring(self._why or "drew segments")
+    -- "drew segments" is a claim about a redraw; with no redraw recorded there
+    -- is nothing to claim. `_proj` is only set by a redraw that reached the
+    -- measurement stage, so it is the honest indicator.
+    if self._why then
+      return "minimap verdict: " .. tostring(self._why)
+    end
+    if type(self._proj) ~= "table" then
+      return "minimap verdict: no redraw on a usable minimap sample yet"
+    end
+    return "minimap verdict: drew segments"
   end)
   fact(function()
     return "minimap drawError=" .. tostring(self._drawError or "none")

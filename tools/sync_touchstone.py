@@ -361,6 +361,32 @@ EDITORS = {
 }
 
 
+ASSET_LITERAL = '"Interface\\\\AddOns\\\\Touchstone\\\\ChestAdvisor\\\\marker.tga"'
+ASSET_CONST = "MIGHTIEPACK_TOUCHSTONE_ASSETS"
+ASSET_PREAMBLE = (
+    "-- Fold: asset paths point at where the module actually lives. Upstream\n"
+    "-- hardcodes Interface\\AddOns\\Touchstone\\... which does not exist once the\n"
+    "-- files are vendored under MightiePack/Modules/Touchstone/ — the bag arrow\n"
+    "-- and the toast arrow then render as nothing and the upgrade never shows.\n"
+    "local _mpAddonName = ...\n"
+    "local " + ASSET_CONST + " = \"Interface\\\\AddOns\\\\\"\n"
+    "\t.. tostring(_mpAddonName or \"MightiePack\")\n"
+    "\t.. \"\\\\Modules\\\\Touchstone\\\\ChestAdvisor\\\\\"\n"
+)
+
+
+def retarget_assets(text: str, name: str) -> str:
+    """Point Touchstone's own art at the vendored location, once per file."""
+    if ASSET_LITERAL not in text:
+        return text
+    text = text.replace(ASSET_LITERAL, "(" + ASSET_CONST + " .. \"marker.tga\")")
+    # The constant has to exist before first use; put it right after the guard.
+    marker = "if MightiePackTouchstoneSkip then return end\n"
+    if not text.startswith(marker):
+        raise SyncError("{}: skip guard missing before asset rewrite".format(name))
+    return text[: len(marker)] + ASSET_PREAMBLE + text[len(marker):]
+
+
 def load_guarded(src_root: Path, name: str) -> str:
     text = read_text(src_root / name)
     if text.startswith("if MightiePackTouchstoneSkip then return end"):
@@ -381,6 +407,7 @@ def generate(src_root: Path) -> dict:
         editor = EDITORS.get(name)
         if editor is not None:
             text = editor(text)
+        text = retarget_assets(text, name)
         outputs[name] = text
     return outputs
 

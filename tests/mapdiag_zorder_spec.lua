@@ -218,6 +218,19 @@ check(M.host and M.host:GetFrameStrata() == "MEDIUM",
 check(M._zorder and M._zorder.candidates and #M._zorder.candidates >= 1,
   "the art candidates are recorded for the diag")
 
+-- On the redraw that performed the raise, the verdict must name draw order AND
+-- say the raise happened on this redraw (not "still invisible"? re-run me).
+chat = {}
+M:Diag()
+local firstDiag = table.concat(chat, "\n")
+check(firstDiag:find("verdict: DRAW ORDER", 1, true) ~= nil,
+  "the raising redraw names draw order as the cause")
+check(firstDiag:find("it was raised to 45 on this redraw", 1, true) ~= nil,
+  "the raising redraw says the raise happened on this redraw (diag: "
+    .. tostring(firstDiag:match("verdict:[^\n]*")) .. ")")
+check(firstDiag:find("RAISED from 13 to 45 on this redraw", 1, true) ~= nil,
+  "the z-order line dates the raise to this redraw")
+
 -- The overlay is itself a child of the canvas, so a naive "highest child wins"
 -- audit ratchets its own level upward on every redraw. Three redraws must keep
 -- the level put, and the raise must stay reported.
@@ -230,6 +243,10 @@ check(M.host:GetFrameLevel() == levelAfterFirst,
     .. ", first " .. tostring(levelAfterFirst) .. ")")
 check(M._zorder and M._zorder.raised == true,
   "the raise is still reported after later redraws (nothing left to raise)")
+check(M._zorder and M._zorder.raisedNow == false,
+  "no raise happens on a later redraw once the host is above the art")
+check(M._zorder and M._zorder.raisedEarlier == true,
+  "the earlier raise is recorded as history")
 check(M._drawError == nil, "no draw error after repeated redraws: " .. tostring(M._drawError))
 
 -- The line itself: real region contract, real pixels.
@@ -275,11 +292,20 @@ for _, needle in ipairs({
   "#2 (0.450,0.430)->(450.9,287.2)",
   -- the segment decision
   "segments: queued=1 total=",
-  -- and the verdict names the cause from those numbers
-  "verdict: DRAW ORDER",
 }) do
   check(joined:find(needle, 1, true) ~= nil, "mapdiag missing: " .. needle)
 end
+-- The verdict must NOT keep claiming draw order once the raise has happened:
+-- the host is already above the art, so the next candidate is named instead,
+-- with the earlier raise carried as history.
+check(joined:find("verdict: DRAW ORDER", 1, true) == nil,
+  "the verdict no longer claims draw order on a redraw where the host is above the art")
+check(joined:find("verdict: no draw-order, colour or geometry cause found", 1, true) ~= nil,
+  "the verdict falls through to the next candidate once the host is on top")
+check(joined:find("(draw order was raised earlier: 13 -> 45)", 1, true) ~= nil,
+  "the earlier raise is carried as history in the verdict")
+check(joined:find("on an earlier redraw; nothing left to raise", 1, true) ~= nil,
+  "the z-order line dates the raise to an earlier redraw")
 check(joined:find("error:", 1, true) == nil, "mapdiag printed an error line")
 
 if failed > 0 then

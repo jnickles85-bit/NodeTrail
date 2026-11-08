@@ -303,6 +303,8 @@ function M:Clear()
   self._px = nil
   self._segLens = nil
   self._skipped = nil
+  self._measured = false
+  self._drew = false
   self._zorder = nil
   self._raisedInfo = nil
   self._why = nil
@@ -354,7 +356,14 @@ function M:EnsureHost(parent, label)
   end
   local level = call(parent, "GetFrameLevel")
   if type(level) == "number" and isFn(host.SetFrameLevel) then
-    pcall(host.SetFrameLevel, host, level + 10)
+    -- Only ever raise here, never reset: a host already placed above the map
+    -- art by AuditAndRaise must not be dropped back to canvas+10 on the next
+    -- redraw (that made every redraw "raise" again and made the diag's verdict
+    -- claim draw order forever).
+    local current = frameLevel(host)
+    if type(current) ~= "number" or current < level + 10 then
+      pcall(host.SetFrameLevel, host, level + 10)
+    end
   end
   return host
 end
@@ -413,13 +422,15 @@ function M:AuditAndRaise(host, parent, width, height)
   if type(currentLevel) == "number" and currentLevel > wantedLevel then
     wantedLevel = currentLevel
   end
-  local raised = false
+  local raisedNow = false
   if isFn(host.SetFrameLevel) and (currentLevel ~= wantedLevel) then
     pcall(host.SetFrameLevel, host, wantedLevel)
-    raised = type(currentLevel) == "number" and currentLevel < wantedLevel
-    if raised then
-      -- Sticky: the raise is the evidence for the verdict, and it must still be
-      -- reported on later redraws (where nothing needs raising any more).
+    raisedNow = type(currentLevel) == "number" and currentLevel < wantedLevel
+    if raisedNow then
+      -- Sticky, but recorded as HISTORY: `raisedInfo` says a raise happened,
+      -- `raisedNow` says it happened on THIS redraw. The verdict must not keep
+      -- claiming draw order on a redraw where the host is already on top —
+      -- otherwise the geometry/colour/unknown verdicts are unreachable.
       self._raisedInfo = { from = currentLevel, to = wantedLevel, label = topLabel }
     end
   end
@@ -430,20 +441,37 @@ function M:AuditAndRaise(host, parent, width, height)
     if isFn(host.SetFrameStrata) then
       pcall(host.SetFrameStrata, host, topStrata)
       hostStrata = topStrata
-      raised = true
+      raisedNow = true
     end
   elseif type(parentStrata) == "string" and isFn(host.SetFrameStrata) and hostStrata ~= parentStrata then
     pcall(host.SetFrameStrata, host, parentStrata)
     hostStrata = parentStrata
   end
   local info = self._raisedInfo
-  if not raised and type(info) == "table" and info.to == wantedLevel and info.from ~= info.to then
-    raised = true
-  end
+  -- `raised` stays sticky: the raise is evidence that must survive later
+  -- redraws (nothing needs raising any more, but it did happen). `raisedNow`
+  -- and `raisedEarlier` say WHEN, so the verdict can fall through to the next
+  -- candidate instead of repeating "draw order" forever.
+  local raisedEarlier = (not raisedNow) and type(info) == "table"
+    and info.to == wantedLevel and info.from ~= info.to
   audit.hostLevel = frameLevel(host)
   audit.hostStrata = hostStrata
-  audit.raised = raised
+  audit.raised = raisedNow or raisedEarlier
+  audit.raisedNow = raisedNow
+  audit.raisedEarlier = raisedEarlier
   audit.raisedFrom = (type(info) == "table") and info.from or currentLevel
+  audit.topLevel = topLevel
+  audit.stillBelow = nil
+  if type(audit.hostLevel) == "number" and type(topLevel) == "number" then
+    local hostRank = strataRank(hostStrata)
+    local artRank = strataRank(topStrata)
+    if hostRank and artRank and hostRank ~= artRank then
+      -- Across strata the strata wins, whatever the level says.
+      audit.stillBelow = hostRank < artRank
+    else
+      audit.stillBelow = audit.hostLevel <= topLevel
+    end
+  end
   self._zorder = audit
   return audit
 end
@@ -471,8 +499,16 @@ function M:RequestRetry()
 end
 
 function M:_redraw()
+  -- Everything the diag prints about THIS redraw starts cleared: a redraw that
+  -- returns early (wrong map, no host, no measurable size) must not leave the
+  -- previous route's points/segments/colour looking like the current ones.
   self._lastQueued = 0
   self._why = nil
+  self._px = nil
+  self._segLens = nil
+  self._skipped = nil
+  self._measured = false
+  self._drew = false
   if not self.path or #self.path < 2 then
     self._why = "no route"
     self:ReleaseVisuals()
@@ -582,6 +618,7 @@ function M:_redraw()
   self._px = px
   self._segLens = segLens
   self._skipped = skipped
+  self._measured = true
 
   -- Draw order is measured on every redraw, not assumed once: the art frames
   -- can be created (or raised) after the first draw.
@@ -590,6 +627,7 @@ function M:_redraw()
   local r, g, b, a, stroke = ns.LineDraw.ColorWidth()
   local thickness = stroke / mapZoom(mapFrame)
   ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, b, a, "ydown")
+  self._drew = true
   self._lastQueued = count
   if count > 0 then
     pcall(host.Show, host)
@@ -858,9 +896,13 @@ function M:Diag()
       fmtNum(z.canvasLevel), tostring(z.canvasStrata or "absent"), fmtNum(#z.candidates),
       table.concat(names, ", "), tostring(z.topLabel), fmtNum(z.topLevel),
       fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), verdict,
-      z.raised and (" (RAISED from " .. fmtNum(z.raisedFrom) .. ")") or "")
+      z.raised and (" (RAISED from " .. fmtNum(z.raisedFrom) .. " to " .. fmtNum(z.hostLevel)
+        .. (z.raisedNow and " on this redraw)" or " on an earlier redraw; nothing left to raise)")) or "")
   end)
   fact(function()
+    if not self._drew then
+      return "colour: not measured on the last redraw (" .. (self._why or "no redraw has run yet") .. ")"
+    end
     local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
     if type(applied) ~= "table" then
       return "colour: no draw recorded yet"
@@ -898,7 +940,10 @@ function M:Diag()
   fact(function()
     local px = self._px
     if type(px) ~= "table" then
-      return "points: not projected yet (no redraw on a measurable map rect)"
+      if not self._measured then
+        return "points: not measured on the last redraw (" .. (self._why or "no redraw has run yet") .. ")"
+      end
+      return "points: none on the last redraw"
     end
     local out = {}
     local shown = 0
@@ -922,6 +967,9 @@ function M:Diag()
     return text
   end)
   fact(function()
+    if not self._measured then
+      return "segments: not measured on the last redraw (" .. (self._why or "no redraw has run yet") .. ")"
+    end
     local lens = self._segLens or {}
     local names = {}
     for i = 1, #lens do
@@ -940,39 +988,56 @@ function M:Diag()
     return text
   end)
   fact(function()
-    -- The one line that names the likely cause from what was measured above.
+    -- The one line that names the NEXT candidate from what THIS redraw
+    -- measured. A raise that already happened is history, not a verdict: once
+    -- the host is above the art the verdict has to fall through to the
+    -- geometry/colour/unknown candidates below.
     if not self.host then
       return "verdict: no host frame yet — nothing has been drawn on this client"
     end
-    if shownState(self.host) == false then
-      return "verdict: the host is hidden — " .. tostring(self._why or "no reason recorded")
-    end
     local z = self._zorder
-    if type(z) == "table" and z.raised then
+    local history = ""
+    if type(z) == "table" and z.raised and type(z.raisedFrom) == "number" then
+      history = (" (draw order was raised earlier: %s -> %s)")
+        :format(fmtNum(z.raisedFrom), fmtNum(z.hostLevel))
+    end
+    if shownState(self.host) == false then
+      return "verdict: the host is hidden — " .. tostring(self._why or "no reason recorded") .. history
+    end
+    if type(z) == "table" and z.raisedNow then
       return string.format(
-        "verdict: DRAW ORDER — the host sat at level %s, below %s (level %s); the overlay now raises it to %s. Re-run /nt mapdiag after opening the map to confirm host_level > top",
+        "verdict: DRAW ORDER — the host sat at level %s, below %s (level %s); it was raised to %s on this redraw. Re-run /nt mapdiag on the same map to confirm host_level > top and look for the line",
         fmtNum(z.raisedFrom), tostring(z.topLabel), fmtNum(z.topLevel), fmtNum(z.hostLevel))
+    end
+    if type(z) == "table" and z.stillBelow then
+      return string.format(
+        "verdict: DRAW ORDER (still below after the raise attempt) — host is level=%s strata=%s, the art is %s level=%s strata=%s; %s. Next measurement: /nt mapdiag on this map, then report the two levels",
+        fmtNum(z.hostLevel), tostring(z.hostStrata or "absent"), tostring(z.topLabel),
+        fmtNum(z.topLevel), tostring(z.topStrata or "absent"),
+        isFn(self.host.SetFrameLevel) and "the client did not accept a higher level"
+          or "this client exposes no SetFrameLevel")
     end
     local total = 0
     for i = 1, #(self._segLens or {}) do
       total = total + self._segLens[i]
     end
     if (self._lastQueued or 0) < 1 then
-      return "verdict: nothing queued — " .. tostring(self._why or "no reason recorded")
+      return "verdict: nothing queued — " .. tostring(self._why or "no reason recorded") .. history
     end
     if total < 8 then
       return string.format(
-        "verdict: GEOMETRY — the %s queued segment(s) total %spx on a %sx%s map: a dot, not a missing line. Next measurement: zoom in on the route's coordinates and screenshot",
+        "verdict: GEOMETRY — the %s queued segment(s) total %spx on a %sx%s map: a dot, not a missing line. Next measurement: zoom in on the route's coordinates and screenshot%s",
         fmtNum(self._lastQueued), fmtNum(total, 1),
-        fmtNum(self._rect and self._rect.width), fmtNum(self._rect and self._rect.height))
+        fmtNum(self._rect and self._rect.width), fmtNum(self._rect and self._rect.height), history)
     end
     local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
     if type(applied) == "table" and type(applied.a) == "number" and applied.a <= 0 then
-      return "verdict: COLOUR — the draw applied alpha " .. fmtNum(applied.a, 2) .. " (pathColor[4]); the line is fully transparent"
+      return "verdict: COLOUR — the draw applied alpha " .. fmtNum(applied.a, 2)
+        .. " (pathColor[4]); the line is fully transparent" .. history
     end
     return string.format(
-      "verdict: no draw-order, colour or geometry cause found — %s segment(s) totalling %spx queued on a shown host at level %s. Next measurement: /nt mapdiag with this map open at this zoom, plus a screenshot of the same view",
-      fmtNum(self._lastQueued), fmtNum(total, 1), fmtNum(frameLevel(self.host)))
+      "verdict: no draw-order, colour or geometry cause found — %s segment(s) totalling %spx queued on a shown host at level %s. Next measurement: /nt mapdiag with this map open at this zoom, plus a screenshot of the same view%s",
+      fmtNum(self._lastQueued), fmtNum(total, 1), fmtNum(frameLevel(self.host)), history)
   end)
 
   say("route")

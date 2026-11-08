@@ -1,4 +1,12 @@
 if MightiePackTouchstoneSkip then return end
+-- Fold: asset paths point at where the module actually lives. Upstream
+-- hardcodes Interface\AddOns\Touchstone\... which does not exist once the
+-- files are vendored under MightiePack/Modules/Touchstone/ — the bag arrow
+-- and the toast arrow then render as nothing and the upgrade never shows.
+local _mpAddonName = ...
+local MIGHTIEPACK_TOUCHSTONE_ASSETS = "Interface\\AddOns\\"
+	.. tostring(_mpAddonName or "MightiePack")
+	.. "\\Modules\\Touchstone\\ChestAdvisor\\"
 --- Touchstone — Upgrades tab (card t_b7b5f60c, audit U1).
 ---
 --- WHAT THIS IS. The window's DEFAULT tab, and the reason the window exists: the
@@ -36,7 +44,7 @@ local C = SF.Colors
 -- texture is not a loadable file — listing it in the TOC raises at login). The
 -- path is the merged layout's own: Touchstone/ChestAdvisor/marker.tga.
 local MARKER_TEXTURE =
-  "Interface\\AddOns\\Touchstone\\ChestAdvisor\\marker.tga"
+  (MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
 
 local ROW_H   = 34
 local ICON    = 22

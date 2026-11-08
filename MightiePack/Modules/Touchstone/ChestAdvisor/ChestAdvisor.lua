@@ -1,4 +1,12 @@
 if MightiePackTouchstoneSkip then return end
+-- Fold: asset paths point at where the module actually lives. Upstream
+-- hardcodes Interface\AddOns\Touchstone\... which does not exist once the
+-- files are vendored under MightiePack/Modules/Touchstone/ — the bag arrow
+-- and the toast arrow then render as nothing and the upgrade never shows.
+local _mpAddonName = ...
+local MIGHTIEPACK_TOUCHSTONE_ASSETS = "Interface\\AddOns\\"
+	.. tostring(_mpAddonName or "MightiePack")
+	.. "\\Modules\\Touchstone\\ChestAdvisor\\"
 -- ChestAdvisor.lua — t_3c1256ec: a per-slot upgrade advisor.
 --
 -- Scope today: the armour slots (head, shoulders, chest, back, wrists, hands,
@@ -1711,7 +1719,7 @@ local function anchorMarker(f, bag, slot, link, slotWordText)
 		-- surface and the visible arrow is a texture whose relative is the
 		-- BUTTON — the geometry pinned in §5b's corrected table:
 		--   button:CreateTexture(nil, "OVERLAY", nil, 7)
-		--   SetTexture("Interface\\AddOns\\Touchstone\\ChestAdvisor\\marker.tga")
+		--   SetTexture((MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga"))
 		--   SetSize(18, 18)
 		--   SetPoint("TOPRIGHT", button, "TOPRIGHT", 1, 1)
 		-- The arrow is stored on the button under ChestAdvisor's own
@@ -1768,7 +1776,7 @@ local function anchorMarker(f, bag, slot, link, slotWordText)
 			texture:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
 		else
 			if type(texture.SetTexture) == "function" then
-				texture:SetTexture("Interface\\AddOns\\Touchstone\\ChestAdvisor\\marker.tga")
+				texture:SetTexture((MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga"))
 			end
 			texture:SetSize(18, 18)
 			texture:SetPoint("TOPRIGHT", button, "TOPRIGHT", 1, 1)
@@ -2171,7 +2179,7 @@ end
 -- the quest block captures them as upvalues.
 local QUEST_ARROW_SIZE = 18         -- bag-marker parity (§5b geometry)
 local QUEST_ARROW_TEXTURE =
-	"Interface\\AddOns\\Touchstone\\ChestAdvisor\\marker.tga"
+	(MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
 
 -- Is this frame shown right now? nil / non-frame / a throwing IsShown all read
 -- as "not shown" (a hidden panel must never draw).
@@ -3625,7 +3633,7 @@ local TOAST_HEADER = "Upgrade found!"
 local TOAST_FALLBACK_SUB = "Better item in your bags"
 local TOAST_FALLBACK_ICON = "Interface\\Icons\\INV_Misc_Bag_08"
 local TOAST_ARROW_TEXTURE =
-	"Interface\\AddOns\\Touchstone\\ChestAdvisor\\marker.tga"
+	(MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
 -- The item name is neutral text (white) and the sub line keeps the mock's ruled
 -- green — neither is Touchstone's own chrome. The one ACCENT lives on the TOAST
 -- table above; these two are what is left of the mock's own palette.

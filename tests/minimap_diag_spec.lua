@@ -107,6 +107,16 @@ local function say()
   return table.concat(chat, "\n")
 end
 
+-- ── 0. nothing redrawn yet: the verdict must not claim a draw ─────────────
+-- `_why` is nil both after a redraw that queued segments and before any redraw
+-- at all, so "drew segments" used to be printed for a state that never drew.
+local freshOut = say()
+check(freshOut:find("minimap verdict: no redraw on a usable minimap sample yet", 1, true) ~= nil,
+  "0: with no redraw at all the verdict says so (got "
+    .. tostring(freshOut:match("minimap verdict:[^\n]*")) .. ")")
+check(freshOut:find("minimap verdict: drew segments", 1, true) == nil,
+  "0: the verdict does not claim a draw that never happened")
+
 -- ── A. a route point inside the minimap view is drawn ─────────────────────
 M:SetRoute({ mapID = mapID, path = { { x = 0.50, y = 0.50 }, { x = 0.52, y = 0.50 } } })
 check(M._drawError == nil, "A: draw error: " .. tostring(M._drawError))
