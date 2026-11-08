@@ -5,6 +5,57 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
 **2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 
+- **The Alchemy line is gated on a REAL signal — or it is not drawn at all** (t_4ab7c230).
+  The previous pass fell back to `recipes (not filtered by skill)`, which still advertised eight
+  crafts Mightie cannot make. The signals it looked for (`numAvailable`, `requiredSkill`) are not
+  the ones this client answers. `Wow.exe` build 16001 carries the usage strings
+  `C_TradeSkillUI.GetCraftableCount(recipeSpellID [, recipeLevel]) -> numAvailable` and
+  `C_TradeSkillUI.IsRecipeProfessionLearned(recipeID) -> boolean`, and its recipeInfo struct names
+  `numAvailable`, `requiredSkillRank` and `skillLineAbilityID`. `Data/Recipes.lua` now resolves
+  availability in this order and records WHICH signal answered:
+  count > 0 → `IsRecipeProfessionLearned == false` → `requiredSkillRank`/`requiredSkill` vs the
+  character's Alchemy rank → learned == true → count == 0 → `isAvailable`; the legacy path reads
+  `GetTradeSkillNumAvailable(i)` and `GetTradeSkillInfo`'s third (learnable) return when present.
+  The learned flag is what answers the report: `GetAllRecipeIDs` enumerates UNLEARNED recipes
+  exactly like known ones. A client that answers none of these draws NO Alchemy line — the caveat
+  is gone — and the options panel carries one short note (`Rc:HiddenHint`) saying the list needs a
+  recipe-availability API this client version lacks. `/nt recipediag [id|name]` prints, for one
+  craftable and one non-craftable recipe, every candidate call and raw value by name
+  (`GetRecipeInfo`/`GetRecipeSchematic` fields, `GetCraftableCount`, `GetRecipeRequirements`,
+  `IsRecipeProfessionLearned`, `GetRecipeCooldown`, legacy calls, and the character's rank), plus
+  the single `signal:` line the panel is gated on. **The `GetCraftableCount(103) -> 3 (number)`
+  output quoted below is the SPEC FIXTURE, not observed client output** — `/nt recipediag` still
+  has to be run in game; the static evidence is the exe's own usage strings. The account
+  SavedVariables on disk (16:24) carry `recipes.alchemy` + `alchemyScanned` but none of the gate
+  keys, which means the session that wrote them was not running this build (`alchemyCraft` would
+  have been persisted) — so the live gate is the next step, not a proven outcome.
+
+  ```
+  NodeTrail recipediag: modern calls: GetRecipeInfo=present, GetRecipeSchematic=present,
+    GetCraftableCount=present, GetRecipeRequirements=absent, IsRecipeProfessionLearned=present, …
+  NodeTrail recipediag: legacy calls: GetTradeSkillLine=absent, GetNumTradeSkills=absent,
+    GetTradeSkillInfo=absent, GetTradeSkillNumAvailable=absent, …
+  NodeTrail recipediag: character Alchemy rank: 75 (GetSkillLineInfo / Pr:Rank)
+  NodeTrail recipediag: --- target 1 (craftable per stored gate): "Lesser Discolored Healing Potion"
+    (recipe id 103) · stored gate: craftable
+  NodeTrail recipediag: GetRecipeInfo(103) -> {name="Lesser Discolored Healing Potion" (string),
+    reagents={1=table, 2=table}, requiredSkillRank=75 (number), skillLineAbilityID=9003 (number)}
+  NodeTrail recipediag: GetCraftableCount(103) -> 3 (number)
+  NodeTrail recipediag: IsRecipeProfessionLearned(103) -> true (boolean)
+  NodeTrail recipediag: --- target 2 (not craftable per stored gate): "Elixir of Wisdom"
+    (recipe id 101) · stored gate: not craftable
+  NodeTrail recipediag: GetRecipeInfo(101) -> {name="Elixir of Wisdom" (string), …
+    requiredSkillRank=50 (number), skillLineAbilityID=9001 (number)}
+  NodeTrail recipediag: GetCraftableCount(101) -> 0 (number)
+  NodeTrail recipediag: IsRecipeProfessionLearned(101) -> false (boolean)
+  NodeTrail recipediag: signal: GetCraftableCount — the Alchemy line is filtered on it
+  ```
+
+  `tests/recipe_diag_spec.lua` pins the three gates, the hide path, the panel note, the raw diag
+  output and saved-data compatibility: **49 checks fail behaviourally on `236031e`, no traceback**;
+  the updated §6 of `tests/alchemy_skill_gate_spec.lua` adds 9 more, and the new options-panel
+  section 5 in `tests/options_spec.lua` adds 5. All 45 `tests/*.lua` pass under lua5.1.
+
 - **The beast panel shows what SKINNING yields — the corpse loot is gone** (t_2c573dbf).
   Mightie on a Dire Mottled Boar: "beast tooltip doesnt need the actual items the mob can drop. Just
   what we obtain from skinning." `Data/SkinHints.lua` no longer aggregates or renders the corpse

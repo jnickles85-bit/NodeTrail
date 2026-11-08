@@ -72,6 +72,7 @@ local LEGACY_CALLS = {
   "GetTradeSkillLine",
   "GetNumTradeSkills",
   "GetTradeSkillInfo",
+  "GetTradeSkillNumAvailable",
   "GetTradeSkillNumReagents",
   "GetTradeSkillReagentItemLink",
 }
@@ -448,32 +449,117 @@ local function alchemyRank(box)
   return box.rank, box.why
 end
 
-local function availabilityFrom(info, rankbox)
-  if type(info) ~= "table" then
-    return nil, nil
+-- ── Which signal can say "this character can make it"? (t_4ab7c230) ───────
+-- The first pass read only `numAvailable` / `requiredSkill` off GetRecipeInfo,
+-- and Forever 16001 answers NEITHER: its client carries
+--
+--   C_TradeSkillUI.GetCraftableCount(recipeSpellID [, recipeLevel]) -> numAvailable
+--   C_TradeSkillUI.IsRecipeProfessionLearned(recipeID)              -> boolean
+--
+-- (both usage strings are in Wow.exe, build 16001; the recipeInfo struct's own
+-- fields are `numAvailable`, `requiredSkillRank`, `skillLineAbilityID`). An
+-- UNLEARNED recipe is enumerated exactly like a known one — that is the list
+-- Mightie saw — so the learned flag is the signal that answers his complaint,
+-- and the skill rank is the second half.
+--
+-- Decided in this order; `how` always names the one that answered:
+--   1. the client's own craftable count > 0   — proof it can be made now;
+--   2. IsRecipeProfessionLearned == false     — the recipe is not known;
+--   3. requiredSkillRank / requiredSkill      — rank comparison;
+--   4. IsRecipeProfessionLearned == true      — known, no readable skill field;
+--   5. craftable count == 0                   — the only answer there is;
+--   6. isAvailable                            — boolean some clients offer.
+-- nil means the client answered nothing for this recipe: the panel then HIDES
+-- the line instead of advertising a list nobody can vouch for.
+local function craftableCount(info, id, mod)
+  if type(info) == "table" and type(info.numAvailable) == "number" then
+    return info.numAvailable, "numAvailable"
   end
-  local n = info.numAvailable
-  if type(n) == "number" then
-    return n > 0, "numAvailable"
-  end
-  local req = info.requiredSkill
-  if type(req) == "number" then
-    local rank, why = alchemyRank(rankbox)
-    if type(rank) == "number" then
-      return rank >= req, "requiredSkill"
+  if type(mod) == "table" and type(mod.GetCraftableCount) == "function" then
+    local ok, n = pcall(mod.GetCraftableCount, id)
+    if ok and type(n) == "number" then
+      return n, "GetCraftableCount"
     end
-    return nil, "requiredSkill (the character's Alchemy rank could not be read: "
-      .. tostring(why) .. ")"
   end
   return nil, nil
 end
+
+local function requiredSkillFrom(info)
+  if type(info) ~= "table" then
+    return nil, nil
+  end
+  if type(info.requiredSkillRank) == "number" then
+    return info.requiredSkillRank, "requiredSkillRank"
+  end
+  if type(info.requiredSkill) == "number" then
+    return info.requiredSkill, "requiredSkill"
+  end
+  return nil, nil
+end
+
+local function learnedFrom(mod, id)
+  if type(mod) ~= "table" or type(mod.IsRecipeProfessionLearned) ~= "function" then
+    return nil
+  end
+  local ok, v = pcall(mod.IsRecipeProfessionLearned, id)
+  if ok and type(v) == "boolean" then
+    return v
+  end
+  return nil
+end
+
+local function availabilityFrom(info, id, mod, rankbox)
+  local n, countHow = craftableCount(info, id, mod)
+  if n ~= nil and n > 0 then
+    return true, countHow
+  end
+  local learned = learnedFrom(mod, id)
+  if learned == false then
+    return false, "IsRecipeProfessionLearned"
+  end
+  local req, reqHow = requiredSkillFrom(info)
+  if req ~= nil then
+    local rank, why = alchemyRank(rankbox)
+    if type(rank) == "number" then
+      return rank >= req, reqHow
+    end
+    if learned == nil and n == nil then
+      return nil, reqHow .. " (the character's Alchemy rank could not be read: "
+        .. tostring(why) .. ")"
+    end
+  end
+  if learned == true then
+    return true, "IsRecipeProfessionLearned"
+  end
+  if n ~= nil then
+    return n > 0, countHow
+  end
+  if type(info) == "table" and type(info.isAvailable) == "boolean" then
+    return info.isAvailable, "isAvailable"
+  end
+  return nil, nil
+end
+
+-- Which answering signal wins when recipes disagree (used for the diag's single
+-- `availability:` word). A count is the strongest proof; a skill comparison is
+-- not proof the recipe is known.
+local SIGNAL_ORDER = {
+  numAvailable = 1,
+  GetCraftableCount = 2,
+  GetTradeSkillNumAvailable = 3,
+  IsRecipeProfessionLearned = 4,
+  requiredSkillRank = 5,
+  requiredSkill = 6,
+  isAvailable = 7,
+  GetTradeSkillInfo = 8,
+}
 
 -- One recipe: name + reagent IDs, from whichever call answers.
 -- `GetRecipeInfo` may answer as a table or as (name, reagents); a
 -- `GetRecipeSchematic` table fills any missing half. Skips cleanly when
 -- neither names the recipe.
--- Returns name, reagents, craftable (true/false/nil), availHow (nil when the
--- client exposed no availability field).
+-- Returns name, reagents, craftable (true/false/nil), availHow (the signal that
+-- answered — nil when the client exposed no availability signal at all).
 local function modernRecipe(mod, id, errbox, rankbox)
   local name
   local reagents
@@ -498,7 +584,6 @@ local function modernRecipe(mod, id, errbox, rankbox)
     if reagents == nil then
       reagents = reagentsFrom(info)
     end
-    craftable, availHow = availabilityFrom(info, rankbox)
   end
   if (name == nil or reagents == nil) and type(mod.GetRecipeSchematic) == "function" then
     -- LIVE CONTRACT (Forever 16001, t_81da8886):
@@ -519,8 +604,12 @@ local function modernRecipe(mod, id, errbox, rankbox)
     end
   end
   if name == nil then
-    return nil, nil, craftable, availHow
+    return nil, nil, nil, nil
   end
+  -- Availability is read last: it needs the recipe id (the count and learned
+  -- calls take it) and, for the skill comparison, the character's rank. It is
+  -- read even when GetRecipeInfo answered only a name string.
+  craftable, availHow = availabilityFrom(info, id, mod, rankbox)
   return name, reagents or {}, craftable, availHow
 end
 
@@ -597,10 +686,14 @@ function Rc:ScanModern()
       else
         unverified = unverified + 1
       end
-      if how == "numAvailable" then
-        availHow = "numAvailable"
-      elseif how ~= nil and availHow == nil then
-        availHow = how
+      if how ~= nil then
+        -- Keep the strongest answering signal for the diag's single word
+        -- (t_4ab7c230): a craftable count is proof, a rank comparison is not
+        -- proof the recipe is known.
+        local rank = SIGNAL_ORDER[how] or 99
+        if availHow == nil or rank < (SIGNAL_ORDER[availHow] or 99) then
+          availHow = how
+        end
       end
       for _, rid in ipairs(reagents) do
         reagentSlots = reagentSlots + 1
@@ -731,15 +824,49 @@ local function scanLegacy()
     nSkills = rN
   end
   local newMap = {}
+  local craft = {}
+  local canMake, cannotMake, unverified = 0, 0, 0
+  local availHow = nil
   local recipesRead = 0
   local reagentSlots = 0
   for i = 1, nSkills do
-    local okI, name, skillType = pcall(GetTradeSkillInfo, i)
+    local okI, name, skillType, learnable = pcall(GetTradeSkillInfo, i)
     if not okI then
       errbox.err = ("GetTradeSkillInfo(%d): %s"):format(i, tostring(name))
     end
     if okI and name ~= nil and skillType ~= "header" then
       recipesRead = recipesRead + 1
+      -- Availability on the legacy API (t_4ab7c230): the count call is the
+      -- same "how many can I make now" the modern path reads, and some
+      -- clients also answer a learnable boolean as GetTradeSkillInfo's third
+      -- return. Neither exists on Forever 16001, so this changes nothing
+      -- there — it keeps an older client filterable instead of hiding a list
+      -- that COULD be gated.
+      local craftable, how
+      if type(GetTradeSkillNumAvailable) == "function" then
+        local okA, nA = pcall(GetTradeSkillNumAvailable, i)
+        if okA and type(nA) == "number" then
+          craftable, how = nA > 0, "GetTradeSkillNumAvailable"
+        end
+      end
+      if craftable == nil and type(learnable) == "boolean" then
+        craftable, how = learnable, "GetTradeSkillInfo"
+      end
+      if craftable == true then
+        craft[name] = true
+        canMake = canMake + 1
+      elseif craftable == false then
+        craft[name] = false
+        cannotMake = cannotMake + 1
+      else
+        unverified = unverified + 1
+      end
+      if how ~= nil then
+        local rank = SIGNAL_ORDER[how] or 99
+        if availHow == nil or rank < (SIGNAL_ORDER[availHow] or 99) then
+          availHow = how
+        end
+      end
       local numReagents = 0
       if type(GetTradeSkillNumReagents) == "function" then
         local okR, rR = pcall(GetTradeSkillNumReagents, i)
@@ -788,21 +915,29 @@ local function scanLegacy()
   end
   local db = ns.GetRecipeDB()
   db.alchemy = finalMap
-  -- The legacy trade-skill API carries no availability field at all (its
-  -- GetTradeSkillInfo answers name + difficulty only), so this path cannot
-  -- gate. It CLEARS the gate rather than leaving a modern scan's stale verdict
-  -- in place, and records "none" so the panel labels the list honestly
-  -- (t_04c983cc).
-  db.alchemyCraft = nil
-  db.alchemyFilterable = false
-  db.alchemyAvailability = "none"
+  -- Persist whatever the legacy API answered (t_4ab7c230). When it answered
+  -- nothing — Forever 16001's case, since its legacy globals are gone — the
+  -- gate is cleared rather than leaving a modern scan's stale verdict, and the
+  -- panel hides the line instead of advertising an unfiltered list.
+  if canMake + cannotMake > 0 then
+    db.alchemyCraft = craft
+    db.alchemyFilterable = true
+    db.alchemyAvailability = availHow or "none"
+  else
+    db.alchemyCraft = nil
+    db.alchemyFilterable = false
+    db.alchemyAvailability = "none"
+  end
   NodeTrailDB.recipes.alchemyScanned = time()
   Rc._diag = {
     path = "legacy",
     profession = Rc:AlchName(),
     recipeCount = nSkills,
     recipesRead = recipesRead,
-    availability = "none",
+    availability = db.alchemyAvailability,
+    craftable = canMake,
+    excluded = cannotMake,
+    unverified = unverified,
     error = errbox.err,
   }
   return true
@@ -877,8 +1012,9 @@ end
 ---              not be filtered (see `filtered`)
 ---   excluded   how many scanned recipes are NOT craftable now
 ---   filtered   true when the client answered availability at all. false means
----              "nobody can say", and the panel must label the list instead of
----              pretending it is gated.
+---              "nobody can say", and the panel must draw NO Alchemy line at
+---              all — a list it cannot vouch for is worse than silence
+---              (t_4ab7c230).
 function Rc:Uses(itemID)
   local db = ns.GetRecipeDB()
   local names = db.alchemy[itemID]
@@ -902,6 +1038,34 @@ function Rc:Uses(itemID)
     end
   end
   return out
+end
+
+--- Why the panel is drawing no Alchemy line, for the options panel — nil when
+--- there is nothing to explain (a filtered client, or no saved recipes yet).
+--- One short sentence, no caveat the player has to decode in a tooltip
+--- (t_4ab7c230): a client that answered no availability hides the list, and
+--- this is where the reason lives.
+function Rc:HiddenHint()
+  local db = ns.GetRecipeDB()
+  if db.alchemyFilterable == true then
+    return nil
+  end
+  local has = false
+  for _ in pairs(db.alchemy or {}) do
+    has = true
+    break
+  end
+  if not has then
+    return nil
+  end
+  if db.alchemyAvailability == "none" and NodeTrailDB.recipes.alchemyScanned ~= nil then
+    return "alchemy uses hidden — this client has no recipe-availability API "
+      .. "(GetCraftableCount, IsRecipeProfessionLearned, requiredSkillRank all absent)"
+  end
+  if NodeTrailDB.recipes.alchemyScanned ~= nil then
+    return "alchemy uses hidden — the saved scan recorded no availability; open Alchemy once to rescan"
+  end
+  return nil
 end
 
 -- ── Shared truth for the options panel and /nt scanrecipes ────────
@@ -1170,9 +1334,13 @@ function Rc:Diag()
   if avail == nil then
     avail = "unknown (no scan has recorded one yet)"
   end
-  if avail == "none" or avail == "unknown (no scan has recorded one yet)" then
-    say("availability: " .. tostring(avail)
-      .. " — this client exposed neither numAvailable nor requiredSkill, so the tooltip lists recipes (not filtered by skill)")
+  if avail == "none" then
+    say("availability: none — no recipe-availability signal answered "
+      .. "(GetCraftableCount / IsRecipeProfessionLearned / requiredSkillRank all absent; "
+      .. "numAvailable / requiredSkill / isAvailable did not answer either), so the Alchemy line is hidden "
+      .. "for this character — /nt recipediag prints the raw per-recipe values")
+  elseif avail == "unknown (no scan has recorded one yet)" then
+    say("availability: unknown (no scan has recorded one yet) — open Alchemy once, then /nt recipediag")
   elseif d and d.availability then
     say(("availability: %s — craftable=%s excluded=%s unverified=%s"):format(
       tostring(avail), tostring(d.craftable or 0), tostring(d.excluded or 0),
@@ -1182,5 +1350,370 @@ function Rc:Diag()
   end
   if Rc._error then
     say("module error: " .. tostring(Rc._error))
+  end
+end
+
+-- ── /nt recipediag (t_4ab7c230) ───────────────────────────────────────────
+-- The in-client measurement the card asks for: for one recipe this character
+-- can make and one it cannot, print EVERY candidate signal and its raw value.
+-- Nothing here is inferred or shaped: the client's own fields are printed by
+-- name, and a call that is absent says so. This is the only way to see inside
+-- Forever 16001 (no /run, no /dump); its Wow.exe carries the usage strings
+--
+--   local numAvailable           = C_TradeSkillUI.GetCraftableCount(recipeSpellID [, recipeLevel])
+--   local recipeProfessionLearned = C_TradeSkillUI.IsRecipeProfessionLearned(recipeID)
+--
+-- and the recipeInfo fields `numAvailable`, `requiredSkillRank`,
+-- `skillLineAbilityID`. The scan reads those three (Data/Recipes.lua above);
+-- this command is how anyone can check that claim against the live client.
+--
+-- Targets: the last scan's persisted gate picks the first recipe it marked
+-- craftable and the first it marked not craftable (that IS "one he can and one
+-- he can't"). With no saved gate — an older scan, or a client that answered
+-- nothing — the first two enumerated ids are dumped instead and the labels say
+-- `stored gate: unknown`. `/nt recipediag <id|name>` puts that recipe first.
+
+local function sortedKeys(t)
+  local nums, strs = {}, {}
+  for k in pairs(t) do
+    if type(k) == "number" then
+      table.insert(nums, k)
+    else
+      table.insert(strs, tostring(k))
+    end
+  end
+  table.sort(nums)
+  table.sort(strs)
+  local out = {}
+  for _, k in ipairs(nums) do
+    table.insert(out, k)
+  end
+  for _, k in ipairs(strs) do
+    table.insert(out, k)
+  end
+  return out
+end
+
+-- A value with its type, so an absent field can never be read as a zero and a
+-- table can be seen as a table. Nested tables are printed two levels deep with
+-- a per-table cap; a recipeInfo/schematic is flat or one level in practice.
+local function fmtValue(v, depth)
+  local t = type(v)
+  if t == "string" then
+    return '"' .. v .. '" (' .. t .. ')'
+  end
+  if t == "number" or t == "boolean" then
+    return tostring(v) .. " (" .. t .. ")"
+  end
+  if t == "table" then
+    if depth <= 0 then
+      return "table"
+    end
+    local keys = sortedKeys(v)
+    local parts = {}
+    local cap = 24
+    for i, k in ipairs(keys) do
+      if i > cap then
+        table.insert(parts, "... (+" .. (#keys - cap) .. " more)")
+        break
+      end
+      table.insert(parts, tostring(k) .. "=" .. fmtValue(v[k], depth - 1))
+    end
+    return "{" .. table.concat(parts, ", ") .. "}"
+  end
+  return tostring(v) .. " (" .. t .. ")"
+end
+
+function Rc:RecipeDiag(arg)
+  local function say(m)
+    if type(DEFAULT_CHAT_FRAME) == "table" and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail recipediag: " .. tostring(m))
+    end
+  end
+  local mod = C_TradeSkillUI
+  say("client: C_TradeSkillUI " .. (type(mod) == "table" and "present" or "ABSENT"))
+  local MODERN_PROBES = {
+    "GetRecipeInfo",
+    "GetRecipeSchematic",
+    "GetCraftableCount",
+    "GetRecipeRequirements",
+    "IsRecipeProfessionLearned",
+    "GetRecipeCooldown",
+    "GetRecipeInfoForSkillLineAbility",
+    "GetOriginalCraftRecipeID",
+    "GetAllRecipeIDs",
+    "GetNumRecipeIDs",
+  }
+  local parts = {}
+  for _, n in ipairs(MODERN_PROBES) do
+    table.insert(parts, n .. "=" .. ((type(mod) == "table" and type(mod[n]) == "function") and "present" or "absent"))
+  end
+  say("modern calls: " .. table.concat(parts, ", "))
+  local LEGACY_PROBES = {
+    "GetTradeSkillLine",
+    "GetNumTradeSkills",
+    "GetTradeSkillInfo",
+    "GetTradeSkillNumAvailable",
+    "GetTradeSkillNumReagents",
+    "GetTradeSkillReagentInfo",
+    "GetTradeSkillReagentItemLink",
+  }
+  parts = {}
+  for _, n in ipairs(LEGACY_PROBES) do
+    table.insert(parts, n .. "=" .. (type(_G[n]) == "function" and "present" or "absent"))
+  end
+  say("legacy calls: " .. table.concat(parts, ", "))
+
+  local rank, rankWhy
+  if type(ns.Profession) == "table" and type(ns.Profession.Rank) == "function" then
+    local ok, r, w = pcall(ns.Profession.Rank, ns.Profession, "alchemy")
+    if ok and type(r) == "number" then
+      rank = r
+    else
+      rankWhy = tostring(w or r)
+    end
+  else
+    rankWhy = "Data/Profession.lua is not loaded, so no skill API was asked"
+  end
+  say("character Alchemy rank: "
+    .. (rank and (rank .. " (GetSkillLineInfo / Pr:Rank)") or ("unreadable (" .. tostring(rankWhy) .. ")")))
+
+  local prof
+  if type(mod) == "table" then
+    prof = openProfession(mod)
+  end
+  if prof == nil and type(GetTradeSkillLine) == "function" then
+    local okP, l = pcall(GetTradeSkillLine)
+    if okP and type(l) == "string" and l ~= "" then
+      prof = l
+    end
+  end
+  say("open profession: " .. tostring(prof or "unknown (no call answered)"))
+
+  local errbox = {}
+  local ids, via
+  if type(mod) == "table" then
+    ids, via = collectModernIDs(mod, errbox)
+  end
+  if ids == nil then
+    say("recipe ids: none enumerated (" .. tostring(errbox.err or "the client returned no ids") .. ")")
+    return
+  end
+  say(("recipe ids: %d enumerated via %s"):format(#ids, tostring(via or "?")))
+
+  local db = ns.GetRecipeDB()
+  local craft = type(db.alchemyCraft) == "table" and db.alchemyCraft or nil
+  local names, infos = {}, {}
+  local canMake, cannotMake, unverified = 0, 0, 0
+  if craft then
+    for _, v in pairs(craft) do
+      if v == true then
+        canMake = canMake + 1
+      elseif v == false then
+        cannotMake = cannotMake + 1
+      else
+        unverified = unverified + 1
+      end
+    end
+  end
+
+  local function readRecipe(id)
+    local info, nm
+    if type(mod) == "table" and type(mod.GetRecipeInfo) == "function" then
+      local ok, a = pcall(mod.GetRecipeInfo, id)
+      if ok then
+        if type(a) == "table" then
+          info = a
+          nm = nameFrom(a)
+        elseif type(a) == "string" and a ~= "" then
+          nm = a
+        end
+      end
+    end
+    if nm == nil and type(mod) == "table" and type(mod.GetRecipeSchematic) == "function" then
+      local ok, s = pcall(mod.GetRecipeSchematic, id, false)
+      if ok and type(s) == "table" then
+        nm = nameFrom(s)
+      end
+    end
+    return nm, info
+  end
+
+  local shown = 0
+  for _, id in ipairs(ids) do
+    local nm, info = readRecipe(id)
+    names[id] = nm
+    infos[id] = info
+    shown = shown + 1
+    if shown <= 12 then
+      say(("[%d] id=%s name=%s"):format(shown, tostring(id), nm and ('"' .. nm .. '"') or "unnamed"))
+    end
+  end
+  if #ids > shown or #ids > 12 then
+    say(("... %d more id(s) not listed"):format(#ids - math.min(shown, 12)))
+  end
+  if craft then
+    say(("stored gate: %d craftable, %d not craftable, %d unverified (availability=%s)")
+      :format(canMake, cannotMake, unverified, tostring(db.alchemyAvailability or "none")))
+  else
+    say("stored gate: none (no saved alchemyCraft — an older scan, or a client that answered nothing)")
+  end
+
+  -- Pick the two probes: the first recipe the stored gate says he can make and
+  -- the first it says he cannot. An explicit argument overrides target 1.
+  local firstID, secondID
+  local argID = tonumber(arg)
+  local argName = type(arg) == "string" and arg ~= "" and arg:lower() or nil
+  if argID and names[argID] ~= nil then
+    firstID = argID
+  elseif argName then
+    for _, id in ipairs(ids) do
+      local nm = names[id]
+      if nm and nm:lower():find(argName, 1, true) then
+        firstID = id
+        break
+      end
+    end
+  end
+  if craft then
+    for _, id in ipairs(ids) do
+      local nm = names[id]
+      if nm and craft[nm] == true and firstID == nil and id ~= secondID then
+        firstID = id
+      elseif nm and craft[nm] == false and secondID == nil and id ~= firstID then
+        secondID = id
+      end
+    end
+  end
+  if firstID == nil then
+    firstID = ids[1]
+  end
+  if secondID == nil or secondID == firstID then
+    for _, id in ipairs(ids) do
+      if id ~= firstID then
+        secondID = id
+        break
+      end
+    end
+  end
+
+  local function storedLabel(id)
+    local nm = names[id]
+    if craft and nm and craft[nm] == true then
+      return "craftable"
+    elseif craft and nm and craft[nm] == false then
+      return "not craftable"
+    end
+    return "unknown"
+  end
+
+  local function callLine(name, arg)
+    local f = type(mod) == "table" and mod[name] or nil
+    local shown = name .. "(" .. tostring(arg) .. ")"
+    if type(f) ~= "function" then
+      say(shown .. " -> absent")
+      return
+    end
+    local ok, a = pcall(f, arg)
+    if not ok then
+      say(shown .. " raised: " .. tostring(a))
+      return
+    end
+    say(shown .. " -> " .. fmtValue(a, 2))
+  end
+
+  local function dumpTarget(label, id)
+    if id == nil then
+      say("--- " .. label .. ": no recipe id to probe")
+      return
+    end
+    local nm = names[id]
+    say(("--- %s: %s (recipe id %s) · stored gate: %s")
+      :format(label, nm and ('"' .. nm .. '"') or "unnamed", tostring(id), storedLabel(id)))
+    local info = infos[id]
+    if info ~= nil then
+      say(("GetRecipeInfo(%s) -> %s"):format(tostring(id), fmtValue(info, 2)))
+    else
+      say(("GetRecipeInfo(%s) -> no table (the call is absent, raised, or answered a bare name)"):format(tostring(id)))
+    end
+    if type(mod) == "table" and type(mod.GetRecipeSchematic) == "function" then
+      local ok, s = pcall(mod.GetRecipeSchematic, id, false)
+      if ok then
+        say(("GetRecipeSchematic(%s, false) -> %s"):format(tostring(id), fmtValue(s, 2)))
+      else
+        say(("GetRecipeSchematic(%s, false) raised: %s"):format(tostring(id), tostring(s)))
+      end
+    else
+      say("GetRecipeSchematic(...) -> absent")
+    end
+    callLine("GetCraftableCount", id)
+    callLine("GetRecipeRequirements", id)
+    callLine("IsRecipeProfessionLearned", id)
+    callLine("GetRecipeCooldown", id)
+    if info and type(info.skillLineAbilityID) == "number" then
+      callLine("GetRecipeInfoForSkillLineAbility", info.skillLineAbilityID)
+    end
+    -- Legacy: only when the globals exist. The index is the one whose name
+    -- matches; without a match the first three rows are printed so the shape
+    -- is still visible.
+    if type(GetNumTradeSkills) == "function" and type(GetTradeSkillInfo) == "function" then
+      local okN, n = pcall(GetNumTradeSkills)
+      say("legacy GetNumTradeSkills() -> " .. fmtValue(n, 0))
+      if okN and type(n) == "number" then
+        local hit
+        for i = 1, math.min(n, 200) do
+          local ok, a = pcall(GetTradeSkillInfo, i)
+          if ok and a == nm then
+            hit = i
+            break
+          end
+        end
+        local rows = hit and { hit } or { 1, 2, 3 }
+        for _, i in ipairs(rows) do
+          local ok, a, b, c = pcall(GetTradeSkillInfo, i)
+          if ok then
+            say(("legacy GetTradeSkillInfo(%d) -> %s, %s, %s")
+              :format(i, fmtValue(a, 0), fmtValue(b, 0), fmtValue(c, 0)))
+          end
+        end
+        if hit then
+          if type(GetTradeSkillNumAvailable) == "function" then
+            local okA, avail = pcall(GetTradeSkillNumAvailable, hit)
+            say(("legacy GetTradeSkillNumAvailable(%d) -> %s"):format(hit, okA and fmtValue(avail, 0) or ("raised: " .. tostring(avail))))
+          else
+            say("legacy GetTradeSkillNumAvailable(...) -> absent")
+          end
+          if type(GetTradeSkillNumReagents) == "function" then
+            local okR, nr = pcall(GetTradeSkillNumReagents, hit)
+            say(("legacy GetTradeSkillNumReagents(%d) -> %s"):format(hit, okR and fmtValue(nr, 0) or ("raised: " .. tostring(nr))))
+            if okR and type(nr) == "number" and type(GetTradeSkillReagentInfo) == "function" then
+              for r = 1, math.min(nr, 3) do
+                local okI, a, b, c = pcall(GetTradeSkillReagentInfo, hit, r)
+                if okI then
+                  say(("legacy GetTradeSkillReagentInfo(%d, %d) -> %s, %s, %s")
+                    :format(hit, r, fmtValue(a, 0), fmtValue(b, 0), fmtValue(c, 0)))
+                end
+              end
+            end
+          end
+        end
+      end
+    else
+      say("legacy trade-skill globals: absent (GetNumTradeSkills / GetTradeSkillInfo)")
+    end
+  end
+
+  dumpTarget("target 1 (craftable per stored gate)", firstID)
+  dumpTarget("target 2 (not craftable per stored gate)", secondID)
+
+  local avail = db.alchemyAvailability
+  if avail == nil then
+    say("signal: not measured yet — no completed scan recorded availability; open Alchemy once, then rerun")
+  elseif avail == "none" then
+    say("signal: NONE — GetCraftableCount / IsRecipeProfessionLearned / requiredSkillRank / "
+      .. "numAvailable / requiredSkill / isAvailable all absent or unreadable for these recipes; "
+      .. "the Alchemy line is hidden")
+  else
+    say("signal: " .. tostring(avail) .. " — the Alchemy line is filtered on it")
   end
 end

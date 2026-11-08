@@ -30,6 +30,9 @@ local function printHelp()
   -- documented without a new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt scanrecipes (alias: /nt recipes) - recipe-scan status; scans now if your Alchemy window is open")
+  -- t_4ab7c230: the raw per-recipe signal measurement.
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt recipediag [id|name] - raw trade-skill values for one craftable and one non-craftable recipe (what this client can actually answer)")
   -- t_0f65b0b9: the world-map overlay diagnostic. Inline like the line above,
   -- so the new command is documented without a new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
@@ -233,6 +236,8 @@ local function handleSlash(msg)
     ns.SetAutoRefresh(msg:match("^autorefresh%s+(.*)$"))
   elseif msg == "scanrecipes" or msg == "recipes" then
     ns.ScanRecipes()
+  elseif msg == "recipediag" or msg:match("^recipediag%s") then
+    ns.PrintRecipeDiag(msg:match("^recipediag%s+(.*)$"))
   elseif msg == "mapdiag" or msg:match("^mapdiag%s") then
     -- /nt mapdiag probe [on|off] — the visibility bisect (off by default)
     ns.PrintMapDiag(msg:match("^mapdiag%s+(.*)$"))
@@ -286,6 +291,21 @@ function ns.ScanRecipes()
     DEFAULT_CHAT_FRAME:AddMessage(msg)
   end
   return ok and done or false
+end
+
+-- /nt recipediag [id|name] (t_4ab7c230) — the raw signal measurement, inside
+-- the client. The work lives in Data/Recipes.lua (one source of truth for
+-- recipe state); this is the guarded entry point the slash handler calls.
+function ns.PrintRecipeDiag(arg)
+  local rec = ns.Recipes
+  if type(rec) ~= "table" or type(rec.RecipeDiag) ~= "function" then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: recipediag unavailable (recipe module not loaded)")
+    return
+  end
+  local ok, err = pcall(rec.RecipeDiag, rec, arg)
+  if not ok then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: recipediag failed: " .. tostring(err))
+  end
 end
 
 -- /nt mapdiag (t_0f65b0b9) — the world-map overlay has never been confirmed

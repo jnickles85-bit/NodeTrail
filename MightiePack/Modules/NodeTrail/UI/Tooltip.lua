@@ -225,20 +225,12 @@ function T.BuildLines(name)
         })
       end
     else
-      -- The scan could not learn availability (this client exposes neither
-      -- numAvailable nor requiredSkill, or only the legacy trade-skill API is
-      -- there). The list is printed UNFILTERED and labelled, instead of a gate
-      -- that is really a guess — /nt ttdiag carries the one-line explanation.
-      local display = uses.names
-      if #display > 4 then
-        display = {}
-        for i = 1, 4 do
-          table.insert(display, uses.names[i])
-        end
-        table.insert(display, "+" .. (#uses.names - 4) .. " more")
-      end
-      table.insert(lines, { left = "Alchemy: " .. table.concat(display, ", ") })
-      table.insert(lines, { left = "recipes (not filtered by skill)" })
+      -- t_4ab7c230: the scan could not learn availability for this recipe
+      -- (this client answered no craftable count, no learned flag and no
+      -- required skill). The honest answer is NOT an unfiltered list with a
+      -- caveat — a line that advertises eight crafts he cannot make is worse
+      -- than no line — so draw nothing here. The options panel carries the one
+      -- short reason (Rc:HiddenHint) and /nt recipediag the raw signals.
     end
   elseif NodeTrailDB and NodeTrailDB.recipes and NodeTrailDB.recipes.alchemyScanned == nil
     and recipeAPIAvailable() then

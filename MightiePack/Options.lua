@@ -344,7 +344,8 @@ end
 local recHeaderY = lastRowY - 36
 local recStatusY = recHeaderY - 18
 local recErrorY = recStatusY - 16
-local recButtonY = recErrorY - 22
+local recNoteY = recErrorY - 16
+local recButtonY = recNoteY - 22
 
 local recHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 recHeader:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, recHeaderY)
@@ -358,6 +359,15 @@ local recError = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"
 recError:SetPoint("LEFT", recHeader, "LEFT", 0, recErrorY - recHeaderY)
 recError:SetText("")
 recError:Hide()
+
+-- t_4ab7c230: when the client answers no availability at all, the herb tooltip
+-- draws NO Alchemy line (a list of crafts he cannot make is worse than none).
+-- This is the one short place the reason lives, so nobody re-opens the card
+-- expecting a fix this client cannot support.
+local recNote = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+recNote:SetPoint("LEFT", recHeader, "LEFT", 0, recNoteY - recHeaderY)
+recNote:SetText("")
+recNote:Hide()
 
 local function syncRecipesBlock()
   local rec = ntRecipes()
@@ -386,6 +396,22 @@ local function syncRecipesBlock()
   else
     recError:SetText("")
     recError:Hide()
+  end
+  -- The hidden-list explanation (t_4ab7c230). nil when the gate is working or
+  -- nothing is saved yet, so the line stays invisible in the normal case.
+  local hint
+  if rec and type(rec.HiddenHint) == "function" then
+    local okH, h = pcall(rec.HiddenHint, rec)
+    if okH and type(h) == "string" and h ~= "" then
+      hint = h
+    end
+  end
+  if hint then
+    recNote:SetText(hint)
+    recNote:Show()
+  else
+    recNote:SetText("")
+    recNote:Hide()
   end
 end
 

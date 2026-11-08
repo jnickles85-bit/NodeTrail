@@ -30,6 +30,8 @@ copy.
 | `/nt stop` | Stop NodeTrail route (only while NodeTrail is enabled) |
 | `/nt reload` | Rebuild the active route from current data (only while NodeTrail is enabled) |
 | `/nt status` | Print route source, herb counts, active route, tooltip state, Alchemy state, module state (only while NodeTrail is enabled) |
+| `/nt scanrecipes` | Recipe-scan status; scans now if the Alchemy window is open (alias `/nt recipes`) |
+| `/nt recipediag` | Print the raw trade-skill values for one craftable and one non-craftable recipe — which availability signal this client actually answers |
 
 ## Options
 - Open with `/mpack` or `/mightiepack`.
@@ -90,9 +92,13 @@ tests/slash_spec.lua
 - Baseline drop rates are shown for the 28 Classic herb nodes.
 - After 10 or more recorded gathers of a herb, your personal drop rates replace the baseline.
 - Open the Alchemy trade skill window once to see which learned recipes use the herb.
-- The Alchemy line lists only the recipes this character can craft right now; the
-  rest are counted in a `+N more you can't make yet` tail. A client that exposes no
-  recipe availability lists them unfiltered and labelled `recipes (not filtered by skill)`.
+- The Alchemy line lists only the recipes this character can craft now: the scan records
+  `C_TradeSkillUI.GetCraftableCount`, `IsRecipeProfessionLearned` and `requiredSkillRank`
+  (plus the legacy count/learnable returns when present), and the rest are counted in a
+  `+N more you can't make yet` tail.
+- A client that exposes none of those signals draws NO Alchemy line at all — an unfiltered
+  list of crafts the character cannot make is worse than silence. The options panel says
+  once why the list is hidden; `/nt recipediag [id|name]` prints the raw per-recipe values.
 - A drop the client cannot name is labelled `unknown item <id>`, never a bare id.
 
 ## Tests
