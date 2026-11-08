@@ -69,6 +69,27 @@ f:SetScript("OnEvent", function(_, event, arg1)
   end
 end)
 
+-- Protected-action reporter.
+--
+-- When the client refuses an addon call, it fires ADDON_ACTION_BLOCKED (or
+-- _FORBIDDEN) with (addonName, functionName) and raises the modal
+--   "<addon> has been blocked from an action only available to the Blizzard UI"
+-- The modal never says WHICH function, and the taint log only flushes on a
+-- clean exit — so without this the only way to identify the call is to guess.
+-- The event arguments are public, so printing them answers it in one line.
+local guard = CreateFrame("Frame")
+for _, ev in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
+  if type(guard.RegisterEvent) == "function" then
+    pcall(guard.RegisterEvent, guard, ev)
+  end
+end
+if type(guard.SetScript) == "function" then
+  guard:SetScript("OnEvent", function(_, event, who, what)
+    pkg.Print(("%s: the client refused a protected call — addon=%s function=%s")
+      :format(tostring(event), tostring(who), tostring(what)))
+  end)
+end
+
 SLASH_MIGHTIEPACK1 = "/mightiepack"
 SLASH_MIGHTIEPACK2 = "/mpack"
 -- t_a5f41944: the card's evidence channel is literally "/mp skindiag".
