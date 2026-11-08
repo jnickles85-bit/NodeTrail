@@ -1407,6 +1407,50 @@ function M:Diag()
         pointText, methodText)
     end)
   end
+  -- The screen position the CLIENT reports for those same dots, next to the
+  -- host's own. `painted == planned` says the regions exist and are anchored;
+  -- only this says whether the client put them where the map can see them.
+  -- A dot reading `screen=absent` is a client that does not answer GetLeft on a
+  -- region — reported as absent rather than as 0,0, which is where a made-up
+  -- coordinate would send the next round hunting a placement bug that is not
+  -- there.
+  fact(function()
+    local dr = self.drawer
+    if not dr or dr.mode ~= "dots" then
+      return "dot screen: no dots pool (mode=" .. tostring(dr and dr.mode or "absent") .. ")"
+    end
+    local applied = dr.lastApplied or {}
+    local painted = tonumber(applied.paintedDots) or 0
+    if painted < 1 then
+      return "dot screen: nothing painted on the last redraw"
+    end
+    local function screenOf(obj)
+      local d = ns.LineDraw.Describe(obj)
+      if not d.present then
+        return "absent"
+      end
+      if type(d.left) ~= "number" or type(d.top) ~= "number" then
+        return "absent"
+      end
+      return string.format("%s,%s", fmtNum(d.left, 1), fmtNum(d.top, 1))
+    end
+    -- In dots mode every dot holds two regions: the rim, then the white dot.
+    local picks = { 1, math.max(1, math.floor(painted * 0.5)), painted }
+    local parts = {}
+    for k = 1, #picks do
+      local dot = picks[k]
+      parts[#parts + 1] = string.format("dot %d screen=%s", dot, screenOf(dr.pool and dr.pool[2 * dot]))
+    end
+    local hostText = "absent"
+    if self.host then
+      local okL, left = pcall(self.host.GetLeft, self.host)
+      local okT, top = pcall(self.host.GetTop, self.host)
+      if okL and okT and type(left) == "number" and type(top) == "number" then
+        hostText = string.format("%s,%s", fmtNum(left, 1), fmtNum(top, 1))
+      end
+    end
+    return "dot screen: " .. table.concat(parts, "; ") .. " host=" .. hostText
+  end)
   fact(function()
     local px = self._px
     if type(px) ~= "table" then

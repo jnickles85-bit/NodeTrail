@@ -121,6 +121,15 @@ function D.Describe(obj)
   end
   d.width = read("GetWidth")
   d.height = read("GetHeight")
+  -- Where the region ACTUALLY is on screen. The anchors say where it was asked
+  -- to be; GetLeft/GetTop say where the client put it. A dot that is anchored
+  -- inside the canvas but whose GetLeft is off the map is a placement bug, and a
+  -- dot whose GetLeft is on the map but invisible is a draw-order/clipping bug —
+  -- only the client's own answer separates those two, which is why the diag
+  -- prints it next to the anchors.
+  d.left = read("GetLeft")
+  d.top = read("GetTop")
+  d.visible = read("IsVisible")
   -- A line REGION may or may not have its own z-order: a bare Texture/Line
   -- region draws inside its parent frame and a client that does not expose
   -- GetFrameLevel/GetFrameStrata for it must read as "inherits the host"

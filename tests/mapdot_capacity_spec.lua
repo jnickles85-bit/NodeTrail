@@ -122,6 +122,31 @@ local function boot(ceiling)
     end
     function r:GetWidth() return self.w or 0 end
     function r:GetHeight() return self.h or 0 end
+    -- The client's own answer to "where did you actually put this region".
+    -- Derived from the anchors the way a real client would: the rect starts at
+    -- the relative frame's origin plus the smallest x / the largest y (y is
+    -- negative downwards), so a diag that invents 0,0 instead of reading the
+    -- region is caught by the section that clears these two methods.
+    function r:GetLeft()
+      if #self.points == 0 then return nil end
+      local base = (self.points[1][2] and self.points[1][2].left) or 0
+      local minX
+      for i = 1, #self.points do
+        local x = self.points[i][4] or 0
+        if not minX or x < minX then minX = x end
+      end
+      return base + (minX or 0)
+    end
+    function r:GetTop()
+      if #self.points == 0 then return nil end
+      local base = (self.points[1][2] and self.points[1][2].top) or 0
+      local maxY
+      for i = 1, #self.points do
+        local y = self.points[i][5] or 0
+        if not maxY or y > maxY then maxY = y end
+      end
+      return base + (maxY or 0)
+    end
     function r:GetObjectType() return self.kind == "line" and "Line" or "Texture" end
     function r:SetTexture(path) self.texture = path end
     function r:SetColorTexture(cr, cg, cb, ca) self.color = { cr, cg, cb, ca } end
@@ -657,6 +682,66 @@ do
   check((a.widen or 1) == 1, "L: the plan was not widened on a client that can hold it (widen="
     .. tostring(a.widen) .. ")")
   check((a.replans or 0) == 0, "L: and no re-fit was needed (replans=" .. tostring(a.replans) .. ")")
+end
+
+-- ═══ M. the diag reports where the CLIENT put the dots, not where we asked ══
+-- "painted == planned" is a statement about regions, not about the screen. The
+-- live client's map shows one short stroke while the diag claims 208 dots, so
+-- the next measurement has to be the region's OWN screen position. These
+-- checks pin that the line exists, that it reads the region (not the plan), and
+-- that a client which cannot answer reads `absent` rather than a made-up 0,0.
+local function lastLineStartingWith(text, prefix)
+  local found
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    local body = line:gsub("^NodeTrail mapdiag: ", "")
+    if body:sub(1, #prefix) == prefix then
+      found = body
+    end
+  end
+  return found
+end
+
+do
+  local M = boot(4000)
+  M.M:SetRoute(route("M"))
+  local host = M.M.host
+  check(host ~= nil, "M: the overlay host exists after a draw")
+
+  local first = lastLineStartingWith(M.diag(), "dot screen:")
+  check(first ~= nil, "M: the diag prints a `dot screen:` line in dots mode")
+  check(first and first:find("dot 1 screen=") ~= nil,
+    "M: it names the first painted dot's screen position (" .. tostring(first) .. ")")
+  local painted = tonumber(((M.M.drawer or {}).lastApplied or {}).paintedDots) or 0
+  check(first and first:find("dot " .. painted .. " screen=") ~= nil,
+    "M: and the last one (" .. tostring(first) .. ")")
+  check(first and first:find("host=") ~= nil, "M: alongside the host's own position")
+
+  -- The dots must follow the host: give the host a screen origin and the
+  -- region's own screen position has to move by exactly that much.
+  if host then
+    host.left, host.top = 40, 90
+    local moved = lastLineStartingWith(M.diag(), "dot screen:")
+    check(moved and moved:find("host=40.0,90.0", 1, true) ~= nil,
+      "M: the host's screen position is read, not assumed (" .. tostring(moved) .. ")")
+    local tex = M.M.drawer and M.M.drawer.pool and M.M.drawer.pool[2]
+    if tex then
+      local left = tex.GetLeft and tex:GetLeft()
+      check(type(left) == "number" and left >= 40,
+        "M: the first dot's own GetLeft is at or right of the host origin (" .. tostring(left) .. ")")
+    end
+  end
+
+  -- A client that does not answer GetLeft on a region must read `absent`.
+  local tex = M.M.drawer and M.M.drawer.pool and M.M.drawer.pool[2]
+  if tex then
+    local savedL, savedT = tex.GetLeft, tex.GetTop
+    tex.GetLeft, tex.GetTop = nil, nil
+    local silent = lastLineStartingWith(M.diag(), "dot screen:")
+    check(silent and silent:find("dot 1 screen=absent") ~= nil,
+      "M: a region that does not answer GetLeft prints absent, not a made-up 0,0 ("
+        .. tostring(silent) .. ")")
+    tex.GetLeft, tex.GetTop = savedL, savedT
+  end
 end
 
 if failed > 0 then
