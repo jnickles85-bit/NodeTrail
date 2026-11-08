@@ -108,6 +108,17 @@ function D.Describe(obj)
   end
   d.width = read("GetWidth")
   d.height = read("GetHeight")
+  -- A line REGION may or may not have its own z-order: a bare Texture/Line
+  -- region draws inside its parent frame and a client that does not expose
+  -- GetFrameLevel/GetFrameStrata for it must read as "inherits the host"
+  -- (nil), not as level 0 — those two are very different draw orders.
+  d.level = read("GetFrameLevel")
+  d.strata = read("GetFrameStrata")
+  d.parent = read("GetParent")
+  local vr, vg, vb, va = read("GetVertexColor")
+  if type(vr) == "number" then
+    d.vertex = { vr, vg, vb, va }
+  end
   local tex = read("GetTexture")
   if type(tex) == "string" then
     d.texture = tex

@@ -284,6 +284,8 @@ check(afterSwitch:find("segments: queued=1 total=", 1, true) == nil,
   "C: the previous route's segment totals are not printed as current")
 check(afterSwitch:find("colour applied by the last draw", 1, true) == nil,
   "C: the previous draw's colour is not printed as current")
+check(afterSwitch:find("721.4", 1, true) == nil,
+  "C: the previous route's pixel coordinates are not printed anywhere, including the held line objects")
 local switchVerdict = lineStartingWith(afterSwitch, "verdict:")
 check(switchVerdict and switchVerdict:find("the host is hidden", 1, true) ~= nil,
   "C: the verdict reports the hidden host (got " .. tostring(switchVerdict) .. ")")
@@ -368,6 +370,81 @@ check(M._zorder and M._zorder.stillBelow == false,
 local stickyVerdict = lineStartingWith(diag(), "verdict:")
 check(stickyVerdict and stickyVerdict:find("DRAW ORDER", 1, true) == nil,
   "F: no draw-order claim once the host is above the art (got " .. tostring(stickyVerdict) .. ")")
+
+-- ═══ G. the held LINE OBJECT is measured, and a bad one is named ══════════
+-- The card's other candidate next to host z-order: "the textures carry zero
+-- alpha or a zero-size edge". The diag printed only kind/shown/alpha/thickness/
+-- len per object, so a held region measuring 0x0 (or sitting under the art)
+-- still produced "no draw-order, colour or geometry cause found" — the exact
+-- invisible-line state, reported as unexplained. The shape below is the real
+-- region contract: GetWidth/GetHeight/GetFrameLevel/GetFrameStrata/GetParent.
+local obj = M.drawer and M.drawer.pool and M.drawer.pool[1]
+check(obj ~= nil, "G: the redraw holds a line object")
+obj.GetWidth = function() return 0 end
+obj.GetHeight = function() return 0 end
+obj.GetFrameLevel = function() return 1 end
+obj.GetFrameStrata = function() return "BACKGROUND" end
+obj.GetParent = function() return M.host end
+M:Redraw()
+check(M._drawError == nil, "G: draw error: " .. tostring(M._drawError))
+local objectDiag = diag()
+local objectLine1 = lineStartingWith(objectDiag, "line 1:")
+check(objectLine1 and objectLine1:find("size=0x0", 1, true) ~= nil,
+  "G: line 1 prints its MEASURED size (got " .. tostring(objectLine1) .. ")")
+check(objectLine1 and objectLine1:find("level=1", 1, true) ~= nil,
+  "G: line 1 prints its measured frame level (got " .. tostring(objectLine1) .. ")")
+check(objectLine1 and objectLine1:find("strata=BACKGROUND", 1, true) ~= nil,
+  "G: line 1 prints its measured strata (got " .. tostring(objectLine1) .. ")")
+check(objectLine1 and objectLine1:find("parent=<unnamed>", 1, true) ~= nil,
+  "G: line 1 prints its parent by name (got " .. tostring(objectLine1) .. ")")
+check(objectLine1 and objectLine1:find("chain=", 1, true) ~= nil
+  and objectLine1:find("WorldMapScrollContainer", 1, true) ~= nil,
+  "G: line 1 prints its parent CHAIN by name, not just the immediate parent (got "
+    .. tostring(objectLine1) .. ")")
+local objectVerdict = lineStartingWith(objectDiag, "verdict:")
+check(objectVerdict and objectVerdict:find("verdict: LINE OBJECT", 1, true) ~= nil,
+  "G: a zero-size held object is named as the cause (got " .. tostring(objectVerdict) .. ")")
+check(objectVerdict and objectVerdict:find("zero-size", 1, true) ~= nil,
+  "G: the verdict says the object has no area (got " .. tostring(objectVerdict) .. ")")
+check(objectVerdict and objectVerdict:find("line 1", 1, true) ~= nil,
+  "G: the verdict names which object (got " .. tostring(objectVerdict) .. ")")
+check(objectDiag:find("verdict: no draw-order, colour or geometry cause found", 1, true) == nil,
+  "G: a bad held object is not reported as 'no cause found'")
+
+-- Same object with area, still under the art: the z-order of the OBJECT is the
+-- named cause. (Host z-order is covered by A-F; this is the texture's own.)
+obj.GetWidth = function() return 100 end
+obj.GetHeight = function() return 3 end
+local belowDiag = diag()
+local belowLine1 = lineStartingWith(belowDiag, "line 1:")
+check(belowLine1 and belowLine1:find("size=100x3", 1, true) ~= nil,
+  "G: line 1 prints the non-zero size (got " .. tostring(belowLine1) .. ")")
+local belowObjectVerdict = lineStartingWith(belowDiag, "verdict:")
+check(belowObjectVerdict and belowObjectVerdict:find("verdict: LINE OBJECT", 1, true) ~= nil,
+  "G: an object under the art is named as the cause (got " .. tostring(belowObjectVerdict) .. ")")
+check(belowObjectVerdict and belowObjectVerdict:find("below the art", 1, true) ~= nil,
+  "G: the verdict says the object is below the art (got " .. tostring(belowObjectVerdict) .. ")")
+check(belowObjectVerdict and belowObjectVerdict:find("zero-size", 1, true) == nil,
+  "G: a sized object is not called zero-size (got " .. tostring(belowObjectVerdict) .. ")")
+
+-- A region that inherits the host's z-order must read as such, not as level 0
+-- or a zero size — blaming it would send the next run after the wrong thing.
+obj.GetWidth, obj.GetHeight = nil, nil
+obj.GetFrameLevel, obj.GetFrameStrata, obj.GetParent = nil, nil, nil
+local inheritDiag = diag()
+local inheritLine1 = lineStartingWith(inheritDiag, "line 1:")
+check(inheritLine1 and inheritLine1:find("size=absent", 1, true) ~= nil,
+  "G: an absent size getter reads 'absent' (got " .. tostring(inheritLine1) .. ")")
+check(inheritLine1 and inheritLine1:find("level=inherits the host", 1, true) ~= nil,
+  "G: an absent level getter reads 'inherits the host' (got " .. tostring(inheritLine1) .. ")")
+check(inheritLine1 and inheritLine1:find("strata=inherits the host", 1, true) ~= nil,
+  "G: an absent strata getter reads 'inherits the host' (got " .. tostring(inheritLine1) .. ")")
+local inheritVerdict = lineStartingWith(inheritDiag, "verdict:")
+check(inheritVerdict and inheritVerdict:find("verdict: LINE OBJECT", 1, true) == nil,
+  "G: a region with no independent z-order is not blamed (got " .. tostring(inheritVerdict) .. ")")
+check(inheritVerdict and inheritVerdict:find("no draw-order, colour or geometry cause found", 1, true) ~= nil,
+  "G: the verdict falls through when the held object cannot be blamed (got "
+    .. tostring(inheritVerdict) .. ")")
 
 if failed > 0 then
   io.stderr:write(failed .. " diag truthfulness check(s) failed\n")

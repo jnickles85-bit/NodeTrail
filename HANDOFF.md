@@ -287,6 +287,13 @@ All twenty-one specs pass with lua5.1.
   line now names the next candidate instead of repeating draw order. If the diag says
   `DRAW ORDER (still below after the raise attempt)`, the client refused the raise and the two
   levels printed on that line are the finding.
+- The held line OBJECTS are now measured too (`line 1:` / `line 2:` print size, level, strata,
+  parent and vertex colour; a region with no independent z-order says `inherits the host`). The
+  verdict names a `LINE OBJECT` cause — zero-size (0x0 only; a horizontal line legitimately has
+  height 0), alpha 0, hidden, or the object sitting below the art — instead of falling through to
+  `no draw-order, colour or geometry cause found` while the line is invisible. After a redraw that
+  never reached the measurement stage, the objects' held endpoints print `not from the last redraw
+  (<why>)` rather than the previous route's pixels.
 - The minimap path's `queued=0` report is now explained per point/segment (inside/OUTSIDE vs the
   clipped circle, mode, radius and unit). If the in-game numbers say the route is simply farther
   than the view radius, nothing is wrong to fix — the diag says so instead of leaving it ambiguous.

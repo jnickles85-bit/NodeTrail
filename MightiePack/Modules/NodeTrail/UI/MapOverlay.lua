@@ -832,6 +832,62 @@ local function fmtFrame(frame)
   return string.format("present (%s, %sx%s)", frameName(frame), fmtNum(w), fmtNum(h))
 end
 
+--- The held line objects, measured. The last redraw queued `_lastQueued`
+--- segments into pool 1..N, so only those objects carry this route's line; any
+--- higher pool entry is a hidden leftover and not a defect. Every read is
+--- guarded by LineDraw.Describe, so a region with no independent z-order says
+--- "inherits the host" (nil) instead of inventing level 0.
+--- A size defect needs BOTH dimensions at 0: a horizontal line legitimately has
+--- height 0 and a thickness, so height 0 alone is not invisible.
+--- Returns human-readable defects; empty when the held objects look drawable.
+local function objectDefects(self)
+  local defects = {}
+  local drawer = self.drawer
+  local pool = drawer and drawer.pool
+  local used = self._lastQueued or 0
+  if type(pool) ~= "table" or used < 1 or not self._drew then
+    return defects
+  end
+  local z = self._zorder
+  for i = 1, used do
+    local d = ns.LineDraw.Describe(pool[i])
+    if not d.present then
+      defects[#defects + 1] = ("line %d is absent from the pool"):format(i)
+    else
+      if type(d.width) == "number" and type(d.height) == "number"
+        and d.width <= 0 and d.height <= 0 then
+        defects[#defects + 1] = ("line %d measures %sx%s (zero-size): the texture has no area to draw")
+          :format(i, fmtNum(d.width), fmtNum(d.height))
+      end
+      if type(d.alpha) == "number" and d.alpha <= 0 then
+        defects[#defects + 1] = ("line %d alpha=%s: fully transparent")
+          :format(i, fmtNum(d.alpha, 2))
+      end
+      if d.shown == false then
+        defects[#defects + 1] = ("line %d is hidden"):format(i)
+      end
+      -- The object's OWN draw order, only when the client exposes it. A region
+      -- that inherits the host's z-order is covered by the host branches above.
+      if type(d.level) == "number" and type(z) == "table" and type(z.topLevel) == "number" then
+        local objRank = strataRank(d.strata)
+        local artRank = strataRank(z.topStrata)
+        local below
+        if objRank and artRank and objRank ~= artRank then
+          below = objRank < artRank
+        else
+          below = d.level <= z.topLevel
+        end
+        if below then
+          defects[#defects + 1] = ("line %d sits at level=%s strata=%s, below the art %s (level=%s strata=%s)")
+            :format(i, fmtNum(d.level), tostring(d.strata or "absent"), tostring(z.topLabel),
+              fmtNum(z.topLevel), tostring(z.topStrata or "absent"))
+        end
+      end
+    end
+  end
+  return defects
+end
+
 function M:Diag()
   local mapFrame = _G.WorldMapFrame
 
@@ -1002,21 +1058,59 @@ function M:Diag()
         return ("line %d: absent (no line object held)"):format(i)
       end
       local len = "absent"
-      if type(d.start) == "table" and type(d.stop) == "table"
-        and type(d.start[3]) == "number" and type(d.stop[3]) == "number" then
-        local dx = (d.stop[3] or 0) - (d.start[3] or 0)
-        local dy = (d.stop[4] or 0) - (d.start[4] or 0)
-        len = fmtNum(math.sqrt(dx * dx + dy * dy), 1) .. "px"
-      end
-      local function pt(p)
-        if type(p) ~= "table" then
-          return "absent"
+      local startText = "absent"
+      local stopText = "absent"
+      if not self._measured then
+        -- The objects keep the endpoints of an EARLIER draw after a redraw that
+        -- never reached the measurement stage (wrong map open, no host, ...).
+        -- Printing those pixels next to "not measured on the last redraw"
+        -- reads as if they were this redraw's geometry.
+        local why = "not from the last redraw (" .. tostring(self._why or "no redraw has run yet") .. ")"
+        len, startText, stopText = why, why, why
+      else
+        if type(d.start) == "table" and type(d.stop) == "table"
+          and type(d.start[3]) == "number" and type(d.stop[3]) == "number" then
+          local dx = (d.stop[3] or 0) - (d.start[3] or 0)
+          local dy = (d.stop[4] or 0) - (d.start[4] or 0)
+          len = fmtNum(math.sqrt(dx * dx + dy * dy), 1) .. "px"
         end
-        return string.format("%s(%s,%s)", tostring(p[1]), fmtNum(p[3], 1), fmtNum(p[4], 1))
+        local function pt(p)
+          if type(p) ~= "table" then
+            return "absent"
+          end
+          return string.format("%s(%s,%s)", tostring(p[1]), fmtNum(p[3], 1), fmtNum(p[4], 1))
+        end
+        startText, stopText = pt(d.start), pt(d.stop)
       end
-      return string.format("line %d: kind=%s shown=%s alpha=%s thickness=%s len=%s start=%s end=%s",
-        i, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2),
-        fmtNum(d.thickness, 2), len, pt(d.start), pt(d.stop))
+      -- Measured, not assumed: an absent getter means the region has no
+      -- independent size/z-order (a bare texture draws inside its parent), so
+      -- that is reported as such instead of as a zero size or level 0.
+      local size = "absent"
+      if type(d.width) == "number" or type(d.height) == "number" then
+        size = fmtNum(d.width) .. "x" .. fmtNum(d.height)
+      end
+      local level = "inherits the host"
+      if type(d.level) == "number" then
+        level = fmtNum(d.level)
+      end
+      local strata = "inherits the host"
+      if type(d.strata) == "string" and d.strata ~= "" then
+        strata = d.strata
+      end
+      local parent = "absent"
+      local chain = "absent"
+      if d.parent ~= nil then
+        parent = frameName(d.parent)
+        chain = parentChainText(d.parent)
+      end
+      local vertex = "absent"
+      if type(d.vertex) == "table" then
+        vertex = string.format("%s,%s,%s,%s", fmtNum(d.vertex[1], 2), fmtNum(d.vertex[2], 2),
+          fmtNum(d.vertex[3], 2), fmtNum(d.vertex[4], 2))
+      end
+      return string.format("line %d: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s",
+        i, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2), vertex,
+        fmtNum(d.thickness, 2), size, level, strata, parent, chain, len, startText, stopText)
     end)
   end
   fact(function()
@@ -1126,6 +1220,16 @@ function M:Diag()
     end
     if (self._lastQueued or 0) < 1 then
       return "verdict: nothing queued — " .. tostring(self._why or "no reason recorded") .. history
+    end
+    -- The objects the segments were drawn into are measured too: a queued
+    -- segment that lands in a 0x0 texture, a transparent one, or one that sits
+    -- under the art is the card's other candidate, and it must be NAMED here
+    -- instead of the diag falling through to "no cause found".
+    local defects = objectDefects(self)
+    if #defects > 0 then
+      return string.format(
+        "verdict: LINE OBJECT — %s queued but invisible because %s. Next measurement: /nt mapdiag again on this map and report the line 1/line 2 lines%s",
+        fmtNum(self._lastQueued), table.concat(defects, "; "), history)
     end
     if total < 8 then
       return string.format(
