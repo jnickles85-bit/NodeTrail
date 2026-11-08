@@ -208,6 +208,10 @@ local Target = ns.Nav.Target
 local Source = ns.Nav.Source
 local Arrow = ns.Nav.Arrow
 ns.Enable = ns.Enable or function() end
+-- The arrow is opt-in by default (it must never appear uninvited); this spec
+-- exists to test the arrow, so it switches it on for the cases below and flips
+-- it off explicitly where the switch itself is under test.
+ns.GetDB().showNavArrow = true
 
 local function core(app, index)
   return app.dots[index]
