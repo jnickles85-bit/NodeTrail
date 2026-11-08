@@ -9,10 +9,10 @@
 --   * /mp skindiag dump prints one line per step, hard-capped at 120
 --     chars — Forever has no /run or /dump, so chat lines are the ONLY
 --     evidence channel that reaches Mightie
---   * every event is registered only if C_EventUtils.IsEventValid says it
---     exists on this client; an invalid one is recorded as
---     "invalid event" in the diag, never raised as an error (the same
---     gate Recipes.lua uses, t_81da8886)
+--   * every event is registered by TRYING it — never by asking a restricted
+--     namespace whether it exists; an unknown one is caught and recorded as
+--     "invalid event" in the diag, never raised as an error (the same gate
+--     Recipes.lua uses, t_81da8886)
 --   * NO SavedVariables: the buffer is in-memory state on this table.
 --     The DB shape lives in SKINNING-DATA-MODEL.md (design only) and in
 --     the implementation card — recording into a DB is NOT this card
@@ -511,22 +511,27 @@ function P:Enable()
     end
   end)
   for _, e in ipairs(self.EVENTS) do
-    -- Register only what THIS client knows. On Forever 16001 some of
-    -- these registers raise "Attempt to register unknown event" — so
-    -- when C_EventUtils is present, ask it first, and record a skipped
-    -- event as "invalid event" (not an error string) so the dump stays
-    -- truthful (t_81da8886; same gate as Recipes.lua).
-    local invalid = false
-    if type(C_EventUtils) == "table"
-      and type(C_EventUtils.IsEventValid) == "function" then
-      local okV, valid = pcall(C_EventUtils.IsEventValid, e)
-      invalid = okV and (valid == false)
-    end
-    if invalid then
-      self._events[e] = "invalid event"
+    -- Register only what THIS client knows, by TRYING it. Never ask
+    -- C_EventUtils.IsEventValid: that namespace is restricted to Blizzard's
+    -- own code, and calling it from an addon is refused at the secure-call
+    -- boundary — the client answers with the modal
+    --   "MightiePack has been blocked from an action only available to the
+    --    Blizzard UI"
+    -- instead of a catchable Lua error, so pcall does not help (live:
+    -- 2026-11-07, the block fired on the exact frame /mp skindiag ran).
+    -- A failed RegisterEvent is an ordinary error we can catch, and an
+    -- unknown event is recorded as "invalid event" so the dump stays
+    -- truthful (t_81da8886).
+    local ok, err = pcall(frame.RegisterEvent, frame, e)
+    if ok then
+      self._events[e] = true
     else
-      local ok, err = pcall(frame.RegisterEvent, frame, e)
-      self._events[e] = ok and true or tostring(err)
+      local msg = tostring(err)
+      if msg:find("unknown event", 1, true) then
+        self._events[e] = "invalid event"
+      else
+        self._events[e] = msg
+      end
     end
   end
 end

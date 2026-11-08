@@ -942,22 +942,23 @@ function Rc:Enable()
   table.insert(allEvents, "NEW_RECIPE_LEARNED")
   Rc._events = {}
   for _, e in ipairs(allEvents) do
-    -- Register only what this client knows. On Forever 16001 only
-    -- TRADE_SKILL_SHOW is valid; the other registers raise "Attempt to
-    -- register unknown event" — so when C_EventUtils is present, ask it
-    -- first, and record a skipped event as "invalid event" (not an error
-    -- string) so /nt ttdiag stays truthful (t_81da8886).
-    local invalid = false
-    if type(C_EventUtils) == "table"
-      and type(C_EventUtils.IsEventValid) == "function" then
-      local okV, valid = pcall(C_EventUtils.IsEventValid, e)
-      invalid = okV and (valid == false)
-    end
-    if invalid then
-      Rc._events[e] = "invalid event"
+    -- Register by TRYING, never by asking C_EventUtils.IsEventValid: that
+    -- namespace is restricted to Blizzard's code and the call is refused at
+    -- the secure-call boundary with the modal "MightiePack has been blocked
+    -- from an action only available to the Blizzard UI", which pcall cannot
+    -- catch (live 2026-11-07). On Forever 16001 only TRADE_SKILL_SHOW is
+    -- valid; the rest raise "unknown event", which we do catch and record as
+    -- "invalid event" so /nt ttdiag stays truthful (t_81da8886).
+    local ok, err = pcall(frame.RegisterEvent, frame, e)
+    if ok then
+      Rc._events[e] = true
     else
-      local ok, err = pcall(frame.RegisterEvent, frame, e)
-      Rc._events[e] = ok and true or tostring(err)
+      local msg = tostring(err)
+      if msg:find("unknown event", 1, true) then
+        Rc._events[e] = "invalid event"
+      else
+        Rc._events[e] = msg
+      end
     end
   end
 end
