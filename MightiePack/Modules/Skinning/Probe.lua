@@ -479,8 +479,13 @@ end
 function P:Enable()
   if self.enabled then return end
   self.enabled = true
+  local function note(m)
+    if type(pkg.Print) == "function" then pkg.Print("skindiag: " .. m) end
+  end
+  note("step: creating the event frame")
   local frame = CreateFrame("Frame")
   self.frame = frame
+  note("step: frame created")
   local function dispatch(event, ...)
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
       self:OnCast("UNIT_SPELLCAST_SUCCEEDED", ...)
@@ -504,12 +509,14 @@ function P:Enable()
       self:OnEnterWorld(...)
     end
   end
+  note("step: installing OnEvent")
   frame:SetScript("OnEvent", function(_, event, ...)
     local ok, err = pcall(dispatch, event, ...)
     if not ok then
       self._error = tostring(err)
     end
   end)
+  note("step: OnEvent installed")
   for _, e in ipairs(self.EVENTS) do
     -- Register only what THIS client knows, by TRYING it. Never ask
     -- C_EventUtils.IsEventValid: that namespace is restricted to Blizzard's
@@ -525,15 +532,19 @@ function P:Enable()
     local ok, err = pcall(frame.RegisterEvent, frame, e)
     if ok then
       self._events[e] = true
+      note("reg ok: " .. e)
     else
       local msg = tostring(err)
       if msg:find("unknown event", 1, true) then
         self._events[e] = "invalid event"
+        note("reg refused (unknown): " .. e)
       else
         self._events[e] = msg
+        note("reg refused (" .. msg .. "): " .. e)
       end
     end
   end
+  note("step: registration finished")
 end
 
 -- /mp skindiag dump — the in-client evidence channel. One line per step,
