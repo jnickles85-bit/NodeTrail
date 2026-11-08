@@ -1322,10 +1322,10 @@ function Rc:Diag()
   else
     say("last scan: none (no scan has run since the addon loaded)")
   end
-  -- Availability (t_04c983cc): which field the client answered with, and what
-  -- the gate made of it. A list that is NOT filtered says so here once, so the
-  -- panel's "recipes (not filtered by skill)" label is explainable rather than
-  -- mysterious.
+  -- Availability (t_04c983cc, t_4ab7c230): which signal the client answered
+  -- with (or that none did), and what the gate made of it. A client that
+  -- answered nothing HIDES the line, so this says which signal was missing
+  -- once — /nt recipediag carries the raw per-recipe values.
   local dbd = nil
   if type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" then
     dbd = NodeTrailDB.recipes
