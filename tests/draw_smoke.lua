@@ -28,6 +28,18 @@ local function makeRegion()
   function r:SetPoint(...) self.points[#self.points + 1] = { ... } end
   function r:SetStartPoint(...) self.startPoint = { ... } end
   function r:SetEndPoint(...) self.endPoint = { ... } end
+  -- The real region contract: LineDraw tests the round-trip before choosing the
+  -- line primitive.
+  function r:GetStartPoint()
+    local p = self.startPoint
+    if not p then return nil end
+    return p[1], p[2], p[3], p[4], p[5]
+  end
+  function r:GetEndPoint()
+    local p = self.endPoint
+    if not p then return nil end
+    return p[1], p[2], p[3], p[4], p[5]
+  end
   function r:SetTexture(path) self.texture = path end
   function r:SetVertexColor(cr, cg, cb, ca) self.vertexColor = { cr, cg, cb, ca } end
   function r:SetColorTexture(cr, cg, cb, ca) self.colorTexture = { cr, cg, cb, ca } end
@@ -325,8 +337,37 @@ ns.GetDB().showWorldMap = true
 ns.MapOverlay:SetRoute(route)
 check(#shown(ns.MapOverlay.host, "line") == 1, "world lines return")
 
--- Texture fallbacks on the same host.
+-- Texture fallbacks on the same host. The ladder is now
+--   line (endpoints proven) -> dots (two-corner anchors) -> rotate -> texcoord,
+-- because a client can accept SetStartPoint/EndPoint (or SetWidth) and do
+-- nothing with them; the chain of anchored quads is the primitive that leaves
+-- the fewest setters able to be a silent no-op.
 ns.MapOverlay.drawer.disableLine = true
+ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
+ns.MapOverlay:Redraw()
+check(ns.MapOverlay.drawer.mode == "dots", "anchored-dots fallback, got "
+  .. tostring(ns.MapOverlay.drawer.mode))
+local dots = shown(ns.MapOverlay.host, "texture")
+check(#dots > 50, "a chain of dots covers the segment, got " .. #dots)
+local firstDot, lastDot = dots[1], dots[#dots]
+if firstDot and lastDot and type(firstDot.points) == "table"
+  and #firstDot.points >= 2 and #lastDot.points >= 2 then
+  -- 800x600 canvas, segment (200,300) -> (600,300), thickness 1 -> a 2.5px dot
+  -- every 3px, so the first spans [198.75,201.25] and the last [598.75,601.25].
+  near(firstDot.points[1][4], 198.75, "the first dot's left edge sits on the first point")
+  near(firstDot.points[2][4], 201.25, "the first dot's right edge")
+  near(lastDot.points[1][4], 598.75, "the last dot's left edge sits on the segment end")
+  near(lastDot.points[2][4], 601.25, "the last dot's right edge")
+  check(firstDot.width == 0 and firstDot.height == 0,
+    "dots never call SetWidth/SetHeight — the anchors force the size")
+  check(firstDot.rotation == nil, "dots never call SetRotation")
+else
+  check(false, "the fallback objects carry no two-corner anchors (a SetWidth/SetRotation "
+    .. "texture was used instead)")
+end
+
+-- Legacy primitives stay reachable (diagnostic switches, like disableLine).
+ns.MapOverlay.drawer.disableDots = true
 ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "rotate", "SetRotation fallback")
@@ -345,6 +386,7 @@ check(#taxi >= 1, "texcoord segment visible")
 check(taxi[1] and taxi[1].texture == "Interface\\TaxiFrame\\UI-Taxi-Line", "taxi line texture")
 check(taxi[1] and taxi[1].texcoord and #taxi[1].texcoord == 8, "eight texcoords")
 WOW_NO_ROTATION = false
+ns.MapOverlay.drawer.disableDots = false
 
 -- Minimap, back on CreateLine.
 local nearRoute = {

@@ -84,6 +84,37 @@ On top of that branch:
   verdict; the fraction fallback now follows the minimap zoom instead of drawing the same size at
   every zoom step. **The z-order fix is not yet confirmed in game** — `/nt mapdiag` with the map
   open is the proof (it must print `host_level` > `top`).
+- **World-map line: the primitive, measured** (t_a08cb3e0). The live `/nt mapdiag` from `c220ec7`
+  (Barrens 1413, 12 segments, 326.1px) settled it: `queued=12`, `z-order … above the art`,
+  `colour … a=0.90`, and every line object `shown=true thickness=2.88 size=0x0` with
+  `start=TOPLEFT(0.0,absent) end=TOPLEFT(0.0,absent)`. The frame, strata, alpha, colour and
+  thickness were all correct — **the client accepted `SetStartPoint`/`SetEndPoint` and kept no
+  geometry**, so the region had no line to draw and nothing raised an error.
+  `LineDraw` no longer picks `mode="line"` on the existence of `Frame:CreateLine`: `detect` sets a
+  known 64px diagonal on the new region and requires the endpoints (or the size) to read back
+  (`D.LineProof`). When they do not, it falls back to **`mode="dots"`**: a chain of 2.5px quads
+  anchored by two corners (`BOTTOMLEFT`/`TOPRIGHT`), spaced 3px, with **no `SetWidth`,
+  `SetHeight`, `SetSize`, `SetRotation` or `SetTexCoord` call at all** — the primitive with the
+  fewest setters left to be a silent no-op. `D.DotPlan`/`D.PlanDots` are pure and unit-tested
+  (coverage, both endpoints, the 1200-object cap, size/spacing scaled together). `rotate` and
+  `texcoord` stay as legacy fallbacks behind `disableDots`/`disableLine`.
+  `/nt mapdiag` now prints `primitive: chose mode=… ; line proof: object=… GetNumPoints=…
+  start=… end=… size=… -> KEPT|DROPPED; texture proof: SetPoint/SetWidth/SetHeight/SetSize/
+  SetRotation/SetTexCoord presence, size setters -> WxH, two corner anchors -> WxH points=N`,
+  plus an `anchor probe:` that repeats the two-corner experiment live and every held object's
+  `object=` (GetObjectType), `numpoints=` and `points=[1:BOTTOMLEFT(...) 2:TOPRIGHT(...)]` and
+  `methods=`. The verdict gained `verdict: PRIMITIVE` (names the dropped endpoints and says the
+  route is now N anchored dots) instead of falling through to "no cause found".
+  **A zero size on a Line is no longer reported as the cause** — a Line's extent comes from its
+  endpoints, and `line 1 measures 0x0 (zero-size)` was the false accusation that hid the real
+  defect for four rounds; `objectDefects` now judges each primitive by its own contract
+  (endpoints for a line, two anchors for a dot, SetWidth for the rest).
+  **`/nt mapdiag probe`** draws a solid 40x40 marker at the first route point, a 4px border around
+  the full canvas, and one diagonal `(0,0)->(w,h)` through the same `LineDraw.Draw` the route uses,
+  printing the coordinates and measured sizes of all three. It is **off by default**; `probe off`
+  removes them. `/nt mapdiag primitive <auto|line|dots|rotate>` pins a primitive for one redraw and
+  reports the mode the client's measurement ended up choosing — an in-game A/B with no code edit.
+  **Not yet confirmed visible in game**: the probe is in place for that run.
 - **Tooltip flicker instrumentation + fix** (t_c0a68ed2): `Refresh` takes a `source`
   (`show`/`setunit`/`setitem`/`poll`) and keeps a ring of the last **8** evaluations — hovered name,
   NumLines before/after, whether `blockIntact` matched, whether the block was appended, whether
@@ -217,8 +248,11 @@ Run from repo root with lua5.1:
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
-All twenty-four specs and `tests/draw_smoke.lua` pass with lua5.1
-(`tests/skinning_recorder_spec.lua` is the newest; it is RED on `5455eea` with 7 FAILs).
+- `tests/mapdraw_primitive_spec.lua` (t_a08cb3e0: the LIVE client shape — a `CreateLine` region whose `SetStartPoint`/`SetEndPoint` return and whose getters keep reading `TOPLEFT(0.0,absent)` at `size=0x0`, and a texture with no `SetWidth`/`SetHeight`/`SetRotation`. Pins: the line primitive is refused by measurement and the overlay falls back to `mode="dots"`; the dots are two-corner-anchored 2.5px quads every 3px that cover the segment end to end and reach both endpoints; the diag prints `primitive:` with both proofs, `anchor probe … two corner anchors -> 64x8 points=2`, and the held object's `object=`/`numpoints=`/`points=`/`methods=`; `verdict: PRIMITIVE` names the dropped endpoints instead of blaming a zero size; `mapdiag probe` draws the marker/border/diagonal with printed coordinates and is off by default; `mapdiag primitive <auto|line|dots|rotate>` reports the mode the measurement chose, not the one requested; and a client whose line region DOES keep its endpoints still uses `mode="line"`. Also unit-tests the pure `DotPlan`/`PlanDots` (coverage, both endpoints, the 1200-object cap, size/spacing scaled together). RED on `c220ec7` with 40 FAILs)
+All twenty-seven spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_a08cb3e0` HEAD.
+On `c220ec7` the four specs this card touched are RED with **51 FAILs**
+(`mapdraw_primitive_spec` 40, `diag_truthful_spec` 6, `draw_smoke` 3, `minimap_diag_spec` 2);
+the other 23 stay green.
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -299,6 +333,14 @@ All twenty-four specs and `tests/draw_smoke.lua` pass with lua5.1
   position rather than node position.
 - Density tunables have never been tuned against real data.
 - MapOverlay/MinimapPath frames load even when NodeTrail is off.
+- **The world-map line is fixed by measurement but not yet SEEN in game** (t_a08cb3e0). The client
+  accepted every `SetStartPoint`/`SetEndPoint` and kept no geometry, so the route is now a chain of
+  two-corner-anchored dots. The next in-game run answers two things with `/nt mapdiag probe`: which
+  of **marker / border / diagonal** is visible (nothing visible = frame/strata/alpha, or no texture
+  primitive at all; marker+border only = the stroke path; all three but no route = the route
+  geometry), and whether `two corner anchors -> WxH` on the `anchor probe:` line is non-zero. If the
+  marker and border draw but the diagonal does not, `/nt mapdiag primitive rotate` (then
+  ``texcoord``) A/Bs the remaining primitives without a code change.
 - The world-map line has never been seen drawing in game. `/nt mapdiag` reports which frame this
   client exposes (canvas vs WorldMapDetailFrame vs WorldMapButton), the measured sizes, the
   displayed vs route mapID, what the last redraw queued, the measured draw order (host level vs the

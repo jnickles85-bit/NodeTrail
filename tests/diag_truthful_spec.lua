@@ -374,10 +374,17 @@ check(stickyVerdict and stickyVerdict:find("DRAW ORDER", 1, true) == nil,
 -- ═══ G. the held LINE OBJECT is measured, and a bad one is named ══════════
 -- The card's other candidate next to host z-order: "the textures carry zero
 -- alpha or a zero-size edge". The diag printed only kind/shown/alpha/thickness/
--- len per object, so a held region measuring 0x0 (or sitting under the art)
--- still produced "no draw-order, colour or geometry cause found" — the exact
--- invisible-line state, reported as unexplained. The shape below is the real
--- region contract: GetWidth/GetHeight/GetFrameLevel/GetFrameStrata/GetParent.
+-- len per object, so a held region sitting under the art still produced "no
+-- draw-order, colour or geometry cause found" — the exact invisible-line
+-- state, reported as unexplained. The shape below is the real region
+-- contract: GetWidth/GetHeight/GetFrameLevel/GetFrameStrata/GetParent.
+--
+-- t_a08cb3e0 corrects the SIZE rule: a Line region's extent comes from its two
+-- ENDPOINTS, so `size=0x0` on a line is a symptom, not a cause. The live client
+-- (Barrens 1413, c220ec7) printed 0x0 on all 12 queued segments while the truth
+-- was that SetStartPoint/SetEndPoint had left no offsets behind
+-- (start=TOPLEFT(0.0,absent)). The object is therefore judged by its own
+-- contract, and the endpoint defect gets its own case below.
 local obj = M.drawer and M.drawer.pool and M.drawer.pool[1]
 check(obj ~= nil, "G: the redraw holds a line object")
 obj.GetWidth = function() return 0 end
@@ -401,15 +408,47 @@ check(objectLine1 and objectLine1:find("chain=", 1, true) ~= nil
   and objectLine1:find("WorldMapScrollContainer", 1, true) ~= nil,
   "G: line 1 prints its parent CHAIN by name, not just the immediate parent (got "
     .. tostring(objectLine1) .. ")")
+-- The contract is printed too, so the next run can name what the client holds.
+check(objectLine1 and objectLine1:find("numpoints=", 1, true) ~= nil,
+  "G: line 1 prints the region's point count (got " .. tostring(objectLine1) .. ")")
+check(objectLine1 and objectLine1:find("methods=[SetPoint=", 1, true) ~= nil,
+  "G: line 1 prints which setters the region implements (got " .. tostring(objectLine1) .. ")")
 local objectVerdict = lineStartingWith(objectDiag, "verdict:")
 check(objectVerdict and objectVerdict:find("verdict: LINE OBJECT", 1, true) ~= nil,
-  "G: a zero-size held object is named as the cause (got " .. tostring(objectVerdict) .. ")")
-check(objectVerdict and objectVerdict:find("zero-size", 1, true) ~= nil,
-  "G: the verdict says the object has no area (got " .. tostring(objectVerdict) .. ")")
+  "G: a held object under the art is named as the cause (got " .. tostring(objectVerdict) .. ")")
+check(objectVerdict and objectVerdict:find("below the art", 1, true) ~= nil,
+  "G: the verdict names the reason the object cannot be seen (got " .. tostring(objectVerdict) .. ")")
+check(objectVerdict and objectVerdict:find("zero-size", 1, true) == nil,
+  "G: a line that kept its endpoints is NOT called zero-size — a Line's extent "
+    .. "comes from its endpoints (got " .. tostring(objectVerdict) .. ")")
 check(objectVerdict and objectVerdict:find("line 1", 1, true) ~= nil,
   "G: the verdict names which object (got " .. tostring(objectVerdict) .. ")")
 check(objectDiag:find("verdict: no draw-order, colour or geometry cause found", 1, true) == nil,
   "G: a bad held object is not reported as 'no cause found'")
+
+-- The LIVE shape (Barrens 1413, c220ec7): the client ACCEPTED every
+-- SetStartPoint/SetEndPoint and kept no geometry, so GetStartPoint reads
+-- TOPLEFT(0.0, absent) on all 12 queued segments. THAT is the cause the diag
+-- has to name — a 0x0 size was only its consequence.
+local origStart, origEnd = obj.GetStartPoint, obj.GetEndPoint
+obj.GetStartPoint = function() return "TOPLEFT", nil, nil, 0, nil end
+obj.GetEndPoint = function() return "TOPLEFT", nil, nil, 0, nil end
+local droppedDiag = diag()
+local droppedLine1 = lineStartingWith(droppedDiag, "line 1:")
+check(droppedLine1 and droppedLine1:find("start=TOPLEFT(0.0,absent)", 1, true) ~= nil,
+  "G: the dropped-endpoint shape prints what the region really reads (got "
+    .. tostring(droppedLine1) .. ")")
+local droppedVerdict = lineStartingWith(droppedDiag, "verdict:")
+check(droppedVerdict and droppedVerdict:find("verdict: LINE OBJECT", 1, true) ~= nil,
+  "G: the live shape is named as a cause (got " .. tostring(droppedVerdict) .. ")")
+check(droppedVerdict and droppedVerdict:find("did not keep its endpoints", 1, true) ~= nil,
+  "G: the verdict names the endpoints the client dropped (got " .. tostring(droppedVerdict) .. ")")
+check(droppedVerdict and droppedVerdict:find("drops SetStartPoint/SetEndPoint", 1, true) ~= nil,
+  "G: the verdict names the setters the client ignores (got " .. tostring(droppedVerdict) .. ")")
+check(droppedVerdict and droppedVerdict:find("zero-size", 1, true) == nil,
+  "G: the live shape is not blamed on the size (got " .. tostring(droppedVerdict) .. ")")
+obj.GetStartPoint, obj.GetEndPoint = origStart, origEnd
+M:Redraw()
 
 -- Same object with area, still under the art: the z-order of the OBJECT is the
 -- named cause. (Host z-order is covered by A-F; this is the texture's own.)

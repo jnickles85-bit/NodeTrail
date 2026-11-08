@@ -133,6 +133,9 @@ for _, needle in ipairs({
   "minimap points: #1 px=(0.0,0.0)",
   "#2 px=(18.7,0.0) dist=0.28x-radius inside",
   "minimap segments: seg1 queued",
+  -- Requirement: one line per consecutive pair, with both projected
+  -- coordinates, both radius tests and one named reason.
+  "minimap pairs: 1->2 (0.0,0.0) (18.7,0.0), 0.00x-radius inside 0.28x-radius inside, => queued",
   "minimap verdict: drew segments",
 }) do
   check(out:find(needle, 1, true) ~= nil, "A: minimap diag missing: " .. needle)
@@ -149,6 +152,9 @@ out = say()
 for _, needle in ipairs({
   "OUTSIDE",
   "minimap segments: seg1 skipped: clipped away",
+  -- The dropped segment must carry ONE of the four named reasons, with both
+  -- projected coordinates and both radius tests in the same line.
+  "minimap pairs: 1->2 (373.3,-373.3) (420.0,-420.0), 7.86x-radius OUTSIDE 8.84x-radius OUTSIDE, => outside-radius",
   "minimap verdict: none of the 1 segment(s) reach the minimap",
 }) do
   check(out:find(needle, 1, true) ~= nil, "B: minimap diag missing: " .. needle)

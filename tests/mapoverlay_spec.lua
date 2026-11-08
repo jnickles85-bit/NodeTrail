@@ -28,6 +28,19 @@ local function makeRegion()
   function r:SetPoint(...) self.points[#self.points + 1] = { ... } end
   function r:SetStartPoint(...) self.startPoint = { ... } end
   function r:SetEndPoint(...) self.endPoint = { ... } end
+  -- The real region contract reads the endpoints back; a stub that only stores
+  -- them cannot model a client whose line primitive actually works (LineDraw
+  -- now chooses "line" only when the endpoints round-trip).
+  function r:GetStartPoint()
+    local p = self.startPoint
+    if not p then return nil end
+    return p[1], p[2], p[3], p[4], p[5]
+  end
+  function r:GetEndPoint()
+    local p = self.endPoint
+    if not p then return nil end
+    return p[1], p[2], p[3], p[4], p[5]
+  end
   function r:SetTexture(path) self.texture = path end
   function r:SetVertexColor(cr, cg, cb, ca) self.vertexColor = { cr, cg, cb, ca } end
   function r:SetColorTexture(cr, cg, cb, ca) self.colorTexture = { cr, cg, cb, ca } end

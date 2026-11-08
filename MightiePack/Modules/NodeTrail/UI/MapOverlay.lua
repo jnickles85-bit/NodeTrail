@@ -308,6 +308,7 @@ function M:Clear()
   self._zorder = nil
   self._raisedInfo = nil
   self._why = nil
+  self:ClearProbe()
   self:ReleaseVisuals()
 end
 
@@ -832,39 +833,71 @@ local function fmtFrame(frame)
   return string.format("present (%s, %sx%s)", frameName(frame), fmtNum(w), fmtNum(h))
 end
 
---- The held line objects, measured. The last redraw queued `_lastQueued`
---- segments into pool 1..N, so only those objects carry this route's line; any
---- higher pool entry is a hidden leftover and not a defect. Every read is
---- guarded by LineDraw.Describe, so a region with no independent z-order says
---- "inherits the host" (nil) instead of inventing level 0.
---- A size defect needs BOTH dimensions at 0: a horizontal line legitimately has
---- height 0 and a thickness, so height 0 alone is not invisible.
+--- The held objects, measured. What makes an object drawable is the geometry
+--- the draw ASKED for having been recorded — not a size. A Line region's extent
+--- comes from its two endpoints, so `size=0x0` on a line is a SYMPTOM, not a
+--- cause: the live client printed exactly that for 12 queued segments while the
+--- real defect was SetStartPoint/SetEndPoint leaving no offsets behind
+--- (start=TOPLEFT(0.0,absent)). Reporting "zero-size" there sent four rounds
+--- after the wrong thing, so each primitive is judged by its own contract:
+---   line  : the endpoints read back where the draw put them
+---   dots  : the region carries two corner anchors (its size IS the anchors)
+---   other : SetWidth/SetHeight actually sized it
 --- Returns human-readable defects; empty when the held objects look drawable.
 local function objectDefects(self)
   local defects = {}
   local drawer = self.drawer
   local pool = drawer and drawer.pool
-  local used = self._lastQueued or 0
-  if type(pool) ~= "table" or used < 1 or not self._drew then
+  if type(pool) ~= "table" or not self._drew then
+    return defects
+  end
+  local mode = drawer.mode or "?"
+  local applied = ns.LineDraw.Applied(drawer) or {}
+  local used = (mode == "dots") and (applied.dots or 0) or (self._lastQueued or 0)
+  if used < 1 then
     return defects
   end
   local z = self._zorder
+  local label = (mode == "dots") and "dot" or "line"
   for i = 1, used do
     local d = ns.LineDraw.Describe(pool[i])
     if not d.present then
-      defects[#defects + 1] = ("line %d is absent from the pool"):format(i)
+      defects[#defects + 1] = ("%s %d is absent from the pool"):format(label, i)
     else
-      if type(d.width) == "number" and type(d.height) == "number"
-        and d.width <= 0 and d.height <= 0 then
-        defects[#defects + 1] = ("line %d measures %sx%s (zero-size): the texture has no area to draw")
-          :format(i, fmtNum(d.width), fmtNum(d.height))
+      if d.shown == false then
+        defects[#defects + 1] = ("%s %d is hidden"):format(label, i)
       end
       if type(d.alpha) == "number" and d.alpha <= 0 then
-        defects[#defects + 1] = ("line %d alpha=%s: fully transparent")
-          :format(i, fmtNum(d.alpha, 2))
+        defects[#defects + 1] = ("%s %d alpha=%s: fully transparent")
+          :format(label, i, fmtNum(d.alpha, 2))
       end
-      if d.shown == false then
-        defects[#defects + 1] = ("line %d is hidden"):format(i)
+      if mode == "line" then
+        local hasEnds = type(d.startPoint) == "table" and type(d.stopPoint) == "table"
+          and type(d.startPoint.x) == "number" and type(d.startPoint.y) == "number"
+          and type(d.stopPoint.x) == "number" and type(d.stopPoint.y) == "number"
+        if not hasEnds then
+          defects[#defects + 1] = ("line %d did not keep its endpoints (reads start=%s end=%s after the draw): this client drops SetStartPoint/SetEndPoint")
+            :format(i, ns.LineDraw.PointText(d.startPoint), ns.LineDraw.PointText(d.stopPoint))
+        elseif d.startPoint.x == d.stopPoint.x and d.startPoint.y == d.stopPoint.y then
+          defects[#defects + 1] = ("line %d recorded a zero-length segment (start == end)"):format(i)
+        end
+      elseif mode == "dots" then
+        -- A dot has no meaningful width/height of its own: its area comes from
+        -- the two corner anchors, so the anchors are what gets judged.
+        if type(d.numPoints) == "number" then
+          if d.numPoints < 2 then
+            defects[#defects + 1] = ("dot %d carries %d anchor(s); a dot needs two corners to have area")
+              :format(i, d.numPoints)
+          end
+        elseif type(d.width) == "number" and type(d.height) == "number"
+          and d.width <= 0 and d.height <= 0 then
+          defects[#defects + 1] = ("dot %d has no readable anchors and measures %sx%s")
+            :format(i, fmtNum(d.width), fmtNum(d.height))
+        end
+      elseif type(d.width) == "number" and type(d.height) == "number"
+        and d.width <= 0 and d.height <= 0 then
+        defects[#defects + 1] = ("%s %d measures %sx%s (zero-size): the texture has no area to draw")
+          :format(label, i, fmtNum(d.width), fmtNum(d.height))
       end
       -- The object's OWN draw order, only when the client exposes it. A region
       -- that inherits the host's z-order is covered by the host branches above.
@@ -878,8 +911,8 @@ local function objectDefects(self)
           below = d.level <= z.topLevel
         end
         if below then
-          defects[#defects + 1] = ("line %d sits at level=%s strata=%s, below the art %s (level=%s strata=%s)")
-            :format(i, fmtNum(d.level), tostring(d.strata or "absent"), tostring(z.topLabel),
+          defects[#defects + 1] = ("%s %d sits at level=%s strata=%s, below the art %s (level=%s strata=%s)")
+            :format(label, i, fmtNum(d.level), tostring(d.strata or "absent"), tostring(z.topLabel),
               fmtNum(z.topLevel), tostring(z.topStrata or "absent"))
         end
       end
@@ -967,6 +1000,36 @@ function M:Diag()
       fmtNum(self._lastQueued or 0), tostring(mode), fmtNum(held))
   end)
   fact(function()
+    -- WHY this mode was chosen, measured at detection time. The old code chose
+    -- "line" on the existence of Frame:CreateLine alone.
+    local drawer = self.drawer
+    local cap = drawer and drawer.capability
+    if type(drawer) ~= "table" then
+      return "primitive: not measured yet (no drawer)"
+    end
+    if type(cap) ~= "table" then
+      return "primitive: not measured yet (no redraw on a measurable map frame)"
+    end
+    return string.format("primitive: chose mode=%s; line proof: %s; texture proof: %s",
+      tostring(drawer.mode or "none"),
+      ns.LineDraw.LineProofText(cap.line), ns.LineDraw.TextureProofText(cap.dots))
+  end)
+  fact(function()
+    -- The operator's measurement, repeated live: create a region exactly like
+    -- the drawer's own and force its size with two corner anchors, printing
+    -- GetWidth/GetHeight before and after.
+    local host = self.host
+    if not host then
+      return "anchor probe: absent (no host frame)"
+    end
+    local tex = self:_probeTexture(host)
+    if not tex then
+      return "anchor probe: absent (the host exposes no CreateTexture)"
+    end
+    return "anchor probe (texture created like the route's objects): "
+      .. ns.LineDraw.TextureProofText(ns.LineDraw.TextureProof(tex, host))
+  end)
+  fact(function()
     if self._why then
       return "last redraw decided: " .. tostring(self._why)
     end
@@ -1046,9 +1109,13 @@ function M:Diag()
       return "colour: no draw recorded yet"
     end
     return string.format(
-      "colour applied by the last draw: r=%s g=%s b=%s a=%s thickness=%s mode=%s segments=%s space=%s",
+      "colour applied by the last draw: r=%s g=%s b=%s a=%s thickness=%s mode=%s segments=%s space=%s%s",
       fmtNum(applied.r, 2), fmtNum(applied.g, 2), fmtNum(applied.b, 2), fmtNum(applied.a, 2),
-      fmtNum(applied.thickness, 2), tostring(applied.mode), fmtNum(applied.count), tostring(applied.space))
+      fmtNum(applied.thickness, 2), tostring(applied.mode), fmtNum(applied.count), tostring(applied.space),
+      type(applied.dots) == "number"
+        and (" dots=%d size=%s spacing=%s"):format(applied.dots,
+          fmtNum(applied.dotSize, 2), fmtNum(applied.dotSpacing, 2))
+        or "")
   end)
   for i = 1, 2 do
     fact(function()
@@ -1108,9 +1175,33 @@ function M:Diag()
         vertex = string.format("%s,%s,%s,%s", fmtNum(d.vertex[1], 2), fmtNum(d.vertex[2], 2),
           fmtNum(d.vertex[3], 2), fmtNum(d.vertex[4], 2))
       end
-      return string.format("line %d: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s",
+      -- The region's own contract, so the next run can say WHAT this client is
+      -- holding instead of inferring it from a size of 0.
+      local pointText = "absent"
+      if type(d.points) == "table" then
+        local parts = {}
+        for k = 1, #d.points do
+          parts[#parts + 1] = k .. ":" .. ns.LineDraw.PointText(d.points[k])
+        end
+        pointText = table.concat(parts, " ")
+      end
+      local methodText = "absent"
+      if type(d.methods) == "table" then
+        local parts = {}
+        local order = { "SetPoint", "GetPoint", "SetWidth", "SetHeight", "SetSize",
+          "SetRotation", "SetStartPoint", "SetEndPoint" }
+        for k = 1, #order do
+          local name = order[k]
+          parts[#parts + 1] = name .. "=" .. (d.methods[name] and "present" or "absent")
+        end
+        methodText = table.concat(parts, " ")
+      end
+      return string.format("line %d: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s object=%s numpoints=%s points=[%s] methods=[%s]",
         i, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2), vertex,
-        fmtNum(d.thickness, 2), size, level, strata, parent, chain, len, startText, stopText)
+        fmtNum(d.thickness, 2), size, level, strata, parent, chain, len, startText, stopText,
+        tostring(d.objectType or "absent"),
+        type(d.numPoints) == "number" and fmtNum(d.numPoints) or "absent",
+        pointText, methodText)
     end)
   end
   fact(function()
@@ -1242,8 +1333,19 @@ function M:Diag()
       return "verdict: COLOUR — the draw applied alpha " .. fmtNum(applied.a, 2)
         .. " (pathColor[4]); the line is fully transparent" .. history
     end
+    -- The primitive itself, when the client DROPPED the line endpoints: that is
+    -- the measured cause of "queued but nothing drawn", and it is why the route
+    -- is no longer drawn with SetStartPoint/SetEndPoint.
+    local capLine = self.drawer and self.drawer.capability and self.drawer.capability.line
+    if type(capLine) == "table" and capLine.hasCreateLine and not capLine.took
+      and type(applied) == "table" and applied.mode == "dots" then
+      return string.format(
+        "verdict: PRIMITIVE — this client accepted SetStartPoint/SetEndPoint and kept no geometry (reads start=%s end=%s), so mode=line could not draw anything; the route is now drawn as %s anchored dots (size=%s spacing=%s). If that is still not visible, the cause is the frame/strata/alpha path and not the line maths — run /nt mapdiag probe%s",
+        ns.LineDraw.PointText(capLine.start), ns.LineDraw.PointText(capLine.stop),
+        fmtNum(applied.dots), fmtNum(applied.dotSize, 2), fmtNum(applied.dotSpacing, 2), history)
+    end
     return string.format(
-      "verdict: no draw-order, colour or geometry cause found — %s segment(s) totalling %spx queued on a shown host at level %s. Next measurement: /nt mapdiag with this map open at this zoom, plus a screenshot of the same view%s",
+      "verdict: no draw-order, colour or geometry cause found — %s segment(s) totalling %spx queued on a shown host at level %s. Next measurement: /nt mapdiag probe (draws a marker, a border and one diagonal into this same overlay)%s",
       fmtNum(self._lastQueued), fmtNum(total, 1), fmtNum(frameLevel(self.host)), history)
   end)
 
@@ -1282,6 +1384,238 @@ function M:Diag()
   else
     say("MinimapPath: absent (minimap overlay not loaded)")
   end
+end
+
+--- /nt mapdiag primitive <auto|line|dots|rotate> — pin the drawing primitive for
+--- one redraw. This is how the next in-game run can A/B the primitives without a
+--- code change: the request is only a REQUEST, and the diag prints the mode the
+--- client's own measurement ended up choosing (a client that refuses the line
+--- endpoints lands on dots again and says so).
+function M:SetPrimitive(word)
+  if not self.drawer then
+    say("primitive: no drawer yet — open the map with a route first")
+    return
+  end
+  local want = tostring(word or ""):lower():match("^%s*(.-)%s*$") or ""
+  if want == "" then
+    want = "auto"
+  end
+  if want == "auto" then
+    self.drawer.disableLine = false
+    self.drawer.disableDots = false
+  elseif want == "line" then
+    self.drawer.disableLine = false
+    self.drawer.disableDots = true
+  elseif want == "dots" then
+    self.drawer.disableLine = true
+    self.drawer.disableDots = false
+  elseif want == "rotate" or want == "texcoord" then
+    self.drawer.disableLine = true
+    self.drawer.disableDots = true
+  else
+    say(("primitive: unknown '%s' (auto | line | dots | rotate)"):format(want))
+    return
+  end
+  ns.LineDraw.Invalidate(self.drawer)
+  say(("primitive: requested %s; redrawing"):format(want))
+  self:Redraw()
+  say(("primitive: chose mode=%s after the request; the measurement that decided it is on the 'primitive:' line of /nt mapdiag")
+    :format(tostring(self.drawer and self.drawer.mode or "?")))
+end
+
+-- ── /nt mapdiag probe ───────────────────────────────────────────────────────
+-- Prove the overlay is VISIBLE AT ALL before touching any line maths. Three
+-- things are drawn into the SAME host with the SAME texture path the route
+-- uses, and the numbers are printed so the report is checkable:
+--   * a solid 40x40 marker at the first route point,
+--   * a 4px border around the full canvas,
+--   * one diagonal (0,0)->(width,height) through ns.LineDraw.Draw itself.
+-- Which of the three you can see in game separates three different bugs that
+-- look identical from outside:
+--   nothing            -> frame/strata/alpha/parent (or textures draw nothing)
+--   marker+border only -> the line geometry is the bug
+--   all three          -> the route's own geometry is empty/degenerate
+-- Off by default; `/nt mapdiag probe off` removes them.
+
+local PROBE_MARKER = 40
+local PROBE_BORDER = 4
+
+--- One scratch texture reused by every diag run: the anchor measurement needs
+--- a region created exactly like the drawer's own, and re-creating it on every
+--- `/nt mapdiag` would leak one region per command.
+function M:_probeTexture(host)
+  if self._scratchTex and self._scratchParent == host then
+    return self._scratchTex
+  end
+  if not host or not isFn(host.CreateTexture) then
+    return nil
+  end
+  local ok, tex = pcall(host.CreateTexture, host, nil, "OVERLAY")
+  if not ok or not tex then
+    return nil
+  end
+  pcall(tex.Hide, tex)
+  self._scratchTex = tex
+  self._scratchParent = host
+  return tex
+end
+
+function M:ClearProbe()
+  local probe = self._probe
+  self._probe = nil
+  self._probeOn = false
+  if type(probe) ~= "table" then
+    return false
+  end
+  if probe.drawer then
+    ns.LineDraw.Invalidate(probe.drawer)
+  end
+  for i = 1, #(probe.textures or {}) do
+    pcall(probe.textures[i].Hide, probe.textures[i])
+  end
+  return true
+end
+
+function M:Probe(arg)
+  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  -- `/nt mapdiag probe off` reaches here as "probe off": the sub-command word is
+  -- part of the argument, so strip it before reading the switch.
+  want = want:gsub("^probe%s*", "")
+  if want == "off" or want == "hide" or want == "0" then
+    if self:ClearProbe() then
+      say("probe: off (marker, border and diagonal removed)")
+    else
+      say("probe: off (nothing was drawn)")
+    end
+    return
+  end
+
+  local host = self.host
+  if not host then
+    local parent, label = selectParent()
+    if not parent then
+      say("probe: no map frame to draw on (canvas and legacy frames all absent)")
+      return
+    end
+    host = self:EnsureHost(parent, label)
+  end
+  if not host then
+    say("probe: no overlay host (CreateFrame failed)")
+    return
+  end
+  local width, height = frameSize(host)
+  if not width or not height or width < 2 or height < 2 then
+    say(("probe: the host has no measurable size (%sx%s) — nothing can be placed")
+      :format(fmtNum(width), fmtNum(height)))
+    return
+  end
+
+  -- Where the marker goes: the first route point, projected exactly the way
+  -- the route is projected; the canvas centre when there is no route yet.
+  local mx, my, where
+  if self.path and #self.path >= 2 and ns.PathGeom.IsMapPoint(self.path[1]) then
+    local rect = self._rect or ns.PathGeom.MapRect(width, height)
+    if rect then
+      mx, my = ns.PathGeom.FractionToPixel(self.path[1].x, self.path[1].y, rect)
+      where = ("the first route point (%s,%s)")
+        :format(fmtNum(self.path[1].x, 3), fmtNum(self.path[1].y, 3))
+    end
+  end
+  if not mx then
+    mx, my = width * 0.5, height * 0.5
+    where = "the canvas centre (no route points)"
+  end
+
+  self:ClearProbe()
+  local probe = { textures = {}, drawer = ns.LineDraw.Create() }
+  self._probe = probe
+  self._probeOn = true
+
+  local function quad(x1, y1, x2, y2)
+    if not isFn(host.CreateTexture) then
+      return nil
+    end
+    local ok, tex = pcall(host.CreateTexture, host, nil, "OVERLAY")
+    if not ok or not tex then
+      return nil
+    end
+    probe.textures[#probe.textures + 1] = tex
+    ns.LineDraw.ApplyColor(tex, 1, 1, 1, 1)
+    if tex.SetDrawLayer then
+      pcall(tex.SetDrawLayer, tex, "OVERLAY", 7)
+    end
+    pcall(tex.ClearAllPoints, tex)
+    pcall(tex.SetPoint, tex, "BOTTOMLEFT", host, "TOPLEFT", x1, -y2)
+    pcall(tex.SetPoint, tex, "TOPRIGHT", host, "TOPLEFT", x2, -y1)
+    pcall(tex.Show, tex)
+    return tex
+  end
+
+  say(("probe: host=%s %sx%s level=%s strata=%s; LineDraw mode=%s")
+    :format(frameName(host), fmtNum(width), fmtNum(height),
+      fmtNum(frameLevel(host)), tostring(call(host, "GetFrameStrata") or "absent"),
+      tostring(self.drawer and self.drawer.mode or "absent")))
+  -- A hidden host would make every element invisible for a reason that has
+  -- nothing to do with the primitives, so say so and show it: the probe is an
+  -- explicit diagnostic, not the route.
+  if shownState(host) == false then
+    pcall(host.Show, host)
+    say("probe: the host was hidden — shown it for the probe")
+  end
+
+  -- 1. solid 40x40 marker at the first route point
+  local half = PROBE_MARKER * 0.5
+  local marker = quad(mx - half, my - half, mx + half, my + half)
+  if marker then
+    local mw, mh = frameSize(marker)
+    say(("probe: marker %dx%d at %s -> canvas (%s,%s); BOTTOMLEFT(%s,%s) TOPRIGHT(%s,%s); measured %sx%s")
+      :format(PROBE_MARKER, PROBE_MARKER, where, fmtNum(mx, 1), fmtNum(my, 1),
+        fmtNum(mx - half, 1), fmtNum(-(my + half), 1),
+        fmtNum(mx + half, 1), fmtNum(-(my - half), 1),
+        fmtNum(mw), fmtNum(mh)))
+  else
+    say("probe: marker absent (the host exposes no CreateTexture)")
+  end
+
+  -- 2. 4px border around the full canvas
+  local edges = {
+    { "top", 0, 0, width, PROBE_BORDER },
+    { "bottom", 0, height - PROBE_BORDER, width, height },
+    { "left", 0, 0, PROBE_BORDER, height },
+    { "right", width - PROBE_BORDER, 0, width, height },
+  }
+  local borderText = {}
+  for i = 1, #edges do
+    local e = edges[i]
+    local tex = quad(e[2], e[3], e[4], e[5])
+    -- NOT `tex and frameSize(tex)`: an `and` expression yields ONE value, so the
+    -- height would silently read "absent" (Lua 5.1 multi-return truncation).
+    local ew, eh
+    if tex then
+      ew, eh = frameSize(tex)
+    end
+    borderText[#borderText + 1] = ("%s(%s,%s)-(%s,%s)=%sx%s")
+      :format(e[1], fmtNum(e[2], 1), fmtNum(e[3], 1), fmtNum(e[4], 1), fmtNum(e[5], 1),
+        fmtNum(ew), fmtNum(eh))
+  end
+  say(("probe: border %dpx around (0,0)-(%s,%s): %s")
+    :format(PROBE_BORDER, fmtNum(width, 1), fmtNum(height, 1), table.concat(borderText, " ")))
+
+  -- 3. one diagonal through the SAME helper the route uses
+  local r, g, b, a, stroke = ns.LineDraw.ColorWidth()
+  local diagonal = { { 0, 0, width, height } }
+  ns.LineDraw.Draw(probe.drawer, host, diagonal, 1, stroke, r, g, b, a, "ydown")
+  local obj = probe.drawer.pool and probe.drawer.pool[1]
+  local d = ns.LineDraw.Describe(obj)
+  local applied = ns.LineDraw.Applied(probe.drawer) or {}
+  say(("probe: diagonal (0,0)->(%s,%s) via LineDraw mode=%s objects=%s dots=%s; measured size=%sx%s shown=%s start=%s end=%s")
+    :format(fmtNum(width, 1), fmtNum(height, 1), tostring(probe.drawer.mode),
+      fmtNum(probe.drawer.pool and #probe.drawer.pool or 0),
+      fmtNum(applied.dots or 0),
+      type(d.width) == "number" and fmtNum(d.width) or "absent",
+      type(d.height) == "number" and fmtNum(d.height) or "absent",
+      tostring(d.shown), ns.LineDraw.PointText(d.start), ns.LineDraw.PointText(d.stop)))
+  say("probe: report which you can SEE: marker / border / diagonal (or none); '/nt mapdiag probe off' removes them")
 end
 
 local events = CreateFrame("Frame")

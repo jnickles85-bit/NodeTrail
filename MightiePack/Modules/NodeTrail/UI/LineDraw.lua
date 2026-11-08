@@ -68,6 +68,7 @@ function D.Create()
     pool = {},
     mode = nil,
     disableLine = false,
+    capability = {},
   }
 end
 
@@ -101,10 +102,14 @@ function D.Describe(obj)
   local p1, _, rp1, x1, y1 = read("GetStartPoint")
   if type(p1) == "string" then
     d.start = { p1, rp1, x1, y1 }
+    -- Structured form for the truthfulness checks: the array above is the
+    -- positional contract the diag already prints, this one names the fields.
+    d.startPoint = { point = p1, relativePoint = rp1, x = x1, y = y1 }
   end
   local p2, _, rp2, x2, y2 = read("GetEndPoint")
   if type(p2) == "string" then
     d.stop = { p2, rp2, x2, y2 }
+    d.stopPoint = { point = p2, relativePoint = rp2, x = x2, y = y2 }
   end
   d.width = read("GetWidth")
   d.height = read("GetHeight")
@@ -123,6 +128,34 @@ function D.Describe(obj)
   if type(tex) == "string" then
     d.texture = tex
   end
+  -- The region's own contract, so the diag can name what the client actually
+  -- implements instead of guessing from a size of 0.
+  d.objectType = read("GetObjectType")
+  d.luaType = type(obj)
+  local count = read("GetNumPoints")
+  if type(count) == "number" then
+    d.numPoints = count
+    local points = {}
+    if type(obj.GetPoint) == "function" then
+      for i = 1, math.min(count, 4) do
+        local okP, p, rel, relPoint, x, y = pcall(obj.GetPoint, obj, i)
+        if okP and type(p) == "string" then
+          points[i] = { point = p, relativeTo = rel, relativePoint = relPoint, x = x, y = y }
+        end
+      end
+    end
+    d.points = points
+  end
+  local methods = {}
+  local names = {
+    "SetPoint", "GetPoint", "SetWidth", "SetHeight", "SetSize", "SetRotation",
+    "SetStartPoint", "SetEndPoint", "GetStartPoint", "GetEndPoint",
+    "SetThickness", "SetTexCoord", "SetColorTexture", "SetVertexColor",
+  }
+  for i = 1, #names do
+    methods[names[i]] = type(obj[names[i]]) == "function"
+  end
+  d.methods = methods
   return d
 end
 
@@ -131,6 +164,203 @@ end
 --- re-reads pathColor reports the setting, not the draw.
 function D.Applied(drawer)
   return drawer and drawer.lastApplied or nil
+end
+
+-- ── Does the client actually APPLY the geometry a draw asks for? ───────────
+-- A setter that returned is not a state change. The live client answered every
+-- SetStartPoint/SetEndPoint call and then reported
+--   start=TOPLEFT(0.0,absent) end=TOPLEFT(0.0,absent) size=0x0 thickness=2.88
+-- for all 12 queued segments: the line object existed, was shown, carried the
+-- right colour — and had no geometry at all, so nothing appeared and no error
+-- was raised. `mode = "line"` used to be chosen on the mere EXISTENCE of
+-- Frame:CreateLine; it is now chosen only on a measured round-trip.
+local PROBE_SPAN = 64
+local PROBE_TOL = 0.75
+
+local function numberMethod(obj, method)
+  local fn = obj and obj[method]
+  if type(fn) ~= "function" then
+    return nil
+  end
+  local ok, value = pcall(fn, obj)
+  if not ok or type(value) ~= "number" or value ~= value then
+    return nil
+  end
+  return value
+end
+
+--- Read a 5-value point region contract: point, relativeTo, relativePoint, x, y.
+--- Returns nil when the getter is absent or the client answers with no point
+--- name, and keeps nil offsets as nil — "absent" must not read as 0.
+local function readPoint(obj, method)
+  local fn = obj and obj[method]
+  if type(fn) ~= "function" then
+    return nil
+  end
+  local ok, point, rel, relPoint, x, y = pcall(fn, obj)
+  if not ok or type(point) ~= "string" then
+    return nil
+  end
+  return { point = point, relativeTo = rel, relativePoint = relPoint, x = x, y = y }
+end
+
+--- One point as text, for the diag: "TOPLEFT(0.0,absent)".
+function D.PointText(p)
+  if type(p) ~= "table" then
+    return "absent"
+  end
+  local function num(v)
+    if type(v) ~= "number" then
+      return "absent"
+    end
+    return string.format("%.1f", v)
+  end
+  return string.format("%s(%s,%s)", tostring(p.point), num(p.x), num(p.y))
+end
+
+--- Measure whether a Line region keeps the endpoints it is given. Sets a
+--- known 64px diagonal on `obj` when supplied (the caller reuses it), or on a
+--- throwaway region created the same way. Reads back the endpoint tuple and
+--- the size, and reports which of them took effect.
+function D.LineProof(parent, obj)
+  local out = { span = PROBE_SPAN }
+  local created = false
+  if not obj then
+    if type(parent) ~= "table" or type(parent.CreateLine) ~= "function" then
+      out.why = "the client exposes no Frame:CreateLine"
+      return out
+    end
+    local ok, line = pcall(parent.CreateLine, parent, nil, "OVERLAY")
+    if not ok or not line then
+      out.why = "CreateLine raised or returned nothing"
+      return out
+    end
+    obj = line
+    created = true
+  end
+  out.hasCreateLine = true
+  out.objectType = (function()
+    local fn = obj.GetObjectType
+    if type(fn) ~= "function" then return nil end
+    local ok, value = pcall(fn, obj)
+    if ok and type(value) == "string" then return value end
+    return nil
+  end)()
+  out.luaType = type(obj)
+  out.getNumPoints = type(obj.GetNumPoints) == "function"
+  out.setPoint = type(obj.SetPoint) == "function"
+  out.getPoint = type(obj.GetPoint) == "function"
+  out.numPoints = numberMethod(obj, "GetNumPoints")
+  if obj.SetThickness then
+    pcall(obj.SetThickness, obj, 2)
+  end
+  pcall(obj.ClearAllPoints, obj)
+  pcall(obj.SetStartPoint, obj, "TOPLEFT", parent, "TOPLEFT", 0, 0)
+  pcall(obj.SetEndPoint, obj, "TOPLEFT", parent, "TOPLEFT", PROBE_SPAN, -PROBE_SPAN)
+  out.start = readPoint(obj, "GetStartPoint")
+  out.stop = readPoint(obj, "GetEndPoint")
+  out.width = numberMethod(obj, "GetWidth")
+  out.height = numberMethod(obj, "GetHeight")
+  local took = type(out.start) == "table" and type(out.stop) == "table"
+    and type(out.start.x) == "number" and type(out.start.y) == "number"
+    and type(out.stop.x) == "number" and type(out.stop.y) == "number"
+    and math.abs(out.start.x) <= PROBE_TOL and math.abs(out.start.y) <= PROBE_TOL
+    and math.abs(out.stop.x - PROBE_SPAN) <= PROBE_TOL
+    and math.abs(out.stop.y + PROBE_SPAN) <= PROBE_TOL
+  -- A client that does not implement GetStartPoint at all still proves the
+  -- region by sizing it from the endpoints it was given.
+  local sized = type(out.width) == "number" and type(out.height) == "number"
+    and out.width > 0 and out.height > 0
+  out.took = took or sized
+  out.why = out.took and "the endpoints were kept"
+    or "the client accepted SetStartPoint/SetEndPoint and kept no geometry"
+  if created then
+    pcall(obj.Hide, obj)
+  end
+  return out
+end
+
+--- The primitive the dots fallback needs: two corner anchors on a texture.
+--- Measures the setter path (SetWidth/SetHeight/SetSize) BEFORE anchoring, so
+--- the diag can say which of them this client honours.
+function D.TextureProof(tex, parent)
+  local out = {
+    setWidth = type(tex.SetWidth) == "function",
+    setHeight = type(tex.SetHeight) == "function",
+    setSize = type(tex.SetSize) == "function",
+    setRotation = type(tex.SetRotation) == "function",
+    setPoint = type(tex.SetPoint) == "function",
+    setTexCoord = type(tex.SetTexCoord) == "function",
+    getNumPoints = type(tex.GetNumPoints) == "function",
+  }
+  if not out.setPoint then
+    out.canAnchor = false
+    out.why = "the region exposes no SetPoint: no texture primitive can be placed"
+    return out
+  end
+  out.canAnchor = true
+  pcall(tex.ClearAllPoints, tex)
+  if tex.SetWidth then
+    pcall(tex.SetWidth, tex, 64)
+  end
+  if tex.SetHeight then
+    pcall(tex.SetHeight, tex, 8)
+  end
+  out.sizedWidth = numberMethod(tex, "GetWidth")
+  out.sizedHeight = numberMethod(tex, "GetHeight")
+  out.sizedBySetters = type(out.sizedWidth) == "number" and type(out.sizedHeight) == "number"
+    and math.abs(out.sizedWidth - 64) <= 0.5 and math.abs(out.sizedHeight - 8) <= 0.5
+  -- Then force the size the only way this fallback does: two corner anchors.
+  pcall(tex.ClearAllPoints, tex)
+  pcall(tex.SetPoint, tex, "BOTTOMLEFT", parent, "TOPLEFT", 10, -8)
+  pcall(tex.SetPoint, tex, "TOPRIGHT", parent, "TOPLEFT", 74, -16)
+  out.anchorWidth = numberMethod(tex, "GetWidth")
+  out.anchorHeight = numberMethod(tex, "GetHeight")
+  out.numPoints = numberMethod(tex, "GetNumPoints")
+  out.sizedByAnchors = (type(out.numPoints) == "number" and out.numPoints >= 2)
+    or (type(out.anchorWidth) == "number" and type(out.anchorHeight) == "number"
+      and math.abs(out.anchorWidth - 64) <= 0.5 and math.abs(out.anchorHeight - 8) <= 0.5)
+  return out
+end
+
+function D.LineProofText(p)
+  if type(p) ~= "table" then
+    return "not measured"
+  end
+  if p.why and not p.hasCreateLine then
+    return tostring(p.why)
+  end
+  return string.format(
+    "object=%s luatype=%s GetNumPoints=%s GetPoint=%s SetPoint=%s points=%s; start=%s end=%s size=%sx%s -> %s",
+    tostring(p.objectType or "absent"), tostring(p.luaType or "?"),
+    p.getNumPoints and "present" or "absent", p.getPoint and "present" or "absent",
+    p.setPoint and "present" or "absent",
+    type(p.numPoints) == "number" and string.format("%d", p.numPoints) or "absent",
+    D.PointText(p.start), D.PointText(p.stop),
+    type(p.width) == "number" and string.format("%.0f", p.width) or "absent",
+    type(p.height) == "number" and string.format("%.0f", p.height) or "absent",
+    p.took and "KEPT" or "DROPPED")
+end
+
+function D.TextureProofText(p)
+  if type(p) ~= "table" then
+    return "not measured"
+  end
+  local function has(v)
+    return v and "present" or "absent"
+  end
+  if not p.canAnchor then
+    return tostring(p.why or "not measurable")
+  end
+  return string.format(
+    "SetPoint=%s SetWidth=%s SetHeight=%s SetSize=%s SetRotation=%s SetTexCoord=%s; size setters -> %sx%s; two corner anchors -> %sx%s points=%s",
+    has(p.setPoint), has(p.setWidth), has(p.setHeight), has(p.setSize),
+    has(p.setRotation), has(p.setTexCoord),
+    type(p.sizedWidth) == "number" and string.format("%.0f", p.sizedWidth) or "absent",
+    type(p.sizedHeight) == "number" and string.format("%.0f", p.sizedHeight) or "absent",
+    type(p.anchorWidth) == "number" and string.format("%.0f", p.anchorWidth) or "absent",
+    type(p.anchorHeight) == "number" and string.format("%.0f", p.anchorHeight) or "absent",
+    type(p.numPoints) == "number" and string.format("%d", p.numPoints) or "absent")
 end
 
 local function applyColor(obj, r, g, b, a, texturePath)
@@ -147,6 +377,10 @@ local function applyColor(obj, r, g, b, a, texturePath)
     pcall(obj.SetVertexColor, obj, r, g, b, a)
   end
 end
+
+-- The probe in MapOverlay paints its marker/border with the SAME path the
+-- route uses, so it must not carry a second copy of it.
+D.ApplyColor = applyColor
 
 local function hideObj(obj)
   if not obj then
@@ -178,43 +412,166 @@ function D.Invalidate(drawer)
   if drawer then
     drawer.pool = {}
     drawer.mode = nil
+    -- The proof belonged to the previous parent; a new parent must be measured
+    -- again rather than inherit the old evidence.
+    drawer.capability = {}
   end
 end
 
 local function detect(drawer, parent)
   drawer.pool = drawer.pool or {}
+  drawer.capability = drawer.capability or {}
   if not drawer.disableLine and type(parent.CreateLine) == "function" then
-    local ok, line = pcall(function()
-      local created = parent:CreateLine(nil, "OVERLAY")
-      created:SetThickness(2)
-      created:SetStartPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
-      created:SetEndPoint("TOPLEFT", parent, "TOPLEFT", 1, 0)
-      created:Hide()
-      return created
-    end)
-    if ok and line then
-      drawer.mode = "line"
-      drawer.pool[1] = line
-      return
+    local ok, line = pcall(parent.CreateLine, parent, nil, "OVERLAY")
+    if not ok or not line then
+      drawer.capability.line = { why = "CreateLine raised or returned nothing" }
+      drawer.disableLine = true
+    else
+      -- Measured, not assumed: choose the line primitive only when the region
+      -- KEEPS the endpoints it is given. The live client answers the calls and
+      -- reads back no geometry at all, which is a "drawn, no error, invisible"
+      -- line — exactly the bug that took four rounds to find.
+      local proof = D.LineProof(parent, line)
+      drawer.capability.line = proof
+      if proof.took then
+        drawer.mode = "line"
+        drawer.pool[1] = line
+        pcall(line.Hide, line)
+        return
+      end
+      pcall(line.Hide, line)
+      drawer.disableLine = true
     end
-    drawer.disableLine = true
   end
   if type(parent.CreateTexture) ~= "function" then
     drawer.mode = "none"
+    drawer.capability.dots = { canAnchor = false, why = "the host exposes no CreateTexture" }
     return
   end
   local ok, tex = pcall(parent.CreateTexture, parent, nil, "OVERLAY")
   if not ok or not tex then
     drawer.mode = "none"
+    drawer.capability.dots = { canAnchor = false, why = "CreateTexture raised or returned nothing" }
     return
   end
-  tex:Hide()
+  pcall(tex.Hide, tex)
+  local proof = D.TextureProof(tex, parent)
+  drawer.capability.dots = proof
+  -- The chain-of-quads fallback needs only SetPoint: it never touches
+  -- SetWidth/SetHeight/SetSize, SetRotation or SetTexCoord, so it is the
+  -- primitive with the fewest things left to be a silent no-op.
+  -- `disableDots` is the diagnostic/spec switch that reaches the legacy
+  -- texture primitives below (the same role `disableLine` has above).
+  if proof.canAnchor and not drawer.disableDots then
+    -- The proof texture carries the measured SetWidth(64)/SetHeight(8); it is
+    -- discarded rather than reused so no draw object starts out sized by a
+    -- measurement instead of by its anchors.
+    drawer.mode = "dots"
+    return
+  end
   drawer.pool[1] = tex
   if tex.SetRotation then
     drawer.mode = "rotate"
-  else
+  elseif tex.SetTexCoord then
     drawer.mode = "texcoord"
+  else
+    drawer.mode = "none"
   end
+end
+
+--- One dot of the chain: a square forced to its size by two corner anchors.
+--- `space` "ydown" anchors from the host's TOPLEFT (+y down, the world map);
+--- "yup" anchors from its CENTER (+y up, the minimap).
+local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space)
+  local half = (size or 2) * 0.5
+  obj:SetParent(parent)
+  applyColor(obj, r, g, b, a, WHITE)
+  if obj.SetDrawLayer then
+    pcall(obj.SetDrawLayer, obj, "OVERLAY", 7)
+  end
+  if obj.SetBlendMode then
+    pcall(obj.SetBlendMode, obj, "BLEND")
+  end
+  if obj.SetTexCoord then
+    pcall(obj.SetTexCoord, obj, 0, 1, 0, 1)
+  end
+  obj:ClearAllPoints()
+  if space == "yup" then
+    obj:SetPoint("BOTTOMLEFT", parent, "CENTER", cx - half, cy - half)
+    obj:SetPoint("TOPRIGHT", parent, "CENTER", cx + half, cy + half)
+  else
+    obj:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", cx - half, -(cy + half))
+    obj:SetPoint("TOPRIGHT", parent, "TOPLEFT", cx + half, -(cy - half))
+  end
+  obj:Show()
+end
+
+local DOT_MIN_SIZE = 2.5
+-- The operator's prescription: a chain of small quads spaced ~3px apart, so the
+-- stroke reads continuous without any SetWidth/SetRotation.
+local DOT_SPACING_MIN = 3
+-- A long route on a big canvas must not allocate thousands of regions.
+local DOT_MAX_TOTAL = 1200
+
+--- Pure: how many dots cover `length` px at stroke width `thickness`.
+--- @return { length, size, spacing, steps, count }
+function D.DotPlan(length, thickness, scale)
+  local base = tonumber(thickness) or DOT_MIN_SIZE
+  if base < DOT_MIN_SIZE then
+    base = DOT_MIN_SIZE
+  end
+  scale = tonumber(scale) or 1
+  if scale < 1 then
+    scale = 1
+  end
+  -- Both the dot and its spacing scale together, so a capped route keeps the
+  -- same dot-to-gap ratio (a continuous stroke) instead of turning into dashes.
+  local size = base * scale
+  local spacing = base
+  if spacing < DOT_SPACING_MIN then
+    spacing = DOT_SPACING_MIN
+  end
+  spacing = spacing * scale
+  local plan = {
+    length = tonumber(length) or 0,
+    size = size,
+    spacing = spacing,
+    steps = 0,
+    count = 0,
+  }
+  if plan.length <= 0 then
+    return plan
+  end
+  plan.steps = math.ceil(plan.length / spacing)
+  if plan.steps < 1 then
+    plan.steps = 1
+  end
+  plan.count = plan.steps + 1
+  return plan
+end
+
+--- Pure: a dot plan per segment, with one global scale so the whole route
+--- stays inside DOT_MAX_TOTAL. Both endpoints are always drawn.
+function D.PlanDots(buf, count, thickness)
+  local function build(scale)
+    local plans, total = {}, 0
+    for i = 1, count do
+      local seg = buf and buf[i]
+      local len = 0
+      if seg then
+        local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
+        len = math.sqrt(dx * dx + dy * dy)
+      end
+      plans[i] = D.DotPlan(len, thickness, scale)
+      total = total + plans[i].count
+    end
+    return plans, total
+  end
+  local plans, total = build(1)
+  if total > DOT_MAX_TOTAL and total > 0 then
+    plans, total = build(total / DOT_MAX_TOTAL)
+  end
+  return plans, total
 end
 
 local function acquire(drawer, index, parent)
@@ -409,6 +766,35 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space)
   }
   if drawer.mode == "none" or count < 1 then
     D.Clear(drawer)
+    return
+  end
+  if drawer.mode == "dots" then
+    -- Chain of small two-corner-anchored quads. No SetWidth, no SetHeight, no
+    -- SetRotation: the size is forced by the anchors alone, which is the only
+    -- primitive the live client proved it accepts.
+    local plans, total = D.PlanDots(buf, count, thickness)
+    local index = 1
+    for i = 1, count do
+      local seg, plan = buf[i], plans[i]
+      if seg and plan and plan.steps > 0 then
+        local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
+        for k = 0, plan.steps do
+          local t = k / plan.steps
+          local obj = acquire(drawer, index, parent)
+          if obj then
+            paintDot(obj, parent, seg[1] + dx * t, seg[2] + dy * t,
+              plan.size, r, g, b, a, space)
+          end
+          index = index + 1
+        end
+      end
+    end
+    hideFrom(drawer, index)
+    local first = plans[1]
+    drawer.lastApplied.dots = (total > 0) and (index - 1) or 0
+    drawer.lastApplied.plannedDots = total
+    drawer.lastApplied.dotSize = first and first.size or nil
+    drawer.lastApplied.dotSpacing = first and first.spacing or nil
     return
   end
   for i = 1, count do

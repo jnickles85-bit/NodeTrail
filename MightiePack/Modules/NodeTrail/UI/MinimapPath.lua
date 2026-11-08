@@ -467,6 +467,7 @@ function M:_redraw()
     local entry = { index = i }
     if a and b and a.x and b.x then
       local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
+      local raw = math.sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
       if cx1 then
         count = count + 1
         local seg = buf[count]
@@ -477,10 +478,32 @@ function M:_redraw()
         seg[1], seg[2], seg[3], seg[4] = cx1, cy1, cx2, cy2
         entry.queued = true
         entry.len = math.sqrt((cx2 - cx1) * (cx2 - cx1) + (cy2 - cy1) * (cy2 - cy1))
+        entry.clip = { cx1, cy1, cx2, cy2 }
+        -- A queued segment can still be a no-op: two points that project to the
+        -- same pixel are "drawn" and invisible. Name that instead of counting
+        -- it as a success.
+        if entry.len < 0.5 then
+          entry.reason = "degenerate"
+          entry.why = ("queued as a %spx segment (draws nothing)"):format(fmtNum(entry.len, 1))
+        else
+          entry.reason = "queued"
+        end
       else
-        entry.why = "clipped away: both endpoints outside the minimap circle"
+        -- Every dropped segment gets ONE named reason, out of the same four
+        -- words the card asks for, so nothing disappears unexplained.
+        if raw < 0.5 then
+          entry.reason = "degenerate"
+          entry.why = "clipped away: the projected pair is shorter than half a pixel"
+        elseif a.inside == false and b.inside == false then
+          entry.reason = "outside-radius"
+          entry.why = "clipped away: both endpoints outside the minimap circle"
+        else
+          entry.reason = "culled"
+          entry.why = "clipped away: the clip returned nothing with at least one endpoint inside"
+        end
       end
     else
+      entry.reason = "culled"
       entry.why = "not drawn: a point has no projection"
     end
     proj.segs[i] = entry
@@ -726,6 +749,39 @@ function M:Diag()
       return "minimap segments: none in the route"
     end
     return "minimap segments: " .. table.concat(out, "; ")
+  end)
+  fact(function()
+    -- Requirement: no segment may disappear without a NAME. One line per
+    -- consecutive pair, with both projected coordinates, both radius tests and
+    -- the reason word (outside-radius / degenerate / culled / queued).
+    local p = self._proj
+    if type(p) ~= "table" or type(p.segs) ~= "table" then
+      return "minimap pairs: not projected yet"
+    end
+    local out = {}
+    for i = 1, #p.segs do
+      local s = p.segs[i]
+      local a, b = p.points[i], p.points[i + 1]
+      local function pt(v)
+        if v and type(v.x) == "number" then
+          return string.format("(%s,%s)", fmtNum(v.x, 1), fmtNum(v.y, 1))
+        end
+        return "no-projection"
+      end
+      local function test(v)
+        if v and type(v.inside) == "boolean" then
+          return string.format("%sx-radius %s", fmtNum(v.ratio, 2), v.inside and "inside" or "OUTSIDE")
+        end
+        return "radius n/a"
+      end
+      local reason = s.reason or (s.queued and "queued" or "culled")
+      out[#out + 1] = string.format("%d->%d %s %s, %s %s, => %s",
+        i, i + 1, pt(a), pt(b), test(a), test(b), reason)
+    end
+    if #out == 0 then
+      return "minimap pairs: none (the route has a single point)"
+    end
+    return "minimap pairs: " .. table.concat(out, " | ")
   end)
   fact(function()
     -- "drew segments" is a claim about a redraw; with no redraw recorded there

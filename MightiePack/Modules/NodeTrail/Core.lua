@@ -30,6 +30,8 @@ local function printHelp()
   -- so the new command is documented without a new locale entry.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt mapdiag - world-map/minimap frame environment; run this if the route does not appear on the map")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt mapdiag probe [off] - draw a marker, a border and one diagonal line on the map overlay to prove it is visible at all")
   printL("HELP_NOTES")
 end
 
@@ -143,8 +145,9 @@ local function handleSlash(msg)
     ns.PrintStatus()
   elseif msg == "scanrecipes" or msg == "recipes" then
     ns.ScanRecipes()
-  elseif msg == "mapdiag" then
-    ns.PrintMapDiag()
+  elseif msg == "mapdiag" or msg:match("^mapdiag%s") then
+    -- /nt mapdiag probe [on|off] — the visibility bisect (off by default)
+    ns.PrintMapDiag(msg:match("^mapdiag%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -198,7 +201,7 @@ end
 -- overlay actually found (canvas or legacy frames, measured sizes, the
 -- displayed vs route mapID, what the last redraw queued) so the next in-game
 -- run says WHY nothing is visible instead of guessing.
-function ns.PrintMapDiag()
+function ns.PrintMapDiag(arg)
   local function say(text)
     local line = "NodeTrail mapdiag: " .. tostring(text)
     if type(DEFAULT_CHAT_FRAME) == "table" and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
@@ -212,6 +215,32 @@ function ns.PrintMapDiag()
   local overlay = ns.MapOverlay
   if type(overlay) ~= "table" or type(overlay.Diag) ~= "function" then
     say("unavailable (map overlay module not loaded)")
+    return
+  end
+  local mode = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  if mode:match("^probe") then
+    if type(overlay.Probe) ~= "function" then
+      say("probe unavailable (this MapOverlay has no Probe)")
+      return
+    end
+    local okP, errP = pcall(overlay.Probe, overlay, mode)
+    if not okP then
+      say("probe failed: " .. tostring(errP))
+    end
+    -- The probe answers "is the overlay visible at all"; the diag that follows
+    -- says what the primitive measurement found, in the same run.
+  elseif mode:match("^primitive") then
+    if type(overlay.SetPrimitive) ~= "function" then
+      say("primitive switch unavailable (this MapOverlay has no SetPrimitive)")
+      return
+    end
+    local want = mode:match("^primitive%s+(.*)$")
+    local okS, errS = pcall(overlay.SetPrimitive, overlay, want)
+    if not okS then
+      say("primitive failed: " .. tostring(errS))
+    end
+  elseif mode ~= "" then
+    say(("unknown option '%s' (try: probe | probe off | primitive <auto|line|dots|rotate>)"):format(mode))
     return
   end
   local ok, err = pcall(overlay.Diag, overlay)
