@@ -90,6 +90,9 @@ local function boot(ceiling)
   local chat = {}
   local created = 0
   local clipCalls = {}
+  -- Mutable on purpose: a client whose CreateTexture starts working again is
+  -- the case that proves a recorded ceiling must be re-measured, not latched.
+  local limit = ceiling
 
   local function makeRegion(frame, kind)
     local r = {
@@ -194,7 +197,7 @@ local function boot(ceiling)
     end
     function f:DoesClipChildren() return self.clips end
     function f:CreateTexture()
-      if created >= ceiling then
+      if created >= limit then
         return nil
       end
       created = created + 1
@@ -298,11 +301,11 @@ local function boot(ceiling)
     _G.DEFAULT_CHAT_FRAME = previous
     return table.concat(chat, "\n")
   end
+  --- Raise (or lower) the region ceiling between draws.
+  function ctx.setCeiling(n)
+    limit = n
+  end
   return ctx
-end
-
-local function diagText(chat)
-  return table.concat(chat, "\n")
 end
 
 local function lineStartingWith(text, prefix)
@@ -459,6 +462,19 @@ check(midWhite and midWhite:GetWidth() > 0 and midWhite:GetHeight() > 0,
 check(midWhite and midWhite.parent == A.M.host,
   "D: dot 9 is parented to the overlay host, not to something else")
 
+-- The two ends of what was actually painted, in the same shape: a route that
+-- stops on screen after its opening leg must show WHERE the paint stopped.
+for _, tag in ipairs({ "dot mid", "dot last" }) do
+  local line = lineStartingWith(midDiag, tag)
+  check(line ~= nil, "D: /nt mapdiag prints a " .. tag .. " line (got " .. tostring(line) .. ")")
+  if line then
+    check(line:find("shown=true", 1, true) ~= nil, "D: " .. tag .. " is shown (" .. line .. ")")
+    check(line:find("size=", 1, true) ~= nil and line:find("size=0x0", 1, true) == nil,
+      "D: " .. tag .. " measures a real size (" .. line .. ")")
+    check(line:find("planned=", 1, true) ~= nil, "D: " .. tag .. " prints its planned size (" .. line .. ")")
+  end
+end
+
 -- ═══ E. clipping is measured, and the overlay does not clip its own dots ═══
 local clipLine = lineStartingWith(midDiag, "clips:")
 check(clipLine ~= nil, "E: /nt mapdiag prints a clips: line (got " .. tostring(clipLine) .. ")")
@@ -514,6 +530,134 @@ check(drawsLine and drawsLine:find("count=16", 1, true) ~= nil,
   "F: the history keeps the earlier 16-segment pass (" .. tostring(drawsLine) .. ")")
 check(drawsLine and drawsLine:find("count=2", 1, true) ~= nil,
   "F: the history shows the later 2-segment pass (" .. tostring(drawsLine) .. ")")
+
+-- ═══ G. a retry the client cannot fit is never painted ══════════════════════
+-- The 40-region client cannot hold the 32-dot floor of this route. Painting a
+-- wider retry anyway put 1034x1034 px dots in the pool while the diag reported
+-- the normal 4-5 px plan, so the map showed something the numbers denied. The
+-- pool must hold exactly the plan the numbers describe: normal-size dots.
+do
+  local dw = C.M.drawer
+  local reported = tonumber(cApplied.dotSize)
+  local maxSeen, whites, oversized = 0, 0, 0
+  for i = 1, (dw.poolHigh or #dw.pool) do
+    local o = dw.pool[i]
+    if o and isWhite(o) and o.shown then
+      whites = whites + 1
+      local w = o:GetWidth()
+      if w > maxSeen then maxSeen = w end
+      if reported and w > reported * 1.5 then oversized = oversized + 1 end
+    end
+  end
+  check(reported ~= nil, "G: the draw reports the dot size it planned (" .. tostring(reported) .. ")")
+  check(cApplied.reverted ~= true, "G: no painted-then-abandoned retry was needed on a client whose floor cannot fit")
+  check(oversized == 0, "G: every painted dot keeps the planned dot size (oversized=" .. oversized
+    .. " max=" .. tostring(maxSeen) .. " planned=" .. tostring(reported) .. ")")
+  check(whites == cApplied.paintedDots, "G: the pool holds exactly the reported painted dots (whites="
+    .. whites .. " painted=" .. tostring(cApplied.paintedDots) .. ")")
+  near(maxSeen, reported, "G: the widest painted dot is the planned dot, not a 1000px block", 0.01)
+end
+
+-- ═══ H. a latched ceiling is re-measured upward ═════════════════════════════
+-- CreateTexture returning nil once is a refusal, not a verdict. With the ceiling
+-- latched, every later draw stayed widened and shortened for the session, with
+-- no way back. A create that succeeds past the recorded ceiling must clear it.
+do
+  local H = boot(40)
+  H.M:SetRoute(route("H"))
+  local narrow = (H.M.drawer or {}).lastApplied or {}
+  check((narrow.missingDots or 0) > 0,
+    "H: the narrow client reports the shortfall first (missing=" .. tostring(narrow.missingDots) .. ")")
+  check(type(narrow.capacity) == "number", "H: the ceiling is recorded (capacity=" .. tostring(narrow.capacity) .. ")")
+  H.setCeiling(400)
+  H.M:SetRoute(route("H2"))
+  local wide = (H.M.drawer or {}).lastApplied or {}
+  check(wide.paintedDots == wide.plannedDots,
+    "H: once regions can be created again the whole plan is painted (painted="
+      .. tostring(wide.paintedDots) .. " planned=" .. tostring(wide.plannedDots) .. ")")
+  check((wide.missingDots or 0) == 0, "H: and nothing is reported missing (missing="
+    .. tostring(wide.missingDots) .. ")")
+  check((wide.widen or 1) == 1, "H: the widen the stale ceiling forced is dropped (widen="
+    .. tostring(wide.widen) .. ")")
+  check(wide.capacity == nil and wide.capacityStale == true,
+    "H: the stale ceiling is cleared and the diag says so (capacity=" .. tostring(wide.capacity)
+      .. " stale=" .. tostring(wide.capacityStale) .. ")")
+  check(H.created() <= 400, "H: the wider plan still respects the new ceiling (asked=" .. H.created() .. ")")
+end
+
+-- ═══ I. the middle-dot diag prints MEASURED size next to the planned size ══
+-- Measured alone cannot tell "the object exists but the client kept no geometry"
+-- from "the object is the size the draw asked for".
+for _, tag in ipairs({ "dot 8:", "dot 9:" }) do
+  local line = lineStartingWith(midDiag, tag)
+  check(line ~= nil and line:find("planned=", 1, true) ~= nil,
+    "I: " .. tag .. " prints the planned size next to the measured one (got " .. tostring(line) .. ")")
+end
+
+-- ═══ J. the pool line measures the objects, and says where they land ═══════
+do
+  local poolLine = lineStartingWith(A.diag(), "dots pool:")
+  check(poolLine and poolLine:find("sized=", 1, true) ~= nil,
+    "J: the dots pool line measures how many dots have real geometry (got " .. tostring(poolLine) .. ")")
+  check(poolLine and poolLine:find("anchored=", 1, true) ~= nil,
+    "J: the dots pool line counts the dots that carry both anchors (got " .. tostring(poolLine) .. ")")
+  check(poolLine and poolLine:find("sized=" .. tostring((A.M.drawer.lastApplied or {}).paintedDots) .. "/",
+      1, true) ~= nil,
+    "J: on this client every painted dot measures a positive size (got " .. tostring(poolLine) .. ")")
+  local boxLine = lineStartingWith(A.diag(), "dots box:")
+  check(boxLine ~= nil, "J: /nt mapdiag prints where the painted dots land (got " .. tostring(boxLine) .. ")")
+  check(boxLine and boxLine:find("outside=0/", 1, true) ~= nil,
+    "J: no painted dot lands outside the overlay host (got " .. tostring(boxLine) .. ")")
+  check(boxLine and boxLine:find("bbox=", 1, true) ~= nil,
+    "J: the painted bbox is printed so a translation can be seen (got " .. tostring(boxLine) .. ")")
+end
+
+-- ═══ K. the two-corner anchor probe is not upside down ══════════════════════
+-- The probe read "two corner anchors -> 64x0" on the live client because the
+-- BOTTOM anchor was given the SMALLER y-down offset than the TOP one: the top
+-- edge sat above the bottom edge, so the height was 0. That reading sent three
+-- rounds of work after a geometry bug that was only in the probe.
+do
+  local K = boot(400)
+  K.M:SetRoute(route("K"))
+  local probeTex = K.M:_probeTexture(K.M.host)
+  check(probeTex ~= nil, "K: the probe texture is created on the host")
+  if probeTex then
+    -- What /nt mapdiag's "anchor probe" line runs on that same texture.
+    local proof = K.ns.LineDraw.TextureProof(probeTex, K.M.host)
+    local _, _, _, _, bottomY = probeTex:GetPoint(1)
+    local _, _, _, _, topY = probeTex:GetPoint(2)
+    check(type(proof.anchorHeight) == "number" and proof.anchorHeight > 0,
+      "K: the probe measures a positive height (" .. tostring(proof.anchorHeight) .. ")")
+    check(type(bottomY) == "number" and type(topY) == "number",
+      "K: the probe anchors both corners (bottom=" .. tostring(bottomY) .. " top=" .. tostring(topY) .. ")")
+    check(type(bottomY) == "number" and type(topY) == "number" and bottomY < topY,
+      "K: the probe's BOTTOM anchor is below its TOP anchor in y-down space (bottom="
+        .. tostring(bottomY) .. " top=" .. tostring(topY) .. ")")
+    check(probeTex:GetHeight() > 0,
+      "K: the probe therefore measures a positive height (" .. tostring(probeTex:GetHeight()) .. ")")
+  end
+end
+
+-- ═══ L. the card's own number: 17 points at canvas scale 0.696, every dot ══
+-- "a 17-point route at canvas scale 0.696 must paint every planned dot, and a
+-- spec asserts the painted count equals the plan". On a client with enough
+-- regions nothing may be dropped and nothing may be widened.
+do
+  local L = boot(4000)
+  L.M:SetRoute(route("L"))
+  local a = (L.M.drawer or {}).lastApplied or {}
+  near(a.dotScale, CANVAS_SCALE, "L: the canvas scale is the live one", 0.001)
+  check(a.plannedDots == 130,
+    "L: the 17-point route plans 130 dots at 3 screen px (planned=" .. tostring(a.plannedDots) .. ")")
+  check(a.paintedDots == a.plannedDots,
+    "L: every planned dot is painted (painted=" .. tostring(a.paintedDots) .. " planned="
+      .. tostring(a.plannedDots) .. ")")
+  check((a.missingDots or 0) == 0, "L: nothing is missing (missing=" .. tostring(a.missingDots) .. ")")
+  check((a.widen or 1) == 1, "L: the plan was not widened on a client that can hold it (widen="
+    .. tostring(a.widen) .. ")")
+  check((a.replans or 0) == 0, "L: and no re-fit was needed (replans=" .. tostring(a.replans) .. ")")
+end
 
 if failed > 0 then
   io.stderr:write(("mapdot_capacity_spec: %d FAIL(s)\n"):format(failed))

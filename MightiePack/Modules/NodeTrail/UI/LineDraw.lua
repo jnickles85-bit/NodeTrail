@@ -319,9 +319,14 @@ function D.TextureProof(tex, parent)
   out.sizedBySetters = type(out.sizedWidth) == "number" and type(out.sizedHeight) == "number"
     and math.abs(out.sizedWidth - 64) <= 0.5 and math.abs(out.sizedHeight - 8) <= 0.5
   -- Then force the size the only way this fallback does: two corner anchors.
+  -- y-down offsets from TOPLEFT, so the BOTTOM anchor needs the LARGER offset:
+  -- with the two swapped (bottom -8, top -16) the top edge sits above the
+  -- bottom edge, the client answers height 0, and the diag read "two corner
+  -- anchors -> 64x0" — which said the anchors failed when only the probe was
+  -- upside down.
   pcall(tex.ClearAllPoints, tex)
-  pcall(tex.SetPoint, tex, "BOTTOMLEFT", parent, "TOPLEFT", 10, -8)
-  pcall(tex.SetPoint, tex, "TOPRIGHT", parent, "TOPLEFT", 74, -16)
+  pcall(tex.SetPoint, tex, "BOTTOMLEFT", parent, "TOPLEFT", 10, -16)
+  pcall(tex.SetPoint, tex, "TOPRIGHT", parent, "TOPLEFT", 74, -8)
   out.anchorWidth = numberMethod(tex, "GetWidth")
   out.anchorHeight = numberMethod(tex, "GetHeight")
   out.numPoints = numberMethod(tex, "GetNumPoints")
@@ -430,6 +435,8 @@ function D.Invalidate(drawer)
     drawer.widenHint = nil
     drawer.hideFromIndex = nil
     drawer.hiddenCount = nil
+    drawer.dotOutside = nil
+    drawer.dotBox = nil
   end
 end
 
@@ -889,9 +896,26 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     --- dots were ACTUALLY painted (both of their objects existed) versus
     --- planned — the loop index alone cannot tell those apart, which is how a
     --- truncated route used to report itself as complete.
+    --- Also records where the painted dots land relative to the host, because
+    --- "painted outside the host" is indistinguishable from "not painted" on a
+    --- screenshot and is a different bug.
+    local hostW = numberMethod(parent, "GetWidth")
+    local hostH = numberMethod(parent, "GetHeight")
+    local outside, box = 0, {}
+    local function measured(cx, cy)
+      if not box[1] or cx < box[1] then box[1] = cx end
+      if not box[2] or cy < box[2] then box[2] = cy end
+      if not box[3] or cx > box[3] then box[3] = cx end
+      if not box[4] or cy > box[4] then box[4] = cy end
+      if hostW and hostH and (cx < 0 or cy < 0 or cx > hostW or cy > hostH) then
+        outside = outside + 1
+      end
+    end
+    drawer.dotOutside, drawer.dotBox = nil, nil
     local function paint(plans)
       local index, painted, missing = 1, 0, 0
       local first
+      outside, box = 0, {}
       for i = 1, count do
         local seg, plan = buf[i], plans[i]
         if seg and plan and plan.steps > 0 then
@@ -916,6 +940,7 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
             if obj then
               paintDot(obj, parent, cx, cy, plan.size, r, g, b, a, space, 7)
               painted = painted + 1
+              measured(cx, cy)
             else
               -- No region for this dot: it is NOT painted, whatever the plan
               -- says. Counting it as painted is what made a route that stopped
@@ -932,46 +957,120 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     -- ── The plan must fit the regions this client actually hands out ────────
     -- A client that stops creating regions used to lose every dot past the
     -- ceiling, silently: the route painted its opening leg and nothing else
-    -- while the diag still read `dots=<the whole plan>`. Two things fix that:
-    -- the paint counts what it really painted, and the plan is re-widened onto
-    -- the objects that exist, so the chain still spans the route end to end
-    -- (fewer, larger dots) instead of stopping at the ceiling.
-    --- Widest plan that still fits `maxDots`, by planning only (no painting).
-    local function planFitting(startWiden, maxDots)
-      local w = startWiden
-      for _ = 1, 6 do
-        local p, t = D.PlanDots(buf, count, m, w)
-        if t <= maxDots then
-          return p, t, w
+    -- while the diag still read `dots=<the whole plan>`. The paint now counts
+    -- what it really painted, and the plan is re-fitted onto the objects that
+    -- exist, so the chain still spans the route end to end.
+    --
+    -- Two rules keep that re-fit honest, both measured rather than assumed:
+    --   * a plan is only ever PAINTED when its dot count already fits.
+    --     paint() writes the pool from index 1, so painting a plan that does
+    --     not fit leaves enormous dots in the pool for numbers that describe a
+    --     different plan (19 dots measuring 1034 px while the diag claimed the
+    --     normal 4.31 px, which is what "painted anyway, then abandoned" does);
+    --   * widening stops at the coarsest plan (one step per segment, both
+    --     endpoints). Past that point PlanDots cannot get smaller, so widening
+    --     again only inflates the dots and still drops the tail.
+    --- Dots `paint` would paint for `plans` — the count that costs regions.
+    local function plannedDots(plans)
+      local n = 0
+      for i = 1, count do
+        local plan = plans[i]
+        if buf[i] and plan and plan.steps > 0 then
+          n = n + plan.steps + 1
         end
-        w = w * (t / maxDots) * 1.03 -- 1.03: ceil() at the segment level
       end
-      local p, t = D.PlanDots(buf, count, m, w)
-      return p, t, w
+      return n
     end
 
-    local widen = drawer.widenHint or 1
+    --- Widest plan that fits `maxDots`, by planning only (no painting).
+    --- @return plans|nil, dots, widen — nil when even the coarsest plan is too
+    ---   big: widening cannot fit it, so the caller keeps the normal plan and
+    ---   reports the shortfall instead of painting 1000px squares.
+    local function planFitting(maxDots)
+      if type(maxDots) ~= "number" or maxDots < 2 then
+        return nil
+      end
+      local plain, plainTotal = D.PlanDots(buf, count, m, 1)
+      if plainTotal <= maxDots then
+        return plain, plainTotal, 1
+      end
+      -- The floor: one step per segment. Both endpoints are always drawn.
+      local _, coarse = D.PlanDots(buf, count, m, 1024)
+      if coarse > maxDots then
+        return nil
+      end
+      local lo, hi = 1, 2
+      local bestP, bestT
+      for _ = 1, 12 do
+        local p, t = D.PlanDots(buf, count, m, hi)
+        if t <= maxDots then
+          bestP, bestT = p, t
+          break
+        end
+        lo, hi = hi, hi * 2
+      end
+      if not bestP then
+        return nil
+      end
+      for _ = 1, 10 do
+        local mid = (lo + hi) * 0.5
+        local pm, tm = D.PlanDots(buf, count, m, mid)
+        if tm <= maxDots then
+          hi, bestP, bestT = mid, pm, tm
+        else
+          lo = mid
+        end
+      end
+      return bestP, bestT, hi
+    end
+
+    drawer.createFailed = 0
+    -- A recorded ceiling is a MEASURED LOWER BOUND, not a verdict on the client:
+    -- one transient CreateTexture refusal used to latch a small ceiling (and the
+    -- widen it forced) for the rest of the session, so every later draw stayed
+    -- shortened with no way back. Probe one region past it: a create that
+    -- succeeds there proves the old number was a refusal, and the next plan may
+    -- be the full one again.
+    local capacityStale = false
+    if drawer.capacity and drawer.capacity > 0 then
+      if acquire(drawer, drawer.capacity + 1, parent) then
+        drawer.capacity, drawer.widenHint = nil, nil
+        drawer.createFailed = 0
+        capacityStale = true
+      end
+    end
+
     local maxDots = drawer.capacity and math.floor(drawer.capacity / 2) or nil
-    local plans, total
-    if maxDots and maxDots >= count then
-      plans, total, widen = planFitting(widen, maxDots)
-    else
+    local plans, total, widen, fitted
+    if maxDots and maxDots >= 2 then
+      plans, total, widen = planFitting(maxDots)
+      fitted = plans ~= nil
+    end
+    if not plans then
+      widen = drawer.widenHint or 1
       plans, total = D.PlanDots(buf, count, m, widen)
     end
     local index, painted, missing, first = paint(plans)
-    local replans = 0
+    local replans, reverted = 0, false
     while missing > 0 and drawer.capacity and replans < 4 do
-      maxDots = math.floor(drawer.capacity / 2)
-      if maxDots < count or total < 1 then
+      local capDots = math.floor(drawer.capacity / 2)
+      if capDots < 2 then
         break
       end
-      local p2, t2, w2 = planFitting(widen * (total / maxDots) * 1.03, maxDots)
+      local p2, t2, w2 = planFitting(capDots)
+      if not p2 or plannedDots(p2) > capDots then
+        -- Nothing wider fits (or the arithmetic disagrees with the plan):
+        -- painting it would leave oversized dots and still lose the tail.
+        break
+      end
       local i2, painted2, missing2, first2 = paint(p2)
-      -- Only a plan that fits COMPLETELY is worth taking: a partly-wider plan
-      -- paints enormous dots and still loses the tail, which is worse than the
-      -- honest shortfall below. Either the whole route is painted, or the
-      -- missing count says how much of it is not.
       if missing2 ~= 0 then
+        -- The plan fitted on paper but the client refused regions anyway.
+        -- Put the chain the reported numbers describe back in the pool: a
+        -- half-painted retry under the first plan's numbers is the incoherent
+        -- state this whole block exists to prevent.
+        index, painted, missing, first = paint(plans)
+        reverted = true
         break
       end
       widen, plans, total = w2, p2, t2
@@ -980,7 +1079,10 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     end
     -- Start the next draw at the width this client actually needed, so a route
     -- on a capped surface does not re-discover the ceiling on every redraw.
-    drawer.widenHint = (replans > 0) and widen or drawer.widenHint
+    -- A reverted retry proves nothing about the width, so it teaches nothing.
+    if (replans > 0 or fitted) and not reverted then
+      drawer.widenHint = (widen and widen > 1) and widen or nil
+    end
     hideFrom(drawer, index)
     drawer.lastApplied.dots = (total > 0) and painted or 0
     drawer.lastApplied.paintedDots = painted
@@ -990,6 +1092,12 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     drawer.lastApplied.poolHigh = drawer.poolHigh or 0
     drawer.lastApplied.capacity = drawer.capacity
     drawer.lastApplied.replans = replans
+    drawer.lastApplied.reverted = reverted
+    drawer.lastApplied.capacityStale = capacityStale
+    drawer.lastApplied.createFailed = drawer.createFailed
+    drawer.lastApplied.dotOutside = outside
+    drawer.lastApplied.dotBox = box[1] and box or nil
+    drawer.lastApplied.hostSize = (hostW and hostH) and { width = hostW, height = hostH } or nil
     drawer.lastApplied.widen = widen
     drawer.lastApplied.hideFromIndex = drawer.hideFromIndex
     drawer.lastApplied.hiddenByHide = drawer.hiddenCount

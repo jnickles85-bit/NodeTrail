@@ -603,21 +603,60 @@ paints all 130 dots (260 regions) on a permissive client, so the geometry/plan i
   the index and how many objects it hid.
 
 **Instrumentation, so one run answers the card.** `/nt mapdiag` on the world map now also prints:
-- `dots pool: planned=… painted=… missing=… objects=… shown=… highest=… capacity=… widen=…
-  replans=… hideFrom=… hidden=… createFailed=…` — planned vs painted vs *on screen*.
-- `dot 8:` and `dot 9:` in the same shape as `line 1:`/`line 2:` (shown, alpha, size, parent, both
-  anchors), because "only the first leg paints" is a claim about the middle of the route.
+- `dots pool: planned=… painted=… sized=…/… anchored=…/… missing=… objects=… shown=… highest=…
+  capacity=… widen=… replans=… hideFrom=… hidden=… createFailed=… reverted=… stale=…` — planned
+  vs painted vs *measured* (`sized`/`anchored` read every painted object's `GetWidth`/`GetHeight`
+  and `GetNumPoints`, so "created, shown, and 0x0" can no longer pass as painted).
+- `dots box: painted bbox=… host=…x… outside=…/…` — where the painted dots LAND. A dot outside the
+  host is invisible on a screenshot and looks exactly like a dot that was never painted; only the
+  numbers tell them apart.
+- `dot 8:`, `dot 9:`, `dot mid:`, `dot last:` in the same shape as `line 1:`/`line 2:` (shown,
+  alpha, measured size **next to the planned size**, parent, both anchors). `dot mid`/`dot last`
+  are the middle and final dot of what THIS draw painted: if they are shown with the right size and
+  the route is still short on screen, the fault is draw order or clipping, not the paint.
 - `draws: N draw(s) recorded, newest first: #seq count=… dots=…/… hideFrom=… hid=…` — a later pass
   that rewrites the pool with a shorter buffer is now visible instead of invisible.
 - `clips: host clips=… rect=… ; hostParent … ; canvas …` — and the overlay host now calls
   `SetClipsChildren(false)`, so a client that clips children by default cannot crop the route.
 
+**Review round 2 (three defects, all reproduced then fixed).** The review measured, on the spec's
+own 40-region client, that every painted dot was `1034.8x1034.8 px` while the diag reported
+`dotSize=4.31` — the retry loop called `paint(p2)` *before* testing `missing2 ~= 0`, so a plan that
+could not fit was written into the pool and then abandoned, and `planFitting` kept widening past
+the point where `PlanDots` could still shrink (the floor is both endpoints of every segment), which
+is where the 1034px came from. Three fixes:
+
+- **A plan is only painted when its dot count already fits.** `planFitting` now binary-searches the
+  widen between 1 and the coarsest plan and returns nil when even that floor is too big; the retry
+  checks the plan *before* touching the pool (`plannedDots(p2) <= capacity/2`), and if a plan that
+  fitted on paper still comes up short it repaints the first plan so the pool always holds the dots
+  the reported numbers describe (`reverted=true`). On the 40-region client the pool now holds 19
+  dots of 4.31 px with `missing=111` — the "normal dot size + honest shortfall" the previous
+  handoff claimed but did not produce.
+- **`dot N:` prints the MEASURED size next to the planned one** (`size=1034.8x1034.8
+  planned=4.31x4.31` cannot be mistaken for a healthy dot).
+- **A recorded ceiling is re-measured upward.** `drawer.capacity` only ever decreased and was
+  cleared only on a parent change, so one transient `CreateTexture` refusal widened and shortened
+  every later draw for the session. A create that succeeds at `capacity + 1` now clears the ceiling
+  and the widen it forced (`stale=true` on the diag line).
+
+Also fixed, because it cost three rounds of chasing a geometry bug that only existed in the probe:
+`TextureProof`'s two-corner probe anchored `BOTTOMLEFT` at y −8 and `TOPRIGHT` at −16, i.e. the top
+edge above the bottom edge, so the client answered height **0** and the diag printed "two corner
+anchors -> 64x0". The bottom anchor now gets the larger y-down offset.
+
+Spec: `tests/mapdot_capacity_spec.lua` grew sections G–K (retry never paints an unfit plan; ceiling
+re-measured upward; measured-vs-planned size in the middle-dot lines; `sized`/`anchored`/`dots box`
+in the diag; the probe's anchors the right way up). **43 FAILs on `62c26b4`, 13 of them also red on
+`51819d6`** (the reviewed commit), green at HEAD; all 36 `tests/*.lua` pass under lua5.1.
+
 **Still unproven in game.** Which of the three it was. The build is installed; one world-map
 open + `/nt mapdiag` closes it: `painted == planned` with the full loop visible is done. If the
-loop is still short and `painted == planned`, read `draws:` — a `count=2`/`count=3` pass on top of
-a `count=16` one means a rebuild shrank the route and `hideFrom` cropped the pool (next fix).
-`shown` well below `2 × painted` means the client hid the objects; `clips: host clips=true` means
-it clipped them.
+loop is still short and `painted == planned`, read `dots box` (`outside=0/n` but nothing on screen =
+draw order or clipping), then `dot mid:`/`dot last:` (`size=0x0` = the client kept no geometry;
+`shown=true` with a real size = it is drawn and something covers it), then `draws:` (a
+`count=2`/`count=3` pass on top of a `count=16` one means a rebuild shrank the route and `hideFrom`
+cropped the pool).
 
 ### t_d17939c1 — a followable next-waypoint arrow with the yards counting down
 

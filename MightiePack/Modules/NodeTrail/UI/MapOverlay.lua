@@ -1023,6 +1023,13 @@ function M:Diag()
   fact(function()
     -- The card's first question, answered from the objects rather than from the
     -- loop counter: a dot counts as PAINTED only when its own region exists.
+    --
+    -- `sized` goes one step further and MEASURES the objects: a region the
+    -- client accepted, showed and anchored can still read 0x0 (that is exactly
+    -- how the line primitive failed, "shown=true size=0x0"), and then it paints
+    -- nothing while `painted` counts it. So the diag prints all three counts:
+    -- regions that exist, regions that measure a positive size, and regions
+    -- that carry both anchors.
     local drawer = self.drawer
     local a = (drawer and ns.LineDraw.Applied(drawer)) or {}
     if type(drawer) ~= "table" or not self._drew then
@@ -1030,6 +1037,7 @@ function M:Diag()
     end
     local high = drawer.poolHigh or 0
     local existing, shown = 0, 0
+    local sized, anchored, checked = 0, 0, 0
     for i = 1, (high > 0 and high or #drawer.pool) do
       local o = drawer.pool[i]
       if o then
@@ -1037,16 +1045,52 @@ function M:Diag()
         if not o.IsShown or o:IsShown() ~= false then
           shown = shown + 1
         end
+        -- Even pool indices are the white dot of each pair (odd = its rim).
+        if i % 2 == 0 and i <= 2 * (tonumber(a.paintedDots) or 0) then
+          checked = checked + 1
+          local w = call(o, "GetWidth")
+          local h = call(o, "GetHeight")
+          if type(w) ~= "number" or type(h) ~= "number" or (w > 0 and h > 0) then
+            -- No getter: report it as sized rather than slandering a client
+            -- that simply does not measure regions.
+            sized = sized + 1
+          end
+          local points = call(o, "GetNumPoints")
+          if type(points) ~= "number" or points >= 2 then
+            anchored = anchored + 1
+          end
+        end
       end
     end
     return string.format(
-      "dots pool: planned=%s painted=%s missing=%s objects=%s shown=%s highest=%s capacity=%s widen=%s replans=%s hideFrom=%s hidden=%s createFailed=%s",
-      fmtNum(a.plannedDots), fmtNum(a.paintedDots), fmtNum(a.missingDots),
+      "dots pool: planned=%s painted=%s sized=%s/%s anchored=%s/%s missing=%s objects=%s shown=%s highest=%s capacity=%s widen=%s replans=%s hideFrom=%s hidden=%s createFailed=%s reverted=%s stale=%s",
+      fmtNum(a.plannedDots), fmtNum(a.paintedDots),
+      fmtNum(sized), fmtNum(checked), fmtNum(anchored), fmtNum(checked),
+      fmtNum(a.missingDots),
       fmtNum(existing), fmtNum(shown), fmtNum(high),
       a.capacity and fmtNum(a.capacity) or "none",
       fmtNum(a.widen or 1, 2), fmtNum(a.replans or 0),
       a.hideFromIndex and fmtNum(a.hideFromIndex) or "none",
-      fmtNum(a.hiddenByHide or 0), fmtNum(drawer.createFailed or 0))
+      fmtNum(a.hiddenByHide or 0), fmtNum(a.createFailed or 0),
+      tostring(a.reverted and true or false), tostring(a.capacityStale and true or false))
+  end)
+  fact(function()
+    -- Where the painted dots LAND. A dot painted outside the host (or outside
+    -- the canvas) is invisible on a screenshot and looks exactly like a dot
+    -- that was never painted; only the numbers tell them apart. `box` is the
+    -- painted centre bbox in the host's own pixel space, `host` the rect it has
+    -- to fit in.
+    local drawer = self.drawer
+    local a = (drawer and ns.LineDraw.Applied(drawer)) or {}
+    if type(a.dotBox) ~= "table" then
+      return "dots box: no painted dot on the last draw"
+    end
+    local box, host = a.dotBox, a.hostSize
+    return string.format(
+      "dots box: painted bbox=%s,%s..%s,%s host=%sx%s outside=%s/%s",
+      fmtNum(box[1], 1), fmtNum(box[2], 1), fmtNum(box[3], 1), fmtNum(box[4], 1),
+      fmtNum(host and host.width), fmtNum(host and host.height),
+      fmtNum(a.dotOutside or 0), fmtNum(a.paintedDots or 0))
   end)
   fact(function()
     local draws = self._draws
@@ -1250,6 +1294,22 @@ function M:Diag()
   if self.drawer and self.drawer.mode == "dots" then
     samples[#samples + 1] = { 16, "dot 8" }
     samples[#samples + 1] = { 18, "dot 9" }
+    -- ...and the two ends of what was actually painted, because "the opening
+    -- leg paints and nothing else" is a claim about the dots the draw itself
+    -- got to. dot mid / dot last are the middle and the final painted dot of
+    -- THIS draw: shown + right size + right anchors there, with the route still
+    -- short on screen, puts the fault in draw order or clipping and not in the
+    -- paint at all.
+    local painted = tonumber((ns.LineDraw.Applied(self.drawer) or {}).paintedDots) or 0
+    if painted >= 4 then
+      local mid = 2 * math.floor(painted * 0.5)
+      if mid > 18 then
+        samples[#samples + 1] = { mid, "dot mid" }
+      end
+    end
+    if painted >= 2 and 2 * painted > 18 then
+      samples[#samples + 1] = { 2 * painted, "dot last" }
+    end
   end
   for s = 1, #samples do
     local i, tag = samples[s][1], samples[s][2]
@@ -1291,6 +1351,14 @@ function M:Diag()
       if type(d.width) == "number" or type(d.height) == "number" then
         size = fmtNum(d.width) .. "x" .. fmtNum(d.height)
       end
+      -- ...next to what the plan asked for. Measured alone cannot say "the
+      -- object exists but the client kept no geometry": 1034x1034 next to a
+      -- planned 4.31 is a different failure from 4.31 next to a planned 4.31.
+      local planned = "absent"
+      local appliedDot = self.drawer and ns.LineDraw.Applied(self.drawer)
+      if type(appliedDot) == "table" and type(appliedDot.dotSize) == "number" then
+        planned = fmtNum(appliedDot.dotSize) .. "x" .. fmtNum(appliedDot.dotSize)
+      end
       local level = "inherits the host"
       if type(d.level) == "number" then
         level = fmtNum(d.level)
@@ -1331,9 +1399,9 @@ function M:Diag()
         end
         methodText = table.concat(parts, " ")
       end
-      return string.format("%s: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s object=%s numpoints=%s points=[%s] methods=[%s]",
+      return string.format("%s: kind=%s shown=%s alpha=%s vertex=%s thickness=%s size=%s planned=%s level=%s strata=%s parent=%s chain=%s len=%s start=%s end=%s object=%s numpoints=%s points=[%s] methods=[%s]",
         tag, tostring(d.kind or "?"), tostring(d.shown), fmtNum(d.alpha, 2), vertex,
-        fmtNum(d.thickness, 2), size, level, strata, parent, chain, len, startText, stopText,
+        fmtNum(d.thickness, 2), size, planned, level, strata, parent, chain, len, startText, stopText,
         tostring(d.objectType or "absent"),
         type(d.numPoints) == "number" and fmtNum(d.numPoints) or "absent",
         pointText, methodText)
