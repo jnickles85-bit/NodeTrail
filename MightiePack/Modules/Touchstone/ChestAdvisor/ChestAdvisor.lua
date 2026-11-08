@@ -3676,6 +3676,18 @@ local function toastIsEnabled()
 	return t.enabled ~= false          -- only an explicit `false` disables
 end
 
+-- The lifetime a show actually counts down from, in seconds. The persisted knob
+-- wins when it holds a sane number (TOAST_DEFAULTS.lifetime is the shipped
+-- default); anything else reads as the default. This is the value /up diag
+-- compares the MEASURED on-screen time against, so it must be the same one
+-- showToastItem counts down — one reader, no second copy.
+local function toastLifetime()
+	local t = ChestAdvisorDB and ChestAdvisorDB.toast
+	local v = type(t) == "table" and t.lifetime or nil
+	if type(v) == "number" and v > 0 and v <= 60 then return v end
+	return TOAST_DEFAULTS.lifetime
+end
+
 local toastFrame = nil
 local toastActive = false            -- a toast is displayed with its timer pending
 local toastQueue = {}
@@ -3698,13 +3710,19 @@ local toastFired = 0                 -- count of toasts actually drawn (test/dia
 --   deferred     — at least one item is held for PLAYER_REGEN
 --   fadeIn/Out   — the two animation groups, built once
 --   ticker       — the lifetime countdown's ticker handle
+--   fadeFor      — the show id whose EXPIRY the fade-out group is playing for;
+--                  nil when no fade-out is in flight (t_4bae0617)
+--   shownAt      — GetTime() at the show; showMs/lastEnd are the measured
+--                  on-screen duration and how the show ended (/up diag reads
+--                  them, so a tester gets a NUMBER instead of a stopwatch)
 local toastRT = {
 	current = nil, hovered = false, lifetimeLeft = 0,
 	held = {}, deferred = false,
 	fadeIn = nil, fadeOut = nil, ticker = nil,
+	fadeFor = nil, shownAt = nil, showMs = nil, lastEnd = nil,
 }
 
-local drawToast, advanceToast, showToastItem, toastFinishShow
+local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure
 
 -- The persisted position (U3/4). Same discipline as the window's own
 -- savePosition/restorePosition in UI.lua: store only NUMBERS, because the
@@ -3859,9 +3877,24 @@ local function toastBuildAnimations(f)
 		-- not the only hide: the classic client drops it when the same group
 		-- was Stopped and Played in one frame, and a finish step that errors
 		-- must not leave the panel up. toastExpire also arms a timer.
+		--
+		-- t_4bae0617 — THE EARLY-HIDE BUG. A Stop() on this group reports
+		-- OnFinished too (that is the same client behaviour that makes the
+		-- Stopped+Played note above necessary). toastPlayFadeIn Stops BOTH
+		-- groups before every show, so a show that had only just been drawn
+		-- immediately reported "fade-out finished": the handler ran the finish
+		-- step on the toast it had just started and the panel vanished within a
+		-- frame of appearing — exactly the "goes away extremely fast" report,
+		-- and it hit EVERY toast, because the stop happens on every show.
+		-- The group may therefore only end a show when a fade-out was actually
+		-- ARMED for an expiry: toastRT.fadeFor names that show id, and it is nil
+		-- while no fade-out is in flight.
 		if type(ag.SetScript) == "function" then
 			ag:SetScript("OnFinished", function()
-				pcall(toastFinishShow, toastRT.fadeId)
+				local id = toastRT.fadeFor
+				if id == nil then return end
+				toastRT.fadeFor = nil
+				pcall(toastFinishShow, id)
 			end)
 		end
 		toastRT.fadeOut = ag
@@ -3955,6 +3988,14 @@ local function buildToastFrame()
 			local item = toastRT.current
 			if button == "RightButton" then
 				-- Dismiss. No bag window is touched on this path.
+				-- t_4bae0617: this is the OTHER way a show ends, so it records the
+				-- same measured duration, and it disarms the fade BEFORE the Stop
+				-- below (a Stop reports OnFinished on this client).
+				toastRT.lastEnd = "dismissed"
+				local ms = toastMeasure and toastMeasure()
+				if ms then toastRT.showMs = ms end
+				toastRT.shownAt = nil
+				toastRT.fadeFor = nil
 				toastStopAnimations()
 				-- …and stop the countdown, or the ticker would fire the fade-out
 				-- a moment later on a toast that is already gone.
@@ -4073,9 +4114,28 @@ end
 -- Hide the panel and let the queue continue. Idempotent per show id: the
 -- fade's OnFinished and the lifetime fallback both call it, and a second call
 -- must not skip a toast the first call already put on screen.
+--
+-- t_4bae0617: how long the CURRENT show has been on screen, in milliseconds,
+-- from the client's own clock (GetTime) — measured, never the configured value
+-- echoed back. BOTH end paths use it (this one and the right-click dismiss), so
+-- the number /up diag prints always describes the show it names. nil when the
+-- client has no clock or no show is stamped.
+toastMeasure = function()
+	if type(toastRT.shownAt) ~= "number" or type(GetTime) ~= "function" then
+		return nil
+	end
+	local ok, now = pcall(GetTime)
+	if not ok or type(now) ~= "number" then return nil end
+	return math.floor((now - toastRT.shownAt) * 1000 + 0.5)
+end
+
 toastFinishShow = function(showId)
 	if showId ~= nil and toastRT.showId ~= showId then return end
 	if not toastActive then return end
+	local ms = toastMeasure()
+	if ms then toastRT.showMs = ms end
+	toastRT.shownAt = nil
+	toastRT.fadeFor = nil
 	toastRT.showId = (toastRT.showId or 0) + 1
 	local f = toastFrame
 	toastActive = false
@@ -4118,8 +4178,8 @@ toastExpire = function()
 	end
 	toastRT.ticker = nil
 	if not toastActive then return end
+	toastRT.lastEnd = "expired"
 	local showId = toastRT.showId
-	toastRT.fadeId = showId
 	local f = toastFrame
 	local fade = toastRT.fadeOut
 	local fadeFinishes = type(fade) == "table" and type(fade.Play) == "function"
@@ -4130,7 +4190,13 @@ toastExpire = function()
 		if type(toastRT.fadeIn) == "table" and type(toastRT.fadeIn.Stop) == "function" then
 			pcall(toastRT.fadeIn.Stop, toastRT.fadeIn)
 		end
+		-- Arm the group for THIS show (t_4bae0617): the OnFinished handler only
+		-- ends a show whose fade-out was armed here, so the Stop() a later show
+		-- does cannot end it. Cleared before Play so a Play that throws does not
+		-- leave a stale arm behind.
+		toastRT.fadeFor = showId
 		local played = pcall(fade.Play, fade)
+		if not played then toastRT.fadeFor = nil end
 		if played and type(C_Timer) == "table" and type(C_Timer.After) == "function" then
 			local delay = (TOAST.fadeOut or 0.25) + 0.05
 			C_Timer.After(delay, function()
@@ -4198,7 +4264,15 @@ showToastItem = function(item)
 		-- scripts own that state, and on a ROTATION (a second queued upgrade taking
 		-- the screen under a stationary mouse) the pointer never left the panel — so
 		-- clearing it would silently un-pause the new toast.
-		toastRT.lifetimeLeft = TOAST_DEFAULTS.lifetime
+		toastRT.lifetimeLeft = toastLifetime()
+		-- t_4bae0617: stamp the client clock so the show's real duration can be
+		-- measured when it ends (and read back from /up diag).
+		if type(GetTime) == "function" then
+			local okClock, t0 = pcall(GetTime)
+			toastRT.shownAt = (okClock and type(t0) == "number") and t0 or nil
+		else
+			toastRT.shownAt = nil
+		end
 		-- Re-anchor from the persisted position on every show: the panel may have
 		-- been dragged since it was built, and the resting point is what is saved.
 		if type(f.dragging) ~= "boolean" or not f.dragging then
@@ -4416,7 +4490,58 @@ ChestAdvisor.toastState = function()
 		lifetimeLeft = toastRT.lifetimeLeft,
 		held = #toastRT.held,
 		deferred = toastRT.deferred,
+		-- t_4bae0617: the LIFETIME, measured. `lifetime` is what a show counts
+		-- down from; `showMs` is how long the last show was actually on screen
+		-- (nil until one has ended); `lastEnd` is how it ended. /up diag prints
+		-- them so "it goes away too fast" becomes a number, not an impression.
+		lifetime = toastLifetime(),
+		showMs = toastRT.showMs,
+		lastEnd = toastRT.lastEnd,
 	}
+end
+
+-- ---- t_4bae0617: the deterministic test toast ---------------------------------
+--
+-- An upgrade toast otherwise needs a real bag item the scan happens to judge an
+-- UPGRADE, which can take an hour of play — so nothing about its lifetime, fade
+-- or dismiss behaviour could be checked on demand. `/up toasts` raises one
+-- through the REAL path: the entry is queued exactly where a scan queues one and
+-- drawn by showToastItem (no second renderer, no second queue), and the message
+-- is built by buildToastMessage like any other show.
+--
+-- The synthetic entry carries NO link and NO item id, which is the point: the
+-- icon falls back cleanly through the same `tex or TOAST_FALLBACK_ICON` the real
+-- path uses, and buildToastMessage takes its documented fallback wording. It
+-- touches NOTHING the scan owns — no toastedLinks (so the dedupe set is not
+-- polluted), no ChestAdvisorDB.log (that is written only by a verdict), and no
+-- baseline flag (toastSeenFirstScan is only ever set by maybeToastUpgrades).
+--
+-- Returns { started, queued, dropped }: the first call draws immediately, the
+-- second while one is up JOINS THE QUEUE (a rotation, never a second panel), and
+-- the tail past TOAST_MAX is a stated drop like the scan's own.
+local TOAST_TEST_NAME = "Test Upgrade"
+ChestAdvisor.testToast = function(n)
+	n = tonumber(n) or 1
+	if n < 1 then n = 1 end
+	local started, queued, dropped = 0, 0, 0
+	for _ = 1, math.floor(n) do
+		local entry = { name = TOAST_TEST_NAME, test = true }
+		-- The cap is the same one a scan batch obeys, so a tester cannot use
+		-- this to grow a queue the real path could never grow.
+		if #toastQueue >= TOAST_MAX then
+			toastDropped = toastDropped + 1
+			dropped = dropped + 1
+		else
+			toastQueue[#toastQueue + 1] = entry
+			queued = queued + 1
+			if not toastActive then
+				showToastItem(table.remove(toastQueue, 1))
+				queued = queued - 1
+				started = started + 1
+			end
+		end
+	end
+	return { started = started, queued = queued, dropped = dropped }
 end
 ChestAdvisor._maybeToastUpgrades = maybeToastUpgrades
 ChestAdvisor._toastIsEnabled = toastIsEnabled
@@ -5331,6 +5456,10 @@ local function helpText()
 		.. "  /up role clear clear the recorded role for this class\n"
 		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
 		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
+		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real\n"
+		.. "                 queue, so its lifetime, fade and right-click dismiss can be checked without\n"
+		.. "                 waiting for a real upgrade. Run it twice to see the rotation. /up diag reports\n"
+		.. "                 how many fired and how long the last one was actually on screen.\n"
 		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
 		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
 		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
@@ -5407,6 +5536,26 @@ local function cmdToast(msg)
 		return false, "usage: /up toast <on|off>"
 	end
 	return true, "toast " .. w
+end
+
+-- /up toasts (alias /up testtoast) — t_4bae0617: raise the upgrade toast on
+-- demand, so its lifetime, fade and dismiss can be checked without waiting for a
+-- real upgrade to drop. It goes through ChestAdvisor.testToast, which queues and
+-- shows through the REAL path; see that function for what it deliberately does
+-- not touch (no dedupe entry, no log row, no baseline change).
+local function cmdTestToast()
+	if type(ChestAdvisor.testToast) ~= "function" then
+		return false, "the toast surface is not loaded (is the Touchstone module off?)"
+	end
+	if not toastIsEnabled() then
+		return false, "the toast is off — /up toast on, then /up toasts"
+	end
+	ChestAdvisor.testToast(1)
+	local st = type(ChestAdvisor.toastState) == "function" and ChestAdvisor.toastState() or {}
+	return true, string.format(
+		"test toast: %s | queued: %s | lifetime: %.1fs — /up diag reports fired and the measured time",
+		st.shown and "showing" or "not showing", tostring(st.queue or 0),
+		tonumber(st.lifetime) or 0)
 end
 
 -- /up tooltip <on|off> — the sibling of /up toast, on the SAME per-character
@@ -5717,6 +5866,42 @@ local function cmdDiag()
 	else
 		summary = summary .. "\n(no verdict rows stored — /up rescan first)"
 	end
+	-- t_632f27e9: the toast's own state — the notification layer's behaviour
+	-- belongs in the DIAG path (a human explicitly asking), never in the
+	-- toast itself, which carries no suppression/debug text (AC-E2).
+	--
+	-- t_4bae0617: this block used to sit INSIDE the walk-ledger branch below, so
+	-- a tester who ran /up toasts on a fresh login (no scan ledger yet) got no
+	-- toast line at all. It is unconditional now: the toast's lifetime is
+	-- measurable with no scan behind it, which is the point of the test command.
+	-- `fired` and `last show on screen` are the numbers to read.
+	local ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil
+	if type(ts) == "table" then
+		local measured = "not shown yet"
+		if type(ts.showMs) == "number" then
+			measured = string.format("%.2fs", ts.showMs / 1000)
+				.. " (" .. tostring(ts.lastEnd or "?") .. ")"
+		end
+		summary = summary .. "\n--- toast ---"
+				.. "\nenabled: " .. tostring(ts.enabled)
+				.. " | shown: " .. tostring(ts.shown)
+				.. " | fired: " .. tostring(ts.fired)
+				.. " | queued: " .. tostring(ts.queue)
+				.. " | told this session: " .. tostring(ts.told)
+				.. " | cap-dropped: " .. tostring(ts.dropped)
+				-- t_cf2ad83c (U3): the behaviour that card added, so a human
+				-- asking for diagnostics can see the hold and the hover pause.
+				.. "\nhovered: " .. tostring(ts.hovered)
+				.. " | lifetime left: " .. tostring(ts.lifetimeLeft)
+				.. " | held for combat: " .. tostring(ts.held)
+				.. " | deferred: " .. tostring(ts.deferred)
+				-- t_4bae0617: the configured lifetime next to the MEASURED
+				-- on-screen time of the last show, so "it went away too fast" is
+				-- a comparison of two numbers instead of an impression.
+				.. "\nconfigured lifetime: "
+				.. string.format("%.2fs", tonumber(ts.lifetime) or 0)
+				.. " | last show on screen: " .. measured
+	end
 	-- E3 (AC-E9): the walk ledger is part of the /up diag OUTPUT, not just
 	-- the record. A reader must be able to answer "why did this item
 	-- produce no marker?" from the diag text alone — no file open. The
@@ -5733,24 +5918,6 @@ local function cmdDiag()
 			.. "\ncap (MARKER_MAX): 64 — cap-dropped this scan: " .. tostring(ld.capDropped)
 			.. "\nclass state: " .. tostring(ld.classState or "unknown")
 			.. "\nrole: " .. tostring(ld.role or "none")
-		-- t_632f27e9: the toast's own state — the notification layer's behaviour
-		-- belongs in the DIAG path (a human explicitly asking), never in the
-		-- toast itself, which carries no suppression/debug text (AC-E2).
-		local ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil
-		if type(ts) == "table" then
-			summary = summary .. "\n--- toast ---"
-					.. "\nenabled: " .. tostring(ts.enabled)
-					.. " | shown: " .. tostring(ts.shown)
-					.. " | queued: " .. tostring(ts.queue)
-					.. " | told this session: " .. tostring(ts.told)
-					.. " | cap-dropped: " .. tostring(ts.dropped)
-					-- t_cf2ad83c (U3): the behaviour this card added, so a human
-					-- asking for diagnostics can see the hold and the hover pause.
-					.. "\nhovered: " .. tostring(ts.hovered)
-					.. " | lifetime left: " .. tostring(ts.lifetimeLeft)
-					.. " | held for combat: " .. tostring(ts.held)
-					.. " | deferred: " .. tostring(ts.deferred)
-		end
 		-- t_c3fe7d1d: the quest-reward surface's own state, same reasoning as the
 		-- toast block above — the reward arrows' behaviour belongs in the diag
 		-- path (a human asking), never as on-screen debug text.
@@ -6079,6 +6246,8 @@ local function dispatch(msg)
 		ok, out = cmdProbe()
 	elseif subword == "toast" then
 		ok, out = cmdToast(trimmed)
+	elseif subword == "toasts" or subword == "testtoast" then
+		ok, out = cmdTestToast()
 	elseif subword == "tooltip" then
 		ok, out = cmdTooltip(trimmed)
 	elseif subword == "detail" then
