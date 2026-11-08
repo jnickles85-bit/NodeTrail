@@ -309,9 +309,19 @@ function T:Diag()
       say(("panel: font=%s applied=%s backdrop=%s"):format(
         tostring(d.font or "absent"), d.fontApplied and "yes" or "no",
         tostring(d.backdrop or "?")))
-      if type(d.width) == "number" and type(d.widest) == "number" then
-        say(("panel: covers its widest line=%s (%s vs %s)"):format(
-          d.width >= d.widest and "yes" or "NO", px(d.width), px(d.widest)))
+      if type(d.width) == "number" and type(d.needWidth) == "number" then
+        -- The verdict compares the panel against an INDEPENDENT measurement
+        -- (the meter, at the adopted font), not against the GetStringWidth that
+        -- produced the width. Both figures are printed so a mismatch is visible.
+        local how
+        if type(d.widestMeasured) == "number" then
+          how = ("text %s + padding %s = %s, measured independently with %s"):format(
+            px(d.widestMeasured), px(2 * (d.padX or 0)), px(d.needWidth), tostring(d.font or "?"))
+        else
+          how = ("no independent measurement on this client; rows report %s"):format(px(d.widest))
+        end
+        say(("panel: covers its widest line=%s (panel %s vs %s; drawn rows report %s)"):format(
+          d.covers and "yes" or "NO", px(d.width), how, px(d.widest)))
       end
     end
   else

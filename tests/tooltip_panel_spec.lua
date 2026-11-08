@@ -119,6 +119,29 @@ check(anchoredRows >= 1 and anchoredRows == #P:TextLines(),
   ("T2: every row's left column is anchored (got %d of %d)"):format(anchoredRows, #P:TextLines()))
 check(rightRows >= 1, "T2: the percentage column is anchored to the panel's right edge")
 
+-- ── T2b: the font the panel MEASURES with is the font it DRAWS with ───────
+-- A font string created with no font object reports no width and no height on
+-- the client, so a panel that creates its rows after adopting the tooltip font
+-- sizes itself from zeros on the very first hover and the text then grows
+-- outside its own background. Every row must carry a font in the very update
+-- that set P.width, and the width must cover an INDEPENDENT measurement.
+local fontless = 0
+for _, row in ipairs(P._pool) do
+  for _, fs in ipairs({ row.left, row.right }) do
+    if type(fs) == "table" then
+      local okF, path, size = pcall(fs.GetFont, fs)
+      if not okF or type(path) ~= "string" or type(size) ~= "number" then
+        fontless = fontless + 1
+      end
+    end
+  end
+end
+check(fontless == 0, "T2b: every row carries a font in the update that sized the panel (got "
+  .. fontless .. " fontless)")
+check(type(P.widestMeasured) == "number",
+  "T2b: the panel records an independent (meter) measurement for /nt ttdiag")
+check(P.covers == true, "T2b: the panel reports that it covers its widest line")
+
 -- ── T3: no room underneath -> the panel goes ABOVE the tooltip ────────────
 local lowTip = F.newTooltip({ lines = { "Peacebloom", "Herbalism" }, owner = UIParent,
   left = 100, bottom = 20, width = 180, height = 60 })
@@ -165,6 +188,10 @@ for i = 1, 6 do
   if P.width < w then worstWidth = P.width end
   worstGap = math.max(worstGap, w - P.width)
   check(P.width >= w - 0.01, ("T5: hover %d width %.1f >= widest %.1f"):format(i, P.width, w))
+  check(type(P.widestMeasured) == "number"
+    and P.width + 0.01 >= P.widestMeasured + 2 * P.PAD_X,
+    ("T5: hover %d panel %.1f covers the independent measurement %.1f + padding"):format(
+      i, P.width, P.widestMeasured or -1))
 end
 check(P.frame == frameBefore, "T5: six hovers reuse the one panel frame (no second frame was created)")
 check(#P.frame.textures == 5 and #P.frame.fontStrings >= 2,

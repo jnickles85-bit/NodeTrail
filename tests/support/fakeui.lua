@@ -20,25 +20,49 @@ F.lineHeight = 1.35
 F.defaultFontSize = 12
 F.defaultScale = 1
 
-local function newFontString(size)
+-- A font string is only MEASURABLE once it has a font, exactly like the client:
+-- `CreateFontString(nil, "ARTWORK")` with no template and no SetFont reports no
+-- width and no height. `CreateFontString(nil, "ARTWORK", "GameFontNormal")` is
+-- born with that font object. This is what makes a panel that lays rows out
+-- before adopting the tooltip's font fail a spec instead of failing in game.
+local function newFontString(font)
   local fs = {
     kind = "fontstring",
     text = "",
-    size = size or F.defaultFontSize,
+    fontPath = nil,
+    size = nil,
+    fontFlags = nil,
     shown = true,
     justify = "LEFT",
     points = {},
   }
+  if type(font) == "table" and type(font.path) == "string" then
+    fs.fontPath, fs.size, fs.fontFlags =
+      font.path, font.size or F.defaultFontSize, font.flags
+  end
   function fs:SetText(t) self.text = tostring(t or "") end
   function fs:GetText() return self.text end
   function fs:SetFont(path, sz, flags)
     self.fontPath, self.fontFlags = path, flags
     if type(sz) == "number" then self.size = sz end
   end
-  function fs:GetFont() return self.fontPath or "Fonts\\FRIZQT__.TTF", self.size, self.fontFlags or "" end
-  function fs:SetFontObject() return end
-  function fs:GetStringWidth() return #self.text * self.size * F.charWidth end
-  function fs:GetHeight() return self.size * F.lineHeight end
+  function fs:GetFont()
+    if not self.fontPath then return nil end
+    return self.fontPath, self.size, self.fontFlags or ""
+  end
+  function fs:SetFontObject(obj)
+    if type(obj) == "table" and type(obj.size) == "number" then
+      self.fontPath, self.size = obj.path or "FontObject", obj.size
+    end
+  end
+  function fs:GetStringWidth()
+    if not self.fontPath or type(self.size) ~= "number" then return 0 end
+    return #self.text * self.size * F.charWidth
+  end
+  function fs:GetHeight()
+    if not self.fontPath or type(self.size) ~= "number" then return 0 end
+    return self.size * F.lineHeight
+  end
   function fs:SetJustifyH(j) self.justify = j end
   function fs:SetPoint(p, rel, rp, x, y)
     self.points = { { point = p, relativeTo = rel, relativePoint = rp, x = x or 0, y = y or 0 } }
@@ -134,8 +158,17 @@ function F.newFrame(name, parent, sizeW, sizeH)
     self.textures[#self.textures + 1] = t
     return t
   end
-  function f:CreateFontString(_, layer)
-    local fs = newFontString()
+  function f:CreateFontString(_, layer, template)
+    local fs
+    if type(template) == "string" and template ~= "" then
+      -- A named font object: the string is born with that font, so it reports a
+      -- width immediately.
+      fs = newFontString({ path = "Fonts\\FRIZQT__.TTF", size = F.defaultFontSize, flags = "" })
+      fs.fontObject = template
+    else
+      -- No template, no font: 0 width / 0 height until SetFont, like the client.
+      fs = newFontString()
+    end
     fs.layer = layer
     self.fontStrings[#self.fontStrings + 1] = fs
     return fs
@@ -217,9 +250,9 @@ function F.newTooltip(opts)
   -- The client's first line, as a font string the addon may only read.
   function gt:SyncFirstLine()
     if self.lines[1] == nil then return nil end
-    local fs = newFontString(self.lineFont.size)
+    local fs = newFontString({ path = self.lineFont.path, size = self.lineFont.size,
+      flags = self.lineFont.flags })
     fs:SetText(self.lines[1])
-    fs.fontPath, fs.fontFlags = self.lineFont.path, self.lineFont.flags
     _G["GameTooltipTextLeft1"] = fs
     return fs
   end

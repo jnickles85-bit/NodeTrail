@@ -149,11 +149,27 @@ On top of that branch:
   `: `, a percentage never split from its item name), and positioned READ-ONLY from the tooltip's
   rect: left edge on the tooltip's left, top edge just under `GetBottom()`, flipped above the
   tooltip when there is no room, clamped into the screen. Rows are rebuilt from scratch on every
-  update, so a repeated hover cannot duplicate the block. Visibility comes from the existing poll
-  clock only — no `HookScript`, no replaced method, no `Show()` on the tooltip. `/nt ttdiag` prints
-  `panel: SHOWN … rect …`, the width budget, the widest of our lines, whether the width covers it,
-  the adopted font and the backdrop measurement. **Not yet run in game**: the six-hover check and
-  its `ttdiag` numbers are the next live step.
+  update, so a repeated hover cannot duplicate the block.
+  **The font rule (review round 1, the defect this file had):** a font string created with no font
+  object reports no width and no height on this client, and the first update used to adopt the
+  tooltip's font *before* the rows existed — so hover 1 sized the panel from two fontless rows
+  (72.0 px against the 150.6 px the text needs) and the text then grew outside its own background;
+  a row added while the panel was already up had the same hole. Rows are now born with
+  `CreateFontString(nil, "ARTWORK", "GameFontNormal")` **and** with the tooltip's font applied at
+  creation (`_ApplyFont`), `Update` re-adopts after layout, and only then measures: the font it
+  sizes with is the font it draws with, in the same update.
+  **ttdiag's coverage verdict is independent:** `covers its widest line=` compares the panel's width
+  against a second measurement taken from the private meter font string at the adopted font (and
+  prints that figure, its padding and the drawn-row figure), instead of re-checking the same
+  `GetStringWidth` that produced the width.
+  Visibility comes from the existing poll clock only — no `HookScript`, no replaced method, no
+  `Show()` on the tooltip. `/nt ttdiag` prints `panel: SHOWN … rect …`, the width budget, the widest
+  of our lines, whether the width covers it, the adopted font and the backdrop measurement.
+  **Not yet run in game**: the six-hover check and its `ttdiag` numbers are the next live step.
+  *Grep scope:* zero `GameTooltip.<field> =` assignments anywhere in the pack and **no** tooltip
+  write in `Modules/NodeTrail`; the one `GameTooltip:HookScript` left in the tree is Touchstone's
+  read-only `OnTooltipSetItem` fallback (`Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua:1388`),
+  outside this addon's NodeTrail path and kept on purpose.
 - **Tooltip flicker instrumentation + fix** (t_c0a68ed2): `Refresh` takes a `source`
   (`show`/`setunit`/`setitem`/`poll`) and keeps a ring of the last **8** evaluations — hovered name,
   NumLines before/after, whether `blockIntact` matched, whether the block was appended, whether
@@ -298,7 +314,10 @@ Run from repo root with lua5.1:
   and a scale change always leave the width >= the widest line; a long line wraps at `, ` under the
   45% cap while "100% (base)" stays whole; a scaled UI does not double the panel's scale; an
   unreadable tooltip rect builds the block but never places it blind; nothing is written to the
-  tooltip. RED on the installed build, where the first `Refresh` calls `GameTooltip:AddDoubleLine`)
+  tooltip. T2b pins review round 1's defect: every row carries a font in the very update that set the
+  width, and the width covers an INDEPENDENT meter measurement. RED at `007b919` with `T2: panel width
+  72.0 >= widest line 150.6` and `T2b: … (got 4 fontless)` — the first hover sized the panel from
+  zero-width rows. RED on the installed build too, where `UI/TooltipPanel.lua` does not exist)
 - `tests/tooltip_no_gametooltip_writes_spec.lua` (t_f4ff9ea6: the grep gate — no field is assigned on
   GameTooltip anywhere in the addon, exactly one `GameTooltip:HookScript` exists in the whole tree and
   it is Touchstone's read-only `OnTooltipSetItem` fallback, zero tooltip method calls in
@@ -308,7 +327,8 @@ Run from repo root with lua5.1:
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
 - `tests/mapdraw_primitive_spec.lua` (t_a08cb3e0: the LIVE client shape — a `CreateLine` region whose `SetStartPoint`/`SetEndPoint` return and whose getters keep reading `TOPLEFT(0.0,absent)` at `size=0x0`, and a texture with no `SetWidth`/`SetHeight`/`SetRotation`. Pins: the line primitive is refused by measurement and the overlay falls back to `mode="dots"`; the dots are two-corner-anchored 2.5px quads every 3px that cover the segment end to end and reach both endpoints; the diag prints `primitive:` with both proofs, `anchor probe … two corner anchors -> 64x8 points=2`, and the held object's `object=`/`numpoints=`/`points=`/`methods=`; `verdict: PRIMITIVE` names the dropped endpoints instead of blaming a zero size; `mapdiag probe` draws the marker/border/diagonal with printed coordinates and is off by default; `mapdiag primitive <auto|line|dots|rotate>` reports the mode the measurement chose, not the one requested; and a client whose line region DOES keep its endpoints still uses `mode="line"`. Also unit-tests the pure `DotPlan`/`PlanDots` (coverage, both endpoints, the 1200-object cap, size/spacing scaled together). RED on `c220ec7` with 40 FAILs)
-All twenty-nine spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_f4ff9ea6` HEAD.
+All spec files and `tests/draw_smoke.lua` pass with lua5.1 at `t_f4ff9ea6` HEAD
+(the panel fix in review round 1 leaves the whole suite green).
 On `c220ec7` the four specs this card touched are RED with **51 FAILs**
 (`mapdraw_primitive_spec` 40, `diag_truthful_spec` 6, `draw_smoke` 3, `minimap_diag_spec` 2);
 the other 23 stay green.

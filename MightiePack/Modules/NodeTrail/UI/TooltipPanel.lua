@@ -252,8 +252,9 @@ function P:_Ensure()
     or "absent (plain textures)"
   -- The measuring font string. It carries the tooltip's font so a width read
   -- from it is comparable to the client's own text, and it is NEVER written
-  -- into a frame Blizzard owns.
-  local meter = call(f, "CreateFontString", nil, "ARTWORK")
+  -- into a frame Blizzard owns. Born with a template so it is measurable on the
+  -- very first update, before AdoptFont has run (see the font rule below).
+  local meter = call(f, "CreateFontString", nil, "ARTWORK", "GameFontNormal")
   if type(meter) == "table" then
     works(meter, "Hide")
     self.meter = meter
@@ -261,6 +262,33 @@ function P:_Ensure()
   self._pool = {}
   self._hasRows = true
   return f
+end
+
+-- The font rule, and the defect this file used to have (t_f4ff9ea6 review 1):
+-- a font string created with no font object reports NO width and NO height on
+-- the client until SetFont runs. _Row used to create its strings bare, and the
+-- update that sized the panel ran AdoptFont BEFORE those strings existed — so
+-- the first update measured two fontless rows (0 px) and sized the panel from
+-- what was left, then the next 0.2 s tick adopted the font and the text grew
+-- outside the background we had just sized. Rows are therefore born with a
+-- font object AND with the tooltip's font applied at creation from `_font`;
+-- Update re-adopts after layout and measures only then. The font we measure
+-- with is the font we draw with, in the same update.
+function P:_ApplyFont(fs)
+  if type(fs) ~= "table" then
+    return false
+  end
+  local spec = self._font
+  if type(spec) ~= "table" then
+    return false
+  end
+  if type(spec.fontObject) == "table" then
+    return works(fs, "SetFontObject", spec.fontObject)
+  end
+  if type(spec.path) ~= "string" then
+    return false
+  end
+  return works(fs, "SetFont", spec.path, spec.size, spec.flags)
 end
 
 function P:_Row(i)
@@ -273,14 +301,19 @@ function P:_Row(i)
   if type(frame) ~= "table" then
     return nil
   end
-  local left = call(frame, "CreateFontString", nil, "ARTWORK")
+  -- Born WITH a font object: never fontless, never unmeasurable.
+  local left = call(frame, "CreateFontString", nil, "ARTWORK", "GameFontNormal")
   if type(left) ~= "table" then
     return nil
   end
-  row = { left = left, right = call(frame, "CreateFontString", nil, "ARTWORK") }
+  row = { left = left, right = call(frame, "CreateFontString", nil, "ARTWORK", "GameFontNormal") }
   pool[i] = row
+  -- ...and with the tooltip's own font the moment the row exists, so the
+  -- measurement in this very update is taken at the size the text is drawn at.
+  self:_ApplyFont(row.left)
   if type(row.right) == "table" then
     call(row.right, "SetJustifyH", "RIGHT")
+    self:_ApplyFont(row.right)
   end
   return row
 end
@@ -314,6 +347,10 @@ function P:AdoptFont(tooltip)
   end
   local applied = false
   if path then
+    -- Remembered so _Row can apply it at CREATION: a row created later in the
+    -- same update (or in a later one) must be born at the drawn font, never at
+    -- the client's default and never fontless.
+    self._font = { path = path, size = size, flags = flags }
     for _, fs in ipairs(targets) do
       if type(fs) == "table" and works(fs, "SetFont", path, size, flags) then
         applied = true
@@ -332,12 +369,13 @@ function P:AdoptFont(tooltip)
         end
         path = "fontobject:" .. tostring(call(obj, "GetName") or "?")
         size = nil
+        self._font = { fontObject = obj, path = nil }
       end
     end
   end
   self._fontSig = tostring(path or "client default")
     .. (size and (" " .. tostring(size)) or "")
-    .. (flags and (" " .. tostring(flags)) or "")
+    .. (type(flags) == "string" and flags ~= "" and (" " .. flags) or "")
   self._fontApplied = applied
   return self._fontSig, applied
 end
@@ -541,14 +579,14 @@ function P:Update(lines, tooltip)
 
   local budgetScreen = sw * P.CAP_FRACTION
   local cap = budgetScreen / scale
+  -- Adopt BEFORE wrapping: the meter must measure at the tooltip's font, or the
+  -- wrap budget is computed in the wrong units.
   local fontSig = self:AdoptFont(tooltip)
 
   local rows = self:Wrap(lines, cap, measure)
 
-  -- Lay the rows out: text first (so a width read is the width drawn), then
-  -- the panel's own size from the widest of OUR rows plus the padding.
-  local widest, widestText = 0, nil
-  local lineH = 0
+  -- 1) Create/clear/clear-and-set the text of every row first. _Row applies the
+  --    adopted font at creation, so no row is ever measured fontless.
   local pool = self._pool
   for i = 1, #pool do
     call(pool[i].left, "SetText", "")
@@ -575,6 +613,16 @@ function P:Update(lines, tooltip)
         call(slot.right, "Hide")
       end
     end
+  end
+  -- 2) Re-adopt now that every row exists, THEN measure. This is the ordering
+  --    that matters: the font used to size the panel is the font it draws with.
+  fontSig = self:AdoptFont(tooltip)
+
+  -- 3) Measure the drawn rows.
+  local widest, widestText = 0, nil
+  local lineH = 0
+  for i, row in ipairs(rows) do
+    local slot = pool[i]
     local lw = num(slot.left, "GetStringWidth") or 0
     local rw = row.right and (num(slot.right, "GetStringWidth") or 0) or 0
     local w = lw + (row.right and (P.COL_GAP + rw) or 0)
@@ -599,6 +647,30 @@ function P:Update(lines, tooltip)
     lineH = 14
   end
 
+  -- 4) An INDEPENDENT measurement, from the meter at the adopted font. The
+  --    drawn width above and this one come from different widgets, so when the
+  --    panel's width is compared against this figure the /nt ttdiag verdict can
+  --    actually be wrong — it is not the same call checking itself.
+  local widestMeasured, widestMeasuredText
+  local remeasure = self:_Measure()
+  if remeasure then
+    widestMeasured = 0
+    for _, row in ipairs(rows) do
+      local lw = remeasure(row.left) or 0
+      local rw = (row.right and remeasure(row.right)) or 0
+      local w = lw + (row.right and (P.COL_GAP + rw) or 0)
+      if w > widestMeasured then
+        widestMeasured = w
+        widestMeasuredText = row.left .. (row.right and (" | " .. row.right) or "")
+      end
+    end
+  end
+  local needWidth = widest
+  if type(widestMeasured) == "number" and widestMeasured > needWidth then
+    needWidth = widestMeasured
+  end
+  needWidth = needWidth + 2 * P.PAD_X
+
   -- Place the rows. A font string with no anchor does not sit where it was
   -- "meant" to go on this client — it lands at the frame's centre and the block
   -- becomes an unreadable pile — so every row is anchored explicitly: the left
@@ -615,7 +687,7 @@ function P:Update(lines, tooltip)
     end
   end
 
-  local width = math.max(P.MIN_WIDTH, widest + 2 * P.PAD_X)
+  local width = math.max(P.MIN_WIDTH, needWidth)
   local height = 2 * P.PAD_Y + #rows * lineH + math.max(0, #rows - 1) * P.LINE_GAP
   if not works(frame, "SetSize", width, height) then
     call(frame, "SetWidth", width)
@@ -624,10 +696,23 @@ function P:Update(lines, tooltip)
   self.width, self.height = width, height
   self.rows = rows
   self.widest, self.widestText = widest, widestText
+  self.widestMeasured, self.widestMeasuredText = widestMeasured, widestMeasuredText
+  self.needWidth = needWidth
+  self.covers = width + 0.01 >= widest + 2 * P.PAD_X
+    and (type(widestMeasured) ~= "number" or width + 0.01 >= widestMeasured + 2 * P.PAD_X)
+  if #rows > 0 and widest <= 0 then
+    -- Text was set and measures nothing: on this client the rows have no font,
+    -- and a panel sized from zeros is precisely the failure this card is about.
+    -- Say NO rather than declare a coverage that was never measured.
+    self.covers = false
+  end
+  self.meterUsed = remeasure ~= nil
   self.capScreen = budgetScreen
   self.fontSig = fontSig
   info.rows, info.width, info.height = #rows, width, height
   info.widest, info.widestText = widest, widestText
+  info.widestMeasured, info.widestMeasuredText = widestMeasured, widestMeasuredText
+  info.needWidth, info.covers = needWidth, self.covers
   info.cap = cap
   info.font = fontSig
 
@@ -710,6 +795,12 @@ function P:Diag()
     rows = type(self.rows) == "table" and #self.rows or 0,
     widest = self.widest,
     widestText = self.widestText,
+    widestMeasured = self.widestMeasured,
+    widestMeasuredText = self.widestMeasuredText,
+    needWidth = self.needWidth,
+    covers = self.covers,
+    meterUsed = self.meterUsed,
+    padX = P.PAD_X,
     width = self.width,
     height = self.height,
     cap = self.capScreen,
