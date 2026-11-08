@@ -78,6 +78,64 @@ function H.GetNode(name)
   return H.NODES[name]
 end
 
+-- ── item labels (t_04c983cc) ────────────────────────────────────────────────
+-- Mightie's panel showed `item 249399  4%` — a drop row that printed the bare
+-- id where a name belongs. The id was real; the LABEL was the bug. Resolution
+-- order:
+--   1. our own table (the 29 herb ids — offline, always right for herbs),
+--   2. GetItemInfo(id), the client's own answer,
+--   3. `unknown item <id>` — an honest label that also keeps the row
+--      identifiable in a report. Never a bare number passing as a name.
+-- The state is recorded for /nt ttdiag (NameProbeLines below): "answered" vs
+-- "answered nothing" is the question the operator needs answered.
+local function isSecret(v)
+  if type(issecretvalue) ~= "function" then
+    return false
+  end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+H._diag = H._diag or {}
+
+-- Ask the client what item id N is called. Returns name, why — `why` always
+-- says which answer this was, so a nil name is never mistaken for a name.
+function H.ClientItemName(id)
+  if type(GetItemInfo) ~= "function" then
+    return nil, "GetItemInfo is not a function on this client"
+  end
+  local ok, n = pcall(GetItemInfo, id)
+  if not ok then
+    return nil, "GetItemInfo raised"
+  end
+  if isSecret(n) then
+    return nil, "GetItemInfo answered a secret string"
+  end
+  if type(n) ~= "string" or n == "" then
+    return nil, "GetItemInfo answered nothing"
+  end
+  return n, nil
+end
+
+function H.ItemLabel(idOrRow)
+  local id = idOrRow
+  if type(idOrRow) == "table" then
+    id = idOrRow.id
+  end
+  id = tonumber(id)
+  if id ~= nil and H.ITEM_NAMES[id] then
+    return H.ITEM_NAMES[id]
+  end
+  if id ~= nil then
+    local name = H.ClientItemName(id)
+    if name then
+      return name
+    end
+    return "unknown item " .. tostring(id)
+  end
+  return "unknown item"
+end
+
 H.PERSONAL_MIN = 10
 
 function H.GetPersonalStats(primaryItem)
@@ -151,3 +209,68 @@ function H.GetDropLines(name)
   end)
   return list, gathers
 end
+
+-- ── id -> name evidence (t_04c983cc) ────────────────────────────────────────
+-- Every drop id the panel can print that OUR table does not name, resolved the
+-- way the panel resolves it: `item id: 249399 -> GetItemInfo answered nothing ·
+-- shown as "unknown item 249399"`. A player reporting "this row says unknown
+-- item" and an operator reading /nt ttdiag are then looking at the same ids.
+-- Ids come from the researched drop tables AND from this account's recorded
+-- gathers (a herb drops rare mats we never listed). Output is sorted by id, so
+-- the same store always prints the same lines.
+local function unresolvedDropIDs()
+  local seen, order = {}, {}
+  local function add(id)
+    id = tonumber(id)
+    if id ~= nil and H.ITEM_NAMES[id] == nil and not seen[id] then
+      seen[id] = true
+      order[#order + 1] = id
+    end
+  end
+  for _, node in pairs(H.NODES) do
+    if type(node.drops) == "table" then
+      for id in pairs(node.drops) do
+        add(id)
+      end
+    end
+  end
+  local db = ns.GetHerbDB()
+  if type(db) == "table" and type(db.maps) == "table" then
+    for _, mapData in pairs(db.maps) do
+      if type(mapData) == "table" then
+        for _, rec in ipairs(mapData) do
+          if type(rec) == "table" and type(rec.items) == "table" then
+            for _, it in ipairs(rec.items) do
+              if type(it) == "table" then
+                add(it.id)
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(order)
+  return order
+end
+
+function H.NameProbeLines()
+  local ids = unresolvedDropIDs()
+  local out = {}
+  if #ids == 0 then
+    out[1] = "item names: every drop id we can print is named by our own table or the client"
+    return out
+  end
+  out[1] = ("item names: %d drop id(s) are not in our herb table"):format(#ids)
+  for _, id in ipairs(ids) do
+    local name, why = H.ClientItemName(id)
+    if name then
+      out[#out + 1] = ('item id: %d -> "%s" (GetItemInfo) · the panel uses that name'):format(id, name)
+    else
+      out[#out + 1] = ('item id: %d -> %s · the panel prints "unknown item %d"'):format(id, why, id)
+    end
+  end
+  return out
+end
+
+return H

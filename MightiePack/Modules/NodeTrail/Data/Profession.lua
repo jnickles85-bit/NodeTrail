@@ -139,6 +139,15 @@ local function contextOf(kind)
       spell = Pr.SKIN_SPELL_ID, label = Pr.SKIN_LABEL,
     }
   end
+  if kind == "alchemy" then
+    -- t_04c983cc: the recipe scan needs the character's Alchemy RANK (to compare
+    -- a recipe's requiredSkill against), not the yes/no the tooltip gates ask
+    -- for. Same skill-line tier, same name matching, one more context.
+    return {
+      id = "alchemy", names = { "alchemy" },
+      spell = 2259, label = "Alchemy",
+    }
+  end
   return {
     id = "herbalism", names = Pr.NAMES,
     spell = Pr.SPELL_ID, label = Pr.LABEL,
@@ -274,6 +283,48 @@ function Pr:FromSkillLines(ctx)
     return true, detail .. ("; %s rank %d"):format(label, foundRank)
   end
   return false, detail .. "; " .. label .. " line present at rank 0"
+end
+
+-- ── the current RANK of a profession (t_04c983cc) ─────────────────────────
+-- FromSkillLines answers "does this character have the skill". The alchemy
+-- recipe scan needs one more number: the skill rank, to compare a recipe's
+-- requiredSkill against. It is read from the SAME tier-1 calls, with the same
+-- measured row shapes (the returned TYPES decide where the rank sits), so a
+-- client whose rank cannot be read answers nil rather than a guessed number.
+function Pr:Rank(kind)
+  local ctx = contextOf(kind)
+  if type(GetNumSkillLines) ~= "function" then
+    return nil, "GetNumSkillLines absent"
+  end
+  if type(GetSkillLineInfo) ~= "function" then
+    return nil, "GetSkillLineInfo absent"
+  end
+  local okN, n = pcall(GetNumSkillLines)
+  if not okN then
+    return nil, "GetNumSkillLines raised: " .. tostring(n)
+  end
+  if type(n) ~= "number" or n <= 0 then
+    return nil, "GetNumSkillLines returned " .. tostring(n)
+  end
+  local names = wantNames(ctx)
+  for i = 1, n do
+    local ok, a, b, c, d = pcall(GetSkillLineInfo, i)
+    if ok and type(a) == "string" and a ~= "" and not isSecret(a) then
+      local rank
+      if type(b) == "boolean" then
+        rank = d -- documented shape: name, isHeader, isExpanded, skillRank
+      elseif type(b) == "number" then
+        rank = b -- short shape: name, skillRank
+      end
+      if isSkillName(a, names) then
+        if type(rank) == "number" then
+          return rank, ("%s rank %d (GetSkillLineInfo)"):format(ctx.label, rank)
+        end
+        return nil, ctx.label .. " line present but its rank was unreadable"
+      end
+    end
+  end
+  return nil, ("no %s line in %d skill line(s)"):format(ctx.label, n)
 end
 
 -- ── tier 2: the seven profession slots ────────────────────────────────────

@@ -414,14 +414,71 @@ local function collectModernIDs(mod, errbox)
   return nil, nil
 end
 
+-- ── Can this character make it RIGHT NOW? (t_04c983cc) ───────────────────
+-- Mightie: "alchemy tooltip is giving info for crafts i cant do yet." The scan
+-- used to keep only the recipe NAME, so every recipe the client enumerated was
+-- advertised on every herb as if it were available. Availability is therefore
+-- part of the recipe record now, captured ONCE here and never recomputed
+-- elsewhere (one source of truth for recipe state):
+--
+--   * numAvailable  — the client's own count of how many times the recipe can
+--     be made with what is in the bags. A number; 0 means not right now.
+--   * requiredSkill — when the client carries no numAvailable, compare the
+--     recipe's required skill against the character's CURRENT Alchemy rank
+--     (Data/Profession.lua, the same skill-line tier the tooltip gates use).
+--   * neither field — the client cannot say. Answer nil and let the caller
+--     record that, so the panel labels the list instead of pretending.
+--
+-- `how` always says WHICH answer this was, so the diag never mistakes an
+-- unreadable client for a client that said "no".
+local function alchemyRank(box)
+  if box.rank == nil and box.why == nil then
+    local P = ns.Profession
+    if type(P) == "table" and type(P.Rank) == "function" then
+      local ok, rank, why = pcall(P.Rank, P, "alchemy")
+      if ok and type(rank) == "number" then
+        box.rank = rank
+      else
+        box.why = tostring(why or rank)
+      end
+    else
+      box.why = "Data/Profession.lua is not loaded, so the Alchemy rank cannot be read"
+    end
+  end
+  return box.rank, box.why
+end
+
+local function availabilityFrom(info, rankbox)
+  if type(info) ~= "table" then
+    return nil, nil
+  end
+  local n = info.numAvailable
+  if type(n) == "number" then
+    return n > 0, "numAvailable"
+  end
+  local req = info.requiredSkill
+  if type(req) == "number" then
+    local rank, why = alchemyRank(rankbox)
+    if type(rank) == "number" then
+      return rank >= req, "requiredSkill"
+    end
+    return nil, "requiredSkill (the character's Alchemy rank could not be read: "
+      .. tostring(why) .. ")"
+  end
+  return nil, nil
+end
+
 -- One recipe: name + reagent IDs, from whichever call answers.
 -- `GetRecipeInfo` may answer as a table or as (name, reagents); a
 -- `GetRecipeSchematic` table fills any missing half. Skips cleanly when
 -- neither names the recipe.
-local function modernRecipe(mod, id, errbox)
+-- Returns name, reagents, craftable (true/false/nil), availHow (nil when the
+-- client exposed no availability field).
+local function modernRecipe(mod, id, errbox, rankbox)
   local name
   local reagents
   local info
+  local craftable, availHow
   local f = mod.GetRecipeInfo
   if type(f) == "function" then
     local ok, a, b = pcall(f, id)
@@ -441,6 +498,7 @@ local function modernRecipe(mod, id, errbox)
     if reagents == nil then
       reagents = reagentsFrom(info)
     end
+    craftable, availHow = availabilityFrom(info, rankbox)
   end
   if (name == nil or reagents == nil) and type(mod.GetRecipeSchematic) == "function" then
     -- LIVE CONTRACT (Forever 16001, t_81da8886):
@@ -461,9 +519,9 @@ local function modernRecipe(mod, id, errbox)
     end
   end
   if name == nil then
-    return nil, nil
+    return nil, nil, craftable, availHow
   end
-  return name, reagents or {}
+  return name, reagents or {}, craftable, availHow
 end
 
 function Rc:ScanModern()
@@ -519,10 +577,31 @@ function Rc:ScanModern()
   local newMap = {}
   local recipesRead = 0
   local reagentSlots = 0
+  -- Availability, captured per recipe as it is read (t_04c983cc). Keyed by
+  -- recipe name — the same name the reagent map stores — so a herb's list can
+  -- be filtered without any second availability calculation anywhere.
+  local craft = {}
+  local canMake, cannotMake, unverified = 0, 0, 0
+  local availHow = nil
+  local rankbox = {}
   for _, id in ipairs(ids) do
-    local rname, reagents = modernRecipe(mod, id, errbox)
+    local rname, reagents, craftable, how = modernRecipe(mod, id, errbox, rankbox)
     if rname ~= nil then
       recipesRead = recipesRead + 1
+      if craftable == true then
+        craft[rname] = true
+        canMake = canMake + 1
+      elseif craftable == false then
+        craft[rname] = false
+        cannotMake = cannotMake + 1
+      else
+        unverified = unverified + 1
+      end
+      if how == "numAvailable" then
+        availHow = "numAvailable"
+      elseif how ~= nil and availHow == nil then
+        availHow = how
+      end
       for _, rid in ipairs(reagents) do
         reagentSlots = reagentSlots + 1
         newMap[rid] = newMap[rid] or {}
@@ -563,6 +642,15 @@ function Rc:ScanModern()
   end
   local db = ns.GetRecipeDB()
   db.alchemy = finalMap
+  -- The gate is persisted WITH the recipe state and rebuilt on every scan, so a
+  -- character who levels up (or learns a recipe) stops seeing yesterday's list
+  -- the next time Alchemy is opened — no restart needed (t_04c983cc).
+  --   alchemyCraft        name -> true|false, captured above
+  --   alchemyFilterable   true when the client answered for at least one recipe
+  --   alchemyAvailability which field answered ("numAvailable"/"requiredSkill"/"none")
+  db.alchemyCraft = craft
+  db.alchemyFilterable = (canMake + cannotMake) > 0
+  db.alchemyAvailability = availHow or "none"
   NodeTrailDB.recipes.alchemyScanned = time()
   Rc._diag = {
     path = "modern",
@@ -571,6 +659,10 @@ function Rc:ScanModern()
     recipeCount = #ids,
     recipesRead = recipesRead,
     reagentSlots = reagentSlots,
+    availability = db.alchemyAvailability,
+    craftable = canMake,
+    excluded = cannotMake,
+    unverified = unverified,
     error = errbox.err,
   }
   return true
@@ -696,12 +788,21 @@ local function scanLegacy()
   end
   local db = ns.GetRecipeDB()
   db.alchemy = finalMap
+  -- The legacy trade-skill API carries no availability field at all (its
+  -- GetTradeSkillInfo answers name + difficulty only), so this path cannot
+  -- gate. It CLEARS the gate rather than leaving a modern scan's stale verdict
+  -- in place, and records "none" so the panel labels the list honestly
+  -- (t_04c983cc).
+  db.alchemyCraft = nil
+  db.alchemyFilterable = false
+  db.alchemyAvailability = "none"
   NodeTrailDB.recipes.alchemyScanned = time()
   Rc._diag = {
     path = "legacy",
     profession = Rc:AlchName(),
     recipeCount = nSkills,
     recipesRead = recipesRead,
+    availability = "none",
     error = errbox.err,
   }
   return true
@@ -758,9 +859,49 @@ function Rc:Scan()
   return r
 end
 
+--- The raw persisted list for a reagent (the scan's own output, sorted).
+--- The panel-facing view is Rc:Uses below: it is the ONE place the stored
+--- availability is turned into "what may be listed now".
 function Rc:GetUses(itemID)
   local db = ns.GetRecipeDB()
   return db.alchemy[itemID]
+end
+
+--- What the tooltip may say about one reagent (t_04c983cc).
+--- Filtering ONLY: the availability was captured by the scan above, so nothing
+--- here asks the client anything or recomputes a skill comparison.
+--- Returns nil when the item has no recorded use, else:
+---   names      the recipes as scanned (sorted)
+---   craftable  the names this character can make right now — the only ones
+---              the panel may list — or `names` itself when the client could
+---              not be filtered (see `filtered`)
+---   excluded   how many scanned recipes are NOT craftable now
+---   filtered   true when the client answered availability at all. false means
+---              "nobody can say", and the panel must label the list instead of
+---              pretending it is gated.
+function Rc:Uses(itemID)
+  local db = ns.GetRecipeDB()
+  local names = db.alchemy[itemID]
+  if type(names) ~= "table" or #names == 0 then
+    return nil
+  end
+  local craft = db.alchemyCraft
+  local out = { names = names, craftable = names, excluded = 0, filtered = false }
+  if db.alchemyFilterable == true and type(craft) == "table" then
+    out.filtered = true
+    out.craftable = {}
+    for _, nm in ipairs(names) do
+      if craft[nm] == true then
+        table.insert(out.craftable, nm)
+      else
+        -- Not craftable now, OR the client gave no availability for this one.
+        -- Either way the panel must not advertise it; the count is what keeps
+        -- that from being a silent drop.
+        out.excluded = out.excluded + 1
+      end
+    end
+  end
+  return out
 end
 
 -- ── Shared truth for the options panel and /nt scanrecipes ────────
@@ -1016,6 +1157,28 @@ function Rc:Diag()
       tostring(d.error or "nil")))
   else
     say("last scan: none (no scan has run since the addon loaded)")
+  end
+  -- Availability (t_04c983cc): which field the client answered with, and what
+  -- the gate made of it. A list that is NOT filtered says so here once, so the
+  -- panel's "recipes (not filtered by skill)" label is explainable rather than
+  -- mysterious.
+  local dbd = nil
+  if type(NodeTrailDB) == "table" and type(NodeTrailDB.recipes) == "table" then
+    dbd = NodeTrailDB.recipes
+  end
+  local avail = (d and d.availability) or (dbd and dbd.alchemyAvailability)
+  if avail == nil then
+    avail = "unknown (no scan has recorded one yet)"
+  end
+  if avail == "none" or avail == "unknown (no scan has recorded one yet)" then
+    say("availability: " .. tostring(avail)
+      .. " — this client exposed neither numAvailable nor requiredSkill, so the tooltip lists recipes (not filtered by skill)")
+  elseif d and d.availability then
+    say(("availability: %s — craftable=%s excluded=%s unverified=%s"):format(
+      tostring(avail), tostring(d.craftable or 0), tostring(d.excluded or 0),
+      tostring(d.unverified or 0)))
+  else
+    say("availability: " .. tostring(avail) .. " (recorded by an earlier scan)")
   end
   if Rc._error then
     say("module error: " .. tostring(Rc._error))

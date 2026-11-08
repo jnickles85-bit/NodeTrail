@@ -90,6 +90,10 @@ tests/slash_spec.lua
 - Baseline drop rates are shown for the 28 Classic herb nodes.
 - After 10 or more recorded gathers of a herb, your personal drop rates replace the baseline.
 - Open the Alchemy trade skill window once to see which learned recipes use the herb.
+- The Alchemy line lists only the recipes this character can craft right now; the
+  rest are counted in a `+N more you can't make yet` tail. A client that exposes no
+  recipe availability lists them unfiltered and labelled `recipes (not filtered by skill)`.
+- A drop the client cannot name is labelled `unknown item <id>`, never a bare id.
 
 ## Tests
 Run from repo root with lua5.1:
@@ -99,6 +103,7 @@ Run from repo root with lua5.1:
 - `tests/recorder_spec.lua`
 - `tests/density_spec.lua`
 - `tests/tooltip_spec.lua`
+- `tests/alchemy_skill_gate_spec.lua` (the craftability gate, its tail, the unfiltered label and the unknown-item label)
 - `tests/slash_spec.lua`
 - `tests/skindiag_spec.lua`
 - `tests/skinning_recorder_spec.lua` (replays the live kill -> corpse loot -> 8613 cast -> skin loot chain)

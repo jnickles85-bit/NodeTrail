@@ -188,7 +188,11 @@ function T.BuildLines(name)
   local drops, gathers = ns.HerbData.GetDropLines(name)
   if drops then
     for _, d in ipairs(drops) do
-      local itemName = ns.HerbData.ITEM_NAMES[d.id] or ("item " .. d.id)
+      -- t_04c983cc: a drop id our own table does not name is resolved through
+      -- GetItemInfo (the client's own answer), and only when the client knows
+      -- nothing either does the row say `unknown item <id>` — a bare id where a
+      -- name belongs was the bug Mightie reported.
+      local itemName = ns.HerbData.ItemLabel(d)
       local right = d.pct .. "%" .. (d.source == "base" and " (base)" or "")
       table.insert(lines, { left = itemName, right = right })
     end
@@ -199,17 +203,43 @@ function T.BuildLines(name)
   if answer == true then
     table.insert(lines, { left = picksLine(gathers) })
   end
-  local uses = ns.Recipes:GetUses(node.item)
-  if uses and #uses > 0 then
-    local display = uses
-    if #uses > 4 then
-      display = {}
-      for i = 1, 4 do
-        table.insert(display, uses[i])
+  local uses = ns.Recipes:Uses(node.item)
+  if uses then
+    if uses.filtered then
+      -- Only what the character can actually make now (t_04c983cc). Mightie:
+      -- "alchemy tooltip is giving info for crafts i cant do yet." The
+      -- availability was captured by the scan; this is a filter, not a second
+      -- calculation. Nothing is dropped silently: the withheld recipes are
+      -- counted in one short tail.
+      if #uses.craftable > 0 then
+        local text = "Alchemy: " .. table.concat(uses.craftable, ", ")
+        if uses.excluded > 0 then
+          text = text .. ", +" .. uses.excluded .. " more you can't make yet"
+        end
+        table.insert(lines, { left = text })
+      else
+        -- Every scanned recipe is above his skill or unlearned. Listing none is
+        -- right; saying "none" is how the player learns WHY the line changed.
+        table.insert(lines, {
+          left = ("Alchemy: none you can make yet (%d recipe(s) withheld)"):format(uses.excluded),
+        })
       end
-      table.insert(display, "+" .. (#uses - 4) .. " more")
+    else
+      -- The scan could not learn availability (this client exposes neither
+      -- numAvailable nor requiredSkill, or only the legacy trade-skill API is
+      -- there). The list is printed UNFILTERED and labelled, instead of a gate
+      -- that is really a guess — /nt ttdiag carries the one-line explanation.
+      local display = uses.names
+      if #display > 4 then
+        display = {}
+        for i = 1, 4 do
+          table.insert(display, uses.names[i])
+        end
+        table.insert(display, "+" .. (#uses.names - 4) .. " more")
+      end
+      table.insert(lines, { left = "Alchemy: " .. table.concat(display, ", ") })
+      table.insert(lines, { left = "recipes (not filtered by skill)" })
     end
-    table.insert(lines, { left = "Alchemy: " .. table.concat(display, ", ") })
   elseif NodeTrailDB and NodeTrailDB.recipes and NodeTrailDB.recipes.alchemyScanned == nil
     and recipeAPIAvailable() then
     -- A scan that already ran (the Alchemy window was open, its recipes were
@@ -546,6 +576,22 @@ function T:Diag()
     else
       for _, l in ipairs(profLines) do
         say("profession: " .. tostring(l))
+      end
+    end
+  end
+
+  -- 2b) Herb drop labels (t_04c983cc): every drop id the panel can print that
+  --     OUR table does not name, resolved the way the panel resolves it. This
+  --     is where "unknown item 249399" on the panel becomes an answerable
+  --     question — did the client name that id or not?
+  local herbData = ns.HerbData
+  if type(herbData) == "table" and type(herbData.NameProbeLines) == "function" then
+    local okHd, hdLines = pcall(herbData.NameProbeLines)
+    if not okHd or type(hdLines) ~= "table" then
+      say("herb item: probe raised — " .. tostring(hdLines))
+    else
+      for _, l in ipairs(hdLines) do
+        say("herb item: " .. tostring(l))
       end
     end
   end
