@@ -20,7 +20,11 @@ ns.defaults = {
     -- named by an arrow with the yards counting down. navRange is how far away
     -- a waypoint may be before the arrow hides instead of drawing a marker on
     -- the ring for something in another zone.
-    showNavArrow = true,
+    -- OFF by default (Mightie, 2026-11-08: "Please don't replace this requirement
+    -- with a waypoint arrow ... an arrow is optional and comes later."). The
+    -- route line on both maps is the product; this arrow is opt-in via
+    -- /nt arrow on and must never appear uninvited.
+    showNavArrow = false,
     navRange = 1200,
     navArriveYards = 12,
     routeSource = "density", -- "density" (our recorded herbs) or "gm2" (GatherMate2 nodes, optional fallback)
