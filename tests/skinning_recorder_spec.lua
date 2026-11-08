@@ -415,15 +415,22 @@ onlyIf(type(R) == "table" and type(P) == "table",
   GetNumSkillLines = nil
   GetSkillLineInfo = nil
 
-  -- G. a window that cannot be classified is recorded as unclassified
+  -- G. a window that cannot be attributed is recorded as unclassified
   now = 300.00
   loot = {}
   lootSource = nil
   local before = #store.unclassified
-  fire("LOOT_OPENED")                    -- no source GUID at all
+  fire("LOOT_OPENED")                    -- no source GUID, no recent death
   check(#store.unclassified == before + 1,
     "'unattributed' window recorded in the unclassified list")
-  -- a cast with no corpse pinned (no window was ever seen before it)
+  -- t_4b4e9f8d item 3: SKIN attribution must not depend on the corpse window
+  -- having been attributed. A successful 8613 followed, inside the window, by
+  -- a loot window on a known GUID IS skin loot — "full stop". This case used
+  -- to be filed as unclassified because the cast had no corpse pinned to it;
+  -- it is now skin loot on its own record, which honestly says the death was
+  -- never observed (killObserved=false) and does NOT count a kill.
+  -- (A GUID-less window with no death inside DEATH_FALLBACK_WINDOW stays
+  -- unclassified — that is the case just above, and it is still counted.)
   now = 400.00
   loot = {}
   lootSource = nil
@@ -432,13 +439,17 @@ onlyIf(type(R) == "table" and type(P) == "table",
   loot = { { link = CORPSE_ITEM, name = "Scorpid Blood", qty = 1, quality = 0 } }
   lootSource = "Creature-0-7072-1-48-3124-AAAABBBBCC"
   fire("LOOT_OPENED")                    -- pending cast, corpse never pinned
-  local last = store.unclassified[#store.unclassified]
-  check(last and last.guid == "Creature-0-7072-1-48-3124-AAAABBBBCC",
-    "the ambiguous window keeps its own GUID")
-  check(store.records["Creature-0-7072-1-48-3124-AAAABBBBCC"] == nil,
-    "an unclassified window is NOT filed as a corpse record")
-  check(last and type(last.items) == "table" and #last.items == 1,
-    "the unclassified window keeps the items it actually showed")
+  local AMBIG = "Creature-0-7072-1-48-3124-AAAABBBBCC"
+  local ambig = store.records[AMBIG]
+  check(type(ambig) == "table",
+    "a window after a successful cast on a known GUID is skin loot (t_4b4e9f8d item 3)")
+  check(ambig and ambig.killObserved == false,
+    "that record does not invent a kill: killObserved stays false")
+  check(ambig and type(ambig.skinItems) == "table" and #ambig.skinItems == 1,
+    "the skin list holds what the window actually showed")
+  check(store.counts.kills == 2,
+    "no kill was counted for the unattributed-death skin window, got "
+    .. tostring(store.counts.kills))
   check(#store.records[G2].skinItems == 1,
     "the unclassified window did not pollute the real record")
 

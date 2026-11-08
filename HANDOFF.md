@@ -27,6 +27,28 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   name, cast name, item name, a secret GUID, a secret zone, a secret error object, and a 100+ step
   run. Green at HEAD; **23 FAILs** on `c220ec7`.
 
+- **A GUID-less loot window no longer breaks the chain** (t_4b4e9f8d). Live at Razor Hill the client
+  opened the corpse window with **no loot-source GUID and no items** (`k=unattributed i=-`), which
+  left the 8613 cast with nothing to pin to and the real skin window classified `k=unclassified`.
+  Three rules now: (1) a GUID-less window is attributed to the most recent `UNIT_DIED` inside
+  `P.DEATH_FALLBACK_WINDOW` (10s) and the line says which rule fired —
+  `g=..EF7D0D (from UNIT_DIED)`; (2) the open window is re-read on `LOOT_SLOT_CLEARED` and once more
+  just before `LOOT_CLOSED`, so a late-filled window is recorded instead of `none seen` (the record
+  shows `(late read)`); (3) skin attribution comes from the cast, never from the corpse window having
+  been attributed. Items are kept per window open and merged, so a re-read replaces that window's
+  list and never doubles a quantity. The cast's pin is bounded by `SKIN_WINDOW` too — it used to
+  re-pin to any old corpse and file the next player's skin window as corpse loot.
+- **Names and counts** (t_4b4e9f8d): `record unknown` / `last kill: unknown` replace the `record ?`
+  fallback, and a GUID is never printed in a name field — this client can answer `UnitName` with the
+  GUID, which is where `last kill: <guid> g=..EF7D0D` came from. The dump now prints an **accounting**
+  line under the counts: `accounting: kills=15 corpse-windows=4 skin-windows=5 casts=11 | lost
+  kills=11 windows=0 casts=6`, so 15 kills with 4 windows is stated instead of 11 corpses silently
+  vanishing. New spec `tests/skinning_guardless_spec.lua` replays this exact sequence — green at
+  HEAD, **42 FAILs** on `dc94343`. `skinning_recorder_spec`'s section G changed with it: a window
+  after a successful cast on a known GUID is now skin loot on its own record (`killObserved=false`,
+  no kill counted) where it used to be `unclassified` — that is the card's rule 3. **Not yet re-run
+  in game.**
+
 **2026-11-07 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 The herb smoke-test bugs are fixed and confirmed in game by Mightie: tooltip persistence, backdrop
 sizing, on-screen clamping, and Alchemy recipe uses (196 recipes read through `C_TradeSkillUI`).

@@ -79,6 +79,14 @@ P.EVENTS = {
 
 P.MAX_STEPS = 120     -- ring buffer: the dump stays short and screenshot-able
 P.SKIN_WINDOW = 60    -- a Skinning cast attributes a second loot window within this many seconds
+-- A loot window with NO source GUID is not the end of the chain: the client
+-- opens the corpse window a second or two after UNIT_DIED and hands back no
+-- GUID at all (live at Razor Hill, 759876.51 UNIT_DIED ..EF7D0D -> 759878.38
+-- LOOT_OPENED with no GUID). The most recent death inside this many seconds
+-- is that corpse. The bound is what keeps the rule from inventing a corpse out
+-- of a death from a minute ago; the live gap was 1.87s.
+P.DEATH_FALLBACK_WINDOW = 10
+P.MAX_DEATHS = 30     -- ring buffer of recent deaths the fallback may use
 P.LINE_CAP = 120      -- hard cap on every printed line (the card says ~120)
 P.MAX_ITEMS_SHOWN = 3 -- per step line (the full list stays in the step record)
 -- Two copies of one event land in the same frame on this client, so GetTime()
@@ -104,6 +112,8 @@ P.lastLoot = nil      -- { src=, at=, kind= }
 P.lastKill = nil      -- { guid=, name=, at= }
 P._skinSpells = {}    -- spellID -> name, confirmed by name match
 P._deadGuids = {}     -- guid -> t: a death already reported (TARGET_DEAD fallback gate)
+P._deaths = {}        -- ring of { guid=, at=, source=, usedAt= } — the GUID-less-window fallback
+P._win = nil          -- the loot window that is currently OPEN: { guid=, kind=, at=, items=, money=, rereads= }
 P._suppressed = {}    -- event -> count of duplicates dropped before recording
 P._pendingClose = nil -- t of the LOOT_CLOSED step this window already emitted
 P._slotTicks = {}     -- slot -> t of the last LOOT_SLOT_CLEARED (same-instant repeat)
@@ -228,6 +238,61 @@ local function looksLikeGuid(s)
     return false
   end)
   return ok and hit == true
+end
+
+-- A NAME field must carry a name — or say `unknown`. It must never show a GUID
+-- twice (live: "last kill: <guid> g=..EF7D0D" and "record ? g=..30C716"). On
+-- this client UnitName can hand back the GUID itself for a dead creature, so
+-- every path that stores or prints a name goes through here.
+--
+-- A SECRET name is returned untouched: it may be shown, never measured, so it
+-- cannot be compared or matched here either — the compare is guarded and a
+-- secret is never read at all.
+local function usableName(name, guid)
+  if name == nil then return nil end
+  if isSecret(name) then return name end        -- carried, never read
+  if type(name) ~= "string" or name == "" then return nil end
+  local ok, isGuid = pcall(function()
+    if type(guid) == "string" and not isSecret(guid) and name == guid then
+      return true
+    end
+    for _, p in ipairs(GUID_PREFIXES) do
+      if name:match("^" .. p .. "%-%d") then return true end
+    end
+    return false
+  end)
+  if ok and isGuid == true then return nil end
+  return name
+end
+P.usableName = usableName
+
+-- ── the recent-death ring (the GUID-less-window fallback) ──────────────
+-- One entry per death this session observed, so a loot window that reports no
+-- source GUID can still be attributed to the corpse that just died. Prefers
+-- the newest death no window has claimed yet; falls back to the newest inside
+-- the window (a corpse re-opened after a later kill must still resolve).
+function P:RememberDeath(guid, t, source)
+  if type(guid) ~= "string" or guid == "" then return nil end
+  local d = { guid = guid, at = t, source = source or "UNIT_DIED" }
+  self._deaths[#self._deaths + 1] = d
+  while #self._deaths > self.MAX_DEATHS do table.remove(self._deaths, 1) end
+  return d
+end
+
+function P:RecentDeath(t)
+  t = t or nowT()
+  local newest, unclaimed = nil, nil
+  for i = #self._deaths, 1, -1 do
+    local d = self._deaths[i]
+    if type(d) == "table" and d.guid ~= nil and (t - d.at) <= self.DEATH_FALLBACK_WINDOW then
+      if newest == nil then newest = d end
+      if d.usedAt == nil then
+        unclaimed = d
+        break
+      end
+    end
+  end
+  return unclaimed or newest
 end
 
 -- " z=<zone> <mapID>@x,y" — the card requires zone/subzone and the
@@ -382,33 +447,54 @@ function P:ReadLoot()
 end
 
 -- ── attribution (confirmed live, see the header) ─────────────────────
--- SKIN loot = a window on the SAME corpse GUID, opening within SKIN_WINDOW
--- seconds of a successful Skinning cast. The cast is pinned to the corpse the
--- player just looted (lastSkin.guid), which is exactly the live order:
--- loot (sk 14, ..F29C6F) -> cast (sk 20) -> loot again (sk 23, ..F29C6F).
+-- SKIN loot = a window opening within SKIN_WINDOW seconds of a successful
+-- Skinning cast. The cast carries no GUID, so it is pinned to the corpse the
+-- player looted (lastSkin.guid) — the live order: corpse window -> cast ->
+-- skin window.
 --
--- A window with a pending cast that cannot be tied to a corpse at all (the
--- cast happened before any window was seen, so the corpse GUID is unknown) is
--- UNCLASSIFIED — the recorder files it as unclassified rather than guessing
--- which item list it belongs to.
+-- TWO rules, in this order, because the live run at Razor Hill broke the old
+-- one:
+--   1. A window with NO source GUID is NOT a dead end. It is attributed to the
+--      most recent death inside DEATH_FALLBACK_WINDOW (live: UNIT_DIED at
+--      759876.51, GUID-less LOOT_OPENED at 759878.38 on the same corpse).
+--      The rule that fired is returned so the dump can print it.
+--   2. Skin classification depends on the CAST, never on the corpse window
+--      having been attributed. A successful 8613 followed, inside the window,
+--      by a loot window is skin loot. The old code required a matching
+--      cast.guid, so a corpse window that arrived without a GUID made the
+--      player's own skin window "unclassified".
+--
+-- Returns kind, guid, rule — three values. `rule` names the evidence the GUID
+-- came from ("loot-source" | "UNIT_DIED" | "TARGET_DEAD" | "none") so the dump
+-- can print WHICH rule fired instead of presenting a fallback as a fact.
 function P:Classify(src, t)
-  if src == nil or type(src) ~= "string" or src == "" then
-    return "unattributed"
+  local guid, rule = nil, "none"
+  if type(src) == "string" and src ~= "" then
+    guid, rule = src, "loot-source"
+  else
+    local d = self:RecentDeath(t)
+    if d then
+      guid, rule = d.guid, (d.source == "TARGET_DEAD" and "TARGET_DEAD" or "UNIT_DIED")
+      d.usedAt = t
+    end
   end
   local cast = self.lastSkin
-  if not cast or (t - cast.at) > self.SKIN_WINDOW then
-    return "corpse"
+  if cast and (t - cast.at) <= self.SKIN_WINDOW then
+    -- the cast is the authority. A window on a DIFFERENT corpse right after a
+    -- cast is ordinary corpse loot; anything else is the skin window.
+    if cast.guid ~= nil and guid ~= nil and cast.guid ~= guid then
+      return "corpse", guid, rule
+    end
+    if guid == nil then
+      -- a cast is pending and nothing at all identifies this window: saying
+      -- "skin" would file items under a corpse we do not have, and saying
+      -- "corpse" would be the guess the old code made. Unclassified.
+      return "unclassified", nil, rule
+    end
+    return "skin", guid, rule
   end
-  if cast.guid then
-    return (cast.guid == src) and "skin" or "corpse"
-  end
-  local prev = self.lastLoot
-  if type(prev) == "table" and type(prev.src) == "string" and prev.src == src then
-    return "skin"
-  end
-  -- a cast IS pending but it was never pinned to a corpse: saying "corpse"
-  -- here would be a guess, and so would saying "skin".
-  return "unclassified"
+  if guid ~= nil then return "corpse", guid, rule end
+  return "unattributed", nil, rule
 end
 
 -- The recorder is optional: this file must load and work when Record.lua is
@@ -476,7 +562,17 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
     -- Pin the cast to the corpse the player just looted. That is the live
     -- order (loot ..F29C6F at sk 14, cast at sk 20, loot ..F29C6F at sk 23),
     -- and it is the only join the cast event allows: it carries no GUID.
-    local guid = (type(self.lastLoot) == "table" and self.lastLoot.src) or nil
+    --
+    -- BOUNDED by SKIN_WINDOW: a window looted minutes ago says nothing about
+    -- what this cast is being applied to. Without the bound, a cast re-pinned
+    -- itself to any old corpse and every later window on a different GUID was
+    -- filed as ordinary corpse loot instead of skin loot.
+    local guid = nil
+    local prev = self.lastLoot
+    if type(prev) == "table" and type(prev.src) == "string" and prev.at ~= nil
+      and (t - prev.at) <= self.SKIN_WINDOW then
+      guid = prev.src
+    end
     self.lastSkin = { spellID = id, name = name, at = t, guid = guid }
     if id and not self._skinSpells[id] then
       self._skinSpells[id] = name or tostring(id)
@@ -500,6 +596,62 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
   end
 end
 
+-- Compact item text for a printed line: "2934x1,7100x2" plus a "+N" overflow.
+-- The coin slot is named as money, never recorded as an unnamed item.
+function P:ItemText(items, money)
+  items = type(items) == "table" and items or {}
+  local shown = math.min(#items, self.MAX_ITEMS_SHOWN)
+  local bits = {}
+  for i = 1, shown do
+    local it = items[i]
+    if it and it.id then
+      bits[i] = tostring(it.id) .. "x" .. tostring(it.qty)
+        .. (type(it.quality) == "number" and ("q" .. tostring(it.quality)) or "")
+    end
+  end
+  local list = #bits > 0 and table.concat(bits, ",") or nil
+  if money then
+    list = list and (list .. ",money") or "money"
+  end
+  return (list or "-") .. (#items > shown and ("+" .. (#items - shown)) or "")
+end
+
+-- Are two loot reads the same set? Only OUR converted values are touched
+-- (itemID and quantity are numbers), never a client name or link.
+local function sameItems(a, b)
+  local na = type(a) == "table" and #a or 0
+  local nb = type(b) == "table" and #b or 0
+  if na ~= nb then return false end
+  for i = 1, na do
+    local x, y = a[i], b[i]
+    if type(x) ~= "table" or type(y) ~= "table" then return false end
+    if x.id ~= y.id or x.qty ~= y.qty then return false end
+  end
+  return true
+end
+
+-- The client can fill the loot slots AFTER LOOT_OPENED: the live run printed
+-- "i=-" at the open and the items only showed up once the slots were being
+-- taken. So the open window is re-read (a) on every LOOT_SLOT_CLEARED and
+-- (b) once more just before LOOT_CLOSED, and the recorder is handed the fresh
+-- list. Nothing is re-read after the window closed: there is nothing to read.
+--
+-- Returns the fresh items and money, or nil when there is nothing to add.
+function P:RereadWindow(why)
+  local win = self._win
+  if type(win) ~= "table" then return nil end
+  local items, _, money = self:ReadLoot()
+  if sameItems(win.items, items) and win.money == money then return nil end
+  win.items, win.money = items, money
+  win.rereads = (win.rereads or 0) + 1
+  win.lastRead = why
+  local R = self:Recorder()
+  if R and win.guid and type(R.SetWindowItems) == "function" then
+    pcall(R.SetWindowItems, R, win.guid, win.kind, items, money, nowT())
+  end
+  return items, money
+end
+
 function P:OnLootOpened()
   if not self.capturing then return end
   local t = nowT()
@@ -514,37 +666,40 @@ function P:OnLootOpened()
     local ok, nm = pcall(GetLootSourceName)
     if ok and isClientText(nm) then srcName = nm end
   end
-  local kind = self:Classify(src, t)
-  self.lastLoot = { src = src, at = t, kind = kind }
+  local kind, guid, rule = self:Classify(src, t)
+  self.lastLoot = { src = guid, raw = src, at = t, kind = kind, rule = rule }
+  -- the window that is open RIGHT NOW: slot-cleared and the close both re-read
+  -- it, which is how a late-populated window is still recorded correctly
+  self._win = {
+    guid = guid, kind = kind, at = t, items = items, money = money,
+    rereads = 0, rule = rule,
+  }
   local d = "k=" .. kind
-  local suffix = guidSuffix(src)
-  if suffix then d = d .. " g=" .. suffix end
-  local shown = math.min(#items, self.MAX_ITEMS_SHOWN)
-  local bits = {}
-  for i = 1, shown do
-    local it = items[i]
-    -- every entry here has a real itemID (the coin slot never becomes one)
-    bits[i] = tostring(it.id) .. "x" .. tostring(it.qty)
-      .. (type(it.quality) == "number" and ("q" .. tostring(it.quality)) or "")
+  local suffix = guidSuffix(guid)
+  if suffix then
+    d = d .. " g=" .. suffix
+    -- say WHICH rule produced the GUID: a GUID read off the loot source and
+    -- one carried over from the death are different evidence.
+    if rule == "UNIT_DIED" or rule == "TARGET_DEAD" then
+      d = d .. " (from " .. rule .. ")"
+    end
   end
-  local list = #bits > 0 and table.concat(bits, ",") or nil
-  if money then
-    -- the coin slot is named as money, not recorded as an unnamed item
-    list = list and (list .. ",money") or "money"
-  end
-  d = d .. " i=" .. (list or "-") .. (#items > shown and ("+" .. (#items - shown)) or "")
+  d = d .. " i=" .. self:ItemText(items, money)
   d = d .. locLine(w)
   -- the loot source's name is client text: carried beside our text
+  local shownName = nil
+  if srcName ~= nil then shownName = usableName(srcName, guid) end
   self:Step("LOOT_OPENED", d, {
-    kind = kind, src = src, srcName = srcName, name = srcName,
-    nameLabel = " n=", items = items, money = money,
+    kind = kind, src = guid, rawSrc = src, srcName = srcName,
+    name = shownName, nameLabel = " n=",
+    items = items, money = money, rule = rule,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   local R = self:Recorder()
   if R then
     local ev = {
-      guid = src, name = srcName, items = items, money = money, t = t,
-      kind = kind,
+      guid = guid, name = srcName, items = items, money = money, t = t,
+      kind = kind, rule = rule,
       zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
     }
     if kind == "corpse" and type(R.OnCorpseLoot) == "function" then
@@ -552,11 +707,12 @@ function P:OnLootOpened()
     elseif kind == "skin" and type(R.OnSkinLoot) == "function" then
       pcall(R.OnSkinLoot, R, ev)
     elseif type(R.OnUnclassified) == "function" then
-      -- "unattributed" (no source GUID) and "unclassified" both land here:
-      -- the recorder keeps them apart from both item lists.
+      -- "unattributed" (no GUID and no death to fall back to) and
+      -- "unclassified" (a cast is pending but nothing identifies the window)
+      -- both land here: the recorder keeps them apart from both item lists.
       ev.reason = (kind == "unattributed")
-        and "the window reported no loot-source GUID"
-        or "a cast was pending but was never pinned to a corpse"
+        and "no loot-source GUID and no recent death to fall back to"
+        or "a cast was pending but nothing identified this window"
       pcall(R.OnUnclassified, R, ev)
     end
   end
@@ -577,10 +733,16 @@ function P:OnSlotCleared(...)
     end
     self._slotTicks[a1] = t
   end
+  -- the slots are being taken: this is the moment the client reveals what the
+  -- window actually holds (live: LOOT_OPENED said "i=-" and the items appeared
+  -- here), so the open window is re-read before it is closed.
+  local late = self:RereadWindow("slot-cleared")
   local d = "k=slot-cleared slot=" .. (type(a1) == "number" and tostring(a1) or "-")
+  if late then d = d .. " items+=" .. self:ItemText(late, self._win and self._win.money) end
   d = d .. locLine(w)
   self:Step("LOOT_SLOT_CLEARED", d, {
-    slot = a1, zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
+    slot = a1, lateItems = late and true or nil,
+    zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
 end
 
@@ -596,11 +758,18 @@ function P:OnLootClosed()
     return
   end
   self._pendingClose = t
+  -- one last read of the window that is about to go away: a window the client
+  -- filled but the player closed with nothing taken still has to be recorded
+  -- with what it showed.
+  local late = self:RereadWindow("close")
   local d = "k=loot-closed prev=" .. (self.lastLoot and self.lastLoot.kind or "-")
+  if late then d = d .. " items-final=" .. self:ItemText(late, self._win and self._win.money) end
   d = d .. locLine(w)
   self:Step("LOOT_CLOSED", d, {
+    lateItems = late and true or nil,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+  self._win = nil
   local R = self:Recorder()
   if R and type(R.OnLootClosed) == "function" then
     pcall(R.OnLootClosed, R, t)
@@ -640,8 +809,17 @@ function P:OnUnitDied(unit)
       guid = unit
     end
   end
-  if guid or name then self.lastKill = { guid = guid, name = name, at = t } end
-  if guid then self._deadGuids[guid] = t end
+  if guid or name then
+    -- the NAME field carries a name or nothing — never the GUID twice
+    name = usableName(name, guid)
+    self.lastKill = { guid = guid, name = name, at = t }
+  end
+  if guid then
+    self._deadGuids[guid] = t
+    -- remembered for the GUID-less loot window that follows a death on this
+    -- client (live: UNIT_DIED ..EF7D0D -> LOOT_OPENED with no GUID at all)
+    self:RememberDeath(guid, t, "UNIT_DIED")
+  end
   -- our own description of the argument; the value itself is never measured
   local argText = "?"
   if isPlayerDeath then
@@ -702,30 +880,36 @@ function P:OnTargetChanged()
     if ok and isClientText(g) then guid = g end
   end
   if not name and not guid then return end
+  -- a name that is really the GUID has no business in a NAME field (live:
+  -- "last kill: <guid> g=..EF7D0D"). usableName answers nil for it.
+  local displayName = usableName(name, guid)
   local t = nowT()
   if guid and self._deadGuids[guid] then
     -- already recorded as dead: enrich, never re-report
     self:Suppressed("TARGET_DEAD")
-    if name then
+    if displayName ~= nil then
       if type(self.lastKill) == "table" and self.lastKill.guid == guid then
-        self.lastKill.name = self.lastKill.name or name
+        self.lastKill.name = self.lastKill.name or displayName
       end
       local R = self:Recorder()
       if R and type(R.EnrichName) == "function" then
-        pcall(R.EnrichName, R, guid, name)
+        pcall(R.EnrichName, R, guid, displayName)
       end
     end
     return
   end
-  if guid then self._deadGuids[guid] = t end
-  self.lastKill = { guid = guid, name = name, at = t }
+  if guid then
+    self._deadGuids[guid] = t
+    self:RememberDeath(guid, t, "TARGET_DEAD")
+  end
+  self.lastKill = { guid = guid, name = displayName, at = t }
   local w = whereAmI()
   local d = "k=death target"
   local suffix = guidSuffix(guid)
   if suffix then d = d .. " g=" .. suffix end
   d = d .. locLine(w)
   -- the target's name is client text: carried beside our text, printed last
-  local display, label = name, " n="
+  local display, label = displayName, " n="
   if display == nil and guid ~= nil and suffix == nil then
     display, label = guid, " g="
   end
@@ -736,7 +920,7 @@ function P:OnTargetChanged()
   local R = self:Recorder()
   if R and guid and type(R.OnKill) == "function" then
     pcall(R.OnKill, R, {
-      guid = guid, name = name, t = t,
+      guid = guid, name = displayName, t = t,
       zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
     })
   end
@@ -866,6 +1050,8 @@ function P:Disable()
   self.lastLoot = nil
   self.lastKill = nil
   self._deadGuids = {}
+  self._deaths = {}
+  self._win = nil
   self._suppressed = {}
   self._pendingClose = nil
   self._slotTicks = {}
@@ -891,6 +1077,8 @@ function P:Enable()
   if self.enabled then return end
   self.enabled = true
   self._deadGuids = {}
+  self._deaths = {}
+  self._win = nil
   self._suppressed = {}
   self._pendingClose = nil
   self._slotTicks = {}
@@ -1053,10 +1241,13 @@ function P:Diag()
     -- secret is printed whole, because slicing it is exactly what is refused
     local post = ""
     if k.guid ~= nil then post = " g=" .. (guidSuffix(k.guid) or k.guid) end
-    if k.name ~= nil then
-      add("Skinning skindiag: last kill: ", k.name, post)
+    -- the NAME slot never repeats the GUID (live: "last kill: <guid> g=..EF7D0D")
+    -- and says `unknown` when the client never gave a name at all.
+    local shown = usableName(k.name, k.guid)
+    if shown ~= nil then
+      add("Skinning skindiag: last kill: ", shown, post)
     else
-      add("Skinning skindiag: last kill:", nil, post)
+      add("Skinning skindiag: last kill: unknown", nil, post)
     end
   end
   -- Duplicates named by the card are dropped before the recorder sees them;
