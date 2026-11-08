@@ -27,6 +27,7 @@ Modules/NodeTrail/UI/MinimapPath.lua
 Modules/NodeTrail/UI/Tooltip.lua
 Modules/NodeTrail/Core.lua
 Modules/Skinning/Probe.lua
+Modules/Skinning/Record.lua
 Modules/Skinning/Core.lua
 Modules/Touchstone/Bootstrap.lua
 Modules/Touchstone/Constants.lua

@@ -34,6 +34,14 @@ function ns.Enable()
       -- the namespace stays loaded and honestly reports its error in the
       -- diag instead of half-enabling
       ns._error = tostring(err)
+    else
+      -- t_80ffe952: recording is what the sub-option means. ns.Enable is
+      -- reached only when NodeTrailDB.skinning.enabled is on (NodeTrail's
+      -- Enable at login, the options checkbox, both via EnableSkinning), so
+      -- capture starts here — the player must not have to run /mp skindiag
+      -- to have a kill recorded. /mp skindiag still toggles it by hand for a
+      -- manual evidence run.
+      P.capturing = true
     end
   end
 end

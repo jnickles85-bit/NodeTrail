@@ -248,6 +248,11 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       if okT then
         if on then
           pkg.Print("skindiag: capture ON — kill + loot, cast Skinning, then loot again and dump")
+        elseif skinOn then
+          -- t_80ffe952: with the sub-option on, capture IS recording. Turning
+          -- the diagnostic off pauses recording too, and the line says so
+          -- rather than letting the player think it still records.
+          pkg.Print("skindiag: capture off — recording is paused too; /mp skindiag resumes it")
         else
           pkg.Print("skindiag: capture off")
         end

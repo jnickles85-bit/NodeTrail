@@ -1,4 +1,5 @@
 -- Probe.lua — t_a5f41944 (Skinning 1/3: in-client event probe)
+--                 extended by t_80ffe952 (2/3: the recorder, Record.lua)
 --
 -- The in-client evidence channel for the
 --   kill -> corpse loot -> Skinning cast -> skin loot
@@ -13,17 +14,42 @@
 --     namespace whether it exists; an unknown one is caught and recorded as
 --     "invalid event" in the diag, never raised as an error (the same gate
 --     Recipes.lua uses, t_81da8886)
---   * NO SavedVariables: the buffer is in-memory state on this table.
---     The DB shape lives in SKINNING-DATA-MODEL.md (design only) and in
---     the implementation card — recording into a DB is NOT this card
 --
--- The attribution rule implemented below is the card's HYPOTHESIS, made
--- explicit: skinning is the second loot window on the SAME corpse GUID,
--- arriving within SKIN_WINDOW seconds of a Skinning-cast. Until the probe
--- confirms that in-client, every classification it prints is a
--- hypothesis, not a fact. The dump shows the raw chain so a different
--- story (e.g. a distinct loot source for the skin window) can be read
--- straight off the evidence.
+-- SETTLED BY THE LIVE DUMP (build 5455eea, /mp skindiag dump, map 1411).
+-- What was hypothesis in SKINNING-DATA-MODEL.md is now what the client does:
+--
+--   * UNIT_DIED fires for ordinary mobs and its argument IS the creature
+--     GUID ("UNIT_DIED k=death unit=Creature-0-7072-1-48-3124-F090F29C6F").
+--     COMBAT_LOG_EVENT_UNFILTERED stays unregistered: the client treats it
+--     as a protected event and answers ADDON_ACTION_FORBIDDEN, isolated by
+--     per-step tracing on 2026-11-07.
+--   * Skinning is spell 8613 (START -> SUCCEEDED -> STOP), cast by the
+--     player. On this client the 4th UNIT_SPELLCAST_* argument is the cast
+--     bar name ("n=CastBar-1B595C.."), NOT the spell name, so the old
+--     name-matching detector never fired and the skin window was dumped as
+--     k=corpse. 8613 is therefore a CONFIRMED spell ID (P.SKIN_SPELL_IDS);
+--     the name heuristic stays as a fallback for other builds.
+--   * The skin loot window is a SECOND LOOT_OPENED on the SAME corpse GUID
+--     ("sk 23 LOOT_OPENED ... g=..F29C6F i=2934x1" after "sk 14 ... i=7100x1"
+--     on ..F29C6F) — the model's hypothesis, confirmed.
+--   * LOOT_CLOSED fires twice per close (sk 16/sk 17) and
+--     LOOT_SLOT_CLEARED can repeat for the same slot in the same instant
+--     (sk 35/sk 36) — both are de-duplicated here, before any recorder sees
+--     them, so no corpse is double counted.
+--   * TARGET_DEAD (the fallback this build used while COMBAT_LOG was off the
+--     table) repeats a GUID UNIT_DIED already reported (sk 13/sk 18/sk 41).
+--     It is kept STRICTLY as a fallback now: a GUID already recorded as dead
+--     produces no step, it only fills in the mob's name.
+--
+-- The classification rule the recorder codes against: a window is SKIN loot
+-- only when it opens on the same corpse GUID within SKIN_WINDOW seconds of a
+-- successful Skinning cast. A window with a pending cast that cannot be tied
+-- to a corpse we have seen is recorded as UNCLASSIFIED, never guessed into
+-- either list.
+--
+-- NO SavedVariables here: the step buffer is in-memory state on this table.
+-- The record shape lives in Record.lua, which persists to
+-- NodeTrailDB.skinning only while NodeTrail's sub-toggle is on.
 
 local addonName, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
@@ -55,6 +81,18 @@ P.MAX_STEPS = 120     -- ring buffer: the dump stays short and screenshot-able
 P.SKIN_WINDOW = 60    -- a Skinning cast attributes a second loot window within this many seconds
 P.LINE_CAP = 120      -- hard cap on every printed line (the card says ~120)
 P.MAX_ITEMS_SHOWN = 3 -- per step line (the full list stays in the step record)
+-- Two copies of one event land in the same frame on this client, so GetTime()
+-- is equal or one frame apart. Anything inside this many seconds is the same
+-- instant for de-duplication purposes.
+P.DUP_TICK = 0.1
+
+-- CONFIRMED LIVE, not guessed: build 5455eea dumped
+--   sk 19/20/21 UNIT_SPELLCAST_START/SUCCEEDED/STOP s=8613 who=player
+-- for the Skinning cast. The 4th argument on this client is the cast bar name
+-- ("n=CastBar-1B595C.."), so the old name-only detector could not see it —
+-- which is why sk 23 was dumped as k=corpse. The ID is the primary detector;
+-- the name heuristic below stays for builds that do send the name.
+P.SKIN_SPELL_IDS = { [8613] = true }
 
 -- state (session-only; never written to any SavedVariable)
 P.capturing = false
@@ -65,6 +103,10 @@ P.lastSkin = nil      -- { spellID=, name=, at= }
 P.lastLoot = nil      -- { src=, at=, kind= }
 P.lastKill = nil      -- { guid=, name=, at= }
 P._skinSpells = {}    -- spellID -> name, confirmed by name match
+P._deadGuids = {}     -- guid -> t: a death already reported (TARGET_DEAD fallback gate)
+P._suppressed = {}    -- event -> count of duplicates dropped before recording
+P._pendingClose = nil -- t of the LOOT_CLOSED step this window already emitted
+P._slotTicks = {}     -- slot -> t of the last LOOT_SLOT_CLEARED (same-instant repeat)
 P._error = nil
 P.enabled = false
 
@@ -116,6 +158,22 @@ end
 
 local function round4(v)
   return math.floor(v * 10000 + 0.5) / 10000
+end
+
+-- UNIT_DIED's argument is the creature GUID on this client, not a unit token
+-- ("sk 12 UNIT_DIED k=death unit=Creature-0-7072-1-48-3124-F090F29C6F").
+-- Both shapes are accepted: a GUID argument is used directly, a token
+-- ("target", "party1") is resolved through GetUnitGUID.
+--
+-- Lua patterns have NO alternation: "^(Creature|Player)%-%d" would compare
+-- against the literal text "Creature|Player". One test per prefix.
+local GUID_PREFIXES = { "Creature", "Player", "Pet", "Vehicle", "GameObject" }
+local function looksLikeGuid(s)
+  if type(s) ~= "string" then return false end
+  for _, p in ipairs(GUID_PREFIXES) do
+    if s:match("^" .. p .. "%-%d") then return true end
+  end
+  return false
 end
 
 -- " z=<zone> <mapID>@x,y" — the card requires zone/subzone and the
@@ -238,19 +296,53 @@ function P:ReadLoot()
   return items, src
 end
 
--- ── the hypothesis (see the header): skin = the SECOND loot window on
--- the SAME corpse GUID, shortly after a Skinning cast ─────────────────
+-- ── attribution (confirmed live, see the header) ─────────────────────
+-- SKIN loot = a window on the SAME corpse GUID, opening within SKIN_WINDOW
+-- seconds of a successful Skinning cast. The cast is pinned to the corpse the
+-- player just looted (lastSkin.guid), which is exactly the live order:
+-- loot (sk 14, ..F29C6F) -> cast (sk 20) -> loot again (sk 23, ..F29C6F).
+--
+-- A window with a pending cast that cannot be tied to a corpse at all (the
+-- cast happened before any window was seen, so the corpse GUID is unknown) is
+-- UNCLASSIFIED — the recorder files it as unclassified rather than guessing
+-- which item list it belongs to.
 function P:Classify(src, t)
-  if src == nil or type(src) ~= "string" then
+  if src == nil or type(src) ~= "string" or src == "" then
     return "unattributed"
   end
+  local cast = self.lastSkin
+  if not cast or (t - cast.at) > self.SKIN_WINDOW then
+    return "corpse"
+  end
+  if cast.guid then
+    return (cast.guid == src) and "skin" or "corpse"
+  end
   local prev = self.lastLoot
-  if self.lastSkin
-    and (t - self.lastSkin.at) <= self.SKIN_WINDOW
-    and type(prev) == "table" and type(prev.src) == "string" and prev.src == src then
+  if type(prev) == "table" and type(prev.src) == "string" and prev.src == src then
     return "skin"
   end
-  return "corpse"
+  -- a cast IS pending but it was never pinned to a corpse: saying "corpse"
+  -- here would be a guess, and so would saying "skin".
+  return "unclassified"
+end
+
+-- The recorder is optional: this file must load and work when Record.lua is
+-- absent (tests that load only the probe, or a client where the file was not
+-- copied). Nothing below depends on it existing.
+function P:Recorder()
+  local sk = pkg.Skinning
+  local r = type(sk) == "table" and sk.Recorder or nil
+  if type(r) ~= "table" then return nil end
+  return r
+end
+
+-- De-duplication counters. The dump prints them, so the next in-game run can
+-- verify that the duplicates named on the card really were dropped instead of
+-- silently vanishing.
+function P:Suppressed(which)
+  local s = self._suppressed
+  s[which] = (s[which] or 0) + 1
+  return s[which]
 end
 
 -- ── spell / skinning detection ────────────────────────────────────────
@@ -260,6 +352,11 @@ local function nameSkinny(name)
 end
 
 function P:IsSkinningSpell(spellID, spellName)
+  -- the confirmed ID first: on this client the name argument is the cast bar
+  -- ("n=CastBar-1B595C.."), so the name test can never match a real cast.
+  if type(spellID) == "number" and self.SKIN_SPELL_IDS[spellID] then
+    return true
+  end
   if nameSkinny(spellName) then return true end
   if spellID == nil then return false end
   if self._skinSpells[spellID] then return true end
@@ -287,7 +384,11 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
     and event == "UNIT_SPELLCAST_SUCCEEDED"
     and self:IsSkinningSpell(id, name)
   if isSkin then
-    self.lastSkin = { spellID = id, name = name, at = t }
+    -- Pin the cast to the corpse the player just looted. That is the live
+    -- order (loot ..F29C6F at sk 14, cast at sk 20, loot ..F29C6F at sk 23),
+    -- and it is the only join the cast event allows: it carries no GUID.
+    local guid = (type(self.lastLoot) == "table" and self.lastLoot.src) or nil
+    self.lastSkin = { spellID = id, name = name, at = t, guid = guid }
     if id and not self._skinSpells[id] then
       self._skinSpells[id] = name or tostring(id)
     end
@@ -301,12 +402,22 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
     who = who, spellID = id, name = name, skin = isSkin,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+  local R = self:Recorder()
+  if R and isSkin and type(R.OnSkinCast) == "function" and self.lastSkin then
+    pcall(R.OnSkinCast, R, {
+      spellID = id, name = name, t = t, guid = self.lastSkin.guid,
+    })
+  end
 end
 
 function P:OnLootOpened()
   if not self.capturing then return end
   local t = nowT()
   local w = whereAmI()
+  -- a new window: the previous close (and its duplicate) is finished, and
+  -- slot-cleared de-duplication restarts from this window
+  self._pendingClose = nil
+  self._slotTicks = {}
   local items, src = self:ReadLoot()
   local srcName = nil
   if type(GetLootSourceName) == "function" then
@@ -332,12 +443,42 @@ function P:OnLootOpened()
     kind = kind, src = src, srcName = srcName, items = items,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+  local R = self:Recorder()
+  if R then
+    local ev = {
+      guid = src, name = srcName, items = items, t = t, kind = kind,
+      zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
+    }
+    if kind == "corpse" and type(R.OnCorpseLoot) == "function" then
+      pcall(R.OnCorpseLoot, R, ev)
+    elseif kind == "skin" and type(R.OnSkinLoot) == "function" then
+      pcall(R.OnSkinLoot, R, ev)
+    elseif type(R.OnUnclassified) == "function" then
+      -- "unattributed" (no source GUID) and "unclassified" both land here:
+      -- the recorder keeps them apart from both item lists.
+      ev.reason = (kind == "unattributed")
+        and "the window reported no loot-source GUID"
+        or "a cast was pending but was never pinned to a corpse"
+      pcall(R.OnUnclassified, R, ev)
+    end
+  end
 end
 
 function P:OnSlotCleared(...)
   if not self.capturing then return end
   local a1 = select(1, ...)
+  local t = nowT()
   local w = whereAmI()
+  -- sk 35/sk 36: the same slot can be reported twice in the same instant.
+  -- Same-or-next-tick is dropped before it reaches the recorder.
+  if type(a1) == "number" then
+    local last = self._slotTicks[a1]
+    if last and (t - last) <= self.DUP_TICK then
+      self:Suppressed("LOOT_SLOT_CLEARED")
+      return
+    end
+    self._slotTicks[a1] = t
+  end
   local d = "k=slot-cleared slot=" .. (type(a1) == "number" and tostring(a1) or "-")
   d = d .. locLine(w)
   self:Step("LOOT_SLOT_CLEARED", d, {
@@ -347,12 +488,25 @@ end
 
 function P:OnLootClosed()
   if not self.capturing then return end
+  local t = nowT()
   local w = whereAmI()
+  -- sk 16/sk 17 (and sk 25/sk 26): LOOT_CLOSED fires twice for ONE close.
+  -- Nothing reopened a window in between, so the second is the same close;
+  -- emitting it would also move the recorder's gap start point.
+  if self._pendingClose then
+    self:Suppressed("LOOT_CLOSED")
+    return
+  end
+  self._pendingClose = t
   local d = "k=loot-closed prev=" .. (self.lastLoot and self.lastLoot.kind or "-")
   d = d .. locLine(w)
   self:Step("LOOT_CLOSED", d, {
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+  local R = self:Recorder()
+  if R and type(R.OnLootClosed) == "function" then
+    pcall(R.OnLootClosed, R, t)
+  end
 end
 
 function P:OnUnitDied(unit)
@@ -360,7 +514,15 @@ function P:OnUnitDied(unit)
   local t = nowT()
   local w = whereAmI()
   local name, guid = nil, nil
-  if type(unit) == "string" and unit ~= "player" then
+  if looksLikeGuid(unit) then
+    -- the live shape: the argument IS the corpse GUID. A GUID is not a unit
+    -- token, so nothing here asks the client for a name it cannot give — the
+    -- mob's name arrives from the target enrichment below or the loot source.
+    guid = unit
+    if type(self.lastKill) == "table" and self.lastKill.guid == guid then
+      name = self.lastKill.name
+    end
+  elseif type(unit) == "string" and unit ~= "player" then
     if type(GetUnitName) == "function" then
       local ok, nm = pcall(GetUnitName, unit)
       if ok and type(nm) == "string" and nm ~= "" then name = nm end
@@ -369,8 +531,9 @@ function P:OnUnitDied(unit)
       local ok, g = pcall(GetUnitGUID, unit)
       if ok and type(g) == "string" then guid = g end
     end
-    self.lastKill = { guid = guid, name = name, at = t }
   end
+  if guid or name then self.lastKill = { guid = guid, name = name, at = t } end
+  if guid then self._deadGuids[guid] = t end
   local d = "k=death unit=" .. tostring(unit or "?")
   if name then d = d .. " n=" .. cut(name, 16) end
   if guid then d = d .. " g=" .. guidSuffix(guid) end
@@ -380,12 +543,24 @@ function P:OnUnitDied(unit)
     unit = unit, guid = guid, name = name,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+  local R = self:Recorder()
+  if R and guid and type(R.OnKill) == "function" then
+    pcall(R.OnKill, R, {
+      guid = guid, name = name, t = t,
+      zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
+    })
+  end
 end
 
 -- The combat-log replacement (see P.EVENTS): when the target changes, note a
 -- dead target as a kill. This is the only death signal available once
 -- COMBAT_LOG_EVENT_UNFILTERED is off the table, and it fires exactly when the
 -- player moves from a corpse to the next mob.
+--
+-- STRICTLY A FALLBACK now: the live dump repeats a GUID UNIT_DIED already
+-- reported (sk 13 after sk 12, sk 18, sk 41). Such a GUID produces no step —
+-- it only fills in the mob's NAME, which is the one thing UNIT_DIED's GUID
+-- argument cannot provide on this client.
 function P:OnTargetChanged()
   if not self.capturing then return end
   if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function" then return end
@@ -404,6 +579,21 @@ function P:OnTargetChanged()
   end
   if not name and not guid then return end
   local t = nowT()
+  if guid and self._deadGuids[guid] then
+    -- already recorded as dead: enrich, never re-report
+    self:Suppressed("TARGET_DEAD")
+    if name then
+      if type(self.lastKill) == "table" and self.lastKill.guid == guid then
+        self.lastKill.name = self.lastKill.name or name
+      end
+      local R = self:Recorder()
+      if R and type(R.EnrichName) == "function" then
+        pcall(R.EnrichName, R, guid, name)
+      end
+    end
+    return
+  end
+  if guid then self._deadGuids[guid] = t end
   self.lastKill = { guid = guid, name = name, at = t }
   local w = whereAmI()
   local d = "k=death target n=" .. cut(tostring(name or "?"), 16)
@@ -413,6 +603,13 @@ function P:OnTargetChanged()
     unit = "target", guid = guid, name = name,
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+  local R = self:Recorder()
+  if R and guid and type(R.OnKill) == "function" then
+    pcall(R.OnKill, R, {
+      guid = guid, name = name, t = t,
+      zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
+    })
+  end
 end
 
 -- Kept, but never registered: COMBAT_LOG_EVENT_UNFILTERED is a protected event
@@ -464,10 +661,38 @@ function P:OnSkillLines(...)
   local a1 = select(1, ...)
   local w = whereAmI()
   local d = "k=skill-lines arg=" .. (type(a1) == "number" and tostring(a1) or "-")
+  -- SKILL_LINES_CHANGED arrives with no usable argument on this client
+  -- ("arg=-"), so the value is read from the skill lines instead — and when
+  -- that read fails too, nothing is printed. A value is NEVER invented.
+  local skill = self:ReadSkinningSkill()
+  if skill then
+    d = d .. " v=" .. tostring(skill.rank) .. (skill.max and ("/" .. tostring(skill.max)) or "")
+  end
   d = d .. locLine(w)
   self:Step("SKILL_LINES_CHANGED", d, {
-    arg = a1, zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
+    arg = a1, skill = skill and skill.rank or nil,
+    zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
+end
+
+-- Best-effort Skinning skill value. Every lookup is guarded and the return is
+-- nil when the client gives nothing — the dump then shows no value at all.
+function P:ReadSkinningSkill()
+  if type(GetNumSkillLines) ~= "function" or type(GetSkillLineInfo) ~= "function" then
+    return nil
+  end
+  local okN, n = pcall(GetNumSkillLines)
+  if not okN or type(n) ~= "number" then return nil end
+  for i = 1, n do
+    local ok, name, rank, maxRank = pcall(GetSkillLineInfo, i)
+    if ok and type(name) == "string" and name:lower():find("skinn", 1, true) then
+      if type(rank) == "number" then
+        return { rank = rank, max = (type(maxRank) == "number" and maxRank or nil) }
+      end
+      return nil
+    end
+  end
+  return nil
 end
 
 function P:OnEnterWorld(...)
@@ -500,6 +725,14 @@ function P:Disable()
   self.lastSkin = nil
   self.lastLoot = nil
   self.lastKill = nil
+  self._deadGuids = {}
+  self._suppressed = {}
+  self._pendingClose = nil
+  self._slotTicks = {}
+  local R = self:Recorder()
+  if R and type(R.Disable) == "function" then
+    pcall(R.Disable, R)
+  end
   local frame = self.frame
   if type(frame) ~= "table" then
     return was
@@ -517,6 +750,14 @@ end
 function P:Enable()
   if self.enabled then return end
   self.enabled = true
+  self._deadGuids = {}
+  self._suppressed = {}
+  self._pendingClose = nil
+  self._slotTicks = {}
+  local Rx = self:Recorder()
+  if Rx and type(Rx.Enable) == "function" then
+    pcall(Rx.Enable, Rx)
+  end
   local function note(m)
     if type(pkg.Print) == "function" then pkg.Print("skindiag: " .. m) end
   end
@@ -621,6 +862,32 @@ function P:Diag()
   if self.lastKill then
     say("last kill: " .. tostring(self.lastKill.name or self.lastKill.guid or "?")
       .. " " .. tostring(self.lastKill.guid or ""))
+  end
+  -- Duplicates named by the card are dropped before the recorder sees them;
+  -- printing the counts is how the next in-game run proves the drop happened
+  -- instead of having to trust that it did.
+  local sup = self._suppressed or {}
+  local supBits = {}
+  for _, k in ipairs({ "LOOT_CLOSED", "LOOT_SLOT_CLEARED", "TARGET_DEAD" }) do
+    if (sup[k] or 0) > 0 then
+      supBits[#supBits + 1] = k .. "x" .. tostring(sup[k])
+    end
+  end
+  if #supBits > 0 then
+    say("suppressed duplicates: " .. table.concat(supBits, " "))
+  end
+  -- What the RECORDER would store for the last corpse. This is the model the
+  -- next in-game run verifies, without needing a second probe session.
+  local R = self:Recorder()
+  if type(R) == "table" and type(R.Describe) == "function" then
+    local okR, lines = pcall(R.Describe, R)
+    if okR and type(lines) == "table" then
+      for _, l in ipairs(lines) do say(tostring(l)) end
+    else
+      say("record: describe failed: " .. cut(tostring(lines), 60))
+    end
+  else
+    say("record: the recorder (Record.lua) did not load — nothing stored")
   end
   local n = #self.steps
   if n == 0 then

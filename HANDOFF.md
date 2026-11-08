@@ -18,8 +18,27 @@ On top of that branch:
   `NodeTrailDB.skinning.enabled` (default false; the old `MightiePackDB.modules.Skinning` key is
   inert, never read). Turning it off is immediate — no UI reload, no popup. `/mp skindiag` /
   `/mp skindiag dump` capture the kill → loot → skin → skin-loot chain and still run while the
-  sub-option is off (the line says so; nothing is recorded then). Probe only, no recording yet.
-  **Not yet run in game.**
+  sub-option is off (the line says so; nothing is recorded then).
+- **Skinning recorder** (`Modules/Skinning/Record.lua`, t_80ffe952) — the model the probe feeds,
+  built on the **live dump from build `5455eea`** (49 steps, character Bowdecia Arrowroot, map
+  1411). One record per corpse keyed by the corpse GUID, written to
+  `NodeTrailDB.skinning.chars["Name-Realm"].records` and ONLY while
+  `NodeTrailDB.skinning.enabled` is on (with it off the recorder still builds the same record in a
+  session buffer, which is what the dump prints — "diagnostics run, nothing recorded" stays true).
+  Each record keeps the mob GUID/name/npc entry, zone/subzone/map + position at death, the ordinary
+  corpse loot, whether an 8613 cast succeeded, the skinning loot in a **separate** list, and the gap
+  between the corpse loot closing and the skin window opening. Personal counts only — no rate.
+  Recording starts with the sub-option (not with `/mp skindiag`).
+- **Skinning event surface, now measured** (t_80ffe952), from that same dump:
+  `UNIT_DIED` fires for ordinary mobs and its **argument is the creature GUID**; Skinning is spell
+  **8613** and on this client the 4th `UNIT_SPELLCAST_*` argument is the cast bar name
+  (`n=CastBar-1B595C..`), not the spell name — the old name-matching detector never fired, which is
+  why the skin window was dumped as `k=corpse`. The skin window is a **second `LOOT_OPENED` on the
+  same corpse GUID** (hypothesis confirmed). `LOOT_CLOSED` fires twice per close and
+  `LOOT_SLOT_CLEARED` can repeat for the same slot in the same instant; both are de-duplicated
+  before recording. `TARGET_DEAD` is now strictly a fallback: a GUID `UNIT_DIED` already reported
+  produces no step, it only fills in the mob's name. **Not yet re-run in game** — the dump now also
+  prints the stored record so one run verifies the model.
 - **Recipe scan in the options panel**, `/nt scanrecipes`, rescan on every Alchemy window open.
 - **`/mpack status`** prints version, Interface, client build, locale, GatherMate2 and module states
   (`NodeTrail: on (loaded) - skinning off`). TOC metadata is read through
@@ -198,7 +217,8 @@ Run from repo root with lua5.1:
 - `tests/slash_spec.lua` (module gating (no /nt before Enable), slash names, help content, empty/unknown = help, reload without route, status lines (source density/gm2, counts per map and total, unknown map, route none/active, tooltip on, Alchemy scanned/not, module on/off), start/reload/stop round trip from recorded herbs, case and whitespace)
 - `tests/status_meta_spec.lua` (t_5507a0ba: /mpack status TOC metadata — C_AddOns-only, global-only, neither, precedence, nil/empty/raise/non-string fallbacks, no cached provider)
 - `tests/touchstone_fold_spec.lua` (Touchstone fold: TOC block order and Assets line, skip guard on every generated file, disabled module registers no slash/creates no frame, Enable calls SF.Enable once and preserves StatForgeDB, duplicate-load detection by DoesAddOnExist/GetAddOnInfo/unknown, full enable brings up the real slash set and ChestAdvisor frame)
-All twenty-one specs pass with lua5.1.
+All twenty-four specs and `tests/draw_smoke.lua` pass with lua5.1
+(`tests/skinning_recorder_spec.lua` is the newest; it is RED on `5455eea` with 7 FAILs).
 
 ## Herb recorder (Base B)
 - No GatherMate2 needed. GM2 stays an optional soft-dep only for the current route builder (Route/Build.lua still reads GM2 until Base C).
@@ -259,10 +279,11 @@ All twenty-one specs pass with lua5.1.
 ## Next
 1. Mightie smoke-tests the folded Touchstone in game on this desktop: park the standalone folder
    (laptop), install the build, `/reload`, tick Touchstone, `/sf`, check a few gear verdicts.
-2. Skinning dump from the Skinning character (`/mp skindiag` → 10–15 kills, mixed loot order →
-   `/mp skindiag dump`). That dump defines the recorder.
-3. Skinning 2/3: recorder + data model implementation (own DB, leather vs corpse loot separated,
-   baseline vs personal, hunt areas instead of node dots).
+2. Skinning dump from the Skinning character: with the sub-option ON, 10–15 kills, then
+   `/mp skindiag dump`. The dump now ends with the stored record, so that one run verifies the
+   recorder as well as the event surface.
+3. Skinning 3/3: the UI side — leather vs corpse loot compared per creature, baseline vs personal
+   (n≥10 only), hunt areas instead of node dots. The recorder's fields are in place.
 4. Friend build: NodeTrail + Touchstone + Skinning, one zip; then the CurseForge upload when Mightie
    approves.
 
@@ -271,8 +292,9 @@ All twenty-one specs pass with lua5.1.
   presence, and the minimap button are all unproven until the smoke test.
 - Touchstone settings migration is unproven on this machine — the desktop client has no old data;
   migration is proven only by copying the laptop's `Touchstone.lua` across.
-- Skinning event surface unverified: whether skinning loot is a second window on the same corpse GUID
-  is a hypothesis until `/mp skindiag dump` returns.
+- Skinning event surface is measured (see the recorder bullet): `UNIT_DIED` + spell 8613 + a second
+  `LOOT_OPENED` on the same corpse GUID. What is still unproven is the **recorder's output in
+  game** — the dump now prints the stored record, so one `/mp skindiag` run confirms it.
 - Recorder still assumes `UNIT_SPELLCAST_SUCCEEDED` for herb gathering, loot within 5 s, player
   position rather than node position.
 - Density tunables have never been tuned against real data.

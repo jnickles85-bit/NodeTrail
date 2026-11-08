@@ -100,6 +100,24 @@ Run from repo root with lua5.1:
 - `tests/density_spec.lua`
 - `tests/tooltip_spec.lua`
 - `tests/slash_spec.lua`
+- `tests/skindiag_spec.lua`
+- `tests/skinning_recorder_spec.lua` (replays the live kill -> corpse loot -> 8613 cast -> skin loot chain)
+
+## Skinning recorder (NodeTrail sub-option)
+Off by default (`NodeTrailDB.skinning.enabled`). When on, the addon records one
+entry per corpse, keyed by the corpse GUID, in `NodeTrailDB.skinning.chars["Name-Realm"]`:
+mob GUID/name/entry, zone/subzone/map + position at death, the ordinary corpse loot
+(items from `LOOT_OPENED`), whether a Skinning cast (spell 8613) succeeded, the skinning
+loot, and the gap between the corpse loot closing and the skin window opening. The two
+item lists are separate fields — never merged. Only counts of what was actually seen are
+stored; no drop rate is computed from such a small sample.
+
+`COMBAT_LOG_EVENT_UNFILTERED` is a protected event on Forever 16001 and is never
+registered — kills come from `UNIT_DIED` (whose argument is the creature GUID).
+`LOOT_CLOSED` and `LOOT_SLOT_CLEARED` both fire twice per event on this client and are
+de-duplicated before recording. `/mp skindiag` toggles the capture, and
+`/mp skindiag dump` prints the captured steps plus what the recorder stored for the last
+corpse.
 
 ## Handoff
 See `HANDOFF.md` for agent handoff details.

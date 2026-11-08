@@ -101,7 +101,7 @@ local function applySkinning(on)
         return false
       end
     end
-    pkg.Print("Skinning (experimental) on — /mp skindiag captures the kill -> loot -> skin chain.")
+    pkg.Print("Skinning (experimental) on — recording corpses into NodeTrailDB; /mp skindiag dump shows what was stored.")
   else
     if type(nt.DisableSkinning) == "function" then
       nt.DisableSkinning()
