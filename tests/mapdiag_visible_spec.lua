@@ -133,7 +133,8 @@ end
 local chat = {}
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) chat[#chat + 1] = m end }
 SlashCmdList = {}
-function GetTime() return 10 end
+local clock = 10
+function GetTime() return clock end
 function CopyTable(t)
   local out = {}
   for k, v in pairs(t) do out[k] = type(v) == "table" and CopyTable(v) or v end
@@ -253,6 +254,7 @@ check(off ~= nil and off:find("NO dot is inside the visible map", 1, true) ~= ni
 -- another map and redraw. The overlay is hidden; the diag must say so.
 W.host:ClearAllPoints()
 W.host:SetAllPoints(canvas)
+clock = clock + 1
 W:Redraw()
 local applied = ns.LineDraw.Applied(W.drawer)
 check(tonumber(applied.paintedDots) == painted, "4: the draw painted " .. painted .. " dots (got "
@@ -275,6 +277,7 @@ check(idleVisible ~= nil and idleVisible:find("0/0", 1, true) ~= nil,
 
 -- ── 5. back on the route's map, the draw reports itself again ─────────────
 shownMapID = 1413
+clock = clock + 1
 W:Redraw()
 local back = line(diag(), "route dots on the visible map:")
 check(back ~= nil and back:find("visible map: " .. painted .. "/" .. painted, 1, true) ~= nil,
@@ -304,6 +307,7 @@ end
 -- After a bail, the probe must say so too — a zero-painted record that looks
 -- like an empty route is exactly the confusion this card exists to end.
 shownMapID = 1414
+clock = clock + 1
 W:Redraw()
 probe = ns.GetDB().mapProbe
 check(type(probe) == "table" and probe.idle == true,

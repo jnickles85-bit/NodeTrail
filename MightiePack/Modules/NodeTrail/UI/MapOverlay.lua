@@ -353,7 +353,7 @@ function M:ReleaseVisuals(why)
     pcall(self.host.Hide, self.host)
   end
   if why then
-    self:RecordProbe()
+    self:RecordProbe(true)
   end
 end
 
@@ -1011,11 +1011,19 @@ local function objectDefects(self)
   return defects
 end
 
-function M:RecordProbe()
+function M:RecordProbe(force)
   local db = type(ns.GetDB) == "function" and ns.GetDB() or nil
   if type(db) ~= "table" then
     return
   end
+  -- Throttled: a map drag fires OnSizeChanged repeatedly, and this walks every
+  -- painted dot. The diag calls VisibleAudit directly and is not throttled; this
+  -- is only the copy that lands in SavedVariables. A bail is always recorded.
+  local now = (type(GetTime) == "function") and GetTime() or nil
+  if not force and now and self._probeAt and (now - self._probeAt) < 0.25 then
+    return
+  end
+  self._probeAt = now
   local ok, audit = pcall(self.VisibleAudit, self)
   if not ok or type(audit) ~= "table" then
     return
