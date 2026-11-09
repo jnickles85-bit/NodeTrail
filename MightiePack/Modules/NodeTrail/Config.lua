@@ -68,6 +68,9 @@ ns.defaults = {
     mapID = nil,
     startedAt = 0,
     autoRefresh = true,
+  -- Recipe-uses line in the herb tooltip: parked off (Mightie 2026-11-09).
+  -- The scan and the gate keep running; this only hides the line.
+  showAlchemyUses = false,
     autoRefreshPicks = 5,
   },
 }

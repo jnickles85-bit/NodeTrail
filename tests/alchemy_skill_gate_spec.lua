@@ -169,6 +169,10 @@ local recipes = {
 local mode = "numAvailable" -- "numAvailable" | "requiredSkill" | "none"
 
 local function installClient()
+  -- Parked off in the product; this spec covers the gate behind the switch.
+  if type(NodeTrailDB) ~= "table" then NodeTrailDB = {} end
+  NodeTrailDB.profile = NodeTrailDB.profile or {}
+  NodeTrailDB.profile.showAlchemyUses = true
   C_TradeSkillUI = {
     GetAllRecipeIDs = function()
       local ids = {}
@@ -201,6 +205,9 @@ local function installClient()
 end
 
 local function rescan()
+  -- Parked off in the product; this spec covers the gate behind the switch.
+  NodeTrailDB.profile = NodeTrailDB.profile or {}
+  NodeTrailDB.profile.showAlchemyUses = true
   NodeTrailDB.recipes.alchemy = {}
   NodeTrailDB.recipes.alchemyScanned = nil
   local ok, r = pcall(ns.Recipes.Scan, ns.Recipes)

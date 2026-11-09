@@ -100,7 +100,14 @@ local function panelLines()
   return ns.TooltipPanel:TextLines()
 end
 
+-- The recipe-uses line is parked OFF in the product (Config.showAlchemyUses =
+-- false). These specs cover the code behind it, so every render switches it on
+-- unless a test is specifically asserting the parked default (PARKED_ALCHEMY).
+local PARKED_ALCHEMY = false
 local function hover(name)
+  NodeTrailDB = NodeTrailDB or {}
+  NodeTrailDB.profile = NodeTrailDB.profile or {}
+  NodeTrailDB.profile.showAlchemyUses = not PARKED_ALCHEMY
   GameTooltip.lines = { name, "Herbalism" }
   GameTooltip:SyncFirstLine()
   GameTooltip.shown = true
@@ -158,10 +165,12 @@ check(#GameTooltip.lines == 2, "Test 4: unit tooltip ignored (no lines appended)
 check(ns.TooltipPanel:IsShown() == false, "Test 4: unit tooltip shows no panel")
 mouseoverUnit = false
 
--- Test 5
--- t_c2e67619: the block no longer opens with the addon's own name. The first
--- line the addon appends is the node name (the drop row's left column), so the
--- client's two lines are followed by it directly.
+-- Test 5 — the PARKED default, asserted on purpose: with showAlchemyUses off
+-- (the shipped value) a herb tooltip carries the node, the drop rates and the
+-- picks line, and nothing about recipes — not the list, not the "open Alchemy
+-- once" hint. Mightie, 2026-11-09: "lets just take that part out of the tooltip
+-- info for now… the % of drops is fine for now."
+PARKED_ALCHEMY = true
 hover("Peacebloom")
 local lines = panelLines()
 local found = { Peacebloom = false, Picks = false, Alchemy = false }
@@ -183,7 +192,12 @@ check(#GameTooltip.lines == 2,
   "Test 5: the client's tooltip still holds only its own two lines (got " .. #GameTooltip.lines .. ")")
 check(found.Peacebloom, "Test 5: Peacebloom line present")
 check(found.Picks, "Test 5: picks line present")
-check(found.Alchemy, "Test 5: alchemy hint present")
+-- Parked (Mightie 2026-11-09): the recipe-uses line is off by default, and a
+-- parked feature must not advertise itself — so the "Open Alchemy once" hint is
+-- now required to be ABSENT. The gate itself stays covered by
+-- recipe_diag_spec / alchemy_skill_gate_spec, which switch the flag back on.
+check(not found.Alchemy, "Test 5: the parked alchemy line and its hint are absent")
+PARKED_ALCHEMY = false
 
 -- Test 6
 hover("Mageroyal")
@@ -238,7 +252,12 @@ check(found10, "Test 8: picks 10 present")
 trade = { line = "Cooking", rows = { { name = "Spiced Wolf Meat", type = "easy", reagents = { 2672 } } } }
 local scanResult = ns.Recipes:Scan()
 check(scanResult == false, "Test 9: scan returns false for non-alchemy")
-check(NodeTrailDB.recipes.alchemyScanned == nil, "Test 9: alchemyScanned nil")
+-- The DB may be absent entirely here (Test 2 cleared it and a gated scan does
+-- not create one) — either way the intent is that nothing was persisted.
+check(type(NodeTrailDB) ~= "table"
+  or type(NodeTrailDB.recipes) ~= "table"
+  or NodeTrailDB.recipes.alchemyScanned == nil,
+  "Test 9: alchemyScanned nil")
 
 -- Test 10
 trade = {
@@ -522,7 +541,6 @@ local function countAlchKeys(t)
   return n
 end
 
--- Test 17: modern client, GetChildProfessionInfo reports the open window is
 -- COOKING. The scan must NOT write the map (it is not alchemy), must record
 -- gated=profession, and the tooltip must keep the honest "open Alchemy" hint
 -- — not claim a Cooking recipe as an Alchemy one.
@@ -603,7 +621,6 @@ check(stOut18:find("open your Alchemy window once", 1, true) == nil,
 check(stOut18:find("unavailable on this client", 1, true) == nil,
   "Test 18: status does NOT falsely report the API as absent")
 
--- Test 19: modern client where GetChildProfessionInfo positively reports
 -- ALCHEMY. The scan must write the map — EXACTLY as the legacy stub's same
 -- two recipes do (Test 10/Test 14) — set alchemyScanned, and leave no gated
 -- diag. This is the fallback-prof vs primary-prof parity check.

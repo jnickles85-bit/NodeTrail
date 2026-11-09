@@ -206,8 +206,25 @@ function T.BuildLines(name)
   if answer == true then
     table.insert(lines, { left = picksLine(gathers) })
   end
-  local uses = ns.Recipes:Uses(node.item)
-  if uses then
+  -- PARKED (Mightie, 2026-11-09): "lets just take that part out of the tooltip
+  -- info for now. we can bring it back later if we decide to. the % of drops is
+  -- fine for now". The recipe-uses block is behind a default-OFF switch, not
+  -- deleted: the scan, the gate and /nt recipediag all keep working, so turning
+  -- it back on is one config value and no code. This client answers
+  -- craftable=true and IsRecipeProfessionLearned=true for recipes he cannot
+  -- make, so the line needs the count-only gate finished before it earns its
+  -- place in a tooltip again.
+  -- Read the stored profile WITHOUT creating it: ns.GetDB() would build a fresh
+  -- NodeTrailDB in the middle of a tooltip render (and in a spec that has
+  -- deliberately cleared it), which is not a render's job.
+  local prof = (type(NodeTrailDB) == "table" and type(NodeTrailDB.profile) == "table")
+    and NodeTrailDB.profile or nil
+  local showUses = prof ~= nil and prof.showAlchemyUses == true
+  local uses = showUses and ns.Recipes:Uses(node.item) or nil
+  if not showUses then
+    -- parked: no recipe lines and no "open Alchemy once" hint either, so a
+    -- parked feature cannot advertise itself in a tooltip.
+  elseif uses then
     if uses.filtered then
       -- Only what the character can actually make now (t_04c983cc). Mightie:
       -- "alchemy tooltip is giving info for crafts i cant do yet." The
