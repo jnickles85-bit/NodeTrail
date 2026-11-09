@@ -258,6 +258,10 @@ end
 
 local function resetDB()
   NodeTrailDB = { recipes = { alchemy = {} } }
+  -- The recipe-uses line is parked OFF in the product (Config.showAlchemyUses =
+  -- false). These specs exercise the gate behind it, so they switch it back on:
+  -- parked is a default, not a deletion, and the gate must stay covered.
+  NodeTrailDB.profile = { showAlchemyUses = true }
 end
 
 -- ═══ 1. GetCraftableCount is a gate (the client's own "can I make it") ═════
