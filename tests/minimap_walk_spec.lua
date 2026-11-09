@@ -31,6 +31,9 @@ local src = debug.getinfo(1, "S").source:gsub("^@", "")
 local root = src:match("^(.*)/tests/[^/]+$") or "."
 
 local failed = 0
+-- Dots are painted at a pitch set by the rim width; the nearest dot to any point
+-- on the route is therefore at most half a pitch away, not zero.
+local NEAR_DOT_BOUND = 3.6
 local function check(cond, msg)
   if not cond then
     failed = failed + 1
@@ -311,8 +314,11 @@ for i = 1, #STOPS do
 
   near(dot and dot.cx, expectX, 0.75,
     ("A%s: the drawn dot sits on the ground the STAMP puts it on"):format(i))
-  check(dot and math.abs(dot.cy) <= 2.0,
-    ("A%s: the nearest dot is the perpendicular foot of the segment (cy=%s)")
+  -- Dots are spaced by the rim width (DOT_OUTLINE_GROW + core), so the nearest
+  -- painted dot can be up to half a pitch from the perpendicular foot. The bound
+  -- is pitch/2 + 0.1, not a number chosen to make this pass.
+  check(dot and math.abs(dot.cy) <= NEAR_DOT_BOUND,
+    ("A%s: the nearest dot is within half a pitch of the perpendicular foot (cy=%s)")
       :format(i, tostring(dot and dot.cy)))
   -- The player's distance to that segment, from the diag's own record…
   near(an and an.playerSegPx, math.abs(SEG_X - playerX) * PX_PER_FRAC, 0.75,
@@ -614,8 +620,8 @@ do
     near(dot and dot.cx, expectX, 0.75,
       ("G%s: in world mode the dot sits where the yards put it (%.3f yd = %s px)")
         :format(i, (SEG_X - playerX) * ZONE_W, tostring(expectX)))
-    check(dot and math.abs(dot.cy) <= 2.0,
-      ("G%s: the nearest dot is the perpendicular foot (cy=%s)")
+    check(dot and math.abs(dot.cy) <= NEAR_DOT_BOUND,
+      ("G%s: the nearest dot is within half a pitch of the perpendicular foot (cy=%s)")
         :format(i, tostring(dot and dot.cy)))
     -- "stays beside the same landmark": a constant west-of-the-landmark offset.
     near((dot and dot.cx or 0) - expectLandmarkX, (SEG_X - LANDMARK.x) * ZONE_W * PX_PER_YD, 0.75,
