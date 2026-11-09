@@ -1,0 +1,90 @@
+t_b46e5e87 evidence — 2026-11-09T23:37:31Z — base 0da8939
+
+== luac5.1 -p ==
+ok MightiePack/Modules/NodeTrail/Config.lua
+ok MightiePack/Modules/NodeTrail/Route/SkinRoute.lua
+ok MightiePack/Modules/NodeTrail/UI/MapOverlay.lua
+ok MightiePack/Modules/NodeTrail/UI/MinimapPath.lua
+ok MightiePack/Modules/NodeTrail/Core.lua
+ok MightiePack/Options.lua
+ok tests/skinroute_spec.lua
+ok tests/umbrella_spec.lua
+
+== tests/*.lua under lua5.1 ==
+ok   tests/alchemy_skill_gate_spec.lua
+ok   tests/beast_profession_gate_spec.lua
+ok   tests/bugreport_spec.lua
+ok   tests/density_spec.lua
+ok   tests/diag_truthful_spec.lua
+ok   tests/draw_smoke.lua
+ok   tests/event_gate_spec.lua
+ok   tests/item_name_capture_spec.lua
+ok   tests/mapdiag_spec.lua
+ok   tests/mapdiag_visible_spec.lua
+ok   tests/mapdiag_zorder_spec.lua
+ok   tests/mapdot_capacity_spec.lua
+ok   tests/mapdot_scale_spec.lua
+ok   tests/mapdraw_primitive_spec.lua
+ok   tests/mapframe_projection_spec.lua
+ok   tests/maplegibility_spec.lua
+ok   tests/mapoverlay_spec.lua
+ok   tests/minimap_diag_spec.lua
+ok   tests/minimap_hbd_spec.lua
+ok   tests/minimap_units_spec.lua
+ok   tests/minimap_walk_spec.lua
+ok   tests/nav_arrow_spec.lua
+ok   tests/nav_target_spec.lua
+ok   tests/options_spec.lua
+ok   tests/pathgeom_spec.lua
+ok   tests/profession_gate_spec.lua
+ok   tests/recipe_diag_spec.lua
+ok   tests/recorder_spec.lua
+ok   tests/route_auto_spec.lua
+ok   tests/route_stability_spec.lua
+ok   tests/skin_tooltip_spec.lua
+ok   tests/skindiag_secret_spec.lua
+ok   tests/skindiag_spec.lua
+ok   tests/skinning_dump_spec.lua
+ok   tests/skinning_guardless_spec.lua
+ok   tests/skinning_items_spec.lua
+ok   tests/skinning_recorder_spec.lua
+ok   tests/skinroute_spec.lua
+ok   tests/slash_spec.lua
+ok   tests/status_meta_spec.lua
+ok   tests/toast_test_spec.lua
+ok   tests/toast_trace_spec.lua
+ok   tests/tooltip_no_gametooltip_writes_spec.lua
+ok   tests/tooltip_panel_spec.lua
+ok   tests/tooltip_refresh_spec.lua
+ok   tests/tooltip_spec.lua
+ok   tests/touchstone_assets_spec.lua
+ok   tests/touchstone_fold_spec.lua
+ok   tests/touchstone_loadorder_spec.lua
+ok   tests/touchstone_tooltip_line_spec.lua
+ok   tests/touchstone_weights_spec.lua
+ok   tests/ttdiag_minimal_spec.lua
+ok   tests/umbrella_spec.lua
+pass=53 fail=0
+
+== RED on the parent commit (0da8939, pristine git archive + only the new specs) ==
+-- tests/skinroute_spec.lua --
+FAIL: missing file on this commit: MightiePack/Modules/NodeTrail/Route/SkinRoute.lua (cannot open ./MightiePack/Modules/NodeTrail/Route/SkinRoute.lua: No such file or directory)
+FAIL: the skinning route generator exists (Route/SkinRoute.lua)
+FAIL: the generator has one status sentence for the panel/command
+FAIL: RED on this commit: ns.BuildSkinRouteForMap (the generator) is absent
+FAIL: RED on this commit: ns.RefreshSkinRoute (gate + build + draw) is absent
+FAIL: RED on this commit: ns.SkinRouteCommand (/nt skinroute) is absent
+FAIL: RED on this commit: ns.IsSkinRouteEnabled (the persisted switch) is absent
+FAIL: RED on this commit: ns.SetSkinRouteEnabled (the persisted switch) is absent
+FAIL: RED on this commit: MapOverlay:SetSkinRoute (the world-map layer) is absent
+FAIL: RED on this commit: MapOverlay:ClearSkinRoute (the world-map layer) is absent
+FAIL: RED on this commit: MapOverlay:SkinAudit (the mapdiag N/M line) is absent
+FAIL: RED on this commit: MinimapPath:SetSkinRoute (the minimap layer) is absent
+FAIL: RED on this commit: MinimapPath:ClearSkinRoute (the minimap layer) is absent
+exit=1
+-- tests/umbrella_spec.lua (HEAD's version, parent's code) --
+FAIL: checkbox count = moduleOrder + 3 NodeTrail sub-options (skinning, auto-refresh, skinning circle), got 4 expected 5
+FAIL: a skinning farming circle sub-option checkbox exists
+FAIL: the skinning circle sub-option is a real checkbutton
+3 checks failed
+exit=1

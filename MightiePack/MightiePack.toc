@@ -23,6 +23,7 @@ Modules/NodeTrail/Data/SkinHints.lua
 Modules/NodeTrail/Data/Recipes.lua
 Modules/NodeTrail/Route/Cluster.lua
 Modules/NodeTrail/Route/Build.lua
+Modules/NodeTrail/Route/SkinRoute.lua
 Modules/NodeTrail/Route/Auto.lua
 Modules/NodeTrail/UI/PathGeom.lua
 Modules/NodeTrail/UI/LineDraw.lua

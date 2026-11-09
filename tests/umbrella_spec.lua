@@ -280,9 +280,9 @@ local cbCount = 0
 for _, f in ipairs(frames) do
   if f.template == "UICheckButtonTemplate" then cbCount = cbCount + 1 end
 end
-check(cbCount == #pkg.moduleOrder + 2,
-  "checkbox count = moduleOrder + 2 NodeTrail sub-options (skinning, auto-refresh), got " .. cbCount
-  .. " expected " .. (#pkg.moduleOrder + 2))
+check(cbCount == #pkg.moduleOrder + 3,
+  "checkbox count = moduleOrder + 3 NodeTrail sub-options (skinning, auto-refresh, skinning circle), got " .. cbCount
+  .. " expected " .. (#pkg.moduleOrder + 3))
 local boxes = pkg.optionsBoxes
 check(boxes ~= nil, "optionsBoxes exists")
 check(boxes.NodeTrail and boxes.NodeTrail:GetChecked() == true, "NodeTrail box checked")
@@ -341,6 +341,32 @@ if autoBox then
       .. " vs " .. tostring(sp[5]) .. ")")
   end
   check(type(autoBox:GetScript("OnClick")) == "function", "auto-refresh row has an OnClick handler")
+end
+
+-- t_b46e5e87: "Skinning farming circle" is the third indented NodeTrail row —
+-- its own switch, persisted at NodeTrailDB.skinroute.enabled and independent of
+-- the probe and of the herb route. ON by default; the circle itself stays
+-- hidden until the map has enough skinned corpses and the character is a
+-- skinner, so the default cannot draw anything by itself.
+local skinRouteBox = boxes.SkinRoute
+check(skinRouteBox ~= nil, "a skinning farming circle sub-option checkbox exists")
+check(skinRouteBox and skinRouteBox.template == "UICheckButtonTemplate",
+  "the skinning circle sub-option is a real checkbutton")
+if skinRouteBox then
+  check(skinRouteBox:GetChecked() == true, "skinning circle sub-option is ON by default")
+  check(skinRouteBox:IsEnabled() == true, "skinning circle sub-option is usable while NodeTrail is on")
+  local function point1c(box)
+    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
+  end
+  local rp, ap = point1c(skinRouteBox), point1c(autoBox)
+  check(rp ~= nil, "the skinning circle row was positioned")
+  if rp and ap then
+    check(rp[4] == 36, "skinning circle row is indented to x=36, got " .. tostring(rp[4]))
+    check(rp[5] == ap[5] - 22,
+      "skinning circle row sits 22px under the auto-refresh row (got " .. tostring(rp[5])
+      .. " vs " .. tostring(ap[5]) .. ")")
+  end
+  check(type(skinRouteBox:GetScript("OnClick")) == "function", "skinning circle row has an OnClick handler")
 end
 
 local popup

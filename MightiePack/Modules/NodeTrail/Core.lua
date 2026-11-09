@@ -49,6 +49,9 @@ local function printHelp()
     "  /nt minimap [on|off] - the route drawn on the minimap only (the world map is unaffected)")
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt navwalk [start|mark <label>] - record a walk: player coords, the draw-time stamp and the drawn dot's anchors at each stop (saved on /reload)")
+  -- t_b46e5e87: the skinning farming circle.
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt skinroute [on|off|status] - the green closed loop through where you have skinned on THIS zone's map; off clears it, the herb route is unaffected")
   printL("HELP_NOTES")
 end
 
@@ -258,6 +261,11 @@ local function handleSlash(msg)
   elseif msg == "navwalk" or msg:match("^navwalk%s") then
     -- t_86583cf2: record Mightie's four-stop walk in his own client.
     ns.NavWalkCommand(msg:match("^navwalk%s+(.*)$"))
+  elseif msg == "skinroute" or msg:match("^skinroute%s") then
+    -- t_b46e5e87: the skinning farming circle's own switch/status. The circle
+    -- is gated on Skinning and on this map's own skinned sample, so the command
+    -- can honestly say how many more are needed when it draws nothing.
+    ns.SkinRouteCommand(msg:match("^skinroute%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -766,6 +774,16 @@ function ns.Enable()
   -- herb route from starting (it reports through /mp skindiag instead).
   if ns.IsSkinningEnabled() then
     ns.EnableSkinning()
+  end
+  -- t_b46e5e87: the skinning farming circle is a DRAW layer, not the probe, so
+  -- it is evaluated at login whether or not the probe is recording. Nothing is
+  -- drawn until this map has enough of the character's own skinned corpses and
+  -- the shared Skinning gate answers yes, so this is silent by construction.
+  if type(ns.RefreshSkinRoute) == "function" then
+    local okC, errC = pcall(ns.RefreshSkinRoute)
+    if not okC then
+      ns._skinRouteError = tostring(errC)
+    end
   end
   -- t_2bc15917: a route the player started earlier comes back by itself —
   -- Enable() is what a login and a /reload both run. The restore never

@@ -716,6 +716,72 @@ function M:EnsureHost(parent, label)
   return host
 end
 
+--- The skinning circle's own host, on the SAME parent as the herb route's host.
+--- A separate frame is what makes the two layers independent: showing/hiding the
+--- herb line can never hide the circle, and clearing the circle can never clear
+--- the line. Parented by the same rule as EnsureHost (WorldMapFrame on this
+--- client), never the canvas — the draw-order decision is not re-litigated here.
+function M:EnsureSkinHost(parent, label)
+  if not parent or not isFn(CreateFrame) then
+    return nil
+  end
+  if self.skinHost and self._skinHostParent ~= parent then
+    ns.LineDraw.BindOverlay(self.skinHost, parent)
+    self._skinHostParent = parent
+    if self.skinDrawer then
+      ns.LineDraw.Invalidate(self.skinDrawer)
+    end
+  end
+  if not self.skinHost then
+    local ok, host = pcall(CreateFrame, "Frame", nil, parent)
+    if not ok or not host then
+      return nil
+    end
+    self.skinHost = host
+    self.skinDrawer = ns.LineDraw.Create()
+    ns.LineDraw.BindOverlay(host, parent)
+    self._skinHostParent = parent
+  end
+  self._skinParentLabel = label
+  self:HookParentSize(parent)
+  local host = self.skinHost
+  local strata = call(parent, "GetFrameStrata")
+  if type(strata) == "string" and isFn(host.SetFrameStrata) then
+    local currentRank = strataRank(call(host, "GetFrameStrata"))
+    local wantedRank = strataRank(strata)
+    if not currentRank or not wantedRank or currentRank < wantedRank then
+      pcall(host.SetFrameStrata, host, strata)
+    end
+  end
+  local level = call(parent, "GetFrameLevel")
+  if type(level) == "number" and isFn(host.SetFrameLevel) then
+    local current = frameLevel(host)
+    if type(current) ~= "number" or current < level + 10 then
+      pcall(host.SetFrameLevel, host, level + 10)
+    end
+  end
+  pcall(host.SetAlpha, host, 1)
+  if isFn(host.SetIgnoreParentAlpha) then
+    pcall(host.SetIgnoreParentAlpha, host, true)
+  end
+  return host
+end
+
+--- Drop the skinning circle only. The herb route's drawer and host are
+--- untouched: the two layers share the measurement, never their visuals.
+function M:ReleaseSkin(why)
+  if self.skinDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.skinDrawer, why)
+    else
+      ns.LineDraw.Clear(self.skinDrawer)
+    end
+  end
+  if self.skinHost then
+    pcall(self.skinHost.Hide, self.skinHost)
+  end
+end
+
 --- Measure the draw order this client actually gives the map art, and raise
 --- the host above it. The old code raised the host to `parent level + 10` and
 --- stopped there — a guess: on a client whose art frames are siblings of the
@@ -1255,12 +1321,21 @@ function M:Redraw()
   end
   self._busy = true
   local ok, err = pcall(self._redraw, self)
+  -- The skinning circle is a second, independent pass: the herb pass may refuse
+  -- (no route, another map) without that decision touching the circle.
+  local okS, errS = pcall(self._redrawSkin, self)
   self._busy = false
   if not ok then
     self._drawError = tostring(err)
     pcall(self.ReleaseVisuals, self)
   else
     self._drawError = nil
+  end
+  if not okS then
+    self._skinError = tostring(errS)
+    pcall(self.ReleaseSkin, self)
+  else
+    self._skinError = nil
   end
 end
 
@@ -1378,6 +1453,218 @@ function M:SetRoute(route)
   self._retries = 0
   self:TryHookMap()
   self:Redraw()
+end
+
+-- ── the skinning farming circle (t_b46e5e87) ────────────────────────────────
+-- A SECOND layer on the same measured map rect, drawn by its own drawer on its
+-- own host. It is set and cleared independently of the herb route: /nt stop can
+-- clear the line while the circle stays, and /nt skinroute off clears the circle
+-- without touching the line or its fractions.
+function M:SetSkinRoute(route)
+  if not route or not route.path or #route.path < 2 or not ns.GetDB().showWorldMap then
+    self:ClearSkinRoute()
+    return
+  end
+  self.skinPath = route.path
+  self.skinMapID = route.mapID
+  self.skinColor = route.color
+  self.skinRoute = route
+  self._retries = 0
+  self:TryHookMap()
+  self:Redraw()
+end
+
+function M:ClearSkinRoute()
+  self.skinPath = nil
+  self.skinMapID = nil
+  self.skinColor = nil
+  self.skinRoute = nil
+  self._skinWhy = nil
+  self._skinPx = nil
+  self._skinQueued = 0
+  self:ReleaseSkin()
+end
+
+--- Draw the circle. Same measurement, same projection and the same clipping as
+--- the herb pass (`_redraw`), deliberately: the fractions must land on the same
+--- ground, on the same host parent, with the same visible rect. Only the
+--- drawer, the host frame and the colour differ.
+function M:_redrawSkin()
+  self._skinQueued = 0
+  self._skinWhy = nil
+  self._skinPx = nil
+  self._skinSkipped = nil
+  if not self.skinPath or #self.skinPath < 2 then
+    self._skinWhy = "no skinning circle"
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+  if not ns.GetDB().showWorldMap then
+    self._skinWhy = "showWorldMap is off"
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+
+  local mapFrame = _G.WorldMapFrame
+  local shown = displayedMapID(mapFrame)
+  if shown and self.skinMapID and shown ~= self.skinMapID then
+    self._skinWhy = ("the open map is %s, the skinning circle is on %s"):format(
+      tostring(shown), tostring(self.skinMapID))
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+
+  local mapping = self:_measureMapping(mapFrame)
+  self._skinMappingInfo = mapping
+  local parent, label
+  local isCanvas = false
+  if mapping.mode == "frame" then
+    parent, label = mapFrame, "WorldMapFrame"
+  else
+    parent, label, _, _, isCanvas = selectParent()
+  end
+  if not parent then
+    self._skinWhy = "no map frame (canvas and legacy frames all absent)"
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+
+  local host = self:EnsureSkinHost(parent, label)
+  if not host or not self.skinDrawer then
+    self._skinWhy = "no skinning overlay host (CreateFrame failed)"
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+
+  local width, height = frameSize(parent)
+  if not width or not height or width < 2 or height < 2 then
+    self._skinWhy = "the map frame has no measurable size"
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+
+  local inner, innerW, innerH
+  local rect, window
+  if mapping.mode == "frame" then
+    rect = mapping.rect
+    window = mapping.window
+    self._skinInnerLabel = (mapping.ground == "canvas")
+      and "the canvas rect" or "the ScrollContainer rect"
+  else
+    if not isCanvas then
+      inner, innerW, innerH = innerMapFrame(parent)
+    end
+    rect = ns.PathGeom.MapRect(width, height, innerW, innerH)
+    self._skinInnerLabel = inner and frameName(inner) or nil
+  end
+  self._skinRect = rect
+  self._skinWindow = window
+  if not rect then
+    self._skinWhy = "the map rect could not be measured"
+    self:ReleaseSkin(self._skinWhy)
+    return
+  end
+
+  local buf = self._skinBuf or {}
+  self._skinBuf = buf
+  local count = 0
+  local geom = ns.PathGeom
+  local px, segLens, skipped = {}, {}, {}
+  local cw, ch = rect.width, rect.height
+  if mapping.mode == "frame" and type(mapping.groundBox) == "table" then
+    cw, ch = mapping.groundBox.width, mapping.groundBox.height
+  end
+  local function inWindow(x, y)
+    local win = window or rect
+    return x >= win.left - 0.01 and x <= win.left + win.width + 0.01
+      and y >= win.top - 0.01 and y <= win.top + win.height + 0.01
+  end
+  for i = 1, #self.skinPath do
+    local p = self.skinPath[i]
+    if geom.IsMapPoint(p) then
+      local x, y = geom.FractionToPixel(p.x, p.y, rect)
+      px[i] = {
+        x = x, y = y, fx = p.x, fy = p.y,
+        cx = p.x * cw, cy = p.y * ch,
+        visible = (x ~= nil) and inWindow(x, y) or false,
+      }
+    else
+      skipped[#skipped + 1] = "point " .. i .. " not a map point"
+    end
+  end
+  for i = 1, #self.skinPath - 1 do
+    local a, b = self.skinPath[i], self.skinPath[i + 1]
+    if geom.IsMapPoint(a) and geom.IsMapPoint(b) then
+      local x1, y1 = geom.FractionToPixel(a.x, a.y, rect)
+      local x2, y2 = geom.FractionToPixel(b.x, b.y, rect)
+      if x1 and x2 then
+        local outside
+        if window then
+          local cx1, cy1, cx2, cy2 = geom.ClipRect(x1, y1, x2, y2,
+            window.left, window.top, window.left + window.width, window.top + window.height)
+          if cx1 then
+            x1, y1, x2, y2 = cx1, cy1, cx2, cy2
+          else
+            outside = true
+          end
+        end
+        if outside then
+          skipped[#skipped + 1] = ("segment %d is outside the visible map window"):format(i)
+        else
+          local dx, dy = x2 - x1, y2 - y1
+          if dx * dx + dy * dy >= 0.25 then
+            count = count + 1
+            local seg = buf[count]
+            if not seg then
+              seg = {}
+              buf[count] = seg
+            end
+            seg[1], seg[2], seg[3], seg[4] = x1, y1, x2, y2
+            segLens[count] = math.sqrt(dx * dx + dy * dy)
+          else
+            skipped[#skipped + 1] = ("segment %d shorter than 0.5px"):format(i)
+          end
+        end
+      else
+        skipped[#skipped + 1] = ("segment %d did not project"):format(i)
+      end
+    else
+      skipped[#skipped + 1] = ("segment %d has a non-map point"):format(i)
+    end
+  end
+  self._skinPx = px
+  self._skinSegLens = segLens
+  self._skinSkipped = skipped
+
+  local unitScale
+  if mapping.mode == "frame" then
+    local hostBox = measureBox(host)
+    unitScale = (hostBox and hostBox.scale) or mapping.wmf.scale
+  else
+    unitScale = mapZoom(mapFrame)
+  end
+  if type(unitScale) ~= "number" or unitScale ~= unitScale or unitScale <= 0 then
+    unitScale = 1
+  end
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.1, 0.85, 0.35, 0.95 }
+  local r = tonumber(c[1]) or 0.1
+  local g = tonumber(c[2]) or 0.85
+  local b = tonumber(c[3]) or 0.35
+  local a = tonumber(c[4]) or 0.95
+  local widthFrac = tonumber((self.skinRoute and self.skinRoute.width) or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
+  if widthFrac <= 0 then widthFrac = 2 end
+  local metrics = ns.LineDraw.DotMetrics(widthFrac, unitScale, self._screenFloor)
+  self._skinDotMetrics = metrics
+  ns.LineDraw.Draw(self.skinDrawer, host, buf, count, widthFrac / unitScale,
+    r, g, b, a, "ydown", metrics)
+  self._skinQueued = count
+  if count > 0 then
+    pcall(host.Show, host)
+  else
+    self._skinWhy = ("none of the %d circle segments survived projection (%s)"):format(
+      #self.skinPath - 1, #skipped > 0 and table.concat(skipped, "; ") or "no segments in the path")
+    pcall(host.Hide, host)
+  end
 end
 
 -- ── /nt mapdiag ─────────────────────────────────────────────────────────────
@@ -1584,8 +1871,10 @@ end
 --- ways. A check against the dots' own host can never fail (they are its
 --- children), which is how `painted=288 outside=0` was printed for a route that
 --- was not on the screenshot at all.
-function M:VisibleAudit()
-  local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+function M:VisibleAudit(drawerArg, hostArg)
+  local drawer = drawerArg or self.drawer
+  local auditHost = hostArg or self.host
+  local applied = (drawer and ns.LineDraw.Applied(drawer)) or {}
   local out = { idle = applied.idle and true or false, why = applied.why, painted = tonumber(applied.paintedDots) or 0 }
   if out.idle then
     return out
@@ -1593,6 +1882,11 @@ function M:VisibleAudit()
   local mapFrame = _G.WorldMapFrame
   local canvas = getCanvas(mapFrame)
   local mapping = self._mappingInfo
+  -- The circle's own pass measured the map too; when THIS audit is for the skin
+  -- drawer, its measurement is the one that describes the dots' host.
+  if drawerArg ~= nil and drawerArg == self.skinDrawer and type(self._skinMappingInfo) == "table" then
+    mapping = self._skinMappingInfo
+  end
   local window, windowWhy
   if type(mapping) == "table" and mapping.mode == "frame" then
     -- t_c2ce2c49: the dots are anchored in the HOST's pixel space, which on the
@@ -1618,7 +1912,7 @@ function M:VisibleAudit()
   -- rects the client reports are still printed, but they are NOT the ruler this
   -- audit counts with (they are in three different spaces; see canvasWindow).
   out.visible = window
-  out.host = screenRect(self.host)
+  out.host = screenRect(auditHost)
   out.canvasRect = screenRect(canvas)
   out.screen = {
     map = screenRect(mapFrame),
@@ -1629,7 +1923,6 @@ function M:VisibleAudit()
   if out.painted < 1 then
     return out
   end
-  local drawer = self.drawer
   local inside, measured = 0, 0
   local minL, maxR, maxT, minB
   local disagree, disagreeWorst = 0, 0
@@ -1640,7 +1933,7 @@ function M:VisibleAudit()
       -- The dot's centre in the HOST's units (the units its anchors are in) —
       -- WorldMapFrame's pixel space on the frame mapping, the canvas' on the
       -- fallback. The window is chosen in the same space above.
-      local cx, cy = anchorUnits(obj, self.host)
+      local cx, cy = anchorUnits(obj, auditHost)
       if cx then
         measured = measured + 1
         first = first or { x = cx, y = cy }
@@ -1696,6 +1989,14 @@ function M:VisibleAudit()
     out.verdict = " — " .. table.concat(why, "; ")
   end
   return out
+end
+--- The same measurement for the skinning circle's own drawer: its dots were
+--- anchored on the skin host, so the audit must read THAT frame's units.
+function M:SkinAudit()
+  if not self.skinDrawer then
+    return nil
+  end
+  return self:VisibleAudit(self.skinDrawer, self.skinHost)
 end
 
 
@@ -1760,6 +2061,22 @@ function M:Diag()
       fmtNum(hostW), fmtNum(hostH), fmtNum(parentW), fmtNum(parentH),
       tostring(call(self.host, "GetFrameStrata") or "absent"),
       fmtNum(call(self.host, "GetFrameLevel")))
+  end)
+  fact(function()
+    -- The skinning circle's own host. Present only once a circle has been set;
+    -- it is a SECOND frame on the same parent, which is what keeps the two
+    -- layers independently visible.
+    if not self.skinHost then
+      return "skinning circle layer: host=absent (no circle set on this client)"
+    end
+    local w, h = frameSize(self.skinHost)
+    local c = self.skinColor or {}
+    return string.format(
+      "skinning circle layer: parent=%s host=%s host_size=%sx%s colour=%.2f,%.2f,%.2f,%.2f queued=%s",
+      tostring(self._skinParentLabel or "none"),
+      frameName(self.skinHost), fmtNum(w), fmtNum(h),
+      tonumber(c[1]) or 0, tonumber(c[2]) or 0, tonumber(c[3]) or 0, tonumber(c[4]) or 0,
+      fmtNum(self._skinQueued or 0))
   end)
   fact(function()
     local rect = self._rect
@@ -2069,6 +2386,39 @@ function M:Diag()
       fmtNum(a.measured or 0), fmtNum(a.painted or 0),
       bbox, win,
       tostring(a.verdict or ""))
+  end)
+  fact(function()
+    -- The skinning farming circle is a SEPARATE layer. Its own line, in the
+    -- same N/M form, so an in-game run can prove the circle's dots land inside
+    -- the visible map rect without mixing them with the herb route's count.
+    if not self.skinPath then
+      return "skinning circle dots on the visible map: none (no circle for this map)"
+    end
+    local a = self:SkinAudit()
+    if type(a) ~= "table" then
+      return "skinning circle dots on the visible map: unavailable (no skinning draw recorded)"
+    end
+    if a.idle then
+      return "skinning circle dots on the visible map: 0/0 (idle: "
+        .. tostring(a.why or "no reason recorded") .. ")"
+    end
+    if (a.painted or 0) < 1 then
+      return "skinning circle dots on the visible map: 0/0 (nothing painted on the last draw; "
+        .. tostring(self._skinWhy or "no reason recorded") .. ")"
+    end
+    local win = "absent"
+    if type(self._skinWindow) == "table" then
+      win = string.format("%s,%s %sx%s in %s",
+        fmtNum(self._skinWindow.left, 1), fmtNum(self._skinWindow.top, 1),
+        fmtNum(self._skinWindow.width, 1), fmtNum(self._skinWindow.height, 1),
+        tostring(self._skinInnerLabel or "the measured rect"))
+    elseif type(self._skinRect) == "table" then
+      win = "the whole measured map rect (no clip window)"
+    end
+    return string.format("skinning circle dots on the visible map: %s/%s inside (measured %s of %s painted; window=%s; map=%s)%s",
+      fmtNum(a.inside or 0), fmtNum(a.painted or 0),
+      fmtNum(a.measured or 0), fmtNum(a.painted or 0),
+      win, fmtNum(self.skinMapID), tostring(a.verdict or ""))
   end)
   fact(function()
     local draws = self._draws

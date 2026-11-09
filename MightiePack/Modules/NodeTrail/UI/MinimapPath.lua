@@ -491,7 +491,11 @@ function M:Clear()
   self._drawn = nil
   self._drawnStamp = nil
   self._lastSample = nil
-  self:StopUpdates()
+  -- The circle is its own layer: clearing the herb line must not stop its
+  -- ticker, so updates stop only when there is no circle either.
+  if not self.skinPoints then
+    self:StopUpdates()
+  end
   self:ReleaseVisuals()
 end
 
@@ -512,7 +516,43 @@ function M:EnsureHost()
   return host
 end
 
-function M:_indexPoints(route)
+--- The skinning circle's own host: a second frame on the minimap, so clearing
+--- the herb line can never clear the circle (ReleaseVisuals hides self.host).
+function M:EnsureSkinHost()
+  if self.skinHost then
+    return self.skinHost
+  end
+  if not Minimap or type(CreateFrame) ~= "function" then
+    return nil
+  end
+  local ok, host = pcall(CreateFrame, "Frame", nil, Minimap)
+  if not ok or not host then
+    return nil
+  end
+  ns.LineDraw.BindOverlay(host, Minimap)
+  self.skinHost = host
+  self.skinDrawer = ns.LineDraw.Create()
+  return host
+end
+
+--- Drop the circle's visuals only; the herb route's drawer and host stay.
+function M:ReleaseSkinVisuals(why)
+  if self.skinDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.skinDrawer, why)
+    else
+      ns.LineDraw.Clear(self.skinDrawer)
+    end
+  end
+  if self.skinHost then
+    pcall(self.skinHost.Hide, self.skinHost)
+  end
+end
+
+--- Index one route's points for the minimap projection. Pure: returns the
+--- bookkeeping instead of writing it, so the herb route and the skinning circle
+--- can each be indexed without sharing state.
+local function indexRoute(route)
   local HBD = getHBD()
   local pts = {}
   local anyWorld, worldPoints = false, 0
@@ -532,54 +572,78 @@ function M:_indexPoints(route)
     end
     pts[i] = entry
   end
-  self.points = pts
-  -- ALL points, or the projection is not a world projection. `anyWorld` used to
-  -- be enough, and a point without world coordinates then produced no delta and
-  -- was silently dropped from the minimap while the diag claimed a world
-  -- projection for the whole route (review round 3: "useWorld=true but the
-  -- points carry the wrong space"). A partial world set now falls back to the
-  -- frac/zone projection, where every point has a fraction, and says why.
-  self.useWorld = anyWorld and worldPoints == #route.path
-  self._worldPoints = worldPoints
-  self._worldWhy = nil
+  local out = {
+    points = pts,
+    worldPoints = worldPoints,
+    -- ALL points, or the projection is not a world projection. `anyWorld` used
+    -- to be enough, and a point without world coordinates then produced no
+    -- delta and was silently dropped from the minimap while the diag claimed a
+    -- world projection for the whole route (review round 3: "useWorld=true but
+    -- the points carry the wrong space"). A partial world set now falls back to
+    -- the frac/zone projection, where every point has a fraction, and says why.
+    useWorld = anyWorld and worldPoints == #route.path,
+    worldWhy = nil,
+    zoneW = nil,
+    zoneH = nil,
+  }
   if anyWorld and worldPoints < #route.path then
-    self._worldWhy = (("HereBeDragons converted %d of %d point(s); %d have no world position, so the world projection would drop them")
+    out.worldWhy = (("HereBeDragons converted %d of %d point(s); %d have no world position, so the world projection would drop them")
       :format(worldPoints, #route.path, #route.path - worldPoints))
   elseif not anyWorld then
-    self._worldWhy = "no HereBeDragons world position for any route point"
+    out.worldWhy = "no HereBeDragons world position for any route point"
   end
-  self.zoneW, self.zoneH = nil, nil
   if HBD and type(HBD.GetZoneSize) == "function" and route.mapID then
     local ok, w, h = pcall(HBD.GetZoneSize, HBD, route.mapID)
     if ok and type(w) == "number" and type(h) == "number" and w > 0 and h > 0 then
-      self.zoneW, self.zoneH = w, h
+      out.zoneW, out.zoneH = w, h
     end
   end
+  return out
 end
 
-function M:_sample()
-  self._sampleWhy = nil
+function M:_indexPoints(route)
+  local r = indexRoute(route)
+  self.points = r.points
+  self.useWorld = r.useWorld
+  self._worldPoints = r.worldPoints
+  self._worldWhy = r.worldWhy
+  self.zoneW, self.zoneH = r.zoneW, r.zoneH
+end
+
+--- The same indexing for the skinning circle, kept in its own fields so neither
+--- layer can overwrite the other's projection.
+function M:_indexSkinPoints(route)
+  local r = indexRoute(route)
+  self.skinPoints = r.points
+  self.skinUseWorld = r.useWorld
+  self._skinWorldPoints = r.worldPoints
+  self._skinWorldWhy = r.worldWhy
+  self.skinZoneW, self.skinZoneH = r.zoneW, r.zoneH
+end
+
+--- One projection sample for one route. The herb route calls it through
+--- `_sample` (which records the reason on self._sampleWhy); the skinning circle
+--- passes its own map/space so the two can be on different maps at once.
+local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
   local halfW, halfH = minimapHalf()
   if not halfW then
-    self._sampleWhy = "the minimap has no measurable size"
-    return nil
+    return nil, "the minimap has no measurable size"
   end
   local sinF, cosF, faceOK = minimapRotation()
   if not faceOK then
-    self._sampleWhy = "no player facing (rotateMinimap is on and GetPlayerFacing is absent)"
-    return nil
+    return nil, "no player facing (rotateMinimap is on and GetPlayerFacing is absent)"
   end
   local radiusYards = viewRadiusYards()
   local HBD = getHBD()
 
-  if self.useWorld and HBD and type(HBD.GetPlayerWorldPosition) == "function" and radiusYards then
+  if useWorld and HBD and type(HBD.GetPlayerWorldPosition) == "function" and radiusYards then
     local ok, x, y, inst = pcall(HBD.GetPlayerWorldPosition, HBD)
     if ok and type(x) == "number" and type(y) == "number" then
       -- The fraction is not used by the world projection — but the stamp has to
       -- carry it, because the card's four-stop table compares "player fraction"
       -- with "the fraction the draw was built from", and in world mode that
       -- stamp read `frac=(absent,absent)` (review round 3).
-      local mx, my = playerMapPosition(self.mapID, HBD)
+      local mx, my = playerMapPosition(mapID, HBD)
       return {
         mode = "world",
         px = x, py = y, pinst = inst,
@@ -588,25 +652,24 @@ function M:_sample()
         radiusUnit = "yards",
         sinF = sinF, cosF = cosF,
         halfW = halfW, halfH = halfH,
-      }
+      }, nil
     end
   end
 
-  local mx, my = playerMapPosition(self.mapID, HBD)
+  local mx, my = playerMapPosition(mapID, HBD)
   if not mx then
-    self._sampleWhy = ("no player position on map %s"):format(tostring(self.mapID))
-    return nil
+    return nil, ("no player position on map %s"):format(tostring(mapID))
   end
-  if self.zoneW and self.zoneH and radiusYards then
+  if zoneW and zoneH and radiusYards then
     return {
       mode = "zone",
       mx = mx, my = my,
-      zoneW = self.zoneW, zoneH = self.zoneH,
+      zoneW = zoneW, zoneH = zoneH,
       radius = radiusYards,
       radiusUnit = "yards",
       sinF = sinF, cosF = cosF,
       halfW = halfW, halfH = halfH,
-    }
+    }, nil
   end
   local fraction = fallbackViewFraction()
   return {
@@ -616,7 +679,13 @@ function M:_sample()
     radiusUnit = "map fractions (fallback: no yard radius for this zone)",
     sinF = sinF, cosF = cosF,
     halfW = halfW, halfH = halfH,
-  }
+  }, nil
+end
+
+function M:_sample()
+  local sample, why = sampleFor(self, self.mapID, self.useWorld, self.zoneW, self.zoneH)
+  self._sampleWhy = why
+  return sample
 end
 
 function M:_redraw()
@@ -901,18 +970,137 @@ function M:DrawnAudit()
   return self._drawn
 end
 
+--- Draw the skinning farming circle on the minimap. Same sample, same clip and
+--- the same dot machinery as the herb pass; its own drawer, host, colour and
+--- stamps, so neither layer can blank the other.
+function M:_redrawSkin()
+  self._skinQueued = 0
+  self._skinWhy = nil
+  self._skinProj = nil
+  if not self.skinPoints or #self.skinPoints < 2 then
+    self._skinWhy = "no skinning circle"
+    self:ReleaseSkinVisuals()
+    return
+  end
+  if not ns.GetDB().showMinimap then
+    self._skinWhy = "showMinimap is off"
+    self:ReleaseSkinVisuals(self._skinWhy)
+    return
+  end
+  if Minimap and type(Minimap.IsVisible) == "function" then
+    local ok, visible = pcall(Minimap.IsVisible, Minimap)
+    if ok and not visible then
+      self._skinWhy = "the minimap is hidden"
+      self:ReleaseSkinVisuals(self._skinWhy)
+      return
+    end
+  end
+
+  local sample, why = sampleFor(self, self.skinMapID, self.skinUseWorld, self.skinZoneW, self.skinZoneH)
+  if not sample or not sample.radius or sample.radius <= 0 then
+    self._skinWhy = "no projection: " .. tostring(why or "the sample is unusable")
+    self:ReleaseSkinVisuals(self._skinWhy)
+    return
+  end
+  local host = self:EnsureSkinHost()
+  if not host or not self.skinDrawer then
+    self._skinWhy = "no skinning overlay host (CreateFrame failed)"
+    self:ReleaseSkinVisuals(self._skinWhy)
+    return
+  end
+
+  local buf = self._skinBuf or {}
+  self._skinBuf = buf
+  local count = 0
+  local pts = self.skinPoints
+  local proj = { mode = sample.mode, points = {}, segs = {} }
+  for i = 1, #pts do
+    local ax, ay = pointDelta(sample, pts[i])
+    if ax ~= nil then
+      local x1, y1 = toPixel(ax, ay, sample)
+      local dist = math.sqrt((x1 or 0) * (x1 or 0) + (y1 or 0) * (y1 or 0))
+      local radiusPx = math.min(sample.halfW, sample.halfH) * ROUND_INSET
+      proj.points[i] = {
+        x = x1, y = y1, dx = ax, dy = ay, dist = dist,
+        ratio = (radiusPx > 0) and (dist / radiusPx) or nil,
+        inside = radiusPx > 0 and dist <= radiusPx,
+      }
+    else
+      proj.points[i] = { why = "no delta (point lacks the coordinate this mode needs)" }
+    end
+  end
+  for i = 1, #pts - 1 do
+    local a, b = proj.points[i], proj.points[i + 1]
+    local entry = { index = i }
+    if a and b and a.x and b.x then
+      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
+      if cx1 then
+        count = count + 1
+        local seg = buf[count]
+        if not seg then
+          seg = {}
+          buf[count] = seg
+        end
+        seg[1], seg[2], seg[3], seg[4] = cx1, cy1, cx2, cy2
+        entry.queued = true
+      end
+    end
+    proj.segs[i] = entry
+  end
+
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.1, 0.85, 0.35, 0.95 }
+  local r = tonumber(c[1]) or 0.1
+  local g = tonumber(c[2]) or 0.85
+  local bCol = tonumber(c[3]) or 0.35
+  local a = tonumber(c[4]) or 0.95
+  local thickness = tonumber((self.skinRoute and self.skinRoute.width)
+    or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
+  if thickness <= 0 then thickness = 2 end
+  local hostScale = 1
+  if host and type(host.GetScale) == "function" then
+    local okS, s = pcall(host.GetScale, host)
+    if okS and type(s) == "number" and s > 0 then
+      hostScale = s
+    end
+  end
+  local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
+  self._skinDotMetrics = metrics
+  ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  self._skinQueued = count
+  self._skinProj = proj
+  self._skinSample = sample
+  if type(self.skinDrawer.lastApplied) == "table" then
+    self.skinDrawer.lastApplied.time = nowTime()
+  end
+  if count > 0 then
+    pcall(host.Show, host)
+  else
+    self._skinWhy = "none of the circle's segments landed inside the minimap view"
+    pcall(host.Hide, host)
+  end
+end
+
 function M:Redraw()
   if self._busy then
     return
   end
   self._busy = true
   local ok, err = pcall(self._redraw, self)
+  -- The skinning circle is drawn by a second, independent pass: the herb pass
+  -- may refuse (no route, off) without that decision touching the circle.
+  local okS, errS = pcall(self._redrawSkin, self)
   self._busy = false
   if not ok then
     self._drawError = tostring(err)
     pcall(self.ReleaseVisuals, self)
   else
     self._drawError = nil
+  end
+  if not okS then
+    self._skinError = tostring(errS)
+    pcall(self.ReleaseSkinVisuals, self)
+  else
+    self._skinError = nil
   end
 end
 
@@ -923,7 +1111,7 @@ function M:StartUpdates()
   end
   self._acc = 0
   driver:SetScript("OnUpdate", function(_, elapsed)
-    if not M.path then
+    if not M.path and not M.skinPoints then
       M:StopUpdates()
       return
     end
@@ -957,10 +1145,46 @@ function M:SetRoute(route)
   self:Redraw()
 end
 
+-- ── the skinning farming circle (t_b46e5e87) ────────────────────────────────
+-- Second layer, second drawer, second host. Set and cleared independently of the
+-- herb route: /nt stop leaves the circle alone and /nt skinroute off leaves the
+-- herb line alone and its fractions untouched.
+function M:SetSkinRoute(route)
+  if not route or not route.path or #route.path < 2 or not ns.GetDB().showMinimap then
+    self:ClearSkinRoute()
+    return
+  end
+  self.skinMapID = route.mapID
+  self.skinPath = route.path
+  self.skinColor = route.color
+  self.skinRoute = route
+  self:_indexSkinPoints(route)
+  self:StartUpdates()
+  self:Redraw()
+end
+
+function M:ClearSkinRoute()
+  self.skinPath = nil
+  self.skinMapID = nil
+  self.skinColor = nil
+  self.skinRoute = nil
+  self.skinPoints = nil
+  self.skinUseWorld = nil
+  self.skinZoneW, self.skinZoneH = nil, nil
+  self._skinProj = nil
+  self._skinSample = nil
+  self._skinQueued = 0
+  self._skinWhy = nil
+  self:ReleaseSkinVisuals()
+  if not self.path then
+    self:StopUpdates()
+  end
+end
+
 local driver = CreateFrame("Frame")
 M._driver = driver
 local function onEvent(_, event, arg1)
-  if not M.path then
+  if not M.path and not M.skinPoints then
     return
   end
   if event == "CVAR_UPDATE" then
@@ -1593,6 +1817,23 @@ function M:Diag()
   end)
   fact(function()
     return "minimap drawError=" .. tostring(self._drawError or "none")
+  end)
+  fact(function()
+    -- The skinning circle is a second layer: its own line, never mixed with the
+    -- herb route's dots. `segs` is what the last circle draw queued; the colour
+    -- is what the code passed to the draw (LineDraw records it, GetVertexColor
+    -- cannot be trusted on this client).
+    if not self.skinPath then
+      return "skinning circle on the minimap: none (no circle for this map)"
+    end
+    local applied = (self.skinDrawer and ns.LineDraw.Applied(self.skinDrawer)) or {}
+    local c = self.skinColor or {}
+    return string.format(
+      "skinning circle on the minimap: segs queued=%s painted=%s planned=%s colour=%.2f,%.2f,%.2f,%.2f map=%s mode=%s why=%s",
+      fmtNum(self._skinQueued or 0), fmtNum(applied.paintedDots or 0), fmtNum(applied.plannedDots or 0),
+      tonumber(c[1]) or 0, tonumber(c[2]) or 0, tonumber(c[3]) or 0, tonumber(c[4]) or 0,
+      fmtNum(self.skinMapID), tostring(self._skinProj and self._skinProj.mode or "none"),
+      tostring(self._skinWhy or self._skinError or "none"))
   end)
 end
 

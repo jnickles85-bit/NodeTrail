@@ -28,7 +28,7 @@ local SUB_ROW_H = 22
 local SUB_INDENT = 36
 local FIRST_ROW_Y = -48
 
-local moduleY, skinY, autoY, lastRowY = {}, nil, nil, FIRST_ROW_Y
+local moduleY, skinY, autoY, skinRouteY, lastRowY = {}, nil, nil, nil, FIRST_ROW_Y
 do
   local y = FIRST_ROW_Y
   for _, name in ipairs(pkg.moduleOrder or {}) do
@@ -38,8 +38,10 @@ do
     if name == "NodeTrail" then
       skinY = y + (ROW_H - SUB_ROW_H)
       autoY = skinY - SUB_ROW_H
-      lastRowY = autoY
-      y = autoY - ROW_H
+      -- t_b46e5e87: the skinning farming circle's switch, third sub-row.
+      skinRouteY = autoY - SUB_ROW_H
+      lastRowY = skinRouteY
+      y = skinRouteY - ROW_H
     end
   end
 end
@@ -86,6 +88,93 @@ local function autoRefreshOn()
     if ok then
       return on == true
     end
+  end
+  return true
+end
+
+-- t_b46e5e87: the skinning farming circle's switch (default ON). Its own key at
+-- NodeTrailDB.skinroute.enabled, separate from the probe and from the herb route.
+local function skinRouteOn()
+  local nt = ntModule()
+  if nt and type(nt.IsSkinRouteEnabled) == "function" then
+    local ok, on = pcall(nt.IsSkinRouteEnabled)
+    if ok then
+      return on == true
+    end
+  end
+  return true
+end
+
+-- The one sentence the circle's row shows, and ONLY for a confirmed skinner:
+-- a non-skinner must not see a "no data" line anywhere (t_b46e5e87). It states
+-- the count needed whenever nothing can be drawn yet.
+local function skinRouteNote()
+  local nt = ntModule()
+  if not nt then
+    return nil
+  end
+  local Pr = nt.Profession
+  if type(Pr) ~= "table" or type(Pr.Skinning) ~= "function" then
+    return nil
+  end
+  local okG, answer = pcall(Pr.Skinning, Pr)
+  if not okG or answer ~= true then
+    return nil
+  end
+  if type(nt.SkinRoute) ~= "table" or type(nt.SkinRoute.StatusText) ~= "function" then
+    return nil
+  end
+  local ok, line = pcall(nt.SkinRoute.StatusText, nt.SkinRoute)
+  if ok and type(line) == "string" and line ~= "" then
+    if #line > 84 then
+      line = line:sub(1, 81) .. "..."
+    end
+    return line
+  end
+  return nil
+end
+
+-- Apply the sub-toggle: persist it and re-evaluate the layer immediately.
+local function applySkinRoute(on)
+  local nt = ntModule()
+  if not nt then
+    pkg.Print("skinning circle: NodeTrail is not loaded — the sub-option was not saved")
+    return false
+  end
+  if type(nt.SetSkinRouteEnabled) ~= "function" then
+    pkg.Print("skinning circle: NodeTrail has no sub-option setter — the sub-option was not saved")
+    return false
+  end
+  local okS, errS = pcall(nt.SetSkinRouteEnabled, on)
+  if not okS then
+    pkg.Print("skinning circle: could not save the sub-option: " .. tostring(errS))
+    return false
+  end
+  local route, why
+  if type(nt.RefreshSkinRoute) == "function" then
+    local okR, r, w = pcall(nt.RefreshSkinRoute)
+    if okR then
+      route, why = r, w
+    else
+      pkg.Print("skinning circle: refresh failed: " .. tostring(r))
+      return false
+    end
+  end
+  if on then
+    if route then
+      pkg.Print(("Skinning farming circle on — %d-point green loop over %d clusters on this map.")
+        :format(#route.path, #route.clusters))
+    elseif why == "NOT_SKINNER" then
+      pkg.Print("Skinning farming circle on, but this character has no Skinning — nothing is drawn.")
+    elseif why == "GATE_UNREADABLE" or why == "NO_GATE" then
+      pkg.Print("Skinning farming circle on, but this client cannot read the character's professions — nothing is drawn.")
+    else
+      local line = (type(nt.SkinRoute) == "table" and type(nt.SkinRoute.StatusText) == "function")
+        and nt.SkinRoute:StatusText() or nil
+      pkg.Print("Skinning farming circle on, but " .. (line or "there is no route to draw yet") .. ".")
+    end
+  else
+    pkg.Print("Skinning farming circle off — the green loop is cleared; the herb route is unaffected.")
   end
   return true
 end
@@ -322,6 +411,75 @@ local function syncCheckboxes()
       ab:Enable()
     else
       ab:Disable()
+    end
+  end
+
+  -- ── Skinning farming circle sub-option (t_b46e5e87) ─────────────────
+  -- The circle is a DRAW layer, so its switch is independent of the probe and of
+  -- the herb route. The status line under it is shown ONLY to a confirmed
+  -- skinner and says how many more skinned corpses this map needs — the maps
+  -- themselves stay clean until there is real skinning data.
+  if skinRouteY then
+    local rb = boxes.SkinRoute
+    if not rb then
+      rb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+      rb:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT, skinRouteY)
+
+      local rbLabel
+      if rb.Text or rb.text then
+        rbLabel = rb.Text or rb.text
+      else
+        rbLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        rbLabel:SetPoint("LEFT", rb, "RIGHT", 4, 0)
+      end
+      rbLabel:SetText("Skinning farming circle")
+
+      rb:SetScript("OnClick", function(self)
+        if not nodeTrailOn() then
+          self:SetChecked(skinRouteOn())
+          return
+        end
+        applySkinRoute(self:GetChecked() and true or false)
+        syncCheckboxes()
+      end)
+      rb:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Skinning farming circle")
+        GameTooltip:AddLine("A green closed loop through the places this character has killed AND skinned on "
+          .. "the current zone's map. Built from your own recorded corpses only. It stays hidden until the map "
+          .. "has enough skinned corpses to make a circle, until a Skinning character is logged in, and while "
+          .. "this box is unticked. The herb route (white) is a separate line and is not affected.",
+          1, 1, 1, true)
+        GameTooltip:Show()
+      end)
+      rb:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+      end)
+
+      boxes.SkinRoute = rb
+    end
+
+    local note = boxes.SkinRouteNote
+    if not note then
+      note = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      note:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT + 20, skinRouteY - 18)
+      note:SetText("")
+      boxes.SkinRouteNote = note
+    end
+    local text = skinRouteNote()
+    if text then
+      note:SetText(text)
+      note:Show()
+    else
+      note:SetText("")
+      note:Hide()
+    end
+
+    rb:SetChecked(skinRouteOn())
+    if nodeTrailOn() then
+      rb:Enable()
+    else
+      rb:Disable()
     end
   end
 end

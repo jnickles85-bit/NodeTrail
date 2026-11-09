@@ -44,6 +44,15 @@ ns.defaults = {
   skinning = {
     enabled = false,
   },
+  -- t_b46e5e87: the skinning farming circle. Its own switch, separate from the
+  -- probe (NodeTrailDB.skinning.enabled) and from the herb route: the circle is
+  -- an overlay layer, not a recording mode. ON by default because the circle is
+  -- a feature Mightie asked for and it cannot draw anything until this map has
+  -- recorded SKINNED corpses (Route/SkinRoute.lua refuses below the sample
+  -- floor) and the character answers the Skinning gate.
+  skinroute = {
+    enabled = true,
+  },
   -- t_2bc15917 / t_57550700: the route INTENT, never its geometry. The points
   -- are rebuilt from the recorded picks at every enable; only "was a route
   -- running, on which map, since when, and does it follow new picks" is
@@ -121,6 +130,34 @@ end
 function ns.SetSkinningEnabled(on)
   ns.GetSkinDB().enabled = on and true or false
   return NodeTrailDB.skinning.enabled
+end
+
+-- ── Skinning farming circle switch (t_b46e5e87) ─────────────────────
+-- Persisted at NodeTrailDB.skinroute.enabled, filled in lazily like the
+-- other keys: a NodeTrailDB written before this key existed keeps every
+-- other key it already has. Default ON — the circle is drawn only when the
+-- character is a skinner AND this map has enough of his own skinned
+-- corpses, so an untouched zone stays empty either way.
+function ns.GetSkinRouteDB()
+  if type(NodeTrailDB) ~= "table" then
+    NodeTrailDB = CopyTable(ns.defaults)
+  end
+  if type(NodeTrailDB.skinroute) ~= "table" then
+    NodeTrailDB.skinroute = { enabled = true }
+  end
+  if type(NodeTrailDB.skinroute.enabled) ~= "boolean" then
+    NodeTrailDB.skinroute.enabled = true
+  end
+  return NodeTrailDB.skinroute
+end
+
+function ns.IsSkinRouteEnabled()
+  return ns.GetSkinRouteDB().enabled == true
+end
+
+function ns.SetSkinRouteEnabled(on)
+  ns.GetSkinRouteDB().enabled = on and true or false
+  return NodeTrailDB.skinroute.enabled
 end
 
 -- ── Route intent (t_2bc15917) ────────────────────────────────────────
