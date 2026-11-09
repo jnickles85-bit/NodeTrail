@@ -1,0 +1,67 @@
+t_86583cf2 third pass — evidence
+generated: 2026-11-08T19:15:39Z  host: Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+commit: 98c3964 (wt/t_86583cf2, parent d2ccd4c)
+
+== 1. the defect review round 1 reproduced, and the same scenario at this commit ==
+-- mixed draw at the tip (every second dot made unreadable), the line and its verdict:
+   mixed draw: NodeTrail mapdiag: route dots on the visible map: 36/72 inside (measured 36 of 72 painted; dots bbox=996.0,872.7..1154.1,1010.3; visible=717.0,1080.0 697.0x465.0 (scale=1.000), 36 dot(s) whose own GetLeft/GetTop disagree with that arithmetic by up to 188.8 px) — 36 of 72 painted dot(s) report no screen rect — not measured
+   mapdiag_visible_spec: ok
+-- the same spec on d2ccd4c (the build being corrected):
+   FAIL: 7: the denominator is the PAINTED count (36 of 72)
+   FAIL: 7: half the dots are unexamined, so the line cannot read as all-inside (NodeTrail mapdiag: route dots on the visible map: 36/36 inside (dots bbox=996.0,872.7..1154.1,1010.3; visible=717.0,1080.0 697.0x465.0 (scale=1.000), 36 dot(s) whose own GetLeft/GetTop disagree with that arithmetic by up to 188.8 px))
+   FAIL: 7: it says how many dots were actually measured (nil of 72)
+   FAIL: 7: and names the unreadable remainder in the verdict (NodeTrail mapdiag: route dots on the visible map: 36/36 inside (dots bbox=996.0,872.7..1154.1,1010.3; visible=717.0,1080.0 697.0x465.0 (scale=1.000), 36 dot(s) whose own GetLeft/GetTop disagree with that arithmetic by up to 188.8 px))
+   FAIL: 7: the remainder count matches the sabotage (nil of 36)
+   FAIL: 7: and the unmeasured remainder (nil)
+   mapdiag_visible_spec: 6 failure(s)
+
+== 2. the world-mode walk (the projection this build ships) ==
+   world mode (radius=233.333 yd, 0.30 px/yd):
+   stop              playerX   anchor cx,cy px   to-segment px   painted
+   1 start          0.4800    (12.00, -0.00)      12.00            5
+   2 toward         0.5100    (3.00, -0.00)      3.00            5
+   3 past it        0.5220    (-0.60, -0.00)      0.60            5
+   4 walked back    0.5050    (4.50, -0.00)      4.50            5
+   
+-- section G on d6f2a31 (pre-HBD build: no HereBeDragons through LibStub):
+   behavioural FAILs, all of them section G: 28
+
+== 3. the fraction-mode walk, unchanged (the replay the table collected on d6f2a31 matches) ==
+   stop              player(frac)     stamp(frac)/t   anchor cx,cy px   dist px  dist map-frac  to-segment px
+   1 start          (0.4800,0.3000)  (0.4800, t=1.5)  (37.33, 1.44)  37.36  0.0400  37.33
+   2 toward         (0.5100,0.3000)  (0.5100, t=3.0)  (9.33, 1.44)  9.44  0.0101  9.33
+   3 past it        (0.5220,0.3000)  (0.5220, t=4.5)  (-1.87, 1.44)  2.36  0.0025  1.87
+   4 walked back    (0.5050,0.3000)  (0.5050, t=6.0)  (14.00, 1.44)  14.07  0.0151  14.00
+   landmark at (0.500,0.300); route segment x=0.520, y 0.280..0.320; radius=0.0750 frac = 933.3 px/fraction; dots painted at stop 4: 14
+
+== 4. full suite at this commit ==
+   specs=45 failing=0
+
+== 5. red on the branch's parent, behavioural, no traceback ==
+   d34dcb3 mapdiag_visible_spec: rc=1 fails=16 traceback=0
+   d34dcb3 minimap_walk_spec: rc=1 fails=77 traceback=0
+   d6f2a31 mapdiag_visible_spec: rc=1 fails=16 traceback=0
+   d6f2a31 minimap_walk_spec: rc=1 fails=28 traceback=0
+   d2ccd4c mapdiag_visible_spec: rc=1 fails=6 traceback=0
+   d2ccd4c minimap_walk_spec: rc=0 fails=0 traceback=0
+
+== 6. deployed build vs the commit (sha256, first 16) ==
+   eb4f5d7d08ec5290 commit    MapOverlay.lua
+   eb4f5d7d08ec5290 deployed  MapOverlay.lua
+   073e2af733c29cee commit    MinimapPath.lua
+   073e2af733c29cee deployed  MinimapPath.lua
+   fd51720a58e26c4b commit    LineDraw.lua
+   fd51720a58e26c4b deployed  LineDraw.lua
+   backup of the replaced file: C:/Users/jnick/touchstone-backups/mightiepack-t86583cf2/run3-1415/MapOverlay.lua
+
+== 7. the live client, measured this run ==
+   SavedVariables: 2026-11-08 13:57:35.234703900 -0500 — unchanged, i.e. the client has not been /reloaded onto this build
+   grep -c mapProbe: 0 — the world map has not been opened on any deployed build
+   WoW process and the Windows session's input idle time:
+   
+      Id ProcessName
+      -- -----------
+   33436 Wow        
+   
+   
+   idle_seconds=1.875

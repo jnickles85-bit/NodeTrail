@@ -45,6 +45,10 @@ local function printHelp()
     "  /nt navdiag - what this client can tell us about yards: C_Map, HereBeDragons, zone size, world vector, and the arrow's next waypoint")
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt arrow [on|off] - the next-waypoint arrow with the distance counting down")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt minimap [on|off] - the route drawn on the minimap only (the world map is unaffected)")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt navwalk [start|mark <label>] - record a walk: player coords, the draw-time stamp and the drawn dot's anchors at each stop (saved on /reload)")
   printL("HELP_NOTES")
 end
 
@@ -234,8 +238,6 @@ local function handleSlash(msg)
     end
   elseif msg == "status" then
     ns.PrintStatus()
-  elseif msg == "minimap" or msg:match("^minimap%s") then
-    ns.ToggleMinimap(msg:match("^minimap%s+(.*)$"))
   elseif msg == "autorefresh" or msg:match("^autorefresh%s") then
     ns.SetAutoRefresh(msg:match("^autorefresh%s+(.*)$"))
   elseif msg == "scanrecipes" or msg == "recipes" then
@@ -249,6 +251,13 @@ local function handleSlash(msg)
     ns.PrintNavDiag()
   elseif msg == "arrow" or msg:match("^arrow%s") then
     ns.ToggleNavArrow(msg:match("^arrow%s+(.*)$"))
+  elseif msg == "minimap" or msg:match("^minimap%s") then
+    -- t_86583cf2 (re-scope): the minimap line's own switch, so it can be turned
+    -- off without touching the world map route.
+    ns.SetMinimapVisible(msg:match("^minimap%s+(.*)$"))
+  elseif msg == "navwalk" or msg:match("^navwalk%s") then
+    -- t_86583cf2: record Mightie's four-stop walk in his own client.
+    ns.NavWalkCommand(msg:match("^navwalk%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -317,6 +326,97 @@ end
 -- overlay actually found (canvas or legacy frames, measured sizes, the
 -- displayed vs route mapID, what the last redraw queued) so the next in-game
 -- run says WHY nothing is visible instead of guessing.
+-- ── /nt mapdiag parents ───────────────────────────────────────────────────
+-- The swatch test proved that even a 40 px OPAQUE texture on the map overlay's
+-- own host is invisible on this client, so the question is no longer colour or
+-- alpha: it is whether anything parented to that host is composited at all.
+-- This paints six large red squares that differ in exactly two variables —
+-- which frame they hang from, and whether the colour went in through
+-- SetColorTexture or SetTexture+SetVertexColor — and numbers them on screen.
+-- Nothing here touches the route, its coordinates or its persistence.
+function ns.PrintParentLadder()
+  local function say(text)
+    local line = "NodeTrail parents: " .. tostring(text)
+    if type(DEFAULT_CHAT_FRAME) == "table" and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+      local ok = pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, line)
+      if ok then return end
+    end
+    pcall(print, line)
+  end
+  if type(CreateFrame) ~= "function" or type(UIParent) ~= "table" then
+    say("unavailable (no CreateFrame or UIParent)")
+    return
+  end
+  ns._parentLadder = ns._parentLadder or {}
+  for i = 1, #ns._parentLadder do
+    pcall(ns._parentLadder[i].Hide, ns._parentLadder[i])
+  end
+  ns._parentLadder = {}
+
+  local wmf = _G.WorldMapFrame
+  local canvas = nil
+  if type(wmf) == "table" then
+    if type(wmf.GetCanvas) == "function" then
+      local ok, c = pcall(wmf.GetCanvas, wmf)
+      if ok and type(c) == "table" then canvas = c end
+    end
+    if not canvas and type(wmf.ScrollContainer) == "table" then
+      canvas = wmf.ScrollContainer
+    end
+  end
+
+  -- 1 UIParent+SetColorTexture  2 UIParent+SetTexture  3 WorldMapFrame+SetColorTexture
+  -- 4 canvas+SetColorTexture    5 canvas+SetTexture     6 UIParent 200px (size control)
+  local specs = {
+    { label = "1", parent = UIParent, tex = "color",  size = 120, dx = -320, dy = 120 },
+    { label = "2", parent = UIParent, tex = "vertex", size = 120, dx = -160, dy = 120 },
+    { label = "3", parent = wmf,      tex = "color",  size = 120, dx =    0, dy = 120 },
+    { label = "4", parent = canvas,   tex = "color",  size = 120, dx =  160, dy = 120 },
+    { label = "5", parent = canvas,   tex = "vertex", size = 120, dx =  320, dy = 120 },
+    { label = "6", parent = UIParent, tex = "color",  size = 200, dx =    0, dy = -140 },
+  }
+  for i = 1, #specs do
+    local spec = specs[i]
+    if type(spec.parent) ~= "table" then
+      say(("#%s skipped: that parent frame does not exist on this client"):format(spec.label))
+    else
+      local ok, frame = pcall(CreateFrame, "Frame", nil, spec.parent)
+      if not ok or type(frame) ~= "table" then
+        say(("#%s skipped: CreateFrame failed"):format(spec.label))
+      else
+        pcall(frame.SetFrameStrata, frame, "DIALOG")
+        pcall(frame.SetFrameLevel, frame, 900)
+        pcall(frame.ClearAllPoints, frame)
+        pcall(frame.SetPoint, frame, "CENTER", UIParent, "CENTER", spec.dx, spec.dy)
+        pcall(frame.SetSize, frame, spec.size, spec.size)
+        local okT, tex = pcall(frame.CreateTexture, frame, nil, "OVERLAY")
+        if okT and type(tex) == "table" then
+          pcall(tex.SetAllPoints, tex, frame)
+          if spec.tex == "color" and type(tex.SetColorTexture) == "function" then
+            pcall(tex.SetColorTexture, tex, 1, 0, 0, 1)
+          else
+            pcall(tex.SetTexture, tex, "Interface\\Buttons\\WHITE8X8")
+            pcall(tex.SetVertexColor, tex, 1, 0, 0, 1)
+            spec.tex = "vertex"
+          end
+          pcall(tex.SetDrawLayer, tex, "OVERLAY", 7)
+        end
+        pcall(frame.Show, frame)
+        ns._parentLadder[#ns._parentLadder + 1] = frame
+        say(("#%s %dx%d on %s via %s: level=%s strata=%s shown=%s")
+          :format(spec.label, spec.size, spec.size,
+            tostring(spec.parent == UIParent and "UIParent"
+              or (spec.parent == wmf and "WorldMapFrame")
+              or (spec.parent == canvas and "map canvas") or "?"),
+            tostring(spec.tex), tostring(frame.GetFrameLevel and frame:GetFrameLevel() or "absent"),
+            tostring(frame.GetFrameStrata and frame:GetFrameStrata() or "absent"),
+            tostring(frame.IsShown and frame:IsShown() or "absent")))
+      end
+    end
+  end
+  say("tell me which red squares you can SEE (#1-#6); '/nt mapdiag parents off' removes them")
+end
+
 function ns.PrintMapDiag(arg)
   local function say(text)
     local line = "NodeTrail mapdiag: " .. tostring(text)
@@ -334,6 +434,24 @@ function ns.PrintMapDiag(arg)
     return
   end
   local mode = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  if mode:match("^parents") then
+    -- Must not require the overlay to be loaded: the whole point is to test
+    -- frames that are NOT the overlay's host.
+    local rest = mode:match("^parents%s*(.*)$") or ""
+    if rest == "off" or rest == "hide" then
+      for i = 1, #(ns._parentLadder or {}) do
+        pcall(ns._parentLadder[i].Hide, ns._parentLadder[i])
+      end
+      ns._parentLadder = {}
+      say("parents: off (squares removed)")
+    else
+      local okP, errP = pcall(ns.PrintParentLadder)
+      if not okP then
+        say("parents failed: " .. tostring(errP))
+      end
+    end
+    return
+  end
   if mode:match("^probe") then
     if type(overlay.Probe) ~= "function" then
       say("probe unavailable (this MapOverlay has no Probe)")
@@ -355,8 +473,39 @@ function ns.PrintMapDiag(arg)
     if not okS then
       say("primitive failed: " .. tostring(errS))
     end
+  elseif mode:match("^compare") then
+    if type(overlay.Compare) ~= "function" then
+      say("compare unavailable (this MapOverlay has no Compare)")
+      return
+    end
+    local okC, errC = pcall(overlay.Compare, overlay)
+    if not okC then
+      say("compare failed: " .. tostring(errC))
+    end
+  elseif mode:match("^floor") then
+    -- The visibility ladder's rung 3, without a redeploy: same route, same
+    -- coordinates, only the dot's SCREEN size changes.
+    if type(overlay.SetDotFloor) ~= "function" then
+      say("floor switch unavailable (this MapOverlay has no SetDotFloor)")
+      return
+    end
+    local okF, errF = pcall(overlay.SetDotFloor, overlay, mode:match("^floor%s*(.*)$"))
+    if not okF then
+      say("floor failed: " .. tostring(errF))
+    end
+  elseif mode:match("^strata") then
+    -- Rung 2: raise the host above whatever is over the map, or prove it is
+    -- already above it.
+    if type(overlay.SetStrata) ~= "function" then
+      say("strata switch unavailable (this MapOverlay has no SetStrata)")
+      return
+    end
+    local okT, errT = pcall(overlay.SetStrata, overlay, mode:match("^strata%s*(.*)$"))
+    if not okT then
+      say("strata failed: " .. tostring(errT))
+    end
   elseif mode ~= "" then
-    say(("unknown option '%s' (try: probe | probe off | primitive <auto|line|dots|rotate>)"):format(mode))
+    say(("unknown option '%s' (try: probe | probe off | compare | primitive <auto|line|dots|rotate> | floor <px|auto> | strata <MEDIUM|HIGH|DIALOG|auto>)"):format(mode))
     return
   end
   local ok, err = pcall(overlay.Diag, overlay)
@@ -408,6 +557,9 @@ function ns.ToggleNavArrow(arg)
     return
   end
   profile.showNavArrow = on
+  -- An explicit switch: from here on the stored value wins over the opt-in
+  -- migration in ns.GetDB, because this is the player asking, not a default.
+  profile.navArrowUserSet = true
   -- Redraw, never Clear: the arrow keeps the route it was given, so turning it
   -- back on does not need a rebuild.
   local arrow = type(ns.Nav) == "table" and ns.Nav.Arrow or nil
@@ -418,37 +570,88 @@ function ns.ToggleNavArrow(arg)
   return on
 end
 
--- ── /nt minimap [on|off] ────────────────────────────────────────────
--- The minimap half of the route, switchable on its own. A wrong line on the
--- minimap is worse than no line, so this clears the objects immediately.
-function ns.ToggleMinimap(arg)
-  local db = ns.GetDB()
-  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+-- ── /nt minimap [on|off] (t_86583cf2, re-scope) ────────────────────────────
+-- Mightie: "Im not sold on the minimap working as I intend. we might abandon the
+-- minimap feature for the routing. Having the actual map working 100% is the
+-- goal currently." So the minimap line gets its OWN switch: `db.showMinimap`
+-- already gates the minimap drawer, and this reaches it from chat without
+-- touching showWorldMap — the world map stays exactly as it is.
+-- Turning it off CLEARS the minimap drawer (the dots are removed from screen,
+-- not merely stopped) and leaves the route object untouched, so turning it back
+-- on redraws the same route rather than needing a rebuild.
+function ns.SetMinimapVisible(arg)
+  local profile = ns.GetDB()  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
   local on
   if want == "on" or want == "1" or want == "true" then
     on = true
   elseif want == "off" or want == "0" or want == "false" then
     on = false
   elseif want == "" then
-    on = not (db.showMinimap ~= false)
+    on = (profile.showMinimap == false)
   else
     DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt minimap [on|off]")
-    return nil
+    return
   end
-  db.showMinimap = on
-  -- Off means the objects go away now, not on the next redraw: a wrong line on
-  -- the minimap is worse than no line, and the player should not have to wait
-  -- for a tick that may never come.
-  if not on and type(ns.MinimapPath) == "table" and type(ns.MinimapPath.Clear) == "function" then
-    pcall(ns.MinimapPath.Clear, ns.MinimapPath)
-  elseif on and type(ns.MinimapPath) == "table" and type(ns.MinimapPath.Redraw) == "function" then
-    pcall(ns.MinimapPath.Redraw, ns.MinimapPath)
+  profile.showMinimap = on
+  local minimap = type(ns.MinimapPath) == "table" and ns.MinimapPath or nil
+  if type(minimap) == "table" then
+    if on then
+      if type(ns.activeRoute) == "table" and type(minimap.SetRoute) == "function" then
+        pcall(minimap.SetRoute, minimap, ns.activeRoute)
+      end
+    elseif type(minimap.Clear) == "function" then
+      pcall(minimap.Clear, minimap)
+    end
   end
   DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: minimap route " .. (on and "on" or "off")
-    .. " — the world map route is unaffected.")
+    .. (on and "" or " (the world map route is unchanged)")
+    .. (type(ns.activeRoute) ~= "table" and on and " — no active route to draw" or ""))
   return on
 end
 
+-- ── /nt navwalk [start|mark <label>|clear] (t_86583cf2) ───────────────────
+-- Mightie's walk test, made recordable: `start` clears the buffer, `mark` records
+-- a stop from the drawing on screen, bare `/nt navwalk` prints what was recorded.
+-- Everything is also written to NodeTrailDB.navwalk, which the client saves on
+-- /reload — so the four-stop table can be read off disk instead of transcribed.
+function ns.NavWalkCommand(arg)
+  local walk = ns.NavWalk
+  if type(walk) ~= "table" then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: navwalk unavailable (minimap module not loaded)")
+    return
+  end
+  local word = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  local sub, rest = word:match("^(%a+)%s*(.-)$")
+  if word == "" then
+    local lines = walk:Lines()
+    for i = 1, #lines do
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail " .. tostring(lines[i]))
+    end
+    return
+  end
+  if sub == "start" or sub == "begin" then
+    walk:Begin()
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: cleared. Stand still at the start and use '/nt navwalk mark start'.")
+    return
+  end
+  if sub == "clear" then
+    walk:Clear()
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: cleared (the saved copy is overwritten on /reload).")
+    return
+  end
+  if sub == "mark" then
+    local rec, why = walk:Mark(rest == "" and nil or rest)
+    if not rec then
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: not recorded — " .. tostring(why))
+      return
+    end
+    local line = walk:Lines()
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail " .. tostring(line[#line]))
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: stop recorded. Walk on, then '/nt navwalk mark <label>'; '/reload' saves it to disk.")
+    return
+  end
+  DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt navwalk [start|mark <label>|clear] — bare /nt navwalk prints the stops")
+end
 -- ── /nt autorefresh [on|off|<picks>] (t_57550700) ─────────────────────
 -- The switch that decides whether a route keeps following your picks, and how
 -- many gathers make a re-plan due. Mightie's final decision: "change from

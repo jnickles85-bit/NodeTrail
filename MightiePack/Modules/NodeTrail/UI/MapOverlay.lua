@@ -161,6 +161,167 @@ local function fmtNum(value, decimals)
   return string.format("%.2f", value)
 end
 
+--- Multiply a frame's own scale by every ancestor's. GetWidth/GetHeight are in
+--- the frame's OWN units while GetLeft/GetTop are the client's screen-space
+--- answer, so a 1002-px canvas shown at 0.696 occupies 697 px of screen. The
+--- diag compares the dots' screen rect with the map's visible rect, and without
+--- this conversion it would compare two different rulers — which is exactly how
+--- a route that is off the map can read as "inside".
+local function effectiveScale(frame)
+  local scale = 1
+  local node, guard = frame, 0
+  while node and guard < 16 do
+    local s = call(node, "GetScale")
+    if type(s) == "number" and s > 0 then
+      scale = scale * s
+    end
+    node = call(node, "GetParent")
+    guard = guard + 1
+  end
+  return scale
+end
+
+--- A frame's rect ON SCREEN. `left`/`top` come from the client's own
+--- GetLeft/GetTop, never derived from the anchors we asked for, and are
+--- converted to screen px through the frame's effective scale — GetLeft is NOT
+--- a screen coordinate (the projection this card follows measures the canvas
+--- and the frame that way; see measureBox). The size is converted the same
+--- way. Anything the client cannot answer reads as nil, so the diag prints
+--- "absent" instead of a made-up box.
+local function screenRect(frame)
+  if not frame then
+    return nil
+  end
+  local left = call(frame, "GetLeft")
+  local top = call(frame, "GetTop")
+  local w, h = frameSize(frame)
+  if type(left) ~= "number" or type(top) ~= "number"
+    or type(w) ~= "number" or type(h) ~= "number" then
+    return nil
+  end
+  local scale = effectiveScale(frame)
+  local sl, st = left * scale, top * scale
+  local sw, sh = w * scale, h * scale
+  return {
+    left = sl, top = st, width = sw, height = sh,
+    right = sl + sw, bottom = st - sh, scale = scale,
+  }
+end
+
+local function rectText(rect)
+  if type(rect) ~= "table" then
+    return "absent"
+  end
+  return string.format("%s,%s %sx%s (scale=%s)", fmtNum(rect.left, 1), fmtNum(rect.top, 1),
+    fmtNum(rect.width, 1), fmtNum(rect.height, 1), fmtNum(rect.scale, 3))
+end
+
+--- The part of the CANVAS the player can see, expressed in the canvas' OWN
+--- units — the same units the dots are anchored in.
+---
+--- Why this exists (review round 3, 2026-11-08): `route dots on the visible
+--- map` compared the host's GetLeft/GetTop with ScrollContainer's, and on this
+--- client the canvas is the scroll frame's child, so those two rects are in
+--- DIFFERENT spaces (measured: canvas top 699.4 while the map frame it sits in
+--- reported 1084; the canvas and the scroll container did not even overlap).
+--- The comparison therefore printed `0/319 inside` for a route drawn across the
+--- map, which is the same class of defect as the check that could not fail: a
+--- number that measures the ruler, not the dots.
+---
+--- Everything here is in canvas units, so there is one ruler end to end:
+--- `left`/`top` is the window's top-left corner measured from the canvas'
+--- top-left, and `width`/`height` the window's size. `method` names the
+--- measurement, and a client that offers neither measurement returns nil plus
+--- the reason — never a zero that reads as "nothing is visible".
+local function canvasWindow(mapFrame, canvas)
+  if not canvas then
+    return nil, "no canvas on this client (WorldMapFrame:GetCanvas() returned nothing)"
+  end
+  local w, h = frameSize(canvas)
+  if not w or not h or w < 2 or h < 2 then
+    return nil, "the canvas has no measurable size"
+  end
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  if scroll then
+    local child = call(scroll, "GetScrollChild")
+    local hs = call(scroll, "GetHorizontalScroll")
+    local vs = call(scroll, "GetVerticalScroll")
+    local sw, sh = frameSize(scroll)
+    if child == canvas and type(hs) == "number" and type(vs) == "number"
+      and type(sw) == "number" and type(sh) == "number" then
+      -- The scroll container's size is in ITS units; the window has to be in
+      -- the canvas' units. The scale chain is the conversion (a 1002-canvas-px
+      -- map shown at 0.696 is a 697-unit scroller, and 697 x 1/0.696 = 1001.4
+      -- canvas px, i.e. the whole canvas).
+      local scrollEff, canvasEff = effectiveScale(scroll), effectiveScale(canvas)
+      local ratio = (canvasEff and canvasEff > 0) and ((scrollEff or 1) / canvasEff) or 1
+      local winW, winH = sw * ratio, sh * ratio
+      -- Sanity: a scroll offset outside the canvas, or a window wider than it,
+      -- means these numbers are not in the canvas' units. Say so instead of
+      -- pretending they are.
+      if hs >= -1 and vs >= -1 and hs <= w + 1 and vs <= h + 1 and winW <= w + 2 and winH <= h + 2 then
+        return {
+          left = math.max(0, hs), top = math.max(0, vs),
+          width = math.min(winW, w), height = math.min(winH, h),
+          canvasW = w, canvasH = h,
+          method = "ScrollContainer scroll offsets",
+        }
+      end
+      return nil, (("the scroll offsets do not describe this canvas (hs=%s vs=%s window=%sx%s canvas-units=%sx%s canvas=%sx%s)"))
+        :format(fmtNum(hs, 1), fmtNum(vs, 1), fmtNum(sw, 1), fmtNum(sh, 1),
+          fmtNum(winW, 1), fmtNum(winH, 1), fmtNum(w), fmtNum(h))
+    end
+  end
+  -- Not the scroll child (or no ScrollContainer): the canvas' own anchors are
+  -- the only numbers in its units. A TOPLEFT/TOPLEFT anchor with a negative
+  -- offset is the canvas scrolled up and to the left.
+  if isFn(canvas.GetPoint) then
+    local ok, point, rel, relPoint, x, y = pcall(canvas.GetPoint, canvas, 1)
+    if ok and rel and type(x) == "number" and type(y) == "number"
+      and (point == "TOPLEFT") and (relPoint == "TOPLEFT") then
+      local rw, rh = frameSize(rel)
+      if rw and rh and rw > 1 and rh > 1 then
+        local left, top = -x, -y
+        if left >= -w and left <= w and top >= -h and top <= h and rw <= w + 2 and rh <= h + 2 then
+          return {
+            left = math.max(0, left), top = math.max(0, top),
+            width = math.min(rw, w), height = math.min(rh, h),
+            canvasW = w, canvasH = h,
+            method = "canvas TOPLEFT/TopLeft offsets",
+          }
+        end
+        return nil, (("the canvas' anchors do not describe a window inside it (left=%s top=%s window=%sx%s canvas=%sx%s)"))
+          :format(fmtNum(left, 1), fmtNum(top, 1), fmtNum(rw, 1), fmtNum(rh, 1), fmtNum(w), fmtNum(h))
+      end
+    end
+  end
+  return nil, "the client exposes neither a scroll window nor canvas anchors in the canvas' units"
+end
+
+--- A painted dot's centre in CANVAS units, straight from the anchors the draw
+--- set — no host rect, no scale multiplication, so nothing can mix rulers.
+local function anchorUnits(obj, host)
+  if type(obj) ~= "table" or not isFn(obj.GetNumPoints) or not isFn(obj.GetPoint) then
+    return nil
+  end
+  if (tonumber(call(obj, "GetNumPoints")) or 0) < 2 then
+    return nil
+  end
+  local ok1, _, rel1, rp1, x1, y1 = pcall(obj.GetPoint, obj, 1)
+  local ok2, _, rel2, rp2, x2, y2 = pcall(obj.GetPoint, obj, 2)
+  if not ok1 or not ok2 or not host then
+    return nil
+  end
+  if rel1 ~= host or rel2 ~= host or rp1 ~= "TOPLEFT" or rp2 ~= "TOPLEFT" then
+    return nil
+  end
+  if type(x1) ~= "number" or type(y1) ~= "number"
+    or type(x2) ~= "number" or type(y2) ~= "number" then
+    return nil
+  end
+  return (x1 + x2) * 0.5, -(y1 + y2) * 0.5
+end
+
 --- One frame as a diag fact: name, level, strata, shown, size.
 local function frameFact(frame)
   if not frame then
@@ -228,6 +389,100 @@ local function parentChainText(frame, limit)
     return "absent"
   end
   return table.concat(parts, " <- ")
+end
+
+--- The alpha the dots ACTUALLY paint with. A frame's drawn alpha is its own
+--- alpha multiplied by every ancestor's, so a host at alpha 1.00 inside a canvas
+--- at 0.40 can only ever paint at 0.40 — a ghost with every setting reading
+--- 1.00. Nothing in the old diag multiplied the chain: it printed the host's own
+--- `GetAlpha()` and stopped. Walks the real parent chain and names the frame that
+--- dims it.
+--- @return { text, effective, culprit, culpritAlpha, depth }
+local function alphaChain(frame, limit)
+  local parts = {}
+  local node = frame
+  local effective = 1
+  local culprit, culpritAlpha
+  local depth = 0
+  while node and depth < (limit or 12) do
+    depth = depth + 1
+    local alpha = tonumber(call(node, "GetAlpha"))
+    if alpha then
+      effective = effective * alpha
+      if alpha < 0.999 then
+        culprit, culpritAlpha = node, alpha
+      end
+    end
+    parts[#parts + 1] = frameName(node) .. "=" .. (alpha and fmtNum(alpha, 2) or "?")
+    local up = call(node, "GetParent")
+    if up == node then
+      break
+    end
+    node = up
+  end
+  return {
+    text = (#parts > 0) and table.concat(parts, " <- ") or "absent",
+    effective = effective,
+    culprit = culprit,
+    culpritAlpha = culpritAlpha,
+    depth = depth,
+  }
+end
+
+--- The frames that could COVER the host and were never in the audit: the z-order
+--- audit only compares the big map-art frames, so a parchment / fog / dialog
+--- child sitting at a higher level, or any frame carrying an alpha below 1 over
+--- the map, is invisible to it. This walks the canvas's ancestors, records the
+--- shown frames that outrank the host or are faded, and keeps the ones that cover
+--- at least half the map. A route drawn UNDER such a frame is exactly a ghost:
+--- present, in the right place, and diluted by whatever is on top of it.
+local function coverFrames(host, parent, width, height, hostLevel, hostStrata)
+  local out = {}
+  local seen = { [host] = true }
+  local hostRank = strataRank(hostStrata)
+  local node = parent
+  local depth, examined = 0, 0
+  while node and depth < 8 and examined < 400 do
+    depth = depth + 1
+    seen[node] = true
+    local kids = call(node, "GetChildren")
+    if type(kids) == "table" then
+      for i = 1, #kids do
+        local kid = kids[i]
+        examined = examined + 1
+        if kid and not seen[kid] and shownState(kid) ~= false then
+          seen[kid] = true
+          local level = frameLevel(kid)
+          local strata = call(kid, "GetFrameStrata")
+          local alpha = tonumber(call(kid, "GetAlpha"))
+          local rank = strataRank(strata)
+          local above = (type(level) == "number" and type(hostLevel) == "number" and level > hostLevel)
+          local highStrata = (rank ~= nil and hostRank ~= nil and rank > hostRank) or false
+          local faded = (alpha ~= nil and alpha < 0.999)
+          if above or highStrata or faded then
+            local w, h = frameSize(kid)
+            local covers = true
+            if type(width) == "number" and type(height) == "number" and w and h then
+              covers = (w >= width * 0.5) and (h >= height * 0.5)
+            end
+            if covers then
+              out[#out + 1] = {
+                frame = kid,
+                name = frameName(kid),
+                level = level,
+                strata = strata,
+                alpha = alpha,
+                faded = faded,
+                over = above or highStrata,
+              }
+            end
+          end
+        end
+      end
+    end
+    node = call(node, "GetParent")
+  end
+  return out
 end
 
 local function displayedMapID(mapFrame)
@@ -326,12 +581,25 @@ local function innerMapFrame(host)
   return nil
 end
 
-function M:ReleaseVisuals()
+--- Drop the drawn route, and — when a reason is given — record on the drawer that
+--- this redraw painted NOTHING. Without that, a client that hides the overlay
+--- (wrong map, route off, no host) leaves `lastApplied.paintedDots` holding the
+--- previous draw's count, and /nt mapdiag then reports dots on a map where none
+--- are drawn: the exact way a route that "is not anywhere on the screenshot"
+--- still reads as `painted=288 missing=0 outside=0`.
+function M:ReleaseVisuals(why)
   if self.drawer then
-    ns.LineDraw.Clear(self.drawer)
+    if why then
+      ns.LineDraw.MarkIdle(self.drawer, why)
+    else
+      ns.LineDraw.Clear(self.drawer)
+    end
   end
   if self.host then
     pcall(self.host.Hide, self.host)
+  end
+  if why then
+    self:RecordProbe(true)
   end
 end
 
@@ -418,6 +686,31 @@ function M:EnsureHost(parent, label)
     local current = frameLevel(host)
     if type(current) ~= "number" or current < level + 10 then
       pcall(host.SetFrameLevel, host, level + 10)
+    end
+  end
+  -- Opacity, measured rather than assumed. A frame draws at ITS alpha times
+  -- every ancestor's, so the host is pinned opaque here and the client is asked
+  -- to ignore the chain above it (`SetIgnoreParentAlpha`): the world map fades
+  -- itself in and out, and while a parent chain is faded our dots are a ghost
+  -- whatever the vertex colour says. Both calls are read back, never trusted.
+  pcall(host.SetAlpha, host, 1)
+  if isFn(host.SetIgnoreParentAlpha) then
+    pcall(host.SetIgnoreParentAlpha, host, true)
+  end
+  self._hostAlpha = tonumber(call(host, "GetAlpha"))
+  self._ignoreParentAlpha = nil
+  if isFn(host.GetIgnoreParentAlpha) then
+    local ok, ignore = pcall(host.GetIgnoreParentAlpha, host)
+    if ok then
+      self._ignoreParentAlpha = ignore
+    end
+  end
+  -- The ladder's strata knob (only ever upward — the same rule as above).
+  if self._forceStrata and isFn(host.SetFrameStrata) then
+    local forced = strataRank(self._forceStrata)
+    local now = strataRank(call(host, "GetFrameStrata"))
+    if forced and (not now or now < forced) then
+      pcall(host.SetFrameStrata, host, self._forceStrata)
     end
   end
   return host
@@ -683,9 +976,15 @@ function M:_measureMapping(mapFrame)
   m.ground = groundLabel
   m.groundBox = ground
   m.rect = rect
+  m.visible = nil
   m.window = nil
   local view = geom.ProjectRect(m.wmf, m.scroll)
   if view then
+    -- The visible rect: the ScrollContainer's rect expressed in WorldMapFrame
+    -- (the host's) pixel space. This is what a host on the frame must sit on —
+    -- it is measured for the diag even when the view covers the whole map.
+    m.visible = view
+    m.visible.method = "ScrollContainer relative to WorldMapFrame"
     local inside = geom.IntersectRect(rect, view)
     -- A window that covers (nearly) the whole map rect is no clipping at all,
     -- and a sliver is more likely a measurement accident than a real viewport.
@@ -711,14 +1010,16 @@ function M:_redraw()
   self._skipped = nil
   self._measured = false
   self._drew = false
+  self._alphaChain = nil
+  self._cover = nil
   if not self.path or #self.path < 2 then
     self._why = "no route"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
   if not ns.GetDB().showWorldMap then
     self._why = "showWorldMap is off"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -726,7 +1027,7 @@ function M:_redraw()
   local shown = displayedMapID(mapFrame)
   if shown and self.mapID and shown ~= self.mapID then
     self._why = ("the open map is %s, the route is on %s"):format(tostring(shown), tostring(self.mapID))
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -744,7 +1045,7 @@ function M:_redraw()
     self._why = "no map frame (canvas and legacy frames all absent)"
     self._parentLabel = nil
     self._hostSize = nil
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     self:RequestRetry()
     return
   end
@@ -752,7 +1053,7 @@ function M:_redraw()
   local host = self:EnsureHost(parent, label)
   if not host or not self.drawer then
     self._why = "no overlay host (CreateFrame failed)"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -762,7 +1063,7 @@ function M:_redraw()
     self._hostSize = nil
     self._rect = nil
     self._innerLabel = nil
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     self:RequestRetry()
     return
   end
@@ -796,7 +1097,8 @@ function M:_redraw()
   self._rect = rect
   self._window = window
   if not rect then
-    self:ReleaseVisuals()
+    self._why = "the map rect could not be measured"
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -892,7 +1194,9 @@ function M:_redraw()
   -- and one host unit is `unitScale` screen px. On the new host that scale is
   -- the frame's own measured effective scale (the canvas' ~0.696 no longer
   -- applies — the projected rect already carries it), so a dot stays the size
-  -- the operator asked for instead of shrinking with the map.
+  -- the operator asked for instead of shrinking with the map. The visibility
+  -- ladder still overrides the screen floor, so one build can A/B a 3/4/5 px
+  -- core without a deploy.
   local unitScale
   if mapping.mode == "frame" then
     local hostBox = measureBox(host)
@@ -903,9 +1207,15 @@ function M:_redraw()
   if type(unitScale) ~= "number" or unitScale ~= unitScale or unitScale <= 0 then
     unitScale = 1
   end
-  local metrics = ns.LineDraw.DotMetrics(stroke, unitScale)
+  local metrics = ns.LineDraw.DotMetrics(stroke, unitScale, self._screenFloor)
   self._dotMetrics = metrics
   ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / unitScale, r, g, b, a, "ydown", metrics)
+  -- Why it might still not READ, measured next to the draw: the alpha the whole
+  -- parent chain multiplies us down to, and any frame that outranks the host
+  -- over the map. Both are read here, on every redraw, because both change
+  -- (the map fades itself, the art frames are created late).
+  self._alphaChain = alphaChain(host)
+  self._cover = coverFrames(host, parent, width, height, frameLevel(host), call(host, "GetFrameStrata"))
   self._drew = true
   self._lastQueued = count
   -- One record per draw, newest first. The card's third suspect is a later pass
@@ -934,6 +1244,9 @@ function M:_redraw()
       :format(#self.path - 1, #skipped > 0 and table.concat(skipped, "; ") or "no segments in the path")
     pcall(host.Hide, host)
   end
+  -- After `_why` is settled: the probe records the reason when nothing survived,
+  -- so a zero-painted record can never be mistaken for an empty route.
+  self:RecordProbe()
 end
 
 function M:Redraw()
@@ -1072,8 +1385,13 @@ end
 -- missing any of these APIs prints "absent" (or "error: ..." for that one
 -- line) and never aborts the rest of the block.
 
+local captured   -- set while M:Diag() runs: its own output, kept for the SV
+
 local function say(text)
   local line = "NodeTrail mapdiag: " .. tostring(text)
+  if type(captured) == "table" then
+    captured[#captured + 1] = line
+  end
   if type(DEFAULT_CHAT_FRAME) == "table" and isFn(DEFAULT_CHAT_FRAME.AddMessage) then
     local ok = pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, line)
     if ok then
@@ -1194,8 +1512,199 @@ local function objectDefects(self)
   return defects
 end
 
+function M:RecordProbe(force)
+  local db = type(ns.GetDB) == "function" and ns.GetDB() or nil
+  if type(db) ~= "table" then
+    return
+  end
+  -- Throttled: a map drag fires OnSizeChanged repeatedly, and this walks every
+  -- painted dot. The diag calls VisibleAudit directly and is not throttled; this
+  -- is only the copy that lands in SavedVariables. A bail is always recorded.
+  local now = (type(GetTime) == "function") and GetTime() or nil
+  if not force and now and self._probeAt and (now - self._probeAt) < 0.25 then
+    return
+  end
+  self._probeAt = now
+  local ok, audit = pcall(self.VisibleAudit, self)
+  if not ok or type(audit) ~= "table" then
+    return
+  end
+  local function pack(rect)
+    if type(rect) ~= "table" then
+      return nil
+    end
+    return { left = rect.left, top = rect.top, width = rect.width, height = rect.height, scale = rect.scale }
+  end
+  local mapFrame = _G.WorldMapFrame
+  db.mapProbe = {
+    at = (type(GetTime) == "function") and GetTime() or nil,
+    mapID = self.mapID,
+    pathPoints = self.path and #self.path or 0,
+    painted = audit.painted or 0,
+    measured = audit.measured or 0,
+    unmeasured = audit.unmeasured or 0,
+    inside = audit.inside or 0,
+    idle = audit.idle and true or false,
+    why = self._why or audit.why,
+    first = audit.first,
+    bbox = audit.bbox,
+    -- The window the `inside` count was taken against, in the ruler the count
+    -- uses (frame px on the WorldMapFrame mapping, canvas px on the fallback),
+    -- and the measurement it came from. A nil window with a `windowWhy` means
+    -- the on-screen subset could not be measured — never that nothing is
+    -- visible. `windowCanvas` keeps the canvas-unit reading alongside it.
+    window = audit.window and {
+      left = audit.window.left, top = audit.window.top,
+      width = audit.window.width, height = audit.window.height,
+      canvasW = audit.window.canvasW, canvasH = audit.window.canvasH,
+      method = audit.window.method,
+    } or nil,
+    windowUnits = audit.windowUnits,
+    windowWhy = audit.windowWhy,
+    windowMethod = audit.window and audit.window.method or nil,
+    windowCanvas = audit.windowCanvas and {
+      left = audit.windowCanvas.left, top = audit.windowCanvas.top,
+      width = audit.windowCanvas.width, height = audit.windowCanvas.height,
+      canvasW = audit.windowCanvas.canvasW, canvasH = audit.windowCanvas.canvasH,
+      method = audit.windowCanvas.method,
+    } or nil,
+    host = pack(audit.host or screenRect(self.host)),
+    canvas = pack(screenRect(mapFrame and getCanvas(mapFrame))),
+    scroll = pack(screenRect(mapFrame and mapFrame.ScrollContainer)),
+    frame = pack(screenRect(mapFrame)),
+    ui = pack(screenRect(_G.UIParent)),
+    canvasScale = call(mapFrame, "GetCanvasScale"),
+  }
+end
+
+--- Where the painted dots actually are, in SCREEN space, against the rect the
+--- player can actually see (the scroll container that clips the canvas, falling
+--- back to WorldMapFrame). Returned as data so the diag can print it AND the
+--- draw can persist it into SavedVariables — the same measurement, read two
+--- ways. A check against the dots' own host can never fail (they are its
+--- children), which is how `painted=288 outside=0` was printed for a route that
+--- was not on the screenshot at all.
+function M:VisibleAudit()
+  local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+  local out = { idle = applied.idle and true or false, why = applied.why, painted = tonumber(applied.paintedDots) or 0 }
+  if out.idle then
+    return out
+  end
+  local mapFrame = _G.WorldMapFrame
+  local canvas = getCanvas(mapFrame)
+  local mapping = self._mappingInfo
+  local window, windowWhy
+  if type(mapping) == "table" and mapping.mode == "frame" then
+    -- t_c2ce2c49: the dots are anchored in the HOST's pixel space, which on the
+    -- frame mapping is WorldMapFrame's. The count must use the same ruler, so
+    -- the visible rect is the ScrollContainer projected into that space — not
+    -- the canvas window (a different ruler, which read 0/37 for a route that
+    -- was on screen). The whole visible rect, not the clip intersection, so
+    -- the line reports what the player can actually see.
+    window = mapping.visible
+    out.windowUnits = "frame px"
+    windowWhy = window and nil
+      or "the ScrollContainer rect could not be projected onto WorldMapFrame"
+    -- Kept for the saved probe: the same window in canvas units, so the older
+    -- canvas-space reading is still available next to the one that counts.
+    out.windowCanvas, out.windowCanvasWhy = canvasWindow(mapFrame, canvas)
+  else
+    window, windowWhy = canvasWindow(mapFrame, canvas)
+    out.windowUnits = "canvas px"
+  end
+  out.canvas = canvas
+  out.window, out.windowWhy = window, windowWhy
+  -- Kept for the saved-probe shape and for the screenshot reader: the screen
+  -- rects the client reports are still printed, but they are NOT the ruler this
+  -- audit counts with (they are in three different spaces; see canvasWindow).
+  out.visible = window
+  out.host = screenRect(self.host)
+  out.canvasRect = screenRect(canvas)
+  out.screen = {
+    map = screenRect(mapFrame),
+    scroll = screenRect(mapFrame and mapFrame.ScrollContainer),
+    canvas = out.canvasRect,
+    host = out.host,
+  }
+  if out.painted < 1 then
+    return out
+  end
+  local drawer = self.drawer
+  local inside, measured = 0, 0
+  local minL, maxR, maxT, minB
+  local disagree, disagreeWorst = 0, 0
+  local first
+  for d = 1, out.painted do
+    local obj = drawer and drawer.pool and drawer.pool[2 * d]
+    if obj then
+      -- The dot's centre in the HOST's units (the units its anchors are in) —
+      -- WorldMapFrame's pixel space on the frame mapping, the canvas' on the
+      -- fallback. The window is chosen in the same space above.
+      local cx, cy = anchorUnits(obj, self.host)
+      if cx then
+        measured = measured + 1
+        first = first or { x = cx, y = cy }
+        if window
+          and cx >= window.left - 0.5 and cx <= window.left + window.width + 0.5
+          and cy >= window.top - 0.5 and cy <= window.top + window.height + 0.5 then
+          inside = inside + 1
+        end
+        minL = (not minL or cx < minL) and cx or minL
+        maxR = (not maxR or cx > maxR) and cx or maxR
+        maxT = (not maxT or cy < maxT) and cy or maxT
+        minB = (not minB or cy > minB) and cy or minB
+      end
+    end
+  end
+  out.inside, out.measured = inside, measured
+  out.first = first
+  if measured > 0 then
+    out.bbox = { minL, minB, maxR, maxT }
+  end
+  out.disagree, out.disagreeWorst = disagree, disagreeWorst
+  -- The denominator is PAINTED, not measured. A dot whose anchors cannot be
+  -- read is not evidence of anything, so it must not leave the denominator:
+  -- dividing by `measured` let "36/36 inside" read as a pass while half the
+  -- route was unexamined (review round 1). `unmeasured` is reported so the
+  -- remainder is named instead of silently dropped.
+  local unmeasured = out.painted - measured
+  if unmeasured < 0 then
+    unmeasured = 0
+  end
+  out.unmeasured = unmeasured
+  local why = {}
+  if measured == 0 then
+    why[#why + 1] = (("none of the %s painted dot(s) report map anchors: their position cannot be checked"))
+      :format(fmtNum(out.painted))
+  elseif not window then
+    -- No window is NOT a pass and NOT a zero: the subset on screen is unknown.
+    why[#why + 1] = ("the visible window in %s cannot be measured (%s), so the on-screen subset is unmeasured")
+      :format(tostring(out.windowUnits or "host px"), tostring(windowWhy or "no reason recorded"))
+  else
+    if inside == 0 then
+      why[#why + 1] = "NO dot is inside the visible window: the route is drawn where the player cannot see it"
+    elseif inside < measured then
+      why[#why + 1] = ("%s dot(s) fall outside the visible window (clipped by the map frame)")
+        :format(fmtNum(measured - inside))
+    end
+  end
+  if unmeasured > 0 then
+    why[#why + 1] = ("%s of %s painted dot(s) report no map anchors — not measured")
+      :format(fmtNum(unmeasured), fmtNum(out.painted))
+  end
+  if #why > 0 then
+    out.verdict = " — " .. table.concat(why, "; ")
+  end
+  return out
+end
+
+
 function M:Diag()
   local mapFrame = _G.WorldMapFrame
+  -- Every line this run prints is also kept, so the run can be read back from
+  -- SavedVariables after a /reload instead of being transcribed off a chat
+  -- frame by hand. The chat is unchanged; this is a copy.
+  captured = {}
 
   say("frame environment")
   fact(function()
@@ -1351,7 +1860,11 @@ function M:Diag()
     local drawer = self.drawer
     local a = (drawer and ns.LineDraw.Applied(drawer)) or {}
     if type(drawer) ~= "table" or not self._drew then
-      return "dots pool: no draw on this map yet"
+      local why = a.why or self._why or "no redraw has run yet"
+      local held = (type(drawer) == "table" and (drawer.poolHigh or 0)) or 0
+      return string.format(
+        "dots pool: no draw on this map (%s); objects held=%s, painted=0 (the previous draw's count is not this draw's)",
+        tostring(why), fmtNum(held))
     end
     local high = drawer.poolHigh or 0
     local existing, shown = 0, 0
@@ -1415,11 +1928,147 @@ function M:Diag()
       return "dots box: no painted dot on the last draw"
     end
     local box, host = a.dotBox, a.hostSize
+    if a.idle or not box then
+      return "dots box: no painted dot on the last redraw ("
+        .. tostring(a.why or self._why or "no reason recorded") .. ")"
+    end
     return string.format(
       "dots box: painted bbox=%s,%s..%s,%s host=%sx%s outside=%s/%s",
       fmtNum(box[1], 1), fmtNum(box[2], 1), fmtNum(box[3], 1), fmtNum(box[4], 1),
       fmtNum(host and host.width), fmtNum(host and host.height),
       fmtNum(a.dotOutside or 0), fmtNum(a.paintedDots or 0))
+  end)
+  fact(function()
+    -- t_86583cf2 / ara: every rect on the way from the screen to the dots, in
+    -- ONE line, each measured by the client (GetLeft/GetTop/GetWidth/GetHeight
+    -- and the scale chain), never derived from the anchors we asked for.
+    --
+    -- These rects are printed for the screenshot reader, and they are NOT
+    -- compared with each other: on this client the canvas is the scroll frame's
+    -- child, so ScrollContainer and canvas report different rulers (that is why
+    -- the old "inside the visible rect" check read 0/319). The comparison that
+    -- counts lives in `route dots on the visible map:` and uses canvas units.
+    local mapFrame = _G.WorldMapFrame
+    local canvas = getCanvas(mapFrame)
+    local scroll = mapFrame and mapFrame.ScrollContainer
+    local window, windowWhy = canvasWindow(mapFrame, canvas)
+    local parts = {
+      "WorldMapFrame=" .. rectText(screenRect(mapFrame)),
+      "ScrollContainer=" .. rectText(screenRect(scroll)),
+      "canvas=" .. rectText(screenRect(canvas)),
+      "host=" .. rectText(screenRect(self.host)),
+      "UIParent=" .. rectText(screenRect(_G.UIParent)),
+    }
+    if window then
+      parts[#parts + 1] = ("canvas window=%s,%s %sx%s of %sx%s (%s)")
+        :format(fmtNum(window.left, 1), fmtNum(window.top, 1), fmtNum(window.width, 1),
+          fmtNum(window.height, 1), fmtNum(window.canvasW, 1), fmtNum(window.canvasH, 1),
+          tostring(window.method))
+    else
+      parts[#parts + 1] = "canvas window=UNMEASURED (" .. tostring(windowWhy or "no reason") .. ")"
+    end
+    if isFn(canvas and canvas.GetPoint) then
+      local ok, point, rel, relPoint, x, y = pcall(canvas.GetPoint, canvas, 1)
+      if ok and point then
+        parts[#parts + 1] = ("canvas anchor=%s->%s/%s (%s,%s) parent=%s")
+          :format(tostring(point), frameName(rel), tostring(relPoint),
+            fmtNum(x, 1), fmtNum(y, 1), frameName(rel))
+      end
+    end
+    return "map on screen: " .. table.concat(parts, "; ")
+  end)
+  fact(function()
+    -- t_c2ce2c49 / ara: "anchor the host to the visible rect, and assert it".
+    -- The host is WorldMapFrame on the frame mapping, and its children are
+    -- anchored in that frame's pixel space, so the rect it must sit on is the
+    -- ScrollContainer's rect RELATIVE TO WorldMapFrame — the visible map rect.
+    -- The old line compared the host with the canvas, which under the new
+    -- mapping is the bug it was written to catch. A host re-anchored or
+    -- resized moves every dot off the ground, and the per-axis numbers say by
+    -- how much. `mode=` is on the line so an old canvas-host build is
+    -- identifiable from a pasted run.
+    local m = self._mappingInfo
+    local mode = (type(m) == "table" and m.mode) or "absent"
+    local ref, visible, parentLabel, why
+    if mode == "frame" then
+      ref = m.wmf
+      visible = m.visible
+      parentLabel = "WorldMapFrame"
+      if type(visible) ~= "table" then
+        why = "the ScrollContainer rect could not be projected onto WorldMapFrame"
+      end
+    else
+      local canvas = getCanvas(mapFrame)
+      ref = canvas and measureBox(canvas)
+      parentLabel = "canvas"
+      visible, why = canvasWindow(mapFrame, canvas)
+    end
+    local hostBox = measureBox(self.host)
+    local hostRect = (ref and hostBox) and ns.PathGeom.ProjectRect(ref, hostBox) or nil
+    if type(hostRect) ~= "table" or type(visible) ~= "table" then
+      return ("host on the visible rect: UNKNOWN (mode=%s; parent=%s; %s)")
+        :format(mode, parentLabel,
+          tostring(why or (hostRect and "the visible rect cannot be measured"
+            or "the host rect cannot be measured")))
+    end
+    local hx1, hx2 = hostRect.left, hostRect.left + hostRect.width
+    local hy1, hy2 = hostRect.top, hostRect.top + hostRect.height
+    local vx1, vx2 = visible.left, visible.left + visible.width
+    local vy1, vy2 = visible.top, visible.top + visible.height
+    local eps = 1
+    local okX = hx1 <= vx1 + eps and hx2 >= vx2 - eps
+    local okY = hy1 <= vy1 + eps and hy2 >= vy2 - eps
+    local box = ("host x=%s..%s y=%s..%s vs visible x=%s..%s y=%s..%s")
+      :format(fmtNum(hx1, 1), fmtNum(hx2, 1), fmtNum(hy1, 1), fmtNum(hy2, 1),
+        fmtNum(vx1, 1), fmtNum(vx2, 1), fmtNum(vy1, 1), fmtNum(vy2, 1))
+    if okX and okY then
+      return ("host on the visible rect: yes (mode=%s; parent=%s; %s)")
+        :format(mode, parentLabel, box)
+    end
+    return ("host on the visible rect: NO — the host does not cover the visible rect (mode=%s; parent=%s; %s)")
+      :format(mode, parentLabel, box)
+  end)
+  fact(function()
+    -- t_86583cf2 / ara: one line that cannot pass while every dot is off the
+    -- visible map. Measured in CANVAS units against the canvas window
+    -- (M:VisibleAudit -> canvasWindow): one ruler for the dots and the window.
+    local a = self:VisibleAudit()
+    if a.idle then
+      return "route dots on the visible map: 0/0 — no draw on this map ("
+        .. tostring(a.why or "idle") .. ")"
+    end
+    local mode = (self._mappingInfo and self._mappingInfo.mode) or "canvas"
+    local win = "absent"
+    if type(a.window) == "table" then
+      local extra = ""
+      if type(a.window.method) == "string" then
+        extra = "; " .. a.window.method
+      end
+      if type(a.window.canvasW) == "number" then
+        extra = extra .. ("; canvas=%sx%s")
+          :format(fmtNum(a.window.canvasW, 1), fmtNum(a.window.canvasH, 1))
+      end
+      win = string.format("%s,%s %sx%s in %s (mode=%s%s)",
+        fmtNum(a.window.left, 1), fmtNum(a.window.top, 1),
+        fmtNum(a.window.width, 1), fmtNum(a.window.height, 1),
+        tostring(a.windowUnits or "host px"), mode, extra)
+    elseif a.windowWhy then
+      win = "UNMEASURED in " .. mode .. ": " .. tostring(a.windowWhy)
+    end
+    if a.painted < 1 then
+      return "route dots on the visible map: 0/0 (nothing painted on the last draw; window="
+        .. win .. ")"
+    end
+    local bbox = "absent"
+    if type(a.bbox) == "table" then
+      bbox = string.format("%s,%s..%s,%s", fmtNum(a.bbox[1], 1), fmtNum(a.bbox[2], 1),
+        fmtNum(a.bbox[3], 1), fmtNum(a.bbox[4], 1))
+    end
+    return string.format("route dots on the visible map: %s/%s inside (measured %s of %s painted; dots bbox=%s host px; window=%s)%s",
+      fmtNum(a.inside or 0), fmtNum(a.painted or 0),
+      fmtNum(a.measured or 0), fmtNum(a.painted or 0),
+      bbox, win,
+      tostring(a.verdict or ""))
   end)
   fact(function()
     local draws = self._draws
@@ -1514,6 +2163,130 @@ function M:Diag()
     return "parent chain: " .. parentChainText(self.host and self._hostParent or nil)
   end)
   fact(function()
+    -- The card's question in one line: what alpha do these dots actually paint
+    -- at? Effective = the product up the real parent chain, plus whether the
+    -- client accepted the request to ignore it.
+    local c = self._alphaChain
+    if type(c) ~= "table" then
+      return "alpha chain: not measured yet (no redraw on a measurable map frame)"
+    end
+    local ignore = tostring(self._ignoreParentAlpha)
+    if ignore == "nil" then
+      ignore = "absent on this client"
+    end
+    local head = ("alpha chain: %s -> chain=%s; effective=%s; host alpha=%s; ignore-parent-alpha=%s")
+      :format(c.text, fmtNum(c.effective, 2),
+        fmtNum(self._ignoreParentAlpha == true and (self._hostAlpha or 1) or c.effective, 2),
+        fmtNum(self._hostAlpha, 2), ignore)
+    if c.effective < 0.99 and self._ignoreParentAlpha ~= true then
+      head = head .. (" (EFFECTIVE < 1: %s is at %s — the dots cannot paint more opaque than this)")
+        :format(frameName(c.culprit), fmtNum(c.culpritAlpha, 2))
+    end
+    return head
+  end)
+  fact(function()
+    -- Every shown frame that outranks the host over the map, or is faded. The
+    -- z-order audit only knows the big art frames: a parchment/fog/dialog child
+    -- above the host dilutes the route without ever appearing in that audit.
+    local list = self._cover
+    if type(list) ~= "table" then
+      return "cover: not measured yet (no redraw on a measurable map frame)"
+    end
+    if #list == 0 then
+      return "cover: none (no shown frame outranks the host over the map, and none is faded)"
+    end
+    local parts = {}
+    for i = 1, #list do
+      local c = list[i]
+      parts[#parts + 1] = ("%s(lvl=%s strata=%s alpha=%s%s)"):format(
+        c.name, fmtNum(c.level), tostring(c.strata or "?"), fmtNum(c.alpha, 2),
+        c.over and " ABOVE the host" or " faded")
+    end
+    return ("cover: %d frame(s) over the map that could dilute the route [%s]")
+      :format(#list, table.concat(parts, ", "))
+  end)
+  fact(function()
+    -- ONE sampled dot, read back from the client at draw time. Requested colour
+    -- next to GetVertexColor: if the alpha the draw passed is not the alpha the
+    -- region reports, the alpha never reached the texture — a different defect
+    -- from a dot that is merely small, or one that is covered.
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local s = type(applied) == "table" and applied.sampleDot or nil
+    if type(s) ~= "table" or not s.present then
+      return "sample dot: absent (the last draw painted no dot on this surface)"
+    end
+    local function triple(colour)
+      if type(colour) ~= "table" then
+        return "absent"
+      end
+      return ("%s,%s,%s,%s"):format(fmtNum(colour[1], 2), fmtNum(colour[2], 2),
+        fmtNum(colour[3], 2), fmtNum(colour[4], 2))
+    end
+    local vertex = triple(s.vertex)
+    local requested = triple(s.requested)
+    local via = tostring(s.via or "absent")
+    local landed = "not readable (this client exposes no GetVertexColor)"
+    if via == "SetColorTexture" then
+      -- This client carried the colour in a solid-colour texture, so the vertex
+      -- colour is not evidence about the dot at all — saying "landed=yes" off it
+      -- would be the same kind of lie the old diag told.
+      landed = "n/a (the colour went through SetColorTexture, not the vertex colour)"
+    elseif type(s.vertex) == "table" and type(s.requested) == "table" then
+      local same = true
+      for i = 1, 4 do
+        local want = tonumber(s.requested[i]) or 0
+        local got = tonumber(s.vertex[i])
+        if not got or math.abs(got - want) > 0.02 then
+          same = false
+        end
+      end
+      landed = same and "yes" or "NO (the client reports a different colour)"
+    end
+    local size = "absent"
+    if type(s.width) == "number" and type(s.height) == "number" then
+      size = fmtNum(s.width) .. "x" .. fmtNum(s.height)
+    end
+    local screenPx = "absent"
+    if type(s.screen) == "number" then
+      screenPx = fmtNum(s.screen, 2) .. " screen px"
+    end
+    local level = type(s.level) == "number" and fmtNum(s.level) or ("host " .. fmtNum(frameLevel(self.host)))
+    local strata = (type(s.strata) == "string" and s.strata ~= "") and s.strata
+      or tostring(call(self.host, "GetFrameStrata") or "?")
+    return ("sample dot: requested=(%s) alpha asked=%s | applied via=%s | GetVertexColor=(%s) alpha landed=%s | layer=%s blend=%s "
+      .. "measured=%s planned=%s -> %s | level=%s strata=%s | shown=%s region alpha=%s parent=%s")
+      :format(requested, fmtNum(s.requestedAlpha, 2), via, vertex, landed,
+        tostring(s.layer or "absent"), tostring(s.blend or "absent"),
+        size, fmtNum(s.planned, 2), screenPx, level, strata,
+        tostring(s.shown), fmtNum(s.alpha, 2), frameName(s.parent))
+  end)
+  fact(function()
+    -- The dark rim that makes the white dot survive any terrain colour: read the
+    -- same way, so "the rim is not painting" is a printed fact too.
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local s = type(applied) == "table" and applied.sampleRim or nil
+    if type(s) ~= "table" or not s.present then
+      return "sample rim: absent (the last draw painted no outline on this surface)"
+    end
+    local vertex = "absent"
+    if type(s.vertex) == "table" then
+      vertex = ("%s,%s,%s,%s"):format(fmtNum(s.vertex[1], 2), fmtNum(s.vertex[2], 2),
+        fmtNum(s.vertex[3], 2), fmtNum(s.vertex[4], 2))
+    end
+    local wanted = "absent"
+    if type(s.requested) == "table" then
+      wanted = ("%s,%s,%s,%s"):format(fmtNum(s.requested[1], 2), fmtNum(s.requested[2], 2),
+        fmtNum(s.requested[3], 2), fmtNum(s.requested[4], 2))
+    end
+    local size = "absent"
+    if type(s.width) == "number" and type(s.height) == "number" then
+      size = fmtNum(s.width) .. "x" .. fmtNum(s.height)
+    end
+    return ("sample rim: requested=(%s) applied via=%s | GetVertexColor=(%s) | layer=%s measured=%s planned=%s -> %s screen px | shown=%s")
+      :format(wanted, tostring(s.via or "absent"), vertex, tostring(s.layer or "absent"), size,
+        fmtNum(s.planned, 2), fmtNum(s.screen, 2), tostring(s.shown))
+  end)
+  fact(function()
     local z = self._zorder
     if type(z) ~= "table" then
       return "z-order: not measured yet (no redraw on a measurable map frame)"
@@ -1579,10 +2352,11 @@ function M:Diag()
     local drawn = type(applied) == "table" and type(applied.dotSize) == "number"
     if drawn then
       return string.format(
-        "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=3.00px; dots=%s object(s)=%s%s",
+        "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=%s px; dots=%s object(s)=%s%s",
         fmtNum(scale, 3), fmtNum(width), pair(applied.dotSize, applied.dotScreenSize),
         pair(applied.dotOutline, applied.dotScreenOutline),
         pair(applied.dotSpacing, applied.dotScreenSpacing),
+        fmtNum(applied.dotFloor, 2),
         fmtNum(applied.dots), fmtNum(applied.dotObjects or 0),
         tostring(applied.mode) ~= "dots" and (" (mode=" .. tostring(applied.mode) .. ", dots not used)") or "")
     end
@@ -1596,9 +2370,47 @@ function M:Diag()
       note = ("(not used: mode=" .. tostring(applied.mode) .. ")")
     end
     return string.format(
-      "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=3.00px %s",
+      "dots: canvas scale=%s pathWidth=%s px -> dot=%s; outline=%s; spacing=%s; screen floor=%s px %s",
       fmtNum(scale, 3), fmtNum(width), pair(m.size, m.screenSize),
-      pair(m.outline, m.screenOutline), pair(m.spacing, m.screenSpacing), note)
+      pair(m.outline, m.screenOutline), pair(m.spacing, m.screenSpacing),
+      fmtNum(m.screenFloor, 2), note)
+  end)
+  fact(function()
+    -- The ghost's arithmetic, printed instead of guessed at. Each dot is a dark
+    -- rim plus a white core, painted rim-then-core; the ONLY thing that decides
+    -- whether the neighbour's rim eats this core is the pitch between dots. The
+    -- old geometry spaced the dots by the CORE width, which left the next rim
+    -- 1 px inside every white dot — a route that was drawn, opaque and above the
+    -- art, and still read as "extremely transparent". The clearance below is
+    -- measured off the sizes the drawn regions reported, not off a constant.
+    local applied = self.drawer and ns.LineDraw.Applied(self.drawer) or nil
+    local m = self._dotMetrics
+    local src = (type(applied) == "table" and type(applied.dotClearance) == "number") and applied or nil
+    local clearance = src and src.dotClearance or (type(m) == "table" and m.screenSpacing
+      and (m.screenSpacing - (m.screenOutline + m.screenSize) * 0.5)) or nil
+    if type(clearance) ~= "number" then
+      return "draw order: not measured yet (no redraw on a measurable map frame)"
+    end
+    local pitch = src and src.dotScreenSpacing or m.screenSpacing
+    local rim = src and src.dotScreenOutline or m.screenOutline
+    local core = src and src.dotScreenSize or m.screenSize
+    local verdict
+    if clearance >= 0 then
+      verdict = ("no neighbouring rim can reach a core (%.2f px clear)"):format(clearance)
+    else
+      local buried = math.min(1, (-clearance * 2) / core)
+      verdict = ("A RIM STILL CROSSES EVERY CORE: %.2f px each side, %.0f%% of the white dot")
+        :format(-clearance, buried * 100)
+    end
+    -- Sublevels are the other half of draw order: a client that honours them
+    -- paints the rim (6) under the core (7) even when the regions were created
+    -- interleaved. Reported, because this client may not expose the call at all.
+    local sample = type(applied) == "table" and applied.sampleDot or nil
+    local layers = (type(sample) == "table" and sample.layer)
+      and ("sublevels rim/core 6/7 honoured (%s)"):format(tostring(sample.layer))
+      or "no SetDrawLayer on this client (creation order is draw order)"
+    return ("draw order: rim then core per dot; pitch=%s rim=%s core=%s screen px -> clearance=%s px; %s; %s")
+      :format(fmtNum(pitch, 2), fmtNum(rim, 2), fmtNum(core, 2), fmtNum(clearance, 2), verdict, layers)
   end)
   fact(function()
     if not self._drew then
@@ -1753,7 +2565,8 @@ function M:Diag()
     local applied = dr.lastApplied or {}
     local painted = tonumber(applied.paintedDots) or 0
     if painted < 1 then
-      return "dot screen: nothing painted on the last redraw"
+      return "dot screen: nothing painted on the last redraw ("
+        .. tostring(applied.why or self._why or "no reason recorded") .. ")"
     end
     local function screenOf(obj)
       local d = ns.LineDraw.Describe(obj)
@@ -1780,7 +2593,12 @@ function M:Diag()
         hostText = string.format("%s,%s", fmtNum(left, 1), fmtNum(top, 1))
       end
     end
+    -- POOL order, not route order: after any re-plan the pool still holds the
+    -- previous plan's objects, so "dot 1" is not route point #1. Comparing the
+    -- two orders is how a route that is drawn correctly was read as being in the
+    -- wrong place.
     return "dot screen: " .. table.concat(parts, "; ") .. " host=" .. hostText
+      .. " (pool order, not route order: a re-plan leaves the previous plan's objects in the pool)"
   end)
   fact(function()
     local px = self._px
@@ -1967,6 +2785,74 @@ function M:Diag()
   else
     say("MinimapPath: absent (minimap overlay not loaded)")
   end
+  -- The copy, for the next run to be read off disk. `mapDiagLast` is written
+  -- only by this command — a normal draw never touches it.
+  local okDb, db = pcall(ns.GetDB)
+  if okDb and type(db) == "table" then
+    local at
+    if type(GetTime) == "function" then
+      local okT, now = pcall(GetTime)
+      if okT then
+        at = now
+      end
+    end
+    db.mapDiagLast = { at = at, lines = captured }
+  end
+  captured = nil
+end
+
+--- /nt mapdiag floor <px|auto> — pin the white dot's SCREEN floor for the next
+--- redraw. The visibility ladder has to A/B the core size on the live client
+--- without another deploy: the same route, the same coordinates, only the dot's
+--- screen size changes. `auto` restores the shipped floor.
+function M:SetDotFloor(word)
+  local want = tostring(word or ""):lower():match("^%s*(.-)%s*$") or ""
+  if want == "" or want == "auto" or want == "default" then
+    self._screenFloor = nil
+    self:Redraw()
+    local m = self._dotMetrics or {}
+    say(("floor: auto -> dot=%s canvas px = %s screen px; outline=%s screen px")
+      :format(fmtNum(m.size, 2), fmtNum(m.screenSize, 2), fmtNum(m.screenOutline, 2)))
+    return
+  end
+  local px = tonumber(want)
+  if not px or px < 1 or px > 12 then
+    say(("floor: '%s' is not a pixel size (1..12, or auto)"):format(tostring(word)))
+    return
+  end
+  self._screenFloor = px
+  self:Redraw()
+  local m = self._dotMetrics or {}
+  say(("floor: %s screen px -> dot=%s canvas px = %s screen px; outline=%s canvas px = %s screen px")
+    :format(fmtNum(px, 2), fmtNum(m.size, 2), fmtNum(m.screenSize, 2),
+      fmtNum(m.outline, 2), fmtNum(m.screenOutline, 2)))
+end
+
+--- /nt mapdiag strata <MEDIUM|HIGH|DIALOG|auto> — raise the host for the next
+--- redraws. Rung 2 of the visibility ladder; the overlay never lowers a host on
+--- its own, so a strata asked for here sticks until `auto`.
+function M:SetStrata(word)
+  local want = tostring(word or ""):upper():match("^%s*(.-)%s*$") or ""
+  if want == "" or want == "AUTO" or want == "DEFAULT" then
+    self._forceStrata = nil
+    say(("strata: auto (the host is at %s)"):format(tostring(call(self.host, "GetFrameStrata") or "absent")))
+    return
+  end
+  if not strataRank(want) then
+    say(("strata: '%s' is not a frame strata (MEDIUM|HIGH|DIALOG, or auto)"):format(tostring(word)))
+    return
+  end
+  self._forceStrata = want
+  local host = self.host
+  if host and isFn(host.SetFrameStrata) then
+    pcall(host.SetFrameStrata, host, want)
+  end
+  self:Redraw()
+  -- Read back, never assume: a client that accepts the call and ignores it says
+  -- so here instead of looking fixed.
+  local now = call(host, "GetFrameStrata")
+  say(("strata: asked %s; the host reads %s%s"):format(want, tostring(now or "absent"),
+    (now == want) and "" or " (the client did not take it)"))
 end
 
 --- /nt mapdiag primitive <auto|line|dots|rotate> — pin the drawing primitive for
@@ -2041,6 +2927,119 @@ function M:_probeTexture(host)
   self._scratchTex = tex
   self._scratchParent = host
   return tex
+end
+
+-- ── /nt mapdiag compare ────────────────────────────────────────────────────
+-- One host, four specs, one screenshot. Mightie's report: the route dots are
+-- "extremely faint" while the probe's marker on THIS SAME HOST was bright. If
+-- the host were the cause, both would be faint, so this paints four textures
+-- with identical placement and identical colour, varying only size and alpha,
+-- and numbers them so he can say which numbers he can actually read.
+--
+-- Deliberately raw CreateTexture + ApplyColor, the same two calls the probe and
+-- the route both go through: no LineDraw pool, no route coordinates touched.
+local COMPARE_SPECS = {
+  { size = 40, alpha = 1.00, rim = false, note = "40px opaque  (the probe's marker, the known-good control)" },
+  { size = 10, alpha = 1.00, rim = false, note = "10px opaque" },
+  { size = 5,  alpha = 1.00, rim = false, note = "5px opaque   (route size, full alpha)" },
+  { size = 5,  alpha = 0.90, rim = true,  note = "5px a=0.90 with the dark rim (what the route actually draws)" },
+}
+
+function M:Compare()
+  local host = self.host
+  if not host then
+    local parent = selectParent()
+    if not parent then
+      say("compare: no map frame to draw on")
+      return
+    end
+    host = self:EnsureHost(parent, "compare")
+  end
+  if not host or not isFn(host.CreateTexture) then
+    say("compare: the host exposes no CreateTexture — nothing can be placed")
+    return
+  end
+  local width, height = frameSize(host)
+  if not width or not height then
+    say("compare: the host has no measurable size")
+    return
+  end
+
+  local cx, cy = width * 0.5, height * 0.5
+  if self.path and #self.path >= 2 and ns.PathGeom.IsMapPoint(self.path[1]) then
+    local rect = self._rect or ns.PathGeom.MapRect(width, height)
+    if rect then
+      cx, cy = ns.PathGeom.FractionToPixel(self.path[1].x, self.path[1].y, rect)
+    end
+  end
+
+  self:ClearProbe()
+  local probe = { textures = {}, drawer = ns.LineDraw.Create() }
+  self._probe = probe
+  self._probeOn = true
+
+  local function box(x1, y1, x2, y2, r, g, b, a, sublevel)
+    local ok, tex = pcall(host.CreateTexture, host, nil, "OVERLAY")
+    if not ok or not tex then
+      return nil
+    end
+    probe.textures[#probe.textures + 1] = tex
+    ns.LineDraw.ApplyColor(tex, r, g, b, a)
+    if tex.SetDrawLayer then
+      pcall(tex.SetDrawLayer, tex, "OVERLAY", sublevel or 7)
+    end
+    pcall(tex.ClearAllPoints, tex)
+    pcall(tex.SetPoint, tex, "BOTTOMLEFT", host, "TOPLEFT", x1, -y2)
+    pcall(tex.SetPoint, tex, "TOPRIGHT", host, "TOPLEFT", x2, -y1)
+    pcall(tex.Show, tex)
+    return tex
+  end
+
+  -- A row of swatches through the first route point, so the faint route is in
+  -- the same view: the swatches are the measurement, the route beside them is
+  -- the thing being judged.
+  local step = 60
+  local startX = cx - (step * (#COMPARE_SPECS - 1)) * 0.5
+  for i = 1, #COMPARE_SPECS do
+    local spec = COMPARE_SPECS[i]
+    local mx = startX + (i - 1) * step
+    local half = spec.size * 0.5
+    if spec.rim then
+      local rimSize = spec.size + 2
+      local rimHalf = rimSize * 0.5
+      box(mx - rimHalf, cy - rimHalf, mx + rimHalf, cy + rimHalf, 0.06, 0.06, 0.06, 1, 6)
+    end
+    local tex = box(mx - half, cy - half, mx + half, cy + half, 1, 1, 1, spec.alpha)
+    local w, h = frameSize(tex)
+    local alpha = tonumber(call(tex, "GetAlpha"))
+    local vr, vg, vb, va = 1, 1, 1, 1
+    if isFn(tex.GetVertexColor) then
+      local okc, ar, ag, ab, aa = pcall(tex.GetVertexColor, tex)
+      if okc then vr, vg, vb, va = ar, ag, ab, aa end
+    end
+    say(("compare: #%d %s at canvas (%s,%s); measured %sx%s; GetAlpha=%s; GetVertexColor=%s,%s,%s,%s")
+      :format(i, spec.note, fmtNum(mx, 1), fmtNum(cy, 1), fmtNum(w), fmtNum(h),
+        tostring(alpha or "absent"), fmtNum(vr, 2), fmtNum(vg, 2), fmtNum(vb, 2), fmtNum(va, 2)))
+  end
+
+  -- The alpha chain, measured at draw time rather than assumed: a faded
+  -- ancestor makes every swatch a ghost whatever the vertex colour says.
+  local node = host
+  local depth = 0
+  while node and depth < 6 do
+    local a = tonumber(call(node, "GetAlpha"))
+    local ignore = "absent"
+    if isFn(node.GetIgnoreParentAlpha) then
+      local okI, v = pcall(node.GetIgnoreParentAlpha, node)
+      if okI then ignore = tostring(v) end
+    end
+    say(("compare: chain[%d] %s alpha=%s ignoreParentAlpha=%s level=%s strata=%s")
+      :format(depth, frameName(node), tostring(a or "absent"), ignore,
+        fmtNum(frameLevel(node)), tostring(call(node, "GetFrameStrata") or "absent")))
+    node = call(node, "GetParent")
+    depth = depth + 1
+  end
+  say("compare: report which numbers you can read (#1-#4) and whether the dotted route beside them is easier or harder to see; '/nt mapdiag probe off' removes them")
 end
 
 function M:ClearProbe()
@@ -2198,7 +3197,147 @@ function M:Probe(arg)
       type(d.width) == "number" and fmtNum(d.width) or "absent",
       type(d.height) == "number" and fmtNum(d.height) or "absent",
       tostring(d.shown), ns.LineDraw.PointText(d.start), ns.LineDraw.PointText(d.stop)))
-  say("probe: report which you can SEE: marker / border / diagonal (or none); '/nt mapdiag probe off' removes them")
+  -- 4. labelled route points and the player, so ONE screenshot identifies itself
+  -- (ara, t_86583cf2): #1, #10, #20, the last point and `P` for the player's own
+  -- projected position, each with its canvas coordinate AND the region's own
+  -- GetLeft/GetTop. A picture plus this line settles whether the dots sit where
+  -- the maths says, without anyone having to describe the picture.
+  local rect = self._rect
+  local function projectPoint(i)
+    if type(self._px) == "table" and type(self._px[i]) == "table" then
+      return self._px[i].x, self._px[i].y, "measured"
+    end
+    local p = self.path and self.path[i]
+    if rect and type(p) == "table" and ns.PathGeom.IsMapPoint(p) then
+      local x, y = ns.PathGeom.FractionToPixel(p.x, p.y, rect)
+      return x, y, "projected now"
+    end
+    return nil
+  end
+  local wanted, seen = {}, {}
+  if self.path and #self.path >= 2 then
+    local list = { 1, 10, 20, #self.path }
+    for k = 1, #list do
+      local i = list[k]
+      if i >= 1 and i <= #self.path and not seen[i] then
+        seen[i] = true
+        wanted[#wanted + 1] = i
+      end
+    end
+  end
+  local function markerWithLabel(text, x, y, size)
+    local tex = quad(x - size, y - size, x + size, y + size)
+    local left, top = "absent", "absent"
+    if tex then
+      if isFn(tex.GetLeft) then
+        local v = call(tex, "GetLeft")
+        left = fmtNum(v, 1)
+      end
+      if isFn(tex.GetTop) then
+        local v = call(tex, "GetTop")
+        top = fmtNum(v, 1)
+      end
+    end
+    local fs
+    if isFn(host.CreateFontString) then
+      local okF, created = pcall(host.CreateFontString, host, nil, "OVERLAY", "GameFontNormal")
+      if okF and created then
+        fs = created
+        probe.textures[#probe.textures + 1] = fs
+        pcall(fs.SetText, fs, tostring(text))
+        pcall(fs.SetPoint, fs, "BOTTOMLEFT", host, "TOPLEFT", x + size + 1, -(y - size))
+        pcall(fs.Show, fs)
+      end
+    end
+    return tex, left, top, fs ~= nil
+  end
+  local pointParts = {}
+  for k = 1, #wanted do
+    local i = wanted[k]
+    local x, y, how = projectPoint(i)
+    if x then
+      local tex, left, top, labelled = markerWithLabel(i, x, y, 5)
+      pointParts[#pointParts + 1] = string.format("#%s canvas=(%s,%s) %s region(left=%s,top=%s)%s",
+        fmtNum(i), fmtNum(x, 1), fmtNum(y, 1), how, left, top, labelled and " label=yes" or " label=absent")
+    else
+      pointParts[#pointParts + 1] = string.format("#%s canvas=absent (not projected)", fmtNum(i))
+    end
+  end
+  if #pointParts > 0 then
+    say("probe points: " .. table.concat(pointParts, "; "))
+  else
+    say("probe points: none (no route to label)")
+  end
+  -- The player's OWN projected position, labelled P: the one point on the
+  -- screenshot whose ground truth is the player standing there.
+  do
+    local mx, my = nil, nil
+    if rect and self.mapID then
+      if C_Map and isFn(C_Map.GetPlayerMapPosition) then
+        local ok, pos = pcall(C_Map.GetPlayerMapPosition, C_Map, self.mapID, "player")
+        if ok and type(pos) == "table" and isFn(pos.GetXY) then
+          local okXY, fx, fy = pcall(pos.GetXY, pos)
+          if okXY and type(fx) == "number" and fx == fx and not (fx == 0 and fy == 0) then
+            mx, my = fx, fy
+          end
+        end
+      end
+      if not mx and isFn(_G.GetPlayerMapPosition) then
+        local okP, fx, fy = pcall(_G.GetPlayerMapPosition, "player")
+        if okP and type(fx) == "number" and type(fy) == "number"
+          and not (fx == 0 and fy == 0) then
+          mx, my = fx, fy
+        end
+      end
+    end
+    if mx then
+      local x, y = ns.PathGeom.FractionToPixel(mx, my, rect)
+      if x then
+        local tex, left, top, labelled = markerWithLabel("P", x, y, 6)
+        say(("probe player: P frac=(%s,%s) canvas=(%s,%s) region(left=%s,top=%s)%s")
+          :format(fmtNum(mx, 4), fmtNum(my, 4), fmtNum(x, 1), fmtNum(y, 1), left, top,
+            labelled and " label=yes" or " label=absent"))
+      else
+        say("probe player: P frac measured but did not project")
+      end
+    else
+      say("probe player: P absent (this client gave no player map position for map " .. tostring(self.mapID) .. ")")
+    end
+  end
+  -- The frames, side by side, with the client's OWN rect for each. This is the
+  -- line that separates "the dots are wrong" from "the host the dots are drawn
+  -- into is somewhere else on screen".
+  local mapFrame = _G.WorldMapFrame
+  local function frameRectText(label, frame)
+    if not frame then
+      return label .. "=absent"
+    end
+    local l = call(frame, "GetLeft")
+    local t = call(frame, "GetTop")
+    local w, h = frameSize(frame)
+    local sc = call(frame, "GetScale")
+    return string.format("%s=%s left=%s top=%s size=%sx%s scale=%s shown=%s",
+      label, frameName(frame), fmtNum(l, 1), fmtNum(t, 1), fmtNum(w), fmtNum(h),
+      fmtNum(sc, 3), tostring(shownState(frame)))
+  end
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  say("probe rects: " .. table.concat({
+    frameRectText("WorldMapFrame", mapFrame),
+    frameRectText("ScrollContainer", scroll),
+    frameRectText("host", host),
+    frameRectText("UIParent", _G.UIParent),
+  }, "; "))
+  -- ara's rule: a route that is 100% outside the visible rect must never again
+  -- read as a pass.
+  do
+    local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+    local painted = tonumber(applied.paintedDots) or 0
+    local outside = tonumber(applied.dotOutside) or 0
+    say(("probe route dots inside the host rect: %s/%s (outside=%s)%s")
+      :format(fmtNum(painted - outside), fmtNum(painted), fmtNum(outside),
+        painted > 0 and outside >= painted and " — EVERY dot is outside the host: the dots are not on the visible map" or ""))
+  end
+  say("probe: report which you can SEE: marker / border / diagonal / numbered points / P; '/nt mapdiag probe off' removes them")
 end
 
 local events = CreateFrame("Frame")

@@ -79,6 +79,18 @@ function ns.GetDB()
   if type(NodeTrailDB.profile) ~= "table" then
     NodeTrailDB.profile = CopyTable(ns.defaults.profile)
   end
+  -- The waypoint arrow shipped default-ON by mistake before it was parked, so a
+  -- profile written by that build stored `showNavArrow = true`. Changing the
+  -- default cannot undo a stored value, and that is exactly what happened: the
+  -- arrow came back on a build whose default is false. Only an explicit
+  -- /nt arrow switch counts as the player's choice, so anything else is forced
+  -- off once. Turning it on by hand sets the flag and sticks from then on.
+  if NodeTrailDB.profile.navArrowMigration ~= 2 then
+    if NodeTrailDB.profile.navArrowUserSet ~= true then
+      NodeTrailDB.profile.showNavArrow = false
+    end
+    NodeTrailDB.profile.navArrowMigration = 2
+  end
   return NodeTrailDB.profile
 end
 

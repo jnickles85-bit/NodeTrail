@@ -673,8 +673,8 @@ do
   L.M:SetRoute(route("L"))
   local a = (L.M.drawer or {}).lastApplied or {}
   near(a.dotScale, CANVAS_SCALE, "L: the canvas scale is the live one", 0.001)
-  check(a.plannedDots == 130,
-    "L: the 17-point route plans 130 dots at 3 screen px (planned=" .. tostring(a.plannedDots) .. ")")
+  check(a.plannedDots == 76,
+    "L: the 17-point route plans 76 dots at a 4 screen px core on a 6 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
   check(a.paintedDots == a.plannedDots,
     "L: every planned dot is painted (painted=" .. tostring(a.paintedDots) .. " planned="
       .. tostring(a.plannedDots) .. ")")

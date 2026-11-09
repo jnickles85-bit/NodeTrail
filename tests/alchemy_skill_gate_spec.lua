@@ -190,6 +190,13 @@ local function installClient()
       return info
     end,
     GetChildProfessionInfo = function() return { skillLineName = "Alchemy" } end,
+    -- The client enumerates UNLEARNED recipes exactly like known ones and will
+    -- answer a craftable count for them; this flag is the only proof of ownership.
+    IsRecipeProfessionLearned = function(id)
+      local r = recipes[id]
+      if r and r.unlearned then return false end
+      return nil -- unanswerable for the rest: leave the count/skill path in charge
+    end,
   }
 end
 
@@ -447,6 +454,26 @@ if type(craft8) == "table" then
 else
   check(false, "8: the scan persisted no availability map (alchemyCraft), so the panel cannot be reading one")
 end
+
+-- ═══ 9. an UNLEARNED recipe is withheld even when the client counts it ═══
+-- Live report: the panel listed seven recipes the herbalist does not know. This
+-- client answers GetCraftableCount for unlearned recipes too, so a positive
+-- count is not proof of ownership; IsRecipeProfessionLearned == false outranks it.
+for _, r in ipairs(recipes) do
+  r.numAvailable = 0
+  r.unlearned = false
+end
+recipes[1].numAvailable = 3   -- "Elixir of Wisdom", counted but NOT learned
+recipes[1].unlearned = true
+local okScan9, r9 = pcall(ns.Recipes.Scan, ns.Recipes)
+check(okScan9 and r9 == true, "9: the scan succeeds with the learned flag answering")
+hover("Briarthorn")
+local text9 = alchemyText()
+check(text9:find("Elixir of Wisdom", 1, true) == nil,
+  "9: an unlearned recipe is NOT listed even with a positive craftable count (" .. text9 .. ")")
+local craft9 = NodeTrailDB.recipes.alchemyCraft
+check(type(craft9) == "table" and craft9["Elixir of Wisdom"] == false,
+  "9: the scan persisted the learned flag as an exclusion, not as availability")
 
 if failed > 0 then
   io.stderr:write(failed .. " alchemy skill-gate check(s) failed\n")

@@ -260,13 +260,14 @@ if type(LD.DotPlan) ~= "function" or type(LD.PlanDots) ~= "function"
   -- aborting the whole spec so the FAIL count stays meaningful.
   check(false, "0b: LineDraw.DotMetrics/DotPlan/PlanDots are missing")
 else
-  -- t_7f6fdae4: the dot is sized in SCREEN px (3px floor) and divided by the
-  -- surface scale. At scale 1 that is a 3px dot, spaced by its own width.
+  -- t_7f6fdae4 / t_60e6e825: the dot is sized in SCREEN px (a 4px floor) and
+  -- divided by the surface scale. At scale 1 that is a 4px dot, spaced by its
+  -- own width.
   local m = LD.DotMetrics(2, 1)
   local cover = LD.DotPlan(400, m.size, m.spacing)
   check(cover.count == cover.steps + 1, "0b: both endpoints of the segment are drawn")
-  near(cover.spacing, 3, "0b: a 2px stroke is spaced 3px (the operator's chain)")
-  near(cover.size, 3, "0b: the dot is 3 screen px, so the spacing leaves no hole")
+  near(cover.spacing, 6, "0b: a 2px stroke is spaced 6px — the rim width, one px clear of the next core")
+  near(cover.size, 4, "0b: the dot is 4 screen px, so the spacing leaves no hole")
   check(cover.steps * cover.spacing >= 400, "0b: the chain spans the segment")
   check((cover.steps - 1) * cover.spacing < 400, "0b: no more dots than the length needs")
   local zero = LD.DotPlan(0, m.size, m.spacing)
@@ -325,9 +326,9 @@ check(#textures == 2 * #whiteDots,
     .. " dots=" .. #whiteDots)
 
 -- Segment 1: (0.2,0.2) -> (0.4,0.2) on a 1002x668 canvas = (200.4,133.6) ->
--- (400.8,133.6). At scale 1 the dot is the 3px screen floor, so the first dot
--- spans [198.9,201.9] x [132.1,135.1] and the last one sits on the second point.
-local HALF = 1.5
+-- (400.8,133.6). At scale 1 the dot is the 4px screen floor, so the first dot
+-- spans [198.4,202.4] x [131.6,135.6] and the last one sits on the second point.
+local HALF = 2
 local first = whiteDots[1]
 check(first ~= nil, "B: the first dot exists")
 if first then
@@ -341,7 +342,7 @@ if first then
   near(first:GetHeight(), 2 * HALF, "B: the anchors force the dot's height")
   check(first.color and first.color[1] == 1 and first.color[2] == 1 and first.color[3] == 1,
     "B: the dot is solid white through the route's colour path")
-  near(first.color and first.color[4] or -1, 0.9, "B: the dot carries pathColor's alpha")
+  near(first.color and first.color[4] or -1, 1, "B: the dot is painted opaque (t_60e6e825: 4 screen px at alpha 1, not 0.9)")
   check(first.rotation == nil, "B: no SetRotation on a dot")
   near(first.sublevel, 7, "B: the white dot is drawn on the top sublevel")
   -- The dark outline underneath it: larger, and drawn first.
@@ -360,7 +361,8 @@ if first then
     "B: the outline sits on a lower sublevel than the white dot")
 end
 
--- Every white dot sits on its segment, spaced ~3px apart, and the chain reaches
+-- Every white dot sits on its segment, spaced ~6px apart (the rim width), and the
+-- chain reaches
 -- the second point.
 local seg1 = {}
 for i = 1, #whiteDots do
@@ -376,7 +378,11 @@ if last then
 end
 if #seg1 >= 2 then
   local gap = seg1[2].points[1][4] - seg1[1].points[1][4]
-  near(gap, 3, "B: dots are spaced 3px apart (the operator's chain)")
+  -- The gap is the segment's length divided into whole steps, so it lands just
+  -- under the 6px pitch; what matters is that it stays at or above the rim
+  -- width's clearance (5 = rim 6 minus the 1px a rim reaches short of a core).
+  check(gap > 5.5 and gap <= 6.05,
+    "B: dots are spaced by the rim width, ~6px (one px clear of the next core), got " .. tostring(gap))
 end
 
 -- A dot is drawn without any size setter: the stub only has anchors.
@@ -427,7 +433,7 @@ check(verdict and verdict:find("verdict: PRIMITIVE", 1, true) ~= nil,
     .. tostring(verdict) .. ")")
 check(verdict and verdict:find("kept no geometry (reads start=TOPLEFT(0.0,absent) end=TOPLEFT(0.0,absent))", 1, true) ~= nil,
   "C: the verdict quotes the endpoint read-back (got " .. tostring(verdict) .. ")")
-check(verdict and verdict:find("anchored dots (size=3.00 spacing=3.00)", 1, true) ~= nil,
+check(verdict and verdict:find("anchored dots (size=4.00 spacing=6.00)", 1, true) ~= nil,
   "C: the verdict says how the route is drawn instead (got " .. tostring(verdict) .. ")")
 check(joined:find("error:", 1, true) == nil, "C: the diag printed no error line")
 

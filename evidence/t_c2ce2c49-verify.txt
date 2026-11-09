@@ -1,0 +1,120 @@
+t_c2ce2c49 — verification evidence
+date: 2026-11-09 23:00:14 UTC
+tree: /home/jnick/.hermes/kanban/workspaces/t_c2ce2c49/tree (local branch t_c2ce2c49/merge; parents e2d1db1 358d9a4)
+lua: Lua 5.1.5  Copyright (C) 1994-2012 Lua.org, PUC-Rio
+
+== luac5.1 -p (files this card touches) ==
+OK MightiePack/Modules/NodeTrail/UI/MapOverlay.lua
+OK tests/mapdiag_visible_spec.lua
+
+== luac5.1 -p (every .lua under MightiePack/ and tests/) ==
+all 95 .lua files parse
+
+== lua5.1 tests/*.lua (merged tree) ==
+ok   tests/alchemy_skill_gate_spec.lua             alchemy_skill_gate_spec: ok
+ok   tests/beast_profession_gate_spec.lua          beast_profession_gate_spec: ok
+ok   tests/bugreport_spec.lua                      bugreport_spec: ok
+ok   tests/density_spec.lua                        density_spec: ok
+ok   tests/diag_truthful_spec.lua                  diag_truthful_spec: ok
+ok   tests/draw_smoke.lua                          draw_smoke: ok
+ok   tests/event_gate_spec.lua                     event_gate_spec: ok
+ok   tests/item_name_capture_spec.lua              item_name_capture_spec: ok
+ok   tests/mapdiag_spec.lua                        mapdiag_spec: ok
+ok   tests/mapdiag_visible_spec.lua                mapdiag_visible_spec: ok
+ok   tests/mapdiag_zorder_spec.lua                 mapdiag_zorder_spec: ok
+ok   tests/mapdot_capacity_spec.lua                mapdot_capacity_spec: ok
+ok   tests/mapdot_scale_spec.lua                   mapdot_scale_spec: ok
+ok   tests/mapdraw_primitive_spec.lua              mapdraw_primitive_spec: ok
+ok   tests/mapframe_projection_spec.lua            mapframe_projection_spec: ok
+ok   tests/maplegibility_spec.lua                  maplegibility_spec: ok
+ok   tests/mapoverlay_spec.lua                     mapoverlay_spec: ok
+ok   tests/minimap_diag_spec.lua                   minimap_diag_spec: ok
+ok   tests/minimap_hbd_spec.lua                    minimap_hbd_spec: ok
+ok   tests/minimap_units_spec.lua                  minimap_units_spec: ok
+ok   tests/minimap_walk_spec.lua                   minimap_walk_spec: ok
+ok   tests/nav_arrow_spec.lua                      nav_arrow_spec: ok
+ok   tests/nav_target_spec.lua                     nav_target_spec: ok
+ok   tests/options_spec.lua                        options_spec: ok
+ok   tests/pathgeom_spec.lua                       pathgeom_spec: ok
+ok   tests/profession_gate_spec.lua                profession_gate_spec: ok
+ok   tests/recipe_diag_spec.lua                    recipe_diag_spec: ok
+ok   tests/recorder_spec.lua                       recorder_spec: ok
+ok   tests/route_auto_spec.lua                     route_auto_spec: ok
+ok   tests/route_stability_spec.lua                route_stability_spec: ok
+ok   tests/skin_tooltip_spec.lua                   skin_tooltip_spec: ok (2 row(s) on hover, 198px wide, floor 10)
+ok   tests/skindiag_secret_spec.lua                skindiag_secret_spec: ok
+ok   tests/skindiag_spec.lua                       skindiag_spec: ok
+ok   tests/skinning_dump_spec.lua                  skinning_dump_spec: ok
+ok   tests/skinning_guardless_spec.lua             skinning_guardless_spec: ok
+ok   tests/skinning_items_spec.lua                 skinning_items_spec: ok
+ok   tests/skinning_recorder_spec.lua              skinning_recorder_spec: ok
+ok   tests/slash_spec.lua                          slash_spec: ok
+ok   tests/status_meta_spec.lua                    status_meta_spec: ok
+ok   tests/toast_test_spec.lua                     toast_test_spec: ok
+ok   tests/toast_trace_spec.lua                    toast_trace_spec: ok
+ok   tests/tooltip_no_gametooltip_writes_spec.lua  tooltip_no_gametooltip_writes_spec: ok (42 file(s) scanned, 1 known touchstone hook)
+ok   tests/tooltip_panel_spec.lua                  tooltip_panel_spec: ok (width after six hovers 231.2px, at font 20 372.0px, cap 864.0px)
+ok   tests/tooltip_refresh_spec.lua                tooltip_refresh_spec: ok (panel 231x69, widest 211.2, 3 row(s))
+ok   tests/tooltip_spec.lua                        tooltip_spec: ok
+ok   tests/touchstone_assets_spec.lua              touchstone_assets_spec: ok
+ok   tests/touchstone_fold_spec.lua                touchstone_fold_spec: ok
+ok   tests/touchstone_loadorder_spec.lua           touchstone_loadorder_spec: ok
+ok   tests/touchstone_tooltip_line_spec.lua        touchstone_tooltip_line_spec: ok
+ok   tests/touchstone_weights_spec.lua             touchstone_weights_spec: ok
+ok   tests/ttdiag_minimal_spec.lua                 ttdiag_minimal_spec: ok
+ok   tests/umbrella_spec.lua                       umbrella_spec: ok
+TOTAL ok=52 failed=0
+
+== the updated assertions against the two parents alone ==
+method: fresh 'git archive <commit> | tar -x' trees; the MERGED spec copied over tests/mapdiag_visible_spec.lua; lua5.1.
+
+-- e2d1db1 alone (the re-parent, pre-merge: no host-on-the-visible-rect line) --
+FAIL: 1: the diag prints one line with every rect (got no 'map on screen:' line)
+FAIL: 2: the diag measures the dots against the map's visible rect
+FAIL: 3: a healthy draw asserts the host covers the visible rect (got nil)
+FAIL: 3: and state the mapping mode, so an old canvas-host build is identifiable from a paste (got nil)
+FAIL: 3: a host placed away from the visible rect reads NO — not a pass (got nil)
+FAIL: 3: and gives the host and visible rects per axis (got nil)
+FAIL: 4: and names why (got NodeTrail mapdiag: dots pool: no draw on this map yet)
+FAIL: 4: the visible-map line reports 0/0, not dots that are not drawn (got nil)
+FAIL: 5: returning to the route's map reports the dots again (got nil)
+FAIL: 6: the draw records a placement probe in the DB
+FAIL: 6: a bailed redraw is recorded as idle (nil)
+FAIL: 6: with the reason recorded (nil)
+FAIL: 8: the visible-map line is printed for a cropped map
+FAIL: 8: and it names the frame mapping mode (got nil)
+FAIL: 8: the window is the ScrollContainer rect in frame px (nilxnil, expected 348x243.6)
+FAIL: 8: the denominator is the painted count (nil of 32)
+FAIL: 8: exactly the dots inside the visible rect count (nil, expected 32 of 32)
+FAIL: 8: a sliver window reads 0 inside (got nil)
+FAIL: 8: and carries the verdict, so a dot outside the visible rect cannot read as a pass (got nil)
+FAIL: 8: with the mapping mode named (got nil)
+FAIL: 7: the line is printed for a mixed draw
+FAIL: 7: the draw records its placement in the DB (no RecordProbe method)
+FAIL: 7: the probe records painted (nil)
+FAIL: 7: and measured separately (nil)
+FAIL: 7: and the unmeasured remainder (nil)
+FAIL: 7: never more dots inside than it measured
+mapdiag_visible_spec: 26 failure(s)
+rc=1
+
+-- integ/map-legibility (358d9a4) alone (the old canvas-window contract) --
+FAIL: 1: the canvas rect is printed in SCREEN px (1002 canvas px at 0.696 = 697): NodeTrail mapdiag: map on screen: WorldMapFrame=717.0,1080.0 697.0x465.0 (scale=1.000); ScrollContainer=717.0,1080.0 697.0x465.0 (scale=1.000); canvas=1030.2,1551.7 697.4x464.9 (scale=0.696); host=1030.2,1551.7 697.4x464.9 (scale=0.696); UIParent=0.0,1200.0 2133.0x1200.0 (scale=1.000); canvas window=0.0,0.0 1001.4x668.0 of 1002.0x668.0 (ScrollContainer scroll offsets)
+FAIL: 3: a healthy draw asserts the host covers the visible rect (got nil)
+FAIL: 3: and state the mapping mode, so an old canvas-host build is identifiable from a paste (got nil)
+FAIL: 3: a host placed away from the visible rect reads NO — not a pass (got nil)
+FAIL: 3: and gives the host and visible rects per axis (got nil)
+FAIL: 6: with the visible rect in frame px — the ruler the count uses (0..1001.4367816092)
+FAIL: 6: and the units named (nil)
+FAIL: 6: with the same window in canvas units kept alongside it (nil)
+FAIL: 6: and the measurement that canvas reading came from (nil)
+FAIL: 8: and it names the frame mapping mode (got NodeTrail mapdiag: route dots on the visible map: 19/37 inside (measured 37 of 37 painted; dots bbox=400.8,300.6..631.3,100.2 canvas px; window=300.0,200.0 500.0x350.0 in canvas units (ScrollContainer scroll offsets; canvas=1002.0x668.0)) — 18 dot(s) fall outside the visible window (clipped by the map frame))
+FAIL: 8: the window is the ScrollContainer rect in frame px (nilxnil, expected 348x243.6)
+FAIL: 8: exactly the dots inside the visible rect count (19, expected 0 of 37)
+FAIL: 8: every painted dot is inside the visible rect — the draw clips before it paints (0 of 37)
+FAIL: 8: the smaller visible rect really cropped the route (37 of 37 dots)
+FAIL: 8: with the mapping mode named (got NodeTrail mapdiag: route dots on the visible map: 0/37 inside (measured 37 of 37 painted; dots bbox=400.8,300.6..631.3,100.2 canvas px; window=0.0,0.0 10.0x10.0 in canvas units (ScrollContainer scroll offsets; canvas=1002.0x668.0)) — NO dot is inside the visible window: the route is drawn where the player cannot see it)
+FAIL: 7: and names the unreadable remainder in the verdict (NodeTrail mapdiag: route dots on the visible map: 19/37 inside (measured 19 of 37 painted; dots bbox=400.8,300.6..631.3,100.2 canvas px; window=0.0,0.0 1002.0x668.0 in canvas units (ScrollContainer scroll offsets; canvas=1002.0x668.0)) — 18 of 37 painted dot(s) report no canvas anchors — not measured)
+FAIL: 7: the remainder count matches the sabotage (nil of 18)
+mapdiag_visible_spec: 17 failure(s)
+rc=1
