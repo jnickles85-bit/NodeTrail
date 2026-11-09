@@ -5,56 +5,38 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
 **2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
 
-- **The Alchemy line is gated on a REAL signal — or it is not drawn at all** (t_4ab7c230).
-  The previous pass fell back to `recipes (not filtered by skill)`, which still advertised eight
-  crafts Mightie cannot make. The signals it looked for (`numAvailable`, `requiredSkill`) are not
-  the ones this client answers. `Wow.exe` build 16001 carries the usage strings
-  `C_TradeSkillUI.GetCraftableCount(recipeSpellID [, recipeLevel]) -> numAvailable` and
-  `C_TradeSkillUI.IsRecipeProfessionLearned(recipeID) -> boolean`, and its recipeInfo struct names
-  `numAvailable`, `requiredSkillRank` and `skillLineAbilityID`. `Data/Recipes.lua` now resolves
-  availability in this order and records WHICH signal answered:
-  count > 0 → `IsRecipeProfessionLearned == false` → `requiredSkillRank`/`requiredSkill` vs the
-  character's Alchemy rank → learned == true → count == 0 → `isAvailable`; the legacy path reads
-  `GetTradeSkillNumAvailable(i)` and `GetTradeSkillInfo`'s third (learnable) return when present.
-  The learned flag is what answers the report: `GetAllRecipeIDs` enumerates UNLEARNED recipes
-  exactly like known ones. A client that answers none of these draws NO Alchemy line — the caveat
-  is gone — and the options panel carries one short note (`Rc:HiddenHint`) saying the list needs a
-  recipe-availability API this client version lacks. `/nt recipediag [id|name]` prints, for one
-  craftable and one non-craftable recipe, every candidate call and raw value by name
-  (`GetRecipeInfo`/`GetRecipeSchematic` fields, `GetCraftableCount`, `GetRecipeRequirements`,
-  `IsRecipeProfessionLearned`, `GetRecipeCooldown`, legacy calls, and the character's rank), plus
-  the single `signal:` line the panel is gated on. **The `GetCraftableCount(103) -> 3 (number)`
-  output quoted below is the SPEC FIXTURE, not observed client output** — `/nt recipediag` still
-  has to be run in game; the static evidence is the exe's own usage strings. The account
-  SavedVariables on disk (16:24) carry `recipes.alchemy` + `alchemyScanned` but none of the gate
-  keys, which means the session that wrote them was not running this build (`alchemyCraft` would
-  have been persisted) — so the live gate is the next step, not a proven outcome.
-
-  ```
-  NodeTrail recipediag: modern calls: GetRecipeInfo=present, GetRecipeSchematic=present,
-    GetCraftableCount=present, GetRecipeRequirements=absent, IsRecipeProfessionLearned=present, …
-  NodeTrail recipediag: legacy calls: GetTradeSkillLine=absent, GetNumTradeSkills=absent,
-    GetTradeSkillInfo=absent, GetTradeSkillNumAvailable=absent, …
-  NodeTrail recipediag: character Alchemy rank: 75 (GetSkillLineInfo / Pr:Rank)
-  NodeTrail recipediag: --- target 1 (craftable per stored gate): "Lesser Discolored Healing Potion"
-    (recipe id 103) · stored gate: craftable
-  NodeTrail recipediag: GetRecipeInfo(103) -> {name="Lesser Discolored Healing Potion" (string),
-    reagents={1=table, 2=table}, requiredSkillRank=75 (number), skillLineAbilityID=9003 (number)}
-  NodeTrail recipediag: GetCraftableCount(103) -> 3 (number)
-  NodeTrail recipediag: IsRecipeProfessionLearned(103) -> true (boolean)
-  NodeTrail recipediag: --- target 2 (not craftable per stored gate): "Elixir of Wisdom"
-    (recipe id 101) · stored gate: not craftable
-  NodeTrail recipediag: GetRecipeInfo(101) -> {name="Elixir of Wisdom" (string), …
-    requiredSkillRank=50 (number), skillLineAbilityID=9001 (number)}
-  NodeTrail recipediag: GetCraftableCount(101) -> 0 (number)
-  NodeTrail recipediag: IsRecipeProfessionLearned(101) -> false (boolean)
-  NodeTrail recipediag: signal: GetCraftableCount — the Alchemy line is filtered on it
-  ```
-
-  `tests/recipe_diag_spec.lua` pins the three gates, the hide path, the panel note, the raw diag
-  output and saved-data compatibility: **49 checks fail behaviourally on `236031e`, no traceback**;
-  the updated §6 of `tests/alchemy_skill_gate_spec.lua` adds 9 more, and the new options-panel
-  section 5 in `tests/options_spec.lua` adds 5. All 45 `tests/*.lua` pass under lua5.1.
+- **The minimap route is now checked against the objects it drew, not against its own maths**
+  (t_86583cf2). The earlier check was circular: it compared the diag's fresh recalculation of the
+  player's map fraction with the previous recalculation. Now the drawer STAMPS every draw
+  (`drawer.lastApplied.time/.mapID/.playerFrac`, mirrored on `MinimapPath._stamp`) and
+  `/nt mapdiag` prints that stamp back verbatim — never recomputed — plus the anchors the client
+  reports for the nearest drawn dot (`GetPoint(1)`/`GetPoint(2)`), the centre they imply, its
+  distance from the minimap centre in px / radii / map fractions, the route segment and point that
+  dot belongs to, the world-map canvas anchor for the same index, drawn-vs-planned counts and
+  whether the ticker has fired since the last player move. New lines: `minimap stamp:`,
+  `minimap drawn dot:`, `minimap drawn dot route:`, `minimap drawn vs planned:`,
+  `minimap crosscheck:` (per index: world canvas anchor, minimap px, drawn/hidden + reason,
+  mapID equality) and `minimap scale audit:` (HereBeDragons yard distance ÷ drawn px = the real
+  yd/px, so the 0.075 fallback can be measured instead of assumed; prints `absent` without HBD).
+  The WORLD MAP half got the same treatment: `route dots on the visible map: <inside>/<painted> inside
+  (measured <m> of <p> painted; …)` (a route that is 100% outside can no longer read as a pass, and
+  neither can one that is only partly measured — see the third-pass note at the end) and
+  `/nt mapdiag probe` now draws
+  labelled markers at #1/#10/#20/last plus `P` for the player, printing canvas, host and
+  WorldMapFrame/ScrollContainer rects. New `/nt minimap on|off` switches the minimap route alone
+  (world map untouched). New `/nt navwalk start|mark <label>|clear` records the four-stop walk
+  (client coords, draw-time stamp, drawn anchors, segment/point index, distances) into
+  `NodeTrailDB.navwalk`, which the client writes on `/reload` — so the live table can be read off
+  disk instead of transcribed. New `tests/minimap_walk_spec.lua` replays four stops on a synthetic
+  segment beside a landmark and asserts the DRAWN anchors (read from the regions) sit where the
+  stamp puts them, move opposite the player, keep a constant offset from the landmark, and that the
+  player's distance to the segment shrinks → ~0 → grows. It replays BOTH projections: the fraction
+  fallback (§A) and, with a fake HereBeDragons, world mode with `C_Minimap.GetViewRadius()` yards
+  (§G — the projection this build ships). **77 FAILs on `d34dcb3`**, green at this commit; all 45
+  `tests/*.lua` pass under lua5.1. The live four-stop walk in Mightie's client is
+  still the operator's step — the numbers this card's acceptance needs come from `/nt navwalk`.
+  **The table already collected is from the pre-HBD build; see the third-pass note at the end.**
+  Route generation and the dot primitive (`UI/LineDraw.lua`) are untouched.
 
 - **The beast panel shows what SKINNING yields — the corpse loot is gone** (t_2c573dbf).
   Mightie on a Dire Mottled Boar: "beast tooltip doesnt need the actual items the mob can drop. Just
@@ -69,32 +51,20 @@ Bases A–E are on `main` (`c96bf91`, PR #2–#7).
   successful cast behind it is such a case: `Record:OnSkinLoot` does not set `rec.skinned`).
 - **`Scroll: LOWER PING WHOMEVER` is the CLIENT's own name for item 211787** — the id question
   (t_2c573dbf). That label came from `GetItemInfo(id)`, so it was checked against the id instead of
-  being "fixed": `/nt ttdiag` now resolves EVERY distinct item id in the character's store — **no
-  print cap** (review round 1: an 8-line cap plus an ascending id sort silently dropped 211787, the
-  HIGHEST id in a classic-era store, and left no way to ask for it) — one line per id, in this shape:
-  `beast: item id: <id> -> <GetItemInfo(id)> · <corpse|skin|corpse+skin> · <what the loot slot said>`,
-  with `DISAGREES (the keying is wrong, not the label)` when the client's name for that id is not the
-  name the loot slot reported, and `GetItemInfo answered nothing` / `answered a secret string` when
-  the client has no usable name. The count leads the section
-  (`beast: item names: N distinct id(s) in this character's records`), so it is visible that nothing
-  was held back. Records are visited in the recorder's own `store.order`, never `pairs()`, so one
-  store always prints the same lines and the loot-slot name kept for an id is the corpse-side one —
-  not whichever record a hash table happened to visit first (review round 1, minor observation).
-  **The `211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot
-  said the same` line is the §12 SPEC STUB, not observed client output** — the spec sets
-  `ITEM_NAMES[211787]` to stand in for the client's answer; the live line for his own boar record is
-  still pending. Item 211787 is a real world drop of **this** client's
+  being "fixed": `/nt ttdiag` now prints one line per distinct recorded item id —
+  `beast: item id: 211787 -> "Scroll: LOWER PING WHOMEVER" (GetItemInfo) · corpse · the loot slot said the same`
+  — and says `DISAGREES (the keying is wrong, not the label)` when the client's name for that id is
+  not the name the loot slot reported, and `GetItemInfo answered nothing` / `answered a secret
+  string` when the client has no usable name. Item 211787 is a real world drop of **this** client's
   data (WoW Forever 1.60.1 / build 16001 — wowhead `/forever/item=211787`,
   `warcraftforever.wiki`, `thewowdb`, `ahledger` all carry the same id and name), so the label stays
   and no keying change was made. A secret answer is reported, never concatenated (the same
   `issecretvalue` guard `ItemName` uses). `tests/skin_tooltip_spec.lua` pins all of it: §1b the block
-  line-for-line with no corpse trace, §2/§6 the thin and never-skinned cases, §11 the
-  impossible-percentage guard moved to the skin side, §12 the four id→name answers, and §12b a store
-  of 12 distinct ids (more than the old cap) in which the highest id, 211787, must still resolve and
-  nothing may be withheld. **20 checks fail on `d34dcb3`** (the new §1b/§2/§6/§12/§12b checks,
-  behavioural FAILs, no traceback), **4 of them — the §12b cap case — on `95aa115`**; all 42
-  `tests/*.lua` pass under lua5.1. **Not yet run in game**: the live `id -> name` line for his own
-  boar record is the next step — that is the one thing the specs cannot prove for this client.
+  line-for-line with no corpse trace, §2/§6 the thin and never-skinned cases, §12 the four id→name
+  answers, §11 the impossible-percentage guard moved to the skin side. **16 checks fail on `d34dcb3`**
+  (the new §1b/§2/§6/§12 checks, behavioural FAILs, no traceback); all 42 `tests/*.lua` pass under
+  lua5.1. **Not yet run in game**: the live `id -> name` line for his own boar record is the next
+  step — that is the one thing the specs cannot prove for this client.
 
 - **Hovering a BEAST now shows what its corpse and its skinning have yielded** (t_c0221fd7).
   Mightie: "we are missing the skinning tooltip ... says what we might get if we kill it and skin
@@ -1000,53 +970,137 @@ the figure), `tooltip_panel_spec` T2b (no raw row ⇒ floor 0, reported), `toolt
 FAILs, no traceback) and green here. The earlier commit message's "43 checks fail on `06984f6`" was a
 typo — the real count is **46**.
 
-### t_60e6e825 — the route renders as a ghost because its own rim covers the white dot
+**2026-11-08 (second pass, `d1c2e78` on `wt/t_86583cf2`) — the diag measures the dots on
+screen; the minimap stops guessing its scale.**
 
-**Mightie, on `7e3a329`:** "The path is being drawn on the map it is just extremely transparent."
-Placement was already right. This is legibility only: opacity, thickness, inherited parent alpha,
-draw order. Projection, anchoring and the coordinate space were not touched.
+The first pass instrumented the DRAW (stamp, drawn anchors, crosscheck) but left two things
+that could lie. Both are fixed, and both are covered by specs that fail on `d6f2a31`.
 
-**The defect is geometry, and it was measured off the regions the client was given.** Every dot is
-TWO regions: a dark rim, painted first, then the white core on top. `DotMetrics` spaced the dots by
-the CORE width — 2.02 canvas px on the reported draw — while the rim was 3.36 canvas px, so the next
-dot's rim reached 1 px into every white core: **33% of each core on a straight run, 39% at 45°**, and
-55%–62% of the core's area where the route turns. Pixel area of white surviving the whole chain, per
-distinct dot position, on this route at three canvas scales:
+1. **A bailed redraw no longer reports the previous draw.** `MapOverlay:ReleaseVisuals(why)` now
+   calls `LineDraw.MarkIdle(drawer, why)`: the drawer's `lastApplied` says `painted=0` and names the
+   reason. Before, opening a map that is not the route's map hid the overlay and left
+   `paintedDots` at the old value, so `/nt mapdiag` printed `painted=288 missing=0 outside=0` for a
+   route that was nowhere on the screen. Three diag lines now read `no draw on this map (<why>)`
+   instead of quoting the stale count.
+2. **The placement check is in SCREEN space, against the rect the player can see.**
+   `MapOverlay:VisibleAudit()` computes each painted dot's centre from the anchors the draw set
+   plus the host's measured rect (exactly the numbers the primitive used), counts how many fall
+   inside `WorldMapFrame.ScrollContainer`'s screen rect (falling back to `WorldMapFrame`), and
+   prints `route dots on the visible map: N/M inside (dots bbox=…; visible=…)<verdict>`. The old
+   line compared the dots with their own host, which they are parented to and therefore always
+   fit inside — a check that could not fail. New line `map on screen:` prints WorldMapFrame /
+   ScrollContainer / canvas / host / UIParent rects side by side, with sizes converted through
+   the scale chain, so the canvas-vs-visible-rect question is one line away.
+   `dot screen:` now says "pool order, not route order": after a re-plan the pool still holds the
+   previous plan's objects, so "dot 1" is not route point #1 — comparing those two orders is how a
+   correctly drawn route was read as being in the wrong place.
+3. **The same audit is persisted**: every world-map redraw writes `NodeTrailDB.mapProbe`
+   (`at`, `mapID`, `painted`/`inside`/`measured`, `bbox`, `first dot screen pos`, `visible`/`host`/
+   `canvas`/`scroll`/`frame`/`ui` rects, `canvasScale`, `idle`+`why`). The client writes SavedVariables
+   on `/reload`, so the placement numbers are readable off
+   `WTF/Account/JERMTHE1/SavedVariables/MightiePack.lua` instead of a pasted chat line.
+4. **The minimap scale is measured when HereBeDragons is there.** `MinimapPath.getHBD` only looked at
+   `GatherMate2.HBD`, and GatherMate2 is not installed on this client — so every draw printed
+   `radius=0.0750 [map fractions (fallback: no yard radius for this zone)]` while RXPGuides was
+   shipping the same library at `_forever_/Interface/AddOns/RXPGuides/libs/HereBeDragons`. It now
+   also resolves it through LibStub (a TABLE with `__call`, not a function — the first cut of the
+   check got that wrong and still read "absent"). With the library present the draw uses world
+   coordinates and `C_Minimap.GetViewRadius()` yards, the diag names the source and version
+   (`minimap hereBeDragons: LibStub:HereBeDragons-2.0 version=…`), and the scale audit prints yd/px
+   plus the radius those pixels imply. Without it, the fallback is still used and still says so.
+   Also documented the sign convention: HBD world coordinates run backwards from UI map fractions
+   (`x = left - width * x` in `GetWorldCoordinatesFromZone`), so player-minus-point is what restores
+   "east is +x" and keeps `pointDelta`'s two branches consistent — otherwise the minimap would
+   mirror the route the moment HBD loads.
 
-| canvas scale | 0.6 | 1.0 | 1.5 |
-|---|---|---|---|
-| `7e3a329` (pitch = core) | 44% | 51% | 55% |
-| this build (pitch = rim) | 81% | 90% | 94% |
+**Proof.** `tests/mapdiag_visible_spec.lua`: 10 behavioural FAILs on `d6f2a31` (no `map on screen:`
+line, no visible-rect measurement, no idle record, stale count reported), green at `d1c2e78`.
+`tests/minimap_hbd_spec.lua`: 12 behavioural FAILs on `d6f2a31` (HBD not found, radius stays 0.075,
+dots at 18.67 px instead of 6.00 px for a 20 yd offset), green here. 45/45 `tests/*.lua` pass under
+lua5.1. Route generation, the dot primitive and the projection maths are unchanged.
 
-That is the whole "extremely transparent": a white dot painted OPAQUE under a rim that covers half of
-it. It also explains why the alpha looked innocent — a 90% white square cannot read as a ghost by
-itself, which is what the card said — and why the probe diagonal was bright: a single region has no
-neighbour to paint over it.
+**Still needs the client (one step).** `/reload` loads `d1c2e78`; open the world map once (that is
+what triggers a redraw) and `/reload` again. `NodeTrailDB.mapProbe` then holds, for that map, the
+rects and the `inside/measured` count — the numbers that say whether the route is inside the map
+the player can see, and whether the host rect and the visible rect agree. `/nt mapdiag` prints the
+same lines live, and `/nt mapdiag probe` labels #1/#10/#20/last plus `P` for one screenshot.
 
-**Why draw order could not be the fix.** This client exposes no `SetDrawLayer`, so within a frame a
-region is painted in CREATION order; the two-pass "all rims, then all cores" ordering is available
-but it starves the cores on a client with a region ceiling (the rim pass eats the allowance and
-leaves black rims with nothing on top — reproduced on the 40-region client in
-`mapdot_capacity_spec`: `painted=0`, 39 rims). The fix is the pitch instead: `DotMetrics` spaces the
-dots by the RIM width (`core + DOT_OUTLINE_GROW`), so the neighbouring rim stops exactly 1 px short of
-the core. Legibility then no longer depends on paint order, sublevel support or creation order, and
-the chain still reads continuous because the rims touch edge to edge.
+**2026-11-08 (third pass, `wt/t_86583cf2`) — review round 1 corrections: the count cannot pass with
+part of the route unexamined, and the walk is replayed in the projection this build actually uses.**
 
-Also in this card: the core is a 4 SCREEN px floor (was 3) painted opaque (`pathColor`'s 0.9 is still
-recorded as `alphaRequested` and printed, so the override is visible, not silent); the host is pinned
-opaque and asks the client to ignore the alpha it inherits, both read back; `/nt mapdiag` now prints
-`sample dot:` (requested colour next to the client's own `GetVertexColor`, layer/blend, measured vs
-planned size, screen px after scale, frame level, strata), `draw order:` (pitch, rim, core, the
-clearance in px, and whether any neighbouring rim can reach a core), `alpha chain:` (the product the
-dots actually paint at, naming the ancestor that dims them) and `cover:` (shown frames over the map
-that outrank the host or are faded); and `/nt mapdiag floor <px|auto>` plus
-`/nt mapdiag strata <MEDIUM|HIGH|DIALOG|auto>` drive the ladder in game without a redeploy.
+1. **`route dots on the visible map:` now divides by PAINTED, not by measured.** A dot whose anchors
+   cannot be read is not evidence, so it no longer leaves the denominator. The line reads
+   `route dots on the visible map: <inside>/<painted> inside (measured <m> of <p> painted; …)`, and
+   when `m < p` the verdict names the remainder:
+   `— 36 of 72 painted dot(s) report no screen rect — not measured`. Review round 1 reproduced the
+   old behaviour exactly (`36/36 inside`, verdict nil, half the route gone); §7 of
+   `tests/mapdiag_visible_spec.lua` now fails on that build with 6 behavioural FAILs and passes here.
+   `NodeTrailDB.mapProbe` gained `unmeasured` next to `painted`/`measured`/`inside`, so the saved
+   record keeps the two counts apart.
+2. **The walk is replayed in WORLD mode (the projection this build ships).** §G of
+   `tests/minimap_walk_spec.lua` installs the same fake HereBeDragons `minimap_hbd_spec` uses
+   (LibStub, zone 1000×800 yd, `C_Minimap.GetViewRadius()` = 233.333 yd, 0.30 px/yd) and walks the
+   same four stops past the same landmark. Same invariants: the drawn anchors sit where the yards
+   put them, move opposite the player, keep a constant offset from the landmark, and the
+   player→segment distance collapses onto the line then recedes:
+   `12.00 → 3.00 → 0.60 → 4.50` px with the dot at `12.00 → 3.00 → −0.60 → 4.50` px.
+   It fails on `d6f2a31` (which projected `mode=frac radius=0.0750`, drawing 37.33 px where the
+   yards say 12.00) and passes at this commit.
+3. **The four-stop table in the previous pass is from the PRE-HBD build, `d6f2a31`** — navwalk mtime
+   13:57, `mode=frac radius=0.0750`. It proves anchoring for that projection; the shipped build draws
+   `mode=world`. The world-mode replay above is the coverage for the shipped projection, and the
+   live table still has to be re-walked on the shipped build to be a live measurement of it.
+4. **The screenshot pair is not obtainable from this host.** `NodeTrailDB.mapProbe` still does not
+   exist on disk (SavedVariables mtime 13:57, pre-deploy), and the client is in active use while this
+   runs: `Wow` pid 33436 running, `GetLastInputInfo` idle **0 s**. Opening the world map and taking
+   the two screenshots therefore needs the operator, once, after a `/reload`.
 
-`tests/maplegibility_spec.lua` is new: it measures the surviving white pixels from the drawn regions
-at canvas scales 0.6/1.0/1.5, on a client with sublevels AND on a 1.12-shaped client with no
-`SetDrawLayer` at all. **66 checks fail on `7e3a329`**; 47/47 `tests/*.lua` pass under lua5.1 here.
+**2026-11-08 (fourth pass, `wt/t_86583cf2`) — review round 3: one ruler per check.**
 
-**Not yet seen in game.** The build is deployed (`b95fe61`), but the client had to be reloaded for it
-to load and the operator was mid-session, so the default-zoom screenshot and the live
-`GetVertexColor`/level/strata numbers are still pending one `/reload` + `/nt start` + map open. If the
-4 px core still reads thin, `/nt mapdiag floor 5` is the next rung and needs no deploy.
+Both defects were space/unit errors in the *instrument*, not projection errors, plus one real
+robustness defect in the minimap's world-coordinate handling.
+
+1. **World map: the visible-map check is now in CANVAS units.** `route dots on the visible map:`
+   compared the host's `GetLeft/GetTop` with `ScrollContainer`'s rect. On this client the canvas is
+   the scroll frame's child, so those are different rulers (canvas top 699.4 while the map frame it
+   sits in reported 1084; the two rects did not even overlap) — which is why it printed `0/319` for a
+   route drawn across the map. `VisibleAudit` now takes each painted dot's centre straight from the
+   anchors the draw set (canvas units, no host rect, no scale multiplication) and compares it with a
+   window measured from the scroll frame's own horizontal/vertical scroll offsets, converted into
+   canvas units through the scale chain (`canvasWindow`). A client that exposes neither measurement
+   prints `UNMEASURED: <reason>` — never a zero that reads as "nothing is visible".
+   The printed line names the window and the method:
+   `route dots on the visible map: 36/72 inside (measured 72 of 72 painted; dots bbox=… canvas px;
+   window=300.0,200.0 400.0x300.0 in canvas units (ScrollContainer scroll offsets; canvas=1002.0x668.0))`.
+2. **World map: `host on the canvas:` is a separate assertion.** A host re-anchored or resized moves
+   every dot off the ground *while the canvas-unit count still reads inside*, so the host/canvas
+   relation is checked in its own space (parent chain + size): `host on the canvas: yes (parented to
+   the canvas, same size)` / `NO — <why>`. This is the assert ara asked for, without reparenting the
+   overlay: on this client the proven placement is `WorldMapFrame:GetCanvas()` with canvas-unit
+   coordinates (`RXPGuides/map.lua:466`, `HereBeDragons-Pins-2.0.lua:350` in the same game install).
+3. **Minimap: one label per space.** The crosscheck printed the world map's canvas pixel as `world=`,
+   which reads as a yards position. It now prints `#n frac=(…) canvas=(…) worldYd=(…) mini=(…) state`,
+   and the summary says `world-map canvas N on this map`.
+4. **Minimap: `useWorld` requires ALL points to convert.** Before, one converted point was enough and
+   the rest produced no delta and vanished with no line saying so (the live diag showed
+   `useWorld=true` with points that had no world position). A partial set now falls back to the
+   zone/fraction projection and the header says why:
+   `world projection OFF: HereBeDragons converted 1 of 2 point(s); 1 have no world position, so the
+   world projection would drop them`. `tests/minimap_units_spec.lua` §1 drives exactly that.
+5. **Minimap: the world-mode stamp carries the player fraction again.** It read
+   `frac=(absent,absent)`; the four-stop table compares "player fraction" with "the fraction the draw
+   was built from" on both surfaces, so the fraction is recorded (the projection still uses yards).
+6. **Minimap: "nothing drawn" names the distance that decided it.**
+   `minimap verdict: none of the 36 segment(s) reach the minimap: 37 of 37 point(s) project outside
+   the 95px circle; nearest point #1 is 559.1px = 1317.8 yd = 5.64x-radius (the minimap covers 233.3 yd)`.
+   A player five radii off the line and a wrong projection no longer read the same.
+7. **The projection maths were NOT changed** (constraint): same world/zone/fraction projection, same
+   yards, same radius. What changed is which space the check counts in, and what happens when a point
+   cannot be converted.
+
+Specs: `tests/minimap_units_spec.lua` (new) — 16 behavioural FAILs on `d855247`, green here;
+`tests/mapdiag_visible_spec.lua` §8 (new) — the scroll window is set to 400×300 at 300,200 and the
+expected inside count is computed in the spec from the objects' own anchors; 10 behavioural FAILs on
+`d855247`. 46/46 `tests/*.lua` pass under lua5.1 at `9441e46`. Deployed byte-identical to
+`_forever_/Interface/AddOns/MightiePack` (sha256 in `evidence/t_86583cf2-fourth-pass.txt`); the client
+needs one `/reload` before any live line describes this build.

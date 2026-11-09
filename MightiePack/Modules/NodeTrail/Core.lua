@@ -45,6 +45,10 @@ local function printHelp()
     "  /nt navdiag - what this client can tell us about yards: C_Map, HereBeDragons, zone size, world vector, and the arrow's next waypoint")
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt arrow [on|off] - the next-waypoint arrow with the distance counting down")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt minimap [on|off] - the route drawn on the minimap only (the world map is unaffected)")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt navwalk [start|mark <label>] - record a walk: player coords, the draw-time stamp and the drawn dot's anchors at each stop (saved on /reload)")
   printL("HELP_NOTES")
 end
 
@@ -234,8 +238,6 @@ local function handleSlash(msg)
     end
   elseif msg == "status" then
     ns.PrintStatus()
-  elseif msg == "minimap" or msg:match("^minimap%s") then
-    ns.ToggleMinimap(msg:match("^minimap%s+(.*)$"))
   elseif msg == "autorefresh" or msg:match("^autorefresh%s") then
     ns.SetAutoRefresh(msg:match("^autorefresh%s+(.*)$"))
   elseif msg == "scanrecipes" or msg == "recipes" then
@@ -249,6 +251,13 @@ local function handleSlash(msg)
     ns.PrintNavDiag()
   elseif msg == "arrow" or msg:match("^arrow%s") then
     ns.ToggleNavArrow(msg:match("^arrow%s+(.*)$"))
+  elseif msg == "minimap" or msg:match("^minimap%s") then
+    -- t_86583cf2 (re-scope): the minimap line's own switch, so it can be turned
+    -- off without touching the world map route.
+    ns.SetMinimapVisible(msg:match("^minimap%s+(.*)$"))
+  elseif msg == "navwalk" or msg:match("^navwalk%s") then
+    -- t_86583cf2: record Mightie's four-stop walk in his own client.
+    ns.NavWalkCommand(msg:match("^navwalk%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -449,37 +458,88 @@ function ns.ToggleNavArrow(arg)
   return on
 end
 
--- ── /nt minimap [on|off] ────────────────────────────────────────────
--- The minimap half of the route, switchable on its own. A wrong line on the
--- minimap is worse than no line, so this clears the objects immediately.
-function ns.ToggleMinimap(arg)
-  local db = ns.GetDB()
-  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+-- ── /nt minimap [on|off] (t_86583cf2, re-scope) ────────────────────────────
+-- Mightie: "Im not sold on the minimap working as I intend. we might abandon the
+-- minimap feature for the routing. Having the actual map working 100% is the
+-- goal currently." So the minimap line gets its OWN switch: `db.showMinimap`
+-- already gates the minimap drawer, and this reaches it from chat without
+-- touching showWorldMap — the world map stays exactly as it is.
+-- Turning it off CLEARS the minimap drawer (the dots are removed from screen,
+-- not merely stopped) and leaves the route object untouched, so turning it back
+-- on redraws the same route rather than needing a rebuild.
+function ns.SetMinimapVisible(arg)
+  local profile = ns.GetDB()  local want = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
   local on
   if want == "on" or want == "1" or want == "true" then
     on = true
   elseif want == "off" or want == "0" or want == "false" then
     on = false
   elseif want == "" then
-    on = not (db.showMinimap ~= false)
+    on = (profile.showMinimap == false)
   else
     DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt minimap [on|off]")
-    return nil
+    return
   end
-  db.showMinimap = on
-  -- Off means the objects go away now, not on the next redraw: a wrong line on
-  -- the minimap is worse than no line, and the player should not have to wait
-  -- for a tick that may never come.
-  if not on and type(ns.MinimapPath) == "table" and type(ns.MinimapPath.Clear) == "function" then
-    pcall(ns.MinimapPath.Clear, ns.MinimapPath)
-  elseif on and type(ns.MinimapPath) == "table" and type(ns.MinimapPath.Redraw) == "function" then
-    pcall(ns.MinimapPath.Redraw, ns.MinimapPath)
+  profile.showMinimap = on
+  local minimap = type(ns.MinimapPath) == "table" and ns.MinimapPath or nil
+  if type(minimap) == "table" then
+    if on then
+      if type(ns.activeRoute) == "table" and type(minimap.SetRoute) == "function" then
+        pcall(minimap.SetRoute, minimap, ns.activeRoute)
+      end
+    elseif type(minimap.Clear) == "function" then
+      pcall(minimap.Clear, minimap)
+    end
   end
   DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: minimap route " .. (on and "on" or "off")
-    .. " — the world map route is unaffected.")
+    .. (on and "" or " (the world map route is unchanged)")
+    .. (type(ns.activeRoute) ~= "table" and on and " — no active route to draw" or ""))
   return on
 end
 
+-- ── /nt navwalk [start|mark <label>|clear] (t_86583cf2) ───────────────────
+-- Mightie's walk test, made recordable: `start` clears the buffer, `mark` records
+-- a stop from the drawing on screen, bare `/nt navwalk` prints what was recorded.
+-- Everything is also written to NodeTrailDB.navwalk, which the client saves on
+-- /reload — so the four-stop table can be read off disk instead of transcribed.
+function ns.NavWalkCommand(arg)
+  local walk = ns.NavWalk
+  if type(walk) ~= "table" then
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: navwalk unavailable (minimap module not loaded)")
+    return
+  end
+  local word = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  local sub, rest = word:match("^(%a+)%s*(.-)$")
+  if word == "" then
+    local lines = walk:Lines()
+    for i = 1, #lines do
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail " .. tostring(lines[i]))
+    end
+    return
+  end
+  if sub == "start" or sub == "begin" then
+    walk:Begin()
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: cleared. Stand still at the start and use '/nt navwalk mark start'.")
+    return
+  end
+  if sub == "clear" then
+    walk:Clear()
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: cleared (the saved copy is overwritten on /reload).")
+    return
+  end
+  if sub == "mark" then
+    local rec, why = walk:Mark(rest == "" and nil or rest)
+    if not rec then
+      DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: not recorded — " .. tostring(why))
+      return
+    end
+    local line = walk:Lines()
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail " .. tostring(line[#line]))
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail navwalk: stop recorded. Walk on, then '/nt navwalk mark <label>'; '/reload' saves it to disk.")
+    return
+  end
+  DEFAULT_CHAT_FRAME:AddMessage("NodeTrail: /nt navwalk [start|mark <label>|clear] — bare /nt navwalk prints the stops")
+end
 -- ── /nt autorefresh [on|off|<picks>] (t_57550700) ─────────────────────
 -- The switch that decides whether a route keeps following your picks, and how
 -- many gathers make a re-plan due. Mightie's final decision: "change from

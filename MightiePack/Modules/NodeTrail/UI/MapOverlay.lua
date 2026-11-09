@@ -119,6 +119,199 @@ local function fmtNum(value, decimals)
   return string.format("%.2f", value)
 end
 
+--- Multiply a frame's own scale by every ancestor's. GetWidth/GetHeight are in
+--- the frame's OWN units while GetLeft/GetTop are the client's screen-space
+--- answer, so a 1002-px canvas shown at 0.696 occupies 697 px of screen. The
+--- diag compares the dots' screen rect with the map's visible rect, and without
+--- this conversion it would compare two different rulers — which is exactly how
+--- a route that is off the map can read as "inside".
+local function effectiveScale(frame)
+  local scale = 1
+  local node, guard = frame, 0
+  while node and guard < 16 do
+    local s = call(node, "GetScale")
+    if type(s) == "number" and s > 0 then
+      scale = scale * s
+    end
+    node = call(node, "GetParent")
+    guard = guard + 1
+  end
+  return scale
+end
+
+--- A frame's rect ON SCREEN. `left`/`top` come from the client's own
+--- GetLeft/GetTop (never derived from the anchors we asked for), the size is
+--- converted from the frame's units into screen px. Anything the client cannot
+--- answer reads as nil, so the diag prints "absent" instead of a made-up box.
+local function screenRect(frame)
+  if not frame then
+    return nil
+  end
+  local left = call(frame, "GetLeft")
+  local top = call(frame, "GetTop")
+  local w, h = frameSize(frame)
+  if type(left) ~= "number" or type(top) ~= "number"
+    or type(w) ~= "number" or type(h) ~= "number" then
+    return nil
+  end
+  local scale = effectiveScale(frame)
+  local sw, sh = w * scale, h * scale
+  return {
+    left = left, top = top, width = sw, height = sh,
+    right = left + sw, bottom = top - sh, scale = scale,
+  }
+end
+
+local function rectText(rect)
+  if type(rect) ~= "table" then
+    return "absent"
+  end
+  return string.format("%s,%s %sx%s (scale=%s)", fmtNum(rect.left, 1), fmtNum(rect.top, 1),
+    fmtNum(rect.width, 1), fmtNum(rect.height, 1), fmtNum(rect.scale, 3))
+end
+
+--- The part of the CANVAS the player can see, expressed in the canvas' OWN
+--- units — the same units the dots are anchored in.
+---
+--- Why this exists (review round 3, 2026-11-08): `route dots on the visible
+--- map` compared the host's GetLeft/GetTop with ScrollContainer's, and on this
+--- client the canvas is the scroll frame's child, so those two rects are in
+--- DIFFERENT spaces (measured: canvas top 699.4 while the map frame it sits in
+--- reported 1084; the canvas and the scroll container did not even overlap).
+--- The comparison therefore printed `0/319 inside` for a route drawn across the
+--- map, which is the same class of defect as the check that could not fail: a
+--- number that measures the ruler, not the dots.
+---
+--- Everything here is in canvas units, so there is one ruler end to end:
+--- `left`/`top` is the window's top-left corner measured from the canvas'
+--- top-left, and `width`/`height` the window's size. `method` names the
+--- measurement, and a client that offers neither measurement returns nil plus
+--- the reason — never a zero that reads as "nothing is visible".
+local function canvasWindow(mapFrame, canvas)
+  if not canvas then
+    return nil, "no canvas on this client (WorldMapFrame:GetCanvas() returned nothing)"
+  end
+  local w, h = frameSize(canvas)
+  if not w or not h or w < 2 or h < 2 then
+    return nil, "the canvas has no measurable size"
+  end
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  if scroll then
+    local child = call(scroll, "GetScrollChild")
+    local hs = call(scroll, "GetHorizontalScroll")
+    local vs = call(scroll, "GetVerticalScroll")
+    local sw, sh = frameSize(scroll)
+    if child == canvas and type(hs) == "number" and type(vs) == "number"
+      and type(sw) == "number" and type(sh) == "number" then
+      -- The scroll container's size is in ITS units; the window has to be in
+      -- the canvas' units. The scale chain is the conversion (a 1002-canvas-px
+      -- map shown at 0.696 is a 697-unit scroller, and 697 x 1/0.696 = 1001.4
+      -- canvas px, i.e. the whole canvas).
+      local scrollEff, canvasEff = effectiveScale(scroll), effectiveScale(canvas)
+      local ratio = (canvasEff and canvasEff > 0) and ((scrollEff or 1) / canvasEff) or 1
+      local winW, winH = sw * ratio, sh * ratio
+      -- Sanity: a scroll offset outside the canvas, or a window wider than it,
+      -- means these numbers are not in the canvas' units. Say so instead of
+      -- pretending they are.
+      if hs >= -1 and vs >= -1 and hs <= w + 1 and vs <= h + 1 and winW <= w + 2 and winH <= h + 2 then
+        return {
+          left = math.max(0, hs), top = math.max(0, vs),
+          width = math.min(winW, w), height = math.min(winH, h),
+          canvasW = w, canvasH = h,
+          method = "ScrollContainer scroll offsets",
+        }
+      end
+      return nil, (("the scroll offsets do not describe this canvas (hs=%s vs=%s window=%sx%s canvas-units=%sx%s canvas=%sx%s)"))
+        :format(fmtNum(hs, 1), fmtNum(vs, 1), fmtNum(sw, 1), fmtNum(sh, 1),
+          fmtNum(winW, 1), fmtNum(winH, 1), fmtNum(w), fmtNum(h))
+    end
+  end
+  -- Not the scroll child (or no ScrollContainer): the canvas' own anchors are
+  -- the only numbers in its units. A TOPLEFT/TOPLEFT anchor with a negative
+  -- offset is the canvas scrolled up and to the left.
+  if isFn(canvas.GetPoint) then
+    local ok, point, rel, relPoint, x, y = pcall(canvas.GetPoint, canvas, 1)
+    if ok and rel and type(x) == "number" and type(y) == "number"
+      and (point == "TOPLEFT") and (relPoint == "TOPLEFT") then
+      local rw, rh = frameSize(rel)
+      if rw and rh and rw > 1 and rh > 1 then
+        local left, top = -x, -y
+        if left >= -w and left <= w and top >= -h and top <= h and rw <= w + 2 and rh <= h + 2 then
+          return {
+            left = math.max(0, left), top = math.max(0, top),
+            width = math.min(rw, w), height = math.min(rh, h),
+            canvasW = w, canvasH = h,
+            method = "canvas TOPLEFT/TopLeft offsets",
+          }
+        end
+        return nil, (("the canvas' anchors do not describe a window inside it (left=%s top=%s window=%sx%s canvas=%sx%s)"))
+          :format(fmtNum(left, 1), fmtNum(top, 1), fmtNum(rw, 1), fmtNum(rh, 1), fmtNum(w), fmtNum(h))
+      end
+    end
+  end
+  return nil, "the client exposes neither a scroll window nor canvas anchors in the canvas' units"
+end
+
+--- Is the overlay host still the canvas? A dot anchored to the host is placed in
+--- canvas units, so a host that was re-anchored or resized (a zoom handler, a
+--- stray SetPoint) moves the whole route off the ground while every canvas-unit
+--- measurement still reads "inside". This is the check for that failure, in the
+--- host/canvas space, and it is deliberately separate from the scroll window.
+local function hostOnCanvas(host, canvas)
+  if not host then
+    return nil, "no overlay host"
+  end
+  if not canvas then
+    return nil, "no canvas"
+  end
+  local node, guard, found = host, 0, false
+  while node and guard < 8 do
+    if node == canvas then
+      found = true
+      break
+    end
+    node = call(node, "GetParent")
+    guard = guard + 1
+  end
+  if not found then
+    return false, "the host is not parented to the canvas"
+  end
+  local hw, hh = frameSize(host)
+  local cw, ch = frameSize(canvas)
+  if type(hw) ~= "number" or type(hh) ~= "number" or type(cw) ~= "number" or type(ch) ~= "number" then
+    return nil, "the host or the canvas has no measurable size"
+  end
+  if math.abs(hw - cw) > 1 or math.abs(hh - ch) > 1 then
+    return false, (("the host is %sx%s but the canvas is %sx%s: dots are placed in canvas units on a frame of another size")
+      :format(fmtNum(hw, 1), fmtNum(hh, 1), fmtNum(cw, 1), fmtNum(ch, 1)))
+  end
+  return true, "parented to the canvas, same size"
+end
+
+--- A painted dot's centre in CANVAS units, straight from the anchors the draw
+--- set — no host rect, no scale multiplication, so nothing can mix rulers.
+local function anchorUnits(obj, host)
+  if type(obj) ~= "table" or not isFn(obj.GetNumPoints) or not isFn(obj.GetPoint) then
+    return nil
+  end
+  if (tonumber(call(obj, "GetNumPoints")) or 0) < 2 then
+    return nil
+  end
+  local ok1, _, rel1, rp1, x1, y1 = pcall(obj.GetPoint, obj, 1)
+  local ok2, _, rel2, rp2, x2, y2 = pcall(obj.GetPoint, obj, 2)
+  if not ok1 or not ok2 or not host then
+    return nil
+  end
+  if rel1 ~= host or rel2 ~= host or rp1 ~= "TOPLEFT" or rp2 ~= "TOPLEFT" then
+    return nil
+  end
+  if type(x1) ~= "number" or type(y1) ~= "number"
+    or type(x2) ~= "number" or type(y2) ~= "number" then
+    return nil
+  end
+  return (x1 + x2) * 0.5, -(y1 + y2) * 0.5
+end
+
 --- One frame as a diag fact: name, level, strata, shown, size.
 local function frameFact(frame)
   if not frame then
@@ -378,12 +571,25 @@ local function innerMapFrame(host)
   return nil
 end
 
-function M:ReleaseVisuals()
+--- Drop the drawn route, and — when a reason is given — record on the drawer that
+--- this redraw painted NOTHING. Without that, a client that hides the overlay
+--- (wrong map, route off, no host) leaves `lastApplied.paintedDots` holding the
+--- previous draw's count, and /nt mapdiag then reports dots on a map where none
+--- are drawn: the exact way a route that "is not anywhere on the screenshot"
+--- still reads as `painted=288 missing=0 outside=0`.
+function M:ReleaseVisuals(why)
   if self.drawer then
-    ns.LineDraw.Clear(self.drawer)
+    if why then
+      ns.LineDraw.MarkIdle(self.drawer, why)
+    else
+      ns.LineDraw.Clear(self.drawer)
+    end
   end
   if self.host then
     pcall(self.host.Hide, self.host)
+  end
+  if why then
+    self:RecordProbe(true)
   end
 end
 
@@ -687,12 +893,12 @@ function M:_redraw()
   self._cover = nil
   if not self.path or #self.path < 2 then
     self._why = "no route"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
   if not ns.GetDB().showWorldMap then
     self._why = "showWorldMap is off"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -700,7 +906,7 @@ function M:_redraw()
   local shown = displayedMapID(mapFrame)
   if shown and self.mapID and shown ~= self.mapID then
     self._why = ("the open map is %s, the route is on %s"):format(tostring(shown), tostring(self.mapID))
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -709,7 +915,7 @@ function M:_redraw()
     self._why = "no map frame (canvas and legacy frames all absent)"
     self._parentLabel = nil
     self._hostSize = nil
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     self:RequestRetry()
     return
   end
@@ -717,7 +923,7 @@ function M:_redraw()
   local host = self:EnsureHost(parent, label)
   if not host or not self.drawer then
     self._why = "no overlay host (CreateFrame failed)"
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -727,7 +933,7 @@ function M:_redraw()
     self._hostSize = nil
     self._rect = nil
     self._innerLabel = nil
-    self:ReleaseVisuals()
+    self:ReleaseVisuals(self._why)
     self:RequestRetry()
     return
   end
@@ -742,7 +948,8 @@ function M:_redraw()
   self._rect = rect
   self._innerLabel = inner and frameName(inner) or nil
   if not rect then
-    self:ReleaseVisuals()
+    self._why = "the map rect could not be measured"
+    self:ReleaseVisuals(self._why)
     return
   end
 
@@ -841,6 +1048,9 @@ function M:_redraw()
       :format(#self.path - 1, #skipped > 0 and table.concat(skipped, "; ") or "no segments in the path")
     pcall(host.Hide, host)
   end
+  -- After `_why` is settled: the probe records the reason when nothing survived,
+  -- so a zero-painted record can never be mistaken for an empty route.
+  self:RecordProbe()
 end
 
 function M:Redraw()
@@ -1077,6 +1287,163 @@ local function objectDefects(self)
   return defects
 end
 
+function M:RecordProbe(force)
+  local db = type(ns.GetDB) == "function" and ns.GetDB() or nil
+  if type(db) ~= "table" then
+    return
+  end
+  -- Throttled: a map drag fires OnSizeChanged repeatedly, and this walks every
+  -- painted dot. The diag calls VisibleAudit directly and is not throttled; this
+  -- is only the copy that lands in SavedVariables. A bail is always recorded.
+  local now = (type(GetTime) == "function") and GetTime() or nil
+  if not force and now and self._probeAt and (now - self._probeAt) < 0.25 then
+    return
+  end
+  self._probeAt = now
+  local ok, audit = pcall(self.VisibleAudit, self)
+  if not ok or type(audit) ~= "table" then
+    return
+  end
+  local function pack(rect)
+    if type(rect) ~= "table" then
+      return nil
+    end
+    return { left = rect.left, top = rect.top, width = rect.width, height = rect.height, scale = rect.scale }
+  end
+  local mapFrame = _G.WorldMapFrame
+  db.mapProbe = {
+    at = (type(GetTime) == "function") and GetTime() or nil,
+    mapID = self.mapID,
+    pathPoints = self.path and #self.path or 0,
+    painted = audit.painted or 0,
+    measured = audit.measured or 0,
+    unmeasured = audit.unmeasured or 0,
+    inside = audit.inside or 0,
+    idle = audit.idle and true or false,
+    why = self._why or audit.why,
+    first = audit.first,
+    bbox = audit.bbox,
+    -- The window the `inside` count was taken against, in CANVAS units, and the
+    -- measurement it came from. A nil window with a `windowWhy` means the
+    -- on-screen subset could not be measured — never that nothing is visible.
+    window = audit.window and {
+      left = audit.window.left, top = audit.window.top,
+      width = audit.window.width, height = audit.window.height,
+      canvasW = audit.window.canvasW, canvasH = audit.window.canvasH,
+      method = audit.window.method,
+    } or nil,
+    windowWhy = audit.windowWhy,
+    windowMethod = audit.window and audit.window.method or nil,
+    host = pack(audit.host or screenRect(self.host)),
+    canvas = pack(screenRect(mapFrame and getCanvas(mapFrame))),
+    scroll = pack(screenRect(mapFrame and mapFrame.ScrollContainer)),
+    frame = pack(screenRect(mapFrame)),
+    ui = pack(screenRect(_G.UIParent)),
+    canvasScale = call(mapFrame, "GetCanvasScale"),
+  }
+end
+
+--- Where the painted dots actually are, in SCREEN space, against the rect the
+--- player can actually see (the scroll container that clips the canvas, falling
+--- back to WorldMapFrame). Returned as data so the diag can print it AND the
+--- draw can persist it into SavedVariables — the same measurement, read two
+--- ways. A check against the dots' own host can never fail (they are its
+--- children), which is how `painted=288 outside=0` was printed for a route that
+--- was not on the screenshot at all.
+function M:VisibleAudit()
+  local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+  local out = { idle = applied.idle and true or false, why = applied.why, painted = tonumber(applied.paintedDots) or 0 }
+  if out.idle then
+    return out
+  end
+  local mapFrame = _G.WorldMapFrame
+  local canvas = getCanvas(mapFrame)
+  local window, windowWhy = canvasWindow(mapFrame, canvas)
+  out.canvas = canvas
+  out.window, out.windowWhy = window, windowWhy
+  -- Kept for the saved-probe shape and for the screenshot reader: the screen
+  -- rects the client reports are still printed, but they are NOT the ruler this
+  -- audit counts with (they are in three different spaces; see canvasWindow).
+  out.visible = window
+  out.host = screenRect(self.host)
+  out.canvasRect = screenRect(canvas)
+  out.screen = {
+    map = screenRect(mapFrame),
+    scroll = screenRect(mapFrame and mapFrame.ScrollContainer),
+    canvas = out.canvasRect,
+    host = out.host,
+  }
+  if out.painted < 1 then
+    return out
+  end
+  local drawer = self.drawer
+  local inside, measured = 0, 0
+  local minL, maxR, maxT, minB
+  local disagree, disagreeWorst = 0, 0
+  local first
+  for d = 1, out.painted do
+    local obj = drawer and drawer.pool and drawer.pool[2 * d]
+    if obj then
+      -- The dot's centre in CANVAS units (the units its anchors are in).
+      local cx, cy = anchorUnits(obj, self.host)
+      if cx then
+        measured = measured + 1
+        first = first or { x = cx, y = cy }
+        if window
+          and cx >= window.left - 0.5 and cx <= window.left + window.width + 0.5
+          and cy >= window.top - 0.5 and cy <= window.top + window.height + 0.5 then
+          inside = inside + 1
+        end
+        minL = (not minL or cx < minL) and cx or minL
+        maxR = (not maxR or cx > maxR) and cx or maxR
+        maxT = (not maxT or cy < maxT) and cy or maxT
+        minB = (not minB or cy > minB) and cy or minB
+      end
+    end
+  end
+  out.inside, out.measured = inside, measured
+  out.first = first
+  if measured > 0 then
+    out.bbox = { minL, minB, maxR, maxT }
+  end
+  out.disagree, out.disagreeWorst = disagree, disagreeWorst
+  -- The denominator is PAINTED, not measured. A dot whose anchors cannot be
+  -- read is not evidence of anything, so it must not leave the denominator:
+  -- dividing by `measured` let "36/36 inside" read as a pass while half the
+  -- route was unexamined (review round 1). `unmeasured` is reported so the
+  -- remainder is named instead of silently dropped.
+  local unmeasured = out.painted - measured
+  if unmeasured < 0 then
+    unmeasured = 0
+  end
+  out.unmeasured = unmeasured
+  local why = {}
+  if measured == 0 then
+    why[#why + 1] = (("none of the %s painted dot(s) report canvas anchors: their position cannot be checked"))
+      :format(fmtNum(out.painted))
+  elseif not window then
+    -- No window is NOT a pass and NOT a zero: the subset on screen is unknown.
+    why[#why + 1] = ("the visible window in canvas units cannot be measured (%s), so the on-screen subset is unmeasured")
+      :format(tostring(windowWhy or "no reason recorded"))
+  else
+    if inside == 0 then
+      why[#why + 1] = "NO dot is inside the visible window: the route is drawn where the player cannot see it"
+    elseif inside < measured then
+      why[#why + 1] = ("%s dot(s) fall outside the visible window (clipped by the map frame)")
+        :format(fmtNum(measured - inside))
+    end
+  end
+  if unmeasured > 0 then
+    why[#why + 1] = ("%s of %s painted dot(s) report no canvas anchors — not measured")
+      :format(fmtNum(unmeasured), fmtNum(out.painted))
+  end
+  if #why > 0 then
+    out.verdict = " — " .. table.concat(why, "; ")
+  end
+  return out
+end
+
+
 function M:Diag()
   local mapFrame = _G.WorldMapFrame
   -- Every line this run prints is also kept, so the run can be read back from
@@ -1175,7 +1542,11 @@ function M:Diag()
     local drawer = self.drawer
     local a = (drawer and ns.LineDraw.Applied(drawer)) or {}
     if type(drawer) ~= "table" or not self._drew then
-      return "dots pool: no draw on this map yet"
+      local why = a.why or self._why or "no redraw has run yet"
+      local held = (type(drawer) == "table" and (drawer.poolHigh or 0)) or 0
+      return string.format(
+        "dots pool: no draw on this map (%s); objects held=%s, painted=0 (the previous draw's count is not this draw's)",
+        tostring(why), fmtNum(held))
     end
     local high = drawer.poolHigh or 0
     local existing, shown = 0, 0
@@ -1239,11 +1610,103 @@ function M:Diag()
       return "dots box: no painted dot on the last draw"
     end
     local box, host = a.dotBox, a.hostSize
+    if a.idle or not box then
+      return "dots box: no painted dot on the last redraw ("
+        .. tostring(a.why or self._why or "no reason recorded") .. ")"
+    end
     return string.format(
       "dots box: painted bbox=%s,%s..%s,%s host=%sx%s outside=%s/%s",
       fmtNum(box[1], 1), fmtNum(box[2], 1), fmtNum(box[3], 1), fmtNum(box[4], 1),
       fmtNum(host and host.width), fmtNum(host and host.height),
       fmtNum(a.dotOutside or 0), fmtNum(a.paintedDots or 0))
+  end)
+  fact(function()
+    -- t_86583cf2 / ara: every rect on the way from the screen to the dots, in
+    -- ONE line, each measured by the client (GetLeft/GetTop/GetWidth/GetHeight
+    -- and the scale chain), never derived from the anchors we asked for.
+    --
+    -- These rects are printed for the screenshot reader, and they are NOT
+    -- compared with each other: on this client the canvas is the scroll frame's
+    -- child, so ScrollContainer and canvas report different rulers (that is why
+    -- the old "inside the visible rect" check read 0/319). The comparison that
+    -- counts lives in `route dots on the visible map:` and uses canvas units.
+    local mapFrame = _G.WorldMapFrame
+    local canvas = getCanvas(mapFrame)
+    local scroll = mapFrame and mapFrame.ScrollContainer
+    local window, windowWhy = canvasWindow(mapFrame, canvas)
+    local parts = {
+      "WorldMapFrame=" .. rectText(screenRect(mapFrame)),
+      "ScrollContainer=" .. rectText(screenRect(scroll)),
+      "canvas=" .. rectText(screenRect(canvas)),
+      "host=" .. rectText(screenRect(self.host)),
+      "UIParent=" .. rectText(screenRect(_G.UIParent)),
+    }
+    if window then
+      parts[#parts + 1] = ("canvas window=%s,%s %sx%s of %sx%s (%s)")
+        :format(fmtNum(window.left, 1), fmtNum(window.top, 1), fmtNum(window.width, 1),
+          fmtNum(window.height, 1), fmtNum(window.canvasW, 1), fmtNum(window.canvasH, 1),
+          tostring(window.method))
+    else
+      parts[#parts + 1] = "canvas window=UNMEASURED (" .. tostring(windowWhy or "no reason") .. ")"
+    end
+    if isFn(canvas and canvas.GetPoint) then
+      local ok, point, rel, relPoint, x, y = pcall(canvas.GetPoint, canvas, 1)
+      if ok and point then
+        parts[#parts + 1] = ("canvas anchor=%s->%s/%s (%s,%s) parent=%s")
+          :format(tostring(point), frameName(rel), tostring(relPoint),
+            fmtNum(x, 1), fmtNum(y, 1), frameName(rel))
+      end
+    end
+    return "map on screen: " .. table.concat(parts, "; ")
+  end)
+  fact(function()
+    -- t_86583cf2 / ara: "anchor the host to the visible rect, and assert it".
+    -- The assert is here, in the host/canvas space: a host re-anchored or
+    -- resized moves every dot off the ground while the canvas-unit check still
+    -- reads inside, so this line catches that failure on its own.
+    local canvas = getCanvas(mapFrame)
+    local ok, why = hostOnCanvas(self.host, canvas)
+    local hostW, hostH = frameSize(self.host)
+    local canvasW, canvasH = frameSize(canvas)
+    if ok == true then
+      return ("host on the canvas: yes (%s; host=%sx%s canvas=%sx%s)")
+        :format(why, fmtNum(hostW, 1), fmtNum(hostH, 1), fmtNum(canvasW, 1), fmtNum(canvasH, 1))
+    end
+    return ("host on the canvas: NO — %s (host=%sx%s canvas=%sx%s)")
+      :format(tostring(why), fmtNum(hostW, 1), fmtNum(hostH, 1), fmtNum(canvasW, 1), fmtNum(canvasH, 1))
+  end)
+  fact(function()
+    -- t_86583cf2 / ara: one line that cannot pass while every dot is off the
+    -- visible map. Measured in CANVAS units against the canvas window
+    -- (M:VisibleAudit -> canvasWindow): one ruler for the dots and the window.
+    local a = self:VisibleAudit()
+    if a.idle then
+      return "route dots on the visible map: 0/0 — no draw on this map ("
+        .. tostring(a.why or "idle") .. ")"
+    end
+    local win = "absent"
+    if type(a.window) == "table" then
+      win = string.format("%s,%s %sx%s in canvas units (%s; canvas=%sx%s)",
+        fmtNum(a.window.left, 1), fmtNum(a.window.top, 1),
+        fmtNum(a.window.width, 1), fmtNum(a.window.height, 1),
+        tostring(a.window.method), fmtNum(a.window.canvasW, 1), fmtNum(a.window.canvasH, 1))
+    elseif a.windowWhy then
+      win = "UNMEASURED: " .. tostring(a.windowWhy)
+    end
+    if a.painted < 1 then
+      return "route dots on the visible map: 0/0 (nothing painted on the last draw; window="
+        .. win .. ")"
+    end
+    local bbox = "absent"
+    if type(a.bbox) == "table" then
+      bbox = string.format("%s,%s..%s,%s", fmtNum(a.bbox[1], 1), fmtNum(a.bbox[2], 1),
+        fmtNum(a.bbox[3], 1), fmtNum(a.bbox[4], 1))
+    end
+    return string.format("route dots on the visible map: %s/%s inside (measured %s of %s painted; dots bbox=%s canvas px; window=%s)%s",
+      fmtNum(a.inside or 0), fmtNum(a.painted or 0),
+      fmtNum(a.measured or 0), fmtNum(a.painted or 0),
+      bbox, win,
+      tostring(a.verdict or ""))
   end)
   fact(function()
     local draws = self._draws
@@ -1740,7 +2203,8 @@ function M:Diag()
     local applied = dr.lastApplied or {}
     local painted = tonumber(applied.paintedDots) or 0
     if painted < 1 then
-      return "dot screen: nothing painted on the last redraw"
+      return "dot screen: nothing painted on the last redraw ("
+        .. tostring(applied.why or self._why or "no reason recorded") .. ")"
     end
     local function screenOf(obj)
       local d = ns.LineDraw.Describe(obj)
@@ -1767,7 +2231,12 @@ function M:Diag()
         hostText = string.format("%s,%s", fmtNum(left, 1), fmtNum(top, 1))
       end
     end
+    -- POOL order, not route order: after any re-plan the pool still holds the
+    -- previous plan's objects, so "dot 1" is not route point #1. Comparing the
+    -- two orders is how a route that is drawn correctly was read as being in the
+    -- wrong place.
     return "dot screen: " .. table.concat(parts, "; ") .. " host=" .. hostText
+      .. " (pool order, not route order: a re-plan leaves the previous plan's objects in the pool)"
   end)
   fact(function()
     local px = self._px
@@ -2361,7 +2830,147 @@ function M:Probe(arg)
       type(d.width) == "number" and fmtNum(d.width) or "absent",
       type(d.height) == "number" and fmtNum(d.height) or "absent",
       tostring(d.shown), ns.LineDraw.PointText(d.start), ns.LineDraw.PointText(d.stop)))
-  say("probe: report which you can SEE: marker / border / diagonal (or none); '/nt mapdiag probe off' removes them")
+  -- 4. labelled route points and the player, so ONE screenshot identifies itself
+  -- (ara, t_86583cf2): #1, #10, #20, the last point and `P` for the player's own
+  -- projected position, each with its canvas coordinate AND the region's own
+  -- GetLeft/GetTop. A picture plus this line settles whether the dots sit where
+  -- the maths says, without anyone having to describe the picture.
+  local rect = self._rect
+  local function projectPoint(i)
+    if type(self._px) == "table" and type(self._px[i]) == "table" then
+      return self._px[i].x, self._px[i].y, "measured"
+    end
+    local p = self.path and self.path[i]
+    if rect and type(p) == "table" and ns.PathGeom.IsMapPoint(p) then
+      local x, y = ns.PathGeom.FractionToPixel(p.x, p.y, rect)
+      return x, y, "projected now"
+    end
+    return nil
+  end
+  local wanted, seen = {}, {}
+  if self.path and #self.path >= 2 then
+    local list = { 1, 10, 20, #self.path }
+    for k = 1, #list do
+      local i = list[k]
+      if i >= 1 and i <= #self.path and not seen[i] then
+        seen[i] = true
+        wanted[#wanted + 1] = i
+      end
+    end
+  end
+  local function markerWithLabel(text, x, y, size)
+    local tex = quad(x - size, y - size, x + size, y + size)
+    local left, top = "absent", "absent"
+    if tex then
+      if isFn(tex.GetLeft) then
+        local v = call(tex, "GetLeft")
+        left = fmtNum(v, 1)
+      end
+      if isFn(tex.GetTop) then
+        local v = call(tex, "GetTop")
+        top = fmtNum(v, 1)
+      end
+    end
+    local fs
+    if isFn(host.CreateFontString) then
+      local okF, created = pcall(host.CreateFontString, host, nil, "OVERLAY", "GameFontNormal")
+      if okF and created then
+        fs = created
+        probe.textures[#probe.textures + 1] = fs
+        pcall(fs.SetText, fs, tostring(text))
+        pcall(fs.SetPoint, fs, "BOTTOMLEFT", host, "TOPLEFT", x + size + 1, -(y - size))
+        pcall(fs.Show, fs)
+      end
+    end
+    return tex, left, top, fs ~= nil
+  end
+  local pointParts = {}
+  for k = 1, #wanted do
+    local i = wanted[k]
+    local x, y, how = projectPoint(i)
+    if x then
+      local tex, left, top, labelled = markerWithLabel(i, x, y, 5)
+      pointParts[#pointParts + 1] = string.format("#%s canvas=(%s,%s) %s region(left=%s,top=%s)%s",
+        fmtNum(i), fmtNum(x, 1), fmtNum(y, 1), how, left, top, labelled and " label=yes" or " label=absent")
+    else
+      pointParts[#pointParts + 1] = string.format("#%s canvas=absent (not projected)", fmtNum(i))
+    end
+  end
+  if #pointParts > 0 then
+    say("probe points: " .. table.concat(pointParts, "; "))
+  else
+    say("probe points: none (no route to label)")
+  end
+  -- The player's OWN projected position, labelled P: the one point on the
+  -- screenshot whose ground truth is the player standing there.
+  do
+    local mx, my = nil, nil
+    if rect and self.mapID then
+      if C_Map and isFn(C_Map.GetPlayerMapPosition) then
+        local ok, pos = pcall(C_Map.GetPlayerMapPosition, C_Map, self.mapID, "player")
+        if ok and type(pos) == "table" and isFn(pos.GetXY) then
+          local okXY, fx, fy = pcall(pos.GetXY, pos)
+          if okXY and type(fx) == "number" and fx == fx and not (fx == 0 and fy == 0) then
+            mx, my = fx, fy
+          end
+        end
+      end
+      if not mx and isFn(_G.GetPlayerMapPosition) then
+        local okP, fx, fy = pcall(_G.GetPlayerMapPosition, "player")
+        if okP and type(fx) == "number" and type(fy) == "number"
+          and not (fx == 0 and fy == 0) then
+          mx, my = fx, fy
+        end
+      end
+    end
+    if mx then
+      local x, y = ns.PathGeom.FractionToPixel(mx, my, rect)
+      if x then
+        local tex, left, top, labelled = markerWithLabel("P", x, y, 6)
+        say(("probe player: P frac=(%s,%s) canvas=(%s,%s) region(left=%s,top=%s)%s")
+          :format(fmtNum(mx, 4), fmtNum(my, 4), fmtNum(x, 1), fmtNum(y, 1), left, top,
+            labelled and " label=yes" or " label=absent"))
+      else
+        say("probe player: P frac measured but did not project")
+      end
+    else
+      say("probe player: P absent (this client gave no player map position for map " .. tostring(self.mapID) .. ")")
+    end
+  end
+  -- The frames, side by side, with the client's OWN rect for each. This is the
+  -- line that separates "the dots are wrong" from "the host the dots are drawn
+  -- into is somewhere else on screen".
+  local mapFrame = _G.WorldMapFrame
+  local function frameRectText(label, frame)
+    if not frame then
+      return label .. "=absent"
+    end
+    local l = call(frame, "GetLeft")
+    local t = call(frame, "GetTop")
+    local w, h = frameSize(frame)
+    local sc = call(frame, "GetScale")
+    return string.format("%s=%s left=%s top=%s size=%sx%s scale=%s shown=%s",
+      label, frameName(frame), fmtNum(l, 1), fmtNum(t, 1), fmtNum(w), fmtNum(h),
+      fmtNum(sc, 3), tostring(shownState(frame)))
+  end
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  say("probe rects: " .. table.concat({
+    frameRectText("WorldMapFrame", mapFrame),
+    frameRectText("ScrollContainer", scroll),
+    frameRectText("host", host),
+    frameRectText("UIParent", _G.UIParent),
+  }, "; "))
+  -- ara's rule: a route that is 100% outside the visible rect must never again
+  -- read as a pass.
+  do
+    local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+    local painted = tonumber(applied.paintedDots) or 0
+    local outside = tonumber(applied.dotOutside) or 0
+    say(("probe route dots inside the host rect: %s/%s (outside=%s)%s")
+      :format(fmtNum(painted - outside), fmtNum(painted), fmtNum(outside),
+        painted > 0 and outside >= painted and " — EVERY dot is outside the host: the dots are not on the visible map" or ""))
+  end
+  say("probe: report which you can SEE: marker / border / diagonal / numbered points / P; '/nt mapdiag probe off' removes them")
 end
 
 local events = CreateFrame("Frame")

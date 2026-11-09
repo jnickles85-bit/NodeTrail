@@ -1,0 +1,69 @@
+t_86583cf2 second pass — evidence
+generated: 2026-11-08T19:06:30Z  host: Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+commit: b701d64 (wt/t_86583cf2)
+
+== 1. Mightie's four-stop walk, read off the live client's SavedVariables ==
+source: _forever_/WTF/Account/JERMTHE1/SavedVariables/MightiePack.lua -> NodeTrailDB.navwalk
+mapID 1413, tracked route point #27, world reference (448.39,161.32) identical at all four stops.
+Anchors are the values the client reports for the DRAWN dot: GetPoint(1)/GetPoint(2).
+
+stop    drawTime     player frac           draw-time stamp       drawn dot anchors (client's own GetPoint)       dist px dist frac  painted
+start   772852.003   (0.48164,0.24064) (0.48164,0.24064) TOPRIGHT(-38.82,-13.16) ; BOTTOMLEFT(-41.82,-16.16)    42.90   0.03250 73/73
+toward  772916.282   (0.45472,0.24836) (0.45472,0.24836) TOPRIGHT(-4.23,-0.26) ; BOTTOMLEFT(-7.23,-3.26)     6.00   0.00454 125/125
+past    772969.589   (0.43101,0.26083) (0.43101,0.26083) TOPRIGHT(28.97,10.79) ; BOTTOMLEFT(25.97,7.79)    28.99   0.02196 139/139
+back    773041.663   (0.46513,0.24672) (0.46513,0.24672) TOPRIGHT(-17.02,-5.14) ; BOTTOMLEFT(-20.02,-8.14)    19.67   0.01490 109/109
+
+   player -> segment: 42.90 px -> 6.00 px (walking toward it) -> 28.99 px (past it) -> 19.67 px
+   (walking back). The dot is at the minimap centre minus the ground offset, so its own
+   anchors move opposite the player in map space while the ground it marks does not move.
+   Same route point (#27), same world reference, fresh draw stamp every stop.
+
+== 2. new specs at the tip (b701d64) ==
+mapdiag_visible_spec: ok
+minimap_hbd_spec: ok
+
+== 3. the same specs replayed on the parent (d6f2a31) — behavioural FAILs, no traceback ==
+--- mapdiag_visible_spec
+FAIL: 1: the diag prints one line with every rect (got no 'map on screen:' line)
+FAIL: 2: the diag measures the dots against the map's visible rect
+FAIL: 3: a host placed away from the map reads 0/72 inside — not all inside (got nil)
+FAIL: 3: and the line carries the verdict instead of a pass (got nil)
+FAIL: 4: and names why (got NodeTrail mapdiag: dots pool: no draw on this map yet)
+FAIL: 4: the visible-map line reports 0/0, not dots that are not drawn (got nil)
+FAIL: 5: returning to the route's map reports the dots again (got nil)
+FAIL: 6: the draw records a placement probe in the DB
+FAIL: 6: a bailed redraw is recorded as idle (nil)
+FAIL: 6: with the reason recorded (nil)
+mapdiag_visible_spec: 10 failure(s)
+--- minimap_hbd_spec
+FAIL: 1: the diag names the HereBeDragons source it used
+FAIL: 1: it found the library through LibStub, not only through GatherMate2 (got nil)
+FAIL: 1: and reports the version the library answered (got nil)
+FAIL: 2: with world coordinates available the draw uses world mode (got frac)
+FAIL: 2: the radius is the client's view radius in yards got 0.075 expected 233.33333333333
+FAIL: 2: and the unit says yards (got map fractions (fallback: no yard radius for this zone))
+FAIL: 2: the diag prints the measured mode and radius (got NodeTrail mapdiag: minimap projection used: mode=frac radius=0.0750 [map fractions (fallback: no yard radius for this zone)] half=70.0x70.0)
+FAIL: 2: the fallback is not what this draw used (got NodeTrail mapdiag: minimap projection used: mode=frac radius=0.0750 [map fractions (fallback: no yard radius for this zone)] half=70.0x70.0)
+FAIL: 3: the drawn dot's x offset is the yard distance over the measured radius got 18.666666666667 expected 6
+FAIL: 4: the scale audit measures yards per drawn pixel (got NodeTrail mapdiag: minimap scale audit: absent (no HereBeDragons loaded: the radius stays the fraction fallback and cannot be cross-checked against yards))
+FAIL: 4: the radius implied by the drawn pixels matches the client's view radius got nil expected 233.33333333333
+FAIL: 5: with the library gone the diag says it is absent (got nil)
+minimap_hbd_spec: 12 failure(s)
+
+== 4. full suite at the tip ==
+specs=45 failing=0
+
+== 5. deployed build vs the commit (sha256, first 16) ==
+fd51720a58e26c4b  commit    LineDraw.lua
+fd51720a58e26c4b  deployed  LineDraw.lua
+29c1bd58615be1aa  commit    MapOverlay.lua
+29c1bd58615be1aa  deployed  MapOverlay.lua
+073e2af733c29cee  commit    MinimapPath.lua
+073e2af733c29cee  deployed  MinimapPath.lua
+
+== 6. what is still missing ==
+the one screenshot pair (both maps, same moment). Opening the world map is the only way to
+produce it and the client is in active use, so this run did not synthesise input into it.
+After the next /reload the world-map redraw writes NodeTrailDB.mapProbe (rects + inside/measured
+count) and /nt mapdiag prints the same lines, so the screenshot and the numbers come from the
+same moment.
