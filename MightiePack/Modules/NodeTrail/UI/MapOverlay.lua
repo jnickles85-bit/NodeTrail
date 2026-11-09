@@ -3,12 +3,23 @@ pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
 -- World-map white polyline for the active herb route.
--- Points are map fractions (0..1). The line is parented to whatever frame the
--- client actually pans and zooms with (modern: WorldMapFrame:GetCanvas(),
--- Classic: WorldMapDetailFrame / WorldMapButton), measured at draw time, and
--- converted through the measured map rectangle inside that host — see
--- PathGeom.MapRect / FractionToPixel. Hidden when the displayed mapID is not
--- the route's mapID, or when showWorldMap is off.
+-- Points are map fractions (0..1) and are the source of truth: they are never
+-- rewritten. Only the projection changes.
+--
+-- This client does NOT composite children of WorldMapFrame:GetCanvas() — a
+-- 120 px opaque square parented to the canvas is invisible on the live client
+-- while the same square on WorldMapFrame is visible (proven by a parent ladder,
+-- `M:Diag` and tests/mapframe_projection_spec.lua record the reason). So the
+-- host is parented to WorldMapFrame, and the fractions are projected onto the
+-- map's measured rect inside it: PathGeom.ProjectRect turns the canvas' and the
+-- frame's measured screen boxes into one rect, which folds zoom and scroll in.
+-- The ScrollContainer's measured rect is the window the map is visible through,
+-- so a zoomed route is cropped at the frame's edge instead of painted over it.
+-- When the ScrollContainer rect cannot be measured the overlay falls back to
+-- the old canvas host and says so in /nt mapdiag.
+--
+-- Hidden when the displayed mapID is not the route's mapID, or when
+-- showWorldMap is off.
 
 ns.MapOverlay = ns.MapOverlay or {}
 local M = ns.MapOverlay
@@ -60,6 +71,37 @@ local function frameName(frame)
     return name
   end
   return "<unnamed>"
+end
+
+--- A frame's MEASURED screen box, in the units every projection takes.
+--- GetLeft/GetTop are reported in the frame's own scaled units, so
+--- screen px = value * scale; `GetEffectiveScale` is the scale that includes
+--- the window scale and every ancestor, `GetScale` the local one, 1 the last
+--- resort. Anything missing makes the box unmeasurable rather than zero — a
+--- client that answers none of these must fall back, not draw at 0,0.
+local function measureBox(frame)
+  if not frame then
+    return nil
+  end
+  local left = call(frame, "GetLeft")
+  local top = call(frame, "GetTop")
+  local w = call(frame, "GetWidth")
+  local h = call(frame, "GetHeight")
+  if type(left) ~= "number" or type(top) ~= "number"
+    or type(w) ~= "number" or type(h) ~= "number" then
+    return nil
+  end
+  if left ~= left or top ~= top or w ~= w or h ~= h or w <= 0 or h <= 0 then
+    return nil
+  end
+  local scale = call(frame, "GetEffectiveScale")
+  if type(scale) ~= "number" or scale ~= scale or scale <= 0 then
+    scale = call(frame, "GetScale")
+  end
+  if type(scale) ~= "number" or scale ~= scale or scale <= 0 then
+    scale = 1
+  end
+  return { left = left, top = top, width = w, height = h, scale = scale }
 end
 
 --- Strata draw order. A frame level only orders frames INSIDE one strata, so a
@@ -299,6 +341,8 @@ function M:Clear()
   self._retries = 0
   self._lastQueued = 0
   self._rect = nil
+  self._window = nil
+  self._mappingInfo = nil
   self._hostSize = nil
   self._px = nil
   self._segLens = nil
@@ -553,6 +597,109 @@ function M:RequestRetry()
   end
 end
 
+--- A bounded, single-purpose retry: while the frame path is unavailable the
+--- route goes to the old canvas host, which this client may not composite at
+--- all. One more pass 50 ms later re-measures — capped, so a client that never
+--- sizes its ScrollContainer does not become a 20 Hz poll.
+function M:_requestMappingRetry()
+  if (self._mapRetries or 0) >= 3 or self._mapRetryScheduled then
+    return
+  end
+  if not (C_Timer and isFn(C_Timer.After)) then
+    return
+  end
+  self._mapRetries = (self._mapRetries or 0) + 1
+  self._mapRetryScheduled = true
+  local ok = pcall(C_Timer.After, 0.05, function()
+    self._mapRetryScheduled = false
+    if self.path then
+      self:Redraw()
+    end
+  end)
+  if not ok then
+    self._mapRetryScheduled = false
+  end
+end
+
+--- Where the route is drawn, decided from MEASUREMENTS on this client — not
+--- from which API happens to exist.
+---
+--- This client does NOT composite children of `WorldMapFrame:GetCanvas()`. A
+--- controlled parent ladder proved it: six identical 120 px opaque red squares
+--- differing only in parent frame and texture call, and both canvas-parented
+--- ones (#4 colour, #5 vertex) were invisible on the live client while the same
+--- square on `WorldMapFrame` (#3) was visible. Colour, alpha, strata and draw
+--- order were all excluded by that ladder, which is why they are not revisited
+--- here.
+---
+--- So the host moves to `WorldMapFrame` and only the PROJECTION changes: the
+--- route's fractions are untouched and are mapped onto the map's measured rect
+--- inside the new host. The map's rect is taken from the canvas — the frame the
+--- fractions are measured in — and expressed in WorldMapFrame's pixel space by
+--- `PathGeom.ProjectRect`, which folds zoom and scroll in because both boxes are
+--- measured on screen. The ScrollContainer's measured rect gives the WINDOW the
+--- map is visible through, so a zoomed route is cropped at the frame's edge
+--- instead of painted over its border.
+---
+---   mode = "frame"    host on WorldMapFrame, fractions projected onto its rect
+---   mode = "fallback" the ScrollContainer rect could not be measured: the old
+---                     canvas host is used (and the diag says so) rather than
+---                     drawing nothing at all
+function M:_measureMapping(mapFrame)
+  local geom = ns.PathGeom
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  local canvas = getCanvas(mapFrame)
+  local m = {
+    wmf = measureBox(mapFrame),
+    scroll = measureBox(scroll),
+    canvas = measureBox(canvas),
+    scrollFrame = scroll,
+    canvasFrame = canvas,
+  }
+  if not m.wmf then
+    m.mode = "fallback"
+    m.reason = "WorldMapFrame has no measurable GetLeft/GetTop/GetWidth/GetHeight"
+    return m
+  end
+  if not m.scroll then
+    m.mode = "fallback"
+    m.reason = "the ScrollContainer rect cannot be measured on this client"
+    return m
+  end
+  -- The ground: the frame the route's fractions are pixel coordinates in. The
+  -- canvas is that frame; the ScrollContainer is the honest second choice when
+  -- a client exposes no canvas, because it is what it displays.
+  local ground, groundLabel = m.canvas, "canvas"
+  if not ground then
+    ground, groundLabel = m.scroll, "ScrollContainer"
+  end
+  local rect, why = geom.ProjectRect(m.wmf, ground)
+  if not rect then
+    m.mode = "fallback"
+    m.reason = "the map rect could not be projected (" .. tostring(why) .. ")"
+    return m
+  end
+  m.mode = "frame"
+  m.ground = groundLabel
+  m.groundBox = ground
+  m.rect = rect
+  m.window = nil
+  local view = geom.ProjectRect(m.wmf, m.scroll)
+  if view then
+    local inside = geom.IntersectRect(rect, view)
+    -- A window that covers (nearly) the whole map rect is no clipping at all,
+    -- and a sliver is more likely a measurement accident than a real viewport.
+    -- Clip only for a window that is a real, substantial subset.
+    if inside
+      and (inside.width * inside.height) >= (rect.width * rect.height) * 0.05
+      and (inside.width * inside.height) < (rect.width * rect.height) * 0.999
+    then
+      m.window = inside
+    end
+  end
+  return m
+end
+
 function M:_redraw()
   -- Everything the diag prints about THIS redraw starts cleared: a redraw that
   -- returns early (wrong map, no host, no measurable size) must not leave the
@@ -583,7 +730,16 @@ function M:_redraw()
     return
   end
 
-  local parent, label, _, _, isCanvas = selectParent()
+  local mapping = self:_measureMapping(mapFrame)
+  self._mappingInfo = mapping
+  local parent, label
+  local isCanvas = false
+  if mapping.mode == "frame" then
+    -- WorldMapFrame is the parent this client composites (see M:_measureMapping).
+    parent, label = mapFrame, "WorldMapFrame"
+  else
+    parent, label, _, _, isCanvas = selectParent()
+  end
   if not parent then
     self._why = "no map frame (canvas and legacy frames all absent)"
     self._parentLabel = nil
@@ -611,15 +767,34 @@ function M:_redraw()
     return
   end
   self._retries = 0
+  if mapping.mode == "frame" then
+    self._mapRetries = 0
+  else
+    -- The route is on the old host for now; ask for one more pass so it moves
+    -- to WorldMapFrame as soon as the map is measurable (a map that is opening
+    -- is the usual reason it is not yet).
+    self:_requestMappingRetry()
+  end
   self._hostSize = { width = width, height = height }
 
   local inner, innerW, innerH
-  if not isCanvas then
-    inner, innerW, innerH = innerMapFrame(parent)
+  local rect, window
+  if mapping.mode == "frame" then
+    -- The host is bound to WorldMapFrame with SetAllPoints, so it shares that
+    -- frame's pixel space and the projected rect is already in host units.
+    rect = mapping.rect
+    window = mapping.window
+    self._innerLabel = (mapping.ground == "canvas")
+      and "the canvas rect" or "the ScrollContainer rect"
+  else
+    if not isCanvas then
+      inner, innerW, innerH = innerMapFrame(parent)
+    end
+    rect = ns.PathGeom.MapRect(width, height, innerW, innerH)
+    self._innerLabel = inner and frameName(inner) or nil
   end
-  local rect = ns.PathGeom.MapRect(width, height, innerW, innerH)
   self._rect = rect
-  self._innerLabel = inner and frameName(inner) or nil
+  self._window = window
   if not rect then
     self:ReleaseVisuals()
     return
@@ -635,11 +810,28 @@ function M:_redraw()
   local px = {}
   local segLens = {}
   local skipped = {}
+  -- The canvas pixel the diag prints next to the frame pixel: the fraction in
+  -- the map's OWN units, so the two halves of the mapping can be checked
+  -- separately (fraction -> canvas is the route's ground; canvas -> frame is
+  -- the projection this card changed).
+  local cw, ch = rect.width, rect.height
+  if mapping.mode == "frame" and type(mapping.groundBox) == "table" then
+    cw, ch = mapping.groundBox.width, mapping.groundBox.height
+  end
+  local function inWindow(x, y)
+    local win = window or rect
+    return x >= win.left - 0.01 and x <= win.left + win.width + 0.01
+      and y >= win.top - 0.01 and y <= win.top + win.height + 0.01
+  end
   for i = 1, #self.path do
     local p = self.path[i]
     if geom.IsMapPoint(p) then
       local x, y = geom.FractionToPixel(p.x, p.y, rect)
-      px[i] = { x = x, y = y, fx = p.x, fy = p.y }
+      px[i] = {
+        x = x, y = y, fx = p.x, fy = p.y,
+        cx = p.x * cw, cy = p.y * ch,
+        visible = (x ~= nil) and inWindow(x, y) or false,
+      }
     else
       skipped[#skipped + 1] = "point " .. i .. " not a map point"
     end
@@ -650,18 +842,34 @@ function M:_redraw()
       local x1, y1 = geom.FractionToPixel(a.x, a.y, rect)
       local x2, y2 = geom.FractionToPixel(b.x, b.y, rect)
       if x1 and x2 then
-        local dx, dy = x2 - x1, y2 - y1
-        if dx * dx + dy * dy >= 0.25 then
-          count = count + 1
-          local seg = buf[count]
-          if not seg then
-            seg = {}
-            buf[count] = seg
+        -- Crop to the measured viewport when the map is zoomed or scrolled:
+        -- the route may clip at the frame's edge, but it may not move.
+        local outside
+        if window then
+          local cx1, cy1, cx2, cy2 = geom.ClipRect(x1, y1, x2, y2,
+            window.left, window.top, window.left + window.width, window.top + window.height)
+          if cx1 then
+            x1, y1, x2, y2 = cx1, cy1, cx2, cy2
+          else
+            outside = true
           end
-          seg[1], seg[2], seg[3], seg[4] = x1, y1, x2, y2
-          segLens[count] = math.sqrt(dx * dx + dy * dy)
+        end
+        if outside then
+          skipped[#skipped + 1] = ("segment %d is outside the visible map window"):format(i)
         else
-          skipped[#skipped + 1] = ("segment %d shorter than 0.5px"):format(i)
+          local dx, dy = x2 - x1, y2 - y1
+          if dx * dx + dy * dy >= 0.25 then
+            count = count + 1
+            local seg = buf[count]
+            if not seg then
+              seg = {}
+              buf[count] = seg
+            end
+            seg[1], seg[2], seg[3], seg[4] = x1, y1, x2, y2
+            segLens[count] = math.sqrt(dx * dx + dy * dy)
+          else
+            skipped[#skipped + 1] = ("segment %d shorter than 0.5px"):format(i)
+          end
         end
       else
         skipped[#skipped + 1] = ("segment %d did not project"):format(i)
@@ -680,12 +888,24 @@ function M:_redraw()
   self:AuditAndRaise(host, parent, width, height)
 
   local r, g, b, a, stroke = ns.LineDraw.ColorWidth()
-  -- Dot geometry is a SCREEN measurement: the canvas is shown at ~0.696 scale on
-  -- this client, so a stroke expressed in canvas px shrinks below sight.
-  local canvasScale = mapZoom(mapFrame)
-  local metrics = ns.LineDraw.DotMetrics(stroke, canvasScale)
+  -- Dot geometry is a SCREEN measurement: every length below is in HOST units,
+  -- and one host unit is `unitScale` screen px. On the new host that scale is
+  -- the frame's own measured effective scale (the canvas' ~0.696 no longer
+  -- applies — the projected rect already carries it), so a dot stays the size
+  -- the operator asked for instead of shrinking with the map.
+  local unitScale
+  if mapping.mode == "frame" then
+    local hostBox = measureBox(host)
+    unitScale = (hostBox and hostBox.scale) or mapping.wmf.scale
+  else
+    unitScale = mapZoom(mapFrame)
+  end
+  if type(unitScale) ~= "number" or unitScale ~= unitScale or unitScale <= 0 then
+    unitScale = 1
+  end
+  local metrics = ns.LineDraw.DotMetrics(stroke, unitScale)
   self._dotMetrics = metrics
-  ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / canvasScale, r, g, b, a, "ydown", metrics)
+  ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / unitScale, r, g, b, a, "ydown", metrics)
   self._drew = true
   self._lastQueued = count
   -- One record per draw, newest first. The card's third suspect is a later pass
@@ -803,6 +1023,35 @@ function M:TryHookMap()
   local events = self._events
   if events and isFn(events.RegisterEvent) then
     pcall(events.RegisterEvent, events, "WORLD_MAP_UPDATE")
+  end
+
+  -- The projection is MEASURED from the canvas' and the ScrollContainer's screen
+  -- rects, so a zoom or a scroll moves the map under the route and has to
+  -- redraw: the route follows the ground, it does not stay glued to the frame.
+  -- Every hook here is best-effort; a client that fires none of them still
+  -- redraws on WORLD_MAP_UPDATE and on the map's OnShow.
+  if not self._viewHooked then
+    self._viewHooked = true
+    local views = {
+      { frame = mapFrame.ScrollContainer,
+        events = { "OnSizeChanged", "OnScrollRangeChanged", "OnVerticalScroll" } },
+      { frame = getCanvas(mapFrame), events = { "OnSizeChanged" } },
+      { frame = mapFrame, events = { "OnSizeChanged" } },
+    }
+    for i = 1, #views do
+      local entry = views[i]
+      if entry.frame and isFn(entry.frame.HookScript) then
+        for j = 1, #entry.events do
+          pcall(entry.frame.HookScript, entry.frame, entry.events[j], function()
+            M:Redraw()
+          end)
+        end
+      end
+    end
+    if isFn(hooksecurefunc) then
+      pcall(hooksecurefunc, mapFrame, "SetZoom", function() M:Redraw() end)
+      pcall(hooksecurefunc, mapFrame, "SetMapZoom", function() M:Redraw() end)
+    end
   end
 end
 
@@ -1012,6 +1261,69 @@ function M:Diag()
       fmtNum(rect.left), fmtNum(rect.top), fmtNum(rect.width), fmtNum(rect.height),
       fmtNum(self._hostSize and self._hostSize.width), fmtNum(self._hostSize and self._hostSize.height),
       tostring(self._innerLabel or "none"))
+  end)
+  fact(function()
+    -- WHICH frame the route is drawn on, and how its fractions were mapped onto
+    -- it. On this client children of WorldMapFrame:GetCanvas() are not
+    -- composited (the parent ladder: canvas #4/#5 invisible, WorldMapFrame #3
+    -- visible), so the host is WorldMapFrame and the fractions are projected
+    -- onto the canvas' measured rect inside it. Everything printed here was
+    -- measured at the last redraw — the visible rect moves when the map is
+    -- zoomed or scrolled, which is why it is printed with the rect it clips.
+    local m = self._mappingInfo
+    if type(m) ~= "table" then
+      return "world-map host: not decided yet (no redraw on a measurable map frame)"
+    end
+    if m.mode == "frame" then
+      local function box(b, withSize)
+        if type(b) ~= "table" then
+          return "absent"
+        end
+        if withSize then
+          return string.format("left=%s top=%s %sx%s scale=%s",
+            fmtNum(b.left, 1), fmtNum(b.top, 1), fmtNum(b.width, 1), fmtNum(b.height, 1),
+            fmtNum(b.scale, 3))
+        end
+        return string.format("left=%s top=%s scale=%s",
+          fmtNum(b.left, 1), fmtNum(b.top, 1), fmtNum(b.scale, 3))
+      end
+      local rect = m.rect or {}
+      local win = self._window
+      return string.format(
+        "world-map host: parent=WorldMapFrame (children of the canvas are not composited on this client); fractions measured in the %s rect [%s] -> frame rect left=%s top=%s %sx%s; visible rect [%s]; clipping=%s",
+        tostring(m.ground or "?"), box(m.groundBox, true),
+        fmtNum(rect.left, 1), fmtNum(rect.top, 1), fmtNum(rect.width, 1), fmtNum(rect.height, 1),
+        box(m.scroll, true),
+        type(win) == "table"
+          and string.format("yes (window left=%s top=%s %sx%s)",
+            fmtNum(win.left, 1), fmtNum(win.top, 1), fmtNum(win.width, 1), fmtNum(win.height, 1))
+          or "none (the whole map rect is visible)")
+    end
+    return string.format(
+      "world-map host: FALLBACK to %s — %s. This client does not composite children of WorldMapFrame:GetCanvas(), so a route on that host can be drawn and still be invisible",
+      tostring(self._parentLabel or "the old map host"), tostring(m.reason or "no reason recorded"))
+  end)
+  fact(function()
+    -- Which ruler GetLeft/GetTop answer on for a SCALED frame. The client may
+    -- report a frame's OWN units (screen = value * effective scale — the classic
+    -- idiom, and what ProjectRect assumes) or screen px; the two readings differ
+    -- whenever the scale is not 1, and only the canvas is scaled while the map is
+    -- zoomed. Both readings are printed, so the in-game landmark check the card
+    -- asks for ("a known landmark's fraction against its on-screen pixel", at two
+    -- zoom levels) is read against numbers instead of a guess. Nothing offline can
+    -- settle it: a stub can model either convention.
+    local m = self._mappingInfo
+    if type(m) ~= "table" or m.mode ~= "frame" or type(m.groundBox) ~= "table" then
+      return "ruler check: absent (no projected mapping on a measurable map frame)"
+    end
+    local g, h = m.groundBox, m.wmf
+    return string.format(
+      "ruler check: ground left=%s top=%s scale=%s -> read as own units: screen (%s,%s); read as screen px: (%s,%s); the frame's screen box is (%s,%s) %sx%s. ProjectRect reads own units; the in-game landmark check confirms it",
+      fmtNum(g.left, 1), fmtNum(g.top, 1), fmtNum(g.scale, 3),
+      fmtNum(g.left * g.scale, 1), fmtNum(g.top * g.scale, 1),
+      fmtNum(g.left, 1), fmtNum(g.top, 1),
+      fmtNum(h.left * h.scale, 1), fmtNum(h.top * h.scale, 1),
+      fmtNum(h.width * h.scale, 1), fmtNum(h.height * h.scale, 1))
   end)
   fact(function()
     return string.format("MapOverlay: retries=%s drawError=%s",
@@ -1485,8 +1797,13 @@ function M:Diag()
       if p then
         shown = shown + 1
         if shown <= 48 then
-          out[#out + 1] = string.format("#%d (%s,%s)->(%s,%s)",
-            i, fmtNum(p.fx, 3), fmtNum(p.fy, 3), fmtNum(p.x, 1), fmtNum(p.y, 1))
+          -- fraction -> canvas pixel (the route's ground) -> frame pixel (what
+          -- is drawn). The visible= flag says whether the point is inside the
+          -- measured viewport, so "on the map but cropped" is distinguishable
+          -- from "projected somewhere else".
+          out[#out + 1] = string.format("#%d (%s,%s)->(%s,%s) canvas=(%s,%s) visible=%s",
+            i, fmtNum(p.fx, 3), fmtNum(p.fy, 3), fmtNum(p.x, 1), fmtNum(p.y, 1),
+            fmtNum(p.cx, 1), fmtNum(p.cy, 1), tostring(p.visible))
         end
       end
     end

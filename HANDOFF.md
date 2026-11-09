@@ -3,7 +3,60 @@
 ## Status
 Bases A–E are on `main` (`c96bf91`, PR #2–#7).
 
-**2026-11-08 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
+**2026-11-09 — branch `fix/tooltip-refresh`, unmerged, unpushed, undeployed.**
+
+- **The world-map route is drawn on `WorldMapFrame`, not on the canvas** (t_1330d05c). A controlled
+  parent ladder on the live client settled the cause: six identical 120 px opaque red squares,
+  differing only in parent frame and texture call, and the two parented to
+  `WorldMapFrame:GetCanvas()` (#4 colour, #5 vertex) were invisible while the same square on
+  `WorldMapFrame` (#3) was visible. **This client does not composite children of the canvas** —
+  which is why alpha, colour, strata and draw order (all of which read back innocent) were never
+  the fault, and why the minimap route draws fine on its own host.
+  The overlay host now parents to `WorldMapFrame` and only the PROJECTION changes: the route's
+  fractions are untouched, and `PathGeom.ProjectRect(hostBox, mapBox)` turns the canvas' and the
+  frame's measured screen boxes into one rect in the host's pixel space (`left/top/width/height`,
+  +y down from the host's top). Because both boxes are measured on screen, zoom and scroll are
+  inside the numbers — a zoomed map is a wider rect, a scrolled map a shifted one, so the route
+  stays on the same ground (it may crop, it may not shift). The ScrollContainer's measured rect is
+  the visible WINDOW: `PathGeom.IntersectRect` crops the segments to it (only when it is a real,
+  substantial subset of the map rect — never for a sliver, never when it covers everything).
+  Dot geometry is a screen measurement of the NEW host: the surface scale passed to
+  `LineDraw.DotMetrics` is the host's measured effective scale, not `GetCanvasScale()` (the
+  projected rect already carries the canvas' scale), so dots no longer shrink with the map.
+  Zoom/scroll redraws are hooked (ScrollContainer `OnSizeChanged`/`OnScrollRangeChanged`/
+  `OnVerticalScroll`, canvas `OnSizeChanged`, `SetZoom`/`SetMapZoom`), all best-effort.
+  `/nt mapdiag` now prints the whole chain, per sampled dot:
+  `points: 2 of 2 projected; #1 (0.720,0.350)->(869.6,233.7) canvas=(721.4,233.8) visible=true …`
+  next to
+  `world-map host: parent=WorldMapFrame (children of the canvas are not composited on this client);
+   fractions measured in the canvas rect [left=114.0 top=709.7 1002.0x668.0 scale=1.400] ->
+   frame rect left=-140.4 top=-93.6 1402.8x935.2; visible rect [left=300.0 top=900.0 1002.0x668.0
+   scale=1.000]; clipping=yes (window left=0.0 top=0.0 1002.0x668.0)`
+  A `ruler check:` line prints both readings of the measured boxes (GetLeft/GetTop as the frame's
+  own units, `screen = value * effective scale` — the classic idiom `ProjectRect` uses — and as
+  screen px), because the two only differ on a scaled frame and no stub can settle which this
+  client answers; the landmark check below is what confirms it.
+  (that pair is a **fixture** from `tests/mapframe_projection_spec.lua`'s screen-coordinate stub, not
+  observed client output). **Fallback:** when the ScrollContainer rect cannot be measured the old
+  canvas host is used and the same diag line says `world-map host: FALLBACK to …`, rather than
+  drawing nothing. `tests/mapframe_projection_spec.lua` pins the mapping (identity, a zoomed rect, a
+  scrolled rect, a client-units rect, a host/map scale mismatch, degenerate input), the visible
+  window, the module drawing on `WorldMapFrame` at default zoom and at 0.7/1/1.4/2x, the map centre
+  staying on one pixel across zooms, the cropped-not-dropped segment, the fallback and the untouched
+  fractions (plus the bounded re-measure the fallback asks for): **64 checks, all red on
+  `7e3a329`** (behavioural FAILs, no traceback). 47/47
+  `tests/*.lua` pass under lua5.1.
+  **Branch.** The commit is on `fix/tooltip-refresh` (parent `7e3a329`, this workspace's checked-out
+  branch). `integ/map-legibility` (`349c87e`) is that SAME base plus the parent ladder (`d526cdf`),
+  the arrow migration and a far newer `MapOverlay`/`LineDraw`/`MinimapPath` (+1121/+183/+803 lines,
+  the `screenRect`/`canvasWindow`/`hostOnCanvas` measurement model). This change is not on that
+  branch and its `MapOverlay.lua` hunk does not apply there — re-parenting on top of that newer
+  model is a separate job, and the repo's own rules say merges wait for Mightie. Whoever builds the
+  hand-installed client has to pick the line first.
+  **Still needs one in-game run by Mightie:** The Barrens at default zoom with the route on it, and
+  a zoom-in/zoom-out pass to confirm the line holds the ground. Nothing here proves the client
+  composites `WorldMapFrame` children *at the level this host picks* — that is what the screenshot
+  is for.
 
 - **The Alchemy line is gated on a REAL signal — or it is not drawn at all** (t_4ab7c230).
   The previous pass fell back to `recipes (not filtered by skill)`, which still advertised eight
