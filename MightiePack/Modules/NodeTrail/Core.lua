@@ -326,6 +326,97 @@ end
 -- overlay actually found (canvas or legacy frames, measured sizes, the
 -- displayed vs route mapID, what the last redraw queued) so the next in-game
 -- run says WHY nothing is visible instead of guessing.
+-- ── /nt mapdiag parents ───────────────────────────────────────────────────
+-- The swatch test proved that even a 40 px OPAQUE texture on the map overlay's
+-- own host is invisible on this client, so the question is no longer colour or
+-- alpha: it is whether anything parented to that host is composited at all.
+-- This paints six large red squares that differ in exactly two variables —
+-- which frame they hang from, and whether the colour went in through
+-- SetColorTexture or SetTexture+SetVertexColor — and numbers them on screen.
+-- Nothing here touches the route, its coordinates or its persistence.
+function ns.PrintParentLadder()
+  local function say(text)
+    local line = "NodeTrail parents: " .. tostring(text)
+    if type(DEFAULT_CHAT_FRAME) == "table" and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+      local ok = pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, line)
+      if ok then return end
+    end
+    pcall(print, line)
+  end
+  if type(CreateFrame) ~= "function" or type(UIParent) ~= "table" then
+    say("unavailable (no CreateFrame or UIParent)")
+    return
+  end
+  ns._parentLadder = ns._parentLadder or {}
+  for i = 1, #ns._parentLadder do
+    pcall(ns._parentLadder[i].Hide, ns._parentLadder[i])
+  end
+  ns._parentLadder = {}
+
+  local wmf = _G.WorldMapFrame
+  local canvas = nil
+  if type(wmf) == "table" then
+    if type(wmf.GetCanvas) == "function" then
+      local ok, c = pcall(wmf.GetCanvas, wmf)
+      if ok and type(c) == "table" then canvas = c end
+    end
+    if not canvas and type(wmf.ScrollContainer) == "table" then
+      canvas = wmf.ScrollContainer
+    end
+  end
+
+  -- 1 UIParent+SetColorTexture  2 UIParent+SetTexture  3 WorldMapFrame+SetColorTexture
+  -- 4 canvas+SetColorTexture    5 canvas+SetTexture     6 UIParent 200px (size control)
+  local specs = {
+    { label = "1", parent = UIParent, tex = "color",  size = 120, dx = -320, dy = 120 },
+    { label = "2", parent = UIParent, tex = "vertex", size = 120, dx = -160, dy = 120 },
+    { label = "3", parent = wmf,      tex = "color",  size = 120, dx =    0, dy = 120 },
+    { label = "4", parent = canvas,   tex = "color",  size = 120, dx =  160, dy = 120 },
+    { label = "5", parent = canvas,   tex = "vertex", size = 120, dx =  320, dy = 120 },
+    { label = "6", parent = UIParent, tex = "color",  size = 200, dx =    0, dy = -140 },
+  }
+  for i = 1, #specs do
+    local spec = specs[i]
+    if type(spec.parent) ~= "table" then
+      say(("#%s skipped: that parent frame does not exist on this client"):format(spec.label))
+    else
+      local ok, frame = pcall(CreateFrame, "Frame", nil, spec.parent)
+      if not ok or type(frame) ~= "table" then
+        say(("#%s skipped: CreateFrame failed"):format(spec.label))
+      else
+        pcall(frame.SetFrameStrata, frame, "DIALOG")
+        pcall(frame.SetFrameLevel, frame, 900)
+        pcall(frame.ClearAllPoints, frame)
+        pcall(frame.SetPoint, frame, "CENTER", UIParent, "CENTER", spec.dx, spec.dy)
+        pcall(frame.SetSize, frame, spec.size, spec.size)
+        local okT, tex = pcall(frame.CreateTexture, frame, nil, "OVERLAY")
+        if okT and type(tex) == "table" then
+          pcall(tex.SetAllPoints, tex, frame)
+          if spec.tex == "color" and type(tex.SetColorTexture) == "function" then
+            pcall(tex.SetColorTexture, tex, 1, 0, 0, 1)
+          else
+            pcall(tex.SetTexture, tex, "Interface\\Buttons\\WHITE8X8")
+            pcall(tex.SetVertexColor, tex, 1, 0, 0, 1)
+            spec.tex = "vertex"
+          end
+          pcall(tex.SetDrawLayer, tex, "OVERLAY", 7)
+        end
+        pcall(frame.Show, frame)
+        ns._parentLadder[#ns._parentLadder + 1] = frame
+        say(("#%s %dx%d on %s via %s: level=%s strata=%s shown=%s")
+          :format(spec.label, spec.size, spec.size,
+            tostring(spec.parent == UIParent and "UIParent"
+              or (spec.parent == wmf and "WorldMapFrame")
+              or (spec.parent == canvas and "map canvas") or "?"),
+            tostring(spec.tex), tostring(frame.GetFrameLevel and frame:GetFrameLevel() or "absent"),
+            tostring(frame.GetFrameStrata and frame:GetFrameStrata() or "absent"),
+            tostring(frame.IsShown and frame:IsShown() or "absent")))
+      end
+    end
+  end
+  say("tell me which red squares you can SEE (#1-#6); '/nt mapdiag parents off' removes them")
+end
+
 function ns.PrintMapDiag(arg)
   local function say(text)
     local line = "NodeTrail mapdiag: " .. tostring(text)
@@ -343,6 +434,24 @@ function ns.PrintMapDiag(arg)
     return
   end
   local mode = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  if mode:match("^parents") then
+    -- Must not require the overlay to be loaded: the whole point is to test
+    -- frames that are NOT the overlay's host.
+    local rest = mode:match("^parents%s*(.*)$") or ""
+    if rest == "off" or rest == "hide" then
+      for i = 1, #(ns._parentLadder or {}) do
+        pcall(ns._parentLadder[i].Hide, ns._parentLadder[i])
+      end
+      ns._parentLadder = {}
+      say("parents: off (squares removed)")
+    else
+      local okP, errP = pcall(ns.PrintParentLadder)
+      if not okP then
+        say("parents failed: " .. tostring(errP))
+      end
+    end
+    return
+  end
   if mode:match("^probe") then
     if type(overlay.Probe) ~= "function" then
       say("probe unavailable (this MapOverlay has no Probe)")
