@@ -2093,6 +2093,119 @@ function M:_probeTexture(host)
   return tex
 end
 
+-- ── /nt mapdiag compare ────────────────────────────────────────────────────
+-- One host, four specs, one screenshot. Mightie's report: the route dots are
+-- "extremely faint" while the probe's marker on THIS SAME HOST was bright. If
+-- the host were the cause, both would be faint, so this paints four textures
+-- with identical placement and identical colour, varying only size and alpha,
+-- and numbers them so he can say which numbers he can actually read.
+--
+-- Deliberately raw CreateTexture + ApplyColor, the same two calls the probe and
+-- the route both go through: no LineDraw pool, no route coordinates touched.
+local COMPARE_SPECS = {
+  { size = 40, alpha = 1.00, rim = false, note = "40px opaque  (the probe's marker, the known-good control)" },
+  { size = 10, alpha = 1.00, rim = false, note = "10px opaque" },
+  { size = 5,  alpha = 1.00, rim = false, note = "5px opaque   (route size, full alpha)" },
+  { size = 5,  alpha = 0.90, rim = true,  note = "5px a=0.90 with the dark rim (what the route actually draws)" },
+}
+
+function M:Compare()
+  local host = self.host
+  if not host then
+    local parent = selectParent()
+    if not parent then
+      say("compare: no map frame to draw on")
+      return
+    end
+    host = self:EnsureHost(parent, "compare")
+  end
+  if not host or not isFn(host.CreateTexture) then
+    say("compare: the host exposes no CreateTexture — nothing can be placed")
+    return
+  end
+  local width, height = frameSize(host)
+  if not width or not height then
+    say("compare: the host has no measurable size")
+    return
+  end
+
+  local cx, cy = width * 0.5, height * 0.5
+  if self.path and #self.path >= 2 and ns.PathGeom.IsMapPoint(self.path[1]) then
+    local rect = self._rect or ns.PathGeom.MapRect(width, height)
+    if rect then
+      cx, cy = ns.PathGeom.FractionToPixel(self.path[1].x, self.path[1].y, rect)
+    end
+  end
+
+  self:ClearProbe()
+  local probe = { textures = {}, drawer = ns.LineDraw.Create() }
+  self._probe = probe
+  self._probeOn = true
+
+  local function box(x1, y1, x2, y2, r, g, b, a, sublevel)
+    local ok, tex = pcall(host.CreateTexture, host, nil, "OVERLAY")
+    if not ok or not tex then
+      return nil
+    end
+    probe.textures[#probe.textures + 1] = tex
+    ns.LineDraw.ApplyColor(tex, r, g, b, a)
+    if tex.SetDrawLayer then
+      pcall(tex.SetDrawLayer, tex, "OVERLAY", sublevel or 7)
+    end
+    pcall(tex.ClearAllPoints, tex)
+    pcall(tex.SetPoint, tex, "BOTTOMLEFT", host, "TOPLEFT", x1, -y2)
+    pcall(tex.SetPoint, tex, "TOPRIGHT", host, "TOPLEFT", x2, -y1)
+    pcall(tex.Show, tex)
+    return tex
+  end
+
+  -- A row of swatches through the first route point, so the faint route is in
+  -- the same view: the swatches are the measurement, the route beside them is
+  -- the thing being judged.
+  local step = 60
+  local startX = cx - (step * (#COMPARE_SPECS - 1)) * 0.5
+  for i = 1, #COMPARE_SPECS do
+    local spec = COMPARE_SPECS[i]
+    local mx = startX + (i - 1) * step
+    local half = spec.size * 0.5
+    if spec.rim then
+      local rimSize = spec.size + 2
+      local rimHalf = rimSize * 0.5
+      box(mx - rimHalf, cy - rimHalf, mx + rimHalf, cy + rimHalf, 0.06, 0.06, 0.06, 1, 6)
+    end
+    local tex = box(mx - half, cy - half, mx + half, cy + half, 1, 1, 1, spec.alpha)
+    local w, h = frameSize(tex)
+    local alpha = tonumber(call(tex, "GetAlpha"))
+    local vr, vg, vb, va = 1, 1, 1, 1
+    if isFn(tex.GetVertexColor) then
+      local okc, ar, ag, ab, aa = pcall(tex.GetVertexColor, tex)
+      if okc then vr, vg, vb, va = ar, ag, ab, aa end
+    end
+    say(("compare: #%d %s at canvas (%s,%s); measured %sx%s; GetAlpha=%s; GetVertexColor=%s,%s,%s,%s")
+      :format(i, spec.note, fmtNum(mx, 1), fmtNum(cy, 1), fmtNum(w), fmtNum(h),
+        tostring(alpha or "absent"), fmtNum(vr, 2), fmtNum(vg, 2), fmtNum(vb, 2), fmtNum(va, 2)))
+  end
+
+  -- The alpha chain, measured at draw time rather than assumed: a faded
+  -- ancestor makes every swatch a ghost whatever the vertex colour says.
+  local node = host
+  local depth = 0
+  while node and depth < 6 do
+    local a = tonumber(call(node, "GetAlpha"))
+    local ignore = "absent"
+    if isFn(node.GetIgnoreParentAlpha) then
+      local okI, v = pcall(node.GetIgnoreParentAlpha, node)
+      if okI then ignore = tostring(v) end
+    end
+    say(("compare: chain[%d] %s alpha=%s ignoreParentAlpha=%s level=%s strata=%s")
+      :format(depth, frameName(node), tostring(a or "absent"), ignore,
+        fmtNum(frameLevel(node)), tostring(call(node, "GetFrameStrata") or "absent")))
+    node = call(node, "GetParent")
+    depth = depth + 1
+  end
+  say("compare: report which numbers you can read (#1-#4) and whether the dotted route beside them is easier or harder to see; '/nt mapdiag probe off' removes them")
+end
+
 function M:ClearProbe()
   local probe = self._probe
   self._probe = nil

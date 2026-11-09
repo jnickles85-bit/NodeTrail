@@ -355,6 +355,15 @@ function ns.PrintMapDiag(arg)
     if not okS then
       say("primitive failed: " .. tostring(errS))
     end
+  elseif mode:match("^compare") then
+    if type(overlay.Compare) ~= "function" then
+      say("compare unavailable (this MapOverlay has no Compare)")
+      return
+    end
+    local okC, errC = pcall(overlay.Compare, overlay)
+    if not okC then
+      say("compare failed: " .. tostring(errC))
+    end
   elseif mode:match("^floor") then
     -- The visibility ladder's rung 3, without a redeploy: same route, same
     -- coordinates, only the dot's SCREEN size changes.
@@ -378,7 +387,7 @@ function ns.PrintMapDiag(arg)
       say("strata failed: " .. tostring(errT))
     end
   elseif mode ~= "" then
-    say(("unknown option '%s' (try: probe | probe off | primitive <auto|line|dots|rotate> | floor <px|auto> | strata <MEDIUM|HIGH|DIALOG|auto>)"):format(mode))
+    say(("unknown option '%s' (try: probe | probe off | compare | primitive <auto|line|dots|rotate> | floor <px|auto> | strata <MEDIUM|HIGH|DIALOG|auto>)"):format(mode))
     return
   end
   local ok, err = pcall(overlay.Diag, overlay)
