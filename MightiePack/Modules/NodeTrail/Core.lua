@@ -557,6 +557,9 @@ function ns.ToggleNavArrow(arg)
     return
   end
   profile.showNavArrow = on
+  -- An explicit switch: from here on the stored value wins over the opt-in
+  -- migration in ns.GetDB, because this is the player asking, not a default.
+  profile.navArrowUserSet = true
   -- Redraw, never Clear: the arrow keeps the route it was given, so turning it
   -- back on does not need a rebuild.
   local arrow = type(ns.Nav) == "table" and ns.Nav.Arrow or nil
