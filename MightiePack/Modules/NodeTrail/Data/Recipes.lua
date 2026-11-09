@@ -509,13 +509,19 @@ local function learnedFrom(mod, id)
 end
 
 local function availabilityFrom(info, id, mod, rankbox)
-  local n, countHow = craftableCount(info, id, mod)
-  if n ~= nil and n > 0 then
-    return true, countHow
-  end
+  -- The learned flag comes FIRST, and it outranks a positive craftable count.
+  -- Live report from Mightie: the panel listed seven recipes he does not know.
+  -- This client enumerates unlearned recipes exactly like known ones and answers
+  -- `GetCraftableCount` for them too, so a count above zero is not proof the
+  -- recipe is his. "Do I know it" is the only question the player asked, and an
+  -- explicit `false` answers it definitively.
   local learned = learnedFrom(mod, id)
   if learned == false then
     return false, "IsRecipeProfessionLearned"
+  end
+  local n, countHow = craftableCount(info, id, mod)
+  if n ~= nil and n > 0 then
+    return true, countHow
   end
   local req, reqHow = requiredSkillFrom(info)
   if req ~= nil then
