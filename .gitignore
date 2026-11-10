@@ -1,0 +1,12 @@
+# Build output: the packaged zips are produced by tools/build_deploy_zip.py and
+# published from dist/, never committed.
+*.zip
+dist/
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

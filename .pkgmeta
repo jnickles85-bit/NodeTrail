@@ -1,0 +1,18 @@
+package-as: MightiePack
+
+# CurseForge packs this directory only. Everything the addon does not need at
+# runtime stays out of the zip: the spec suite, captured evidence, the sync and
+# build tooling, CI, and the repo-level docs.
+ignore:
+  - .github
+  - .gitignore
+  - .luacheckrc
+  - .pkgmeta
+  - CHANGELOG.md
+  - HANDOFF.md
+  - LICENSE
+  - README.md
+  - evidence
+  - spec
+  - tests
+  - tools

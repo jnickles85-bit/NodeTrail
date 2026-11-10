@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lua:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua 5.1 and luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+          sudo luarocks install luacheck
+
+      - name: Syntax check every shipping file
+        # luac -p parses without running: a module that does not compile never
+        # reaches a player, and this is the cheapest possible gate for that.
+        run: |
+          set -e
+          mapfile -t files < <(find MightiePack -name '*.lua' -print)
+          echo "checking ${#files[@]} file(s)"
+          printf '%s\0' "${files[@]}" | xargs -0 -n 20 luac5.1 -p
+
+      - name: Specs
+        # Each spec is a standalone lua5.1 program: it prints FAIL lines and exits
+        # non-zero on failure. Run them all and report the failing ones rather than
+        # stopping at the first.
+        run: |
+          fails=0
+          count=0
+          for f in tests/*.lua; do
+            count=$((count + 1))
+            echo "::group::$f"
+            if ! lua5.1 "$f"; then
+              echo "::error file=$f::spec failed"
+              fails=$((fails + 1))
+            fi
+            echo "::endgroup::"
+          done
+          echo "$count spec(s) run, $fails failure(s)"
+          exit $fails
+
+      - name: Luacheck
+        run: luacheck MightiePack
