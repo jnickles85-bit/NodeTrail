@@ -58,6 +58,14 @@ globals = {
     time = { other_fields = true }, tinsert = { other_fields = true },
 }
 
+-- SkinRoute.lua is frozen for the in-game round (audit: "leave SkinRoute
+-- behaviour alone"), so it keeps its own naming and the two warnings it raises are
+-- scoped here rather than edited into the file: the unused addon-name slot, and a
+-- deliberate inner `S` alias that mirrors the ns.SkinRoute table.
+files["MightiePack/Modules/NodeTrail/Route/SkinRoute.lua"] = {
+    ignore = { "211", "431" },
+}
+
 -- Vendored Touchstone: the fold copies upstream files verbatim (see
 -- tools/sync_touchstone.py), so its warnings cannot be fixed here without the next
 -- sync overwriting them. They are upstream's to fix; our own files stay clean.
