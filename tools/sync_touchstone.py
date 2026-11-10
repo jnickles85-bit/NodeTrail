@@ -1336,6 +1336,140 @@ end
         ),
     )
 
+    text = edit_chestadvisor_tiebreak(text)
+
+    return text
+
+
+# ---- Card t_c4911603: the tiebreaker flag reaches the player ----------------
+#
+# The comparator's third tier is only useful if the line says so. A tiebreaker
+# row keeps its ordinary verdict token and its ordinary colour, but the sentence
+# becomes "Upgrade — tiebreaker (+64 Armor, +2 Stamina) vs <worn> [Retribution]"
+# (and "Not an upgrade — tiebreaker (...)" the other way), so a survivability
+# gain is never read as a damage gain. The signed deltas ride on the row as
+# `tiebreak` beside `weighted`/`profile`.
+def edit_chestadvisor_tiebreak(text: str) -> str:
+    """Card t_c4911603: render, and persist, the tiebreaker flag."""
+    name = "ChestAdvisor/ChestAdvisor.lua"
+
+    text = replace_once(
+        text,
+        name,
+        "ca.tooltip-tiebreak-doc",
+        "-- row, an UNKNOWN), so every existing line renders byte-identically.\n",
+        (
+            "-- row, an UNKNOWN), so every existing line renders byte-identically.\n"
+            "--\n"
+            "-- A row that carries `tiebreak` (card t_c4911603) was decided by the ranked\n"
+            "-- survivability tiebreakers because the damage total was tied. Its sentence is\n"
+            "-- \"tiebreaker (+64 Armor, +2 Stamina)\" — the signed deltas, candidate minus\n"
+            "-- equipped — and NOT a weighted number, because the gain is not damage. The\n"
+            "-- ordinary word for its token is used unchanged (\"Upgrade\" / \"Not an\n"
+            "-- upgrade\"), so the flag is the only difference from a damage verdict.\n"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        name,
+        "ca.tooltip-tiebreak-head",
+        (
+            "function TOOLTIP_UI.weighted(row, order)\n"
+            '\tif type(row) ~= "table" or type(row.weighted) ~= "number" then return nil end\n'
+            "\tlocal total = row.weighted\n"
+            "\tlocal number = (Verdict and type(Verdict.numText) == \"function\")\n"
+            "\t\tand Verdict.numText(total) or tostring(total)\n"
+            '\tlocal head = "weighted " .. number\n'
+            '\tif type(row.wornLink) == "string" then\n'
+            '\t\thead = head .. " vs " .. itemNameOf(row.wornLink)\n'
+            "\tend\n"
+            '\tif type(row.profile) == "string" then\n'
+            '\t\thead = head .. " [" .. row.profile .. "]"\n'
+            "\tend\n"
+            "\tlocal word = TOOLTIP_UI.word(row.verdict)\n"
+            '\tif row.verdict == "NOT_UPGRADE" then\n'
+            "\t\tif total < 0 then word = TOOLTIP_UI.words.DOWNGRADE\n"
+            "\t\telse word = TOOLTIP_UI.words.NO_CHANGE end\n"
+            "\tend\n"
+        ),
+        (
+            "function TOOLTIP_UI.weighted(row, order)\n"
+            '\tif type(row) ~= "table" or type(row.weighted) ~= "number" then return nil end\n'
+            "\tlocal total = row.weighted\n"
+            "\tlocal vs = nil\n"
+            '\tif type(row.wornLink) == "string" then\n'
+            '\t\tvs = " vs " .. itemNameOf(row.wornLink)\n'
+            "\tend\n"
+            "\tlocal profile = nil\n"
+            '\tif type(row.profile) == "string" then\n'
+            '\t\tprofile = " [" .. row.profile .. "]"\n'
+            "\tend\n"
+            "\tlocal word, head\n"
+            '\tif type(row.tiebreak) == "string" and row.tiebreak ~= "" then\n'
+            "\t\t-- Card t_c4911603: the damage total was tied and the profile's RANKED\n"
+            "\t\t-- tiebreaker decided. The line is deliberately a different sentence from\n"
+            "\t\t-- an ordinary weighted upgrade — \"tiebreaker (+64 Armor, +2 Stamina)\"\n"
+            "\t\t-- rather than a number — because the gain is survivability, not damage.\n"
+            "\t\t-- The deltas are signed from the candidate's side, so the same text says\n"
+            "\t\t-- which way the tie broke in both directions. A NOT_UPGRADE keeps the\n"
+            "\t\t-- card's own word (\"Not an upgrade\"), never \"Downgrade\": no damage was\n"
+            "\t\t-- lost here, the equipped piece simply won the tiebreak.\n"
+            '\t\thead = "tiebreaker (" .. row.tiebreak .. ")" .. (vs or "") .. (profile or "")\n'
+            '\t\tword = (row.verdict == "UPGRADE") and TOOLTIP_UI.words.UPGRADE\n'
+            "\t\t\tor TOOLTIP_UI.words.NOT_UPGRADE\n"
+            "\telse\n"
+            "\t\tlocal number = (Verdict and type(Verdict.numText) == \"function\")\n"
+            "\t\t\tand Verdict.numText(total) or tostring(total)\n"
+            '\t\thead = "weighted " .. number .. (vs or "") .. (profile or "")\n'
+            "\t\tword = TOOLTIP_UI.word(row.verdict)\n"
+            '\t\tif row.verdict == "NOT_UPGRADE" then\n'
+            "\t\t\tif total < 0 then word = TOOLTIP_UI.words.DOWNGRADE\n"
+            "\t\t\telse word = TOOLTIP_UI.words.NO_CHANGE end\n"
+            "\t\tend\n"
+            "\tend\n"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        name,
+        "ca.quest-row-tiebreak",
+        (
+            "\t\t\trow.weighted = weighted.total\n"
+            "\t\t\trow.profile = weighted.profile\n"
+            "\t\tend\n"
+        ),
+        (
+            "\t\t\trow.weighted = weighted.total\n"
+            "\t\t\trow.profile = weighted.profile\n"
+            "\t\t\t-- Card t_c4911603: nil on every ordinary outcome; the signed\n"
+            "\t\t\t-- ranked deltas when the tiebreaker decided, so the line can say\n"
+            "\t\t\t-- \"tiebreaker (...)\" instead of \"weighted 0\".\n"
+            "\t\t\trow.tiebreak = weighted.tiebreak\n"
+            "\t\tend\n"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        name,
+        "ca.bag-row-tiebreak",
+        (
+            "\t\t\t\t\t\t\tweighted = w2 and w2.total or nil,\n"
+            "\t\t\t\t\t\t\tprofile = w2 and w2.profile or nil,"
+        ),
+        (
+            "\t\t\t\t\t\t\tweighted = w2 and w2.total or nil,\n"
+            "\t\t\t\t\t\t\tprofile = w2 and w2.profile or nil,\n"
+            "\t\t\t\t\t\t\t-- Card t_c4911603: the signed ranked deltas when a\n"
+            "\t\t\t\t\t\t\t-- tiebreaker decided the row, nil otherwise (same\n"
+            "\t\t\t\t\t\t\t-- two-scalar economy as `weighted`/`profile`: one\n"
+            "\t\t\t\t\t\t\t-- short string, and only on tiebroken rows).\n"
+            "\t\t\t\t\t\t\ttiebreak = w2 and w2.tiebreak or nil,"
+        ),
+    )
+
     return text
 
 
@@ -1696,7 +1830,297 @@ def edit_verdict(text: str) -> str:
                         VERDICT_GATE9_OPEN + VERDICT_GATE9_ANCHOR)
     text = replace_once(text, name, "verdict.weighted-gate-close", VERDICT_GATE9_CLOSE_OLD,
                         VERDICT_GATE9_CLOSE_NEW)
+    text = edit_verdict_tiebreak(text)
     return text
+
+
+# ---- Card t_c4911603: the SECOND TIER — Agility, then Armor/Stamina ---------
+#
+# Retribution scored `w = { Strength = 4, Intellect = 1 }`: no Agility at all
+# (so Dagmire Gauntlets vs Gloves of the Fang came out close) and no
+# Stamina/Armor (so `51 Armor / +4 Str` leather boots vs `115 Armor / +4 Str /
+# +2 Sta` mail boots scored 0 and read "no change").
+#
+# The fix is not a bigger weight table. Damage decides first (Strength, Spell
+# Power, Agility, Intellect — the numbers researched for WoW: Forever in
+# t_f758a377); Stamina and Armor are an ORDERED tiebreaker list consulted only
+# when the damage total is zero, and a decided tiebreaker is flagged as such.
+#
+# These are anchored folds over the text t_3a744b4a already injects, so the
+# vendored files stay generated: hand-editing them would be reverted by the next
+# sync.
+def edit_verdict_tiebreak(text: str) -> str:
+    """Card t_c4911603: Agility as damage, Armor/Stamina as ranked tiebreakers."""
+    name = "ChestAdvisor/Verdict.lua"
+
+    # (a) the decision table in the doc block gains the tied branch.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiers-decision-table",
+        (
+            "-- and one named noise floor, Verdict.WEIGHT_EPSILON. In order:\n"
+            "--\n"
+            "--     weighted >= +epsilon                         -> UPGRADE\n"
+            "--     weighted <= -epsilon                         -> NOT_UPGRADE (a downgrade)\n"
+            "--     |weighted| < epsilon, a stat up AND one down  -> TRADE_OFF\n"
+            "--     otherwise (every difference one-directional) -> NOT_UPGRADE (no change)\n"
+        ),
+        (
+            "-- and one named noise floor, Verdict.WEIGHT_EPSILON. In order:\n"
+            "--\n"
+            "--     weighted >= +epsilon                         -> UPGRADE\n"
+            "--     weighted <= -epsilon                         -> NOT_UPGRADE (a downgrade)\n"
+            "--     |weighted| < epsilon                          -> damage is TIED, so a\n"
+            "--                                                     profile with ranked\n"
+            "--                                                     tiebreakers answers next\n"
+            "--     ... tied, no tiebreaker decides, mixed signs  -> TRADE_OFF\n"
+            "--     ... tied, no tiebreaker decides, one-way      -> NOT_UPGRADE (no change)\n"
+            "--\n"
+            "-- The tiebreaker tier (card t_c4911603) is an ORDER, not another number: the\n"
+            "-- profile's `tiebreak` list is walked in rank order and the first stat whose two\n"
+            "-- sides differ decides, so no survivability delta can ever outweigh a damage\n"
+            "-- point. When it decides, the verdict keeps its ordinary token and gains the\n"
+            "-- word \"tiebreaker\" plus the signed deltas — a visibly different answer from a\n"
+            "-- damage upgrade because the gain is not damage.\n"
+        ),
+    )
+
+    # (b) the doc paragraph that explains a profile's shape.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiers-doc",
+        "-- `w` is points per point of the stat. A word absent from `w` is weight 0.\n"
+        "Verdict.WEIGHTS = {\n",
+        (
+            "-- `w` is points per point of the stat. A word absent from `w` is weight 0.\n"
+            "--\n"
+            "-- TWO TIERS, RETRIBUTION ONLY (card t_c4911603). A profile may carry\n"
+            "-- `tiebreak = { <stat>, ... }`: an ORDERED list consulted ONLY when the damage\n"
+            "-- total is exactly zero. Damage stats decide first and always; a tiebreaker can\n"
+            "-- never outweigh one point of Strength or Agility. The entries are ranked, not\n"
+            "-- weighted — the first ranked stat whose two sides differ decides, so a large\n"
+            "-- number on a lower-ranked stat cannot outvote a higher-ranked one. This is\n"
+            "-- Mightie's rule, and it is what keeps the -16 cloak case a downgrade while\n"
+            "-- letting `+64 Armor / +2 Sta` at equal Strength read as a (flagged) upgrade.\n"
+            "-- The Ret table's numbers are the ones researched for WoW: Forever in card\n"
+            "-- t_f758a377 (vault: wiki/addons/touchstone-ret-stat-weights.md §2):\n"
+            "--   Strength 4, SpellPower 4 (= 1.00 x Str against a sourced 1.04 median),\n"
+            "--   Agility 2.5 (= 0.625 x Str for a 0.64 median), Intellect 2,\n"
+            "--   Armor > Stamina as ranked tiebreakers (25 Armor ~= 1 Sta of effective HP).\n"
+            "-- Holy and Protection keep their own rows: the same research card says their\n"
+            "-- numbers need separate evidence, and none of it is used here.\n"
+            "Verdict.WEIGHTS = {\n"
+        ),
+    )
+
+    # (c) the Retribution row itself.
+    text = replace_once(
+        text,
+        name,
+        "verdict.ret-two-tier-row",
+        (
+            "\tPALADIN = {\n"
+            "\t\t-- DAMAGER -> melee (str>int>sta). Stamina is the order's third term and the\n"
+            "\t\t-- survivability stat: weight 0, so it cannot decide a damage verdict.\n"
+            '\t\tmelee = { name = "Retribution", w = { Strength = 4, Intellect = 1 } },\n'
+        ),
+        (
+            "\tPALADIN = {\n"
+            "\t\t-- DAMAGER -> melee. Card t_c4911603 (research t_f758a377): the damage\n"
+            "\t\t-- tier is Strength + SpellPower (the Forever sim's top Ret stat, 1.04 x\n"
+            "\t\t-- Strength) + Agility (0.64 x Strength, carried as 2.5) + Intellect; the\n"
+            "\t\t-- ranked tiebreakers are Armor then Stamina. Stamina and Armor appear\n"
+            "\t\t-- ONLY in `tiebreak`, never in `w` — see the block above.\n"
+            "\t\tmelee = {\n"
+            '\t\t\tname = "Retribution",\n'
+            "\t\t\tw = { Strength = 4, SpellPower = 4, Agility = 2.5, Intellect = 2 },\n"
+            '\t\t\ttiebreak = { "Armor", "Stamina" },\n'
+            "\t\t},\n"
+        ),
+    )
+
+    # (d) the noise floor drops below the smallest total a 2.5 weight can make.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiers-epsilon",
+        (
+            "-- The noise floor. Weights are whole points per point of stat, so with the\n"
+            "-- tables above the only total inside the band is 0 — the constant exists so the\n"
+            "-- band has ONE definition that a future fractional weight cannot silently\n"
+            "-- collapse back into a strict `> 0` test.\n"
+            "Verdict.WEIGHT_EPSILON = 1\n"
+        ),
+        (
+            "-- The noise floor. Weights are points per point of stat; the Ret table\n"
+            "-- (t_c4911603) carries the fractional 2.5, so the band must be smaller than the\n"
+            "-- smallest NON-zero total that table can produce. Every weight is a multiple of\n"
+            "-- 0.5 (4, 2.5, 2), so 0.25 sits strictly between a true zero and the smallest\n"
+            "-- real difference and no genuine 0.5 gain is swallowed — the reason\n"
+            "-- t_f758a377 pinned epsilon <= 0.25. With the old whole-point `1` a pair such as\n"
+            "-- +1 Agility / -1 Intellect would net 0.5 and read \"no change\".\n"
+            "-- The constant exists so the band has ONE definition that only the totals table\n"
+            "-- can move. The tiebreaker tier below is gated on this same band, which is safe\n"
+            "-- for exactly the reason above: no total these tables can produce lands inside\n"
+            "-- it, so \"inside the band\" IS a true tie.\n"
+            "Verdict.WEIGHT_EPSILON = 0.25\n"
+        ),
+    )
+
+    # (e) the ranked-tiebreaker helpers, between weightedTotal and the reason.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiebreak-helpers",
+        "-- The stored reason: the number the verdict came from, and the profile it came\n",
+        (
+            "-- The ranked tiebreakers a profile declares, or nil.\n"
+            "--\n"
+            "-- The list is ORDER, not arithmetic: entries are consulted in the order the\n"
+            "-- profile wrote them, and the first one whose two sides differ decides. This is\n"
+            "-- why a big Armor number cannot outvote a higher-ranked stat, and why the\n"
+            "-- profile is the only place the ranking lives (the research card ranks Armor\n"
+            "-- above Stamina for Ret; swapping them is a one-line change here, not a new\n"
+            "-- weight table).\n"
+            "function Verdict.tiebreakStats(profile)\n"
+            "\tlocal ranked = (type(profile) == \"table\") and profile.tiebreak or nil\n"
+            "\tif type(ranked) ~= \"table\" or #ranked == 0 then return nil end\n"
+            "\treturn ranked\n"
+            "end\n"
+            "\n"
+            "-- The tiebreaker comparison for one pair under one profile.\n"
+            "--\n"
+            "--   returns nil when the profile declares no tiebreakers, when the parse is not\n"
+            "--   two tables, or when every ranked stat is equal on both sides (nothing to\n"
+            "--   break — the caller keeps the ordinary words);\n"
+            "--   otherwise { stat = <deciding word>, dir = 1|-1,\n"
+            "--               parts = { { word, delta }, ... },   -- NON-ZERO deltas, ranked\n"
+            "--               text = \"+64 Armor, +2 Stamina\" }    -- candidate - equipped\n"
+            "--\n"
+            "-- A stat absent on one side is a KNOWN absence and weighs in at its full delta,\n"
+            "-- exactly as weightedTotal treats it. The deltas are signed from the candidate's\n"
+            "-- side, so the printed text says which way the tie broke without a second word.\n"
+            "function Verdict.tiebreakTotal(candStats, eqStats, profile)\n"
+            "\tlocal ranked = Verdict.tiebreakStats(profile)\n"
+            "\tif ranked == nil then return nil end\n"
+            "\tlocal cand = (type(candStats) == \"table\") and candStats or {}\n"
+            "\tlocal eq   = (type(eqStats)   == \"table\") and eqStats   or {}\n"
+            "\tlocal parts, deciding, dir = {}, nil, nil\n"
+            "\tfor _, word in ipairs(ranked) do\n"
+            "\t\tlocal delta = (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)\n"
+            "\t\tif delta ~= 0 then\n"
+            "\t\t\tparts[#parts + 1] = { word = word, delta = delta }\n"
+            "\t\t\tif deciding == nil then\n"
+            "\t\t\t\tdeciding = word\n"
+            "\t\t\t\tdir = (delta > 0) and 1 or -1\n"
+            "\t\t\tend\n"
+            "\t\tend\n"
+            "\tend\n"
+            "\tif deciding == nil then return nil end\n"
+            "\tlocal bits = {}\n"
+            "\tfor _, p in ipairs(parts) do\n"
+            "\t\tbits[#bits + 1] = Verdict.numText(p.delta) .. \" \" .. p.word\n"
+            "\tend\n"
+            "\treturn { stat = deciding, dir = dir, parts = parts, text = table.concat(bits, \", \") }\n"
+            "end\n"
+            "\n"
+            "-- The stored reason: the number the verdict came from, and the profile it came\n"
+        ),
+    )
+
+    # (f) the reason learns the tiebreaker sentence.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiers-reason",
+        (
+            "function Verdict.weightedReason(w, profile, kind)\n"
+            '\tlocal head = "weighted " .. Verdict.numText(w.total)\n'
+            "\t\t.. \" [\" .. tostring(type(profile) == \"table\" and profile.name or \"no profile\") .. \"]\"\n"
+            '\tif kind == "trade-off" then\n'
+            '\t\treturn head .. " — better on some stats, worse on others"\n'
+            '\telseif kind == "no change" then\n'
+            '\t\treturn head .. " — no change"\n'
+            "\tend\n"
+            "\treturn head\n"
+            "end\n"
+        ),
+        (
+            "function Verdict.weightedReason(w, profile, kind, tiebreakText)\n"
+            '\tlocal head = "weighted " .. Verdict.numText(w.total)\n'
+            "\t\t.. \" [\" .. tostring(type(profile) == \"table\" and profile.name or \"no profile\") .. \"]\"\n"
+            '\tif kind == "trade-off" then\n'
+            '\t\treturn head .. " — better on some stats, worse on others"\n'
+            '\telseif kind == "no change" then\n'
+            '\t\treturn head .. " — no change"\n'
+            '\telseif (kind == "tiebreaker upgrade" or kind == "tiebreaker downgrade")\n'
+            '\t\tand type(tiebreakText) == "string" then\n'
+            "\t\t-- Damage was tied; the flag and the ranked deltas ARE the reason. The\n"
+            "\t\t-- sign of each delta says which side the tie broke for.\n"
+            '\t\treturn head .. " — tiebreaker (" .. tiebreakText .. ")"\n'
+            "\tend\n"
+            "\treturn head\n"
+            "end\n"
+        ),
+    )
+
+    # (g) the third return value's doc gains the tiebreak fields.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiers-detail-doc",
+        "-- is a different reason entirely and must not be dressed as a weighted line).\n",
+        (
+            "-- is a different reason entirely and must not be dressed as a weighted line).\n"
+            "-- When the ranked tiebreaker decided, that third value also carries\n"
+            "-- { tiebreak = \"<signed deltas>\", tiebreakDir = 1|-1 } so the renderer can flag\n"
+            "-- the answer without re-deriving it from the reason text.\n"
+        ),
+    )
+
+    # (h) the tier itself, between the negative threshold and the trade-off words.
+    text = replace_once(
+        text,
+        name,
+        "verdict.tiers-decide",
+        (
+            "\tif w.total <= -eps then\n"
+            '\t\treturn "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade"), detail\n'
+            "\tend\n"
+        ),
+        (
+            "\tif w.total <= -eps then\n"
+            '\t\treturn "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade"), detail\n'
+            "\tend\n"
+            "\t-- DAMAGE IS TIED. Only now may the profile's ranked tiebreakers speak (card\n"
+            "\t-- t_c4911603): a profile without a `tiebreak` list — every profile but Ret —\n"
+            "\t-- falls straight through to the words below, byte-identically to before.\n"
+            "\t-- The tier is a flag on the answer, not a second number: the verdict is the\n"
+            "\t-- ordinary UPGRADE / NOT_UPGRADE token and the reason says \"tiebreaker\", so\n"
+            "\t-- a survivability gain can never be mistaken for damage.\n"
+            "\tlocal tb = Verdict.tiebreakTotal(candStats, eqStats, profile)\n"
+            "\tif tb ~= nil then\n"
+            '\t\tlocal kind = (tb.dir > 0) and "tiebreaker upgrade" or "tiebreaker downgrade"\n'
+            "\t\tlocal reason = Verdict.weightedReason(w, profile, kind, tb.text)\n"
+            "\t\tdetail.tiebreak = tb.text\n"
+            "\t\tdetail.tiebreakDir = tb.dir\n"
+            "\t\tif tb.dir > 0 then\n"
+            "\t\t\t-- The armour-material veto still applies to a tiebreaker upgrade: a\n"
+            "\t\t\t-- cloth piece on a mail wearer is never an upgrade, however the tie\n"
+            "\t\t\t-- broke (the same call the damage tier makes).\n"
+            '\t\t\tlocal verdict, why = allow("UPGRADE", reason)\n'
+            '\t\t\tif verdict ~= "UPGRADE" then return verdict, why end\n'
+            "\t\t\treturn verdict, why, detail\n"
+            "\t\tend\n"
+            '\t\treturn "NOT_UPGRADE", reason, detail\n'
+            "\tend\n"
+        ),
+    )
+
+    return text
+
 
 
 EDITORS = {

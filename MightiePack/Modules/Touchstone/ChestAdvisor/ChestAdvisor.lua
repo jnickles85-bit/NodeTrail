@@ -1213,22 +1213,46 @@ end
 --
 -- Returns nil for a row with no weighted total (a weapon row, a legacy persisted
 -- row, an UNKNOWN), so every existing line renders byte-identically.
+--
+-- A row that carries `tiebreak` (card t_c4911603) was decided by the ranked
+-- survivability tiebreakers because the damage total was tied. Its sentence is
+-- "tiebreaker (+64 Armor, +2 Stamina)" — the signed deltas, candidate minus
+-- equipped — and NOT a weighted number, because the gain is not damage. The
+-- ordinary word for its token is used unchanged ("Upgrade" / "Not an
+-- upgrade"), so the flag is the only difference from a damage verdict.
 function TOOLTIP_UI.weighted(row, order)
 	if type(row) ~= "table" or type(row.weighted) ~= "number" then return nil end
 	local total = row.weighted
-	local number = (Verdict and type(Verdict.numText) == "function")
-		and Verdict.numText(total) or tostring(total)
-	local head = "weighted " .. number
+	local vs = nil
 	if type(row.wornLink) == "string" then
-		head = head .. " vs " .. itemNameOf(row.wornLink)
+		vs = " vs " .. itemNameOf(row.wornLink)
 	end
+	local profile = nil
 	if type(row.profile) == "string" then
-		head = head .. " [" .. row.profile .. "]"
+		profile = " [" .. row.profile .. "]"
 	end
-	local word = TOOLTIP_UI.word(row.verdict)
-	if row.verdict == "NOT_UPGRADE" then
-		if total < 0 then word = TOOLTIP_UI.words.DOWNGRADE
-		else word = TOOLTIP_UI.words.NO_CHANGE end
+	local word, head
+	if type(row.tiebreak) == "string" and row.tiebreak ~= "" then
+		-- Card t_c4911603: the damage total was tied and the profile's RANKED
+		-- tiebreaker decided. The line is deliberately a different sentence from
+		-- an ordinary weighted upgrade — "tiebreaker (+64 Armor, +2 Stamina)"
+		-- rather than a number — because the gain is survivability, not damage.
+		-- The deltas are signed from the candidate's side, so the same text says
+		-- which way the tie broke in both directions. A NOT_UPGRADE keeps the
+		-- card's own word ("Not an upgrade"), never "Downgrade": no damage was
+		-- lost here, the equipped piece simply won the tiebreak.
+		head = "tiebreaker (" .. row.tiebreak .. ")" .. (vs or "") .. (profile or "")
+		word = (row.verdict == "UPGRADE") and TOOLTIP_UI.words.UPGRADE
+			or TOOLTIP_UI.words.NOT_UPGRADE
+	else
+		local number = (Verdict and type(Verdict.numText) == "function")
+			and Verdict.numText(total) or tostring(total)
+		head = "weighted " .. number .. (vs or "") .. (profile or "")
+		word = TOOLTIP_UI.word(row.verdict)
+		if row.verdict == "NOT_UPGRADE" then
+			if total < 0 then word = TOOLTIP_UI.words.DOWNGRADE
+			else word = TOOLTIP_UI.words.NO_CHANGE end
+		end
 	end
 	local detail = nil
 	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
@@ -2500,6 +2524,10 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 		if type(weighted) == "table" then
 			row.weighted = weighted.total
 			row.profile = weighted.profile
+			-- Card t_c4911603: nil on every ordinary outcome; the signed
+			-- ranked deltas when the tiebreaker decided, so the line can say
+			-- "tiebreaker (...)" instead of "weighted 0".
+			row.tiebreak = weighted.tiebreak
 		end
 		return v, reason, row
 	end
@@ -5309,6 +5337,11 @@ ChestAdvisor.scan = function()
 							-- not come from the weights (a weapon row, a decline).
 							weighted = w2 and w2.total or nil,
 							profile = w2 and w2.profile or nil,
+							-- Card t_c4911603: the signed ranked deltas when a
+							-- tiebreaker decided the row, nil otherwise (same
+							-- two-scalar economy as `weighted`/`profile`: one
+							-- short string, and only on tiebroken rows).
+							tiebreak = w2 and w2.tiebreak or nil,
 							-- The richer diag row (t_9ad3d462 part 3): everything plan s4
 							-- PASS/FIX/KILL grades from, per item. Raw stat lines (<=30, already
 							-- capped by TooltipLines), raw CanUseItem type+value, the player level
