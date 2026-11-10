@@ -1,5 +1,12 @@
 package-as: MightiePack
 
+# The packager copies the repo ROOT into <package-as>/ and then looks for a TOC
+# at its top level. This repo keeps the addon one folder down, so without this
+# line the packager finds no TOC and exits 1. The shape after a release build is
+# MightiePack/MightiePack.toc.
+move-folders:
+  MightiePack/MightiePack: MightiePack
+
 # CurseForge packs this directory only. Everything the addon does not need at
 # runtime stays out of the zip: the spec suite, captured evidence, the sync and
 # build tooling, CI, and the repo-level docs.
@@ -10,7 +17,6 @@ ignore:
   - .pkgmeta
   - CHANGELOG.md
   - HANDOFF.md
-  - LICENSE
   - README.md
   - evidence
   - spec

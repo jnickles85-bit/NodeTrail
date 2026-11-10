@@ -47,8 +47,7 @@ globals = {
     SLASH_CHESTADVISOR3 = { other_fields = true }, SLASH_CHESTADVISOR4 = { other_fields = true }, SLASH_MIGHTIEPACK1 = { other_fields = true },
     SLASH_MIGHTIEPACK2 = { other_fields = true }, SLASH_MIGHTIEPACK3 = { other_fields = true }, SLASH_NODETRAIL1 = { other_fields = true },
     SLASH_NODETRAIL2 = { other_fields = true }, SLASH_TOUCHSTONE1 = { other_fields = true }, SLASH_TOUCHSTONE2 = { other_fields = true },
-    SLASH_TOUCHSTONE3 = { other_fields = true }, STUB = { other_fields = true }, Settings = { other_fields = true },
-    Skinning = { other_fields = true }, SlashCmdList = { other_fields = true }, StatForge = { other_fields = true },
+    SLASH_TOUCHSTONE3 = { other_fields = true }, STUB = { other_fields = true }, Settings = { other_fields = true }, SlashCmdList = { other_fields = true }, StatForge = { other_fields = true },
     StatForgeDB = { other_fields = true }, StaticPopupDialogs = { other_fields = true }, StaticPopup_Show = { other_fields = true },
     TooltipDataProcessor = { other_fields = true }, TooltipUtil = { other_fields = true }, UIParent = { other_fields = true },
     UISpecialFrames = { other_fields = true }, UnitAffectingCombat = { other_fields = true }, UnitClass = { other_fields = true },
@@ -56,7 +55,7 @@ globals = {
     UnitIsDead = { other_fields = true }, UnitLevel = { other_fields = true }, UnitName = { other_fields = true },
     UnitPosition = { other_fields = true }, WOW_PROJECT_ID = { other_fields = true }, WorldFrame = { other_fields = true },
     date = { other_fields = true }, hooksecurefunc = { other_fields = true }, issecretvalue = { other_fields = true },
-    time = { other_fields = true }, tinsert = { other_fields = true }, w2 = { other_fields = true },
+    time = { other_fields = true }, tinsert = { other_fields = true },
 }
 
 -- Vendored Touchstone: the fold copies upstream files verbatim (see

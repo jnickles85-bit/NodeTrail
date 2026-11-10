@@ -20,8 +20,8 @@ one CurseForge shows, and the bundled modules report the same number.
 - The world-map route is parented to `WorldMapFrame` and projected onto the visible
   map rect; children of the map canvas are not composited on this client, which is
   why the route used to be invisible.
-- The minimap route uses the real yard scale (`2.357 yd/px`, view radius ~233 yd),
-  measured at three points, instead of a fixed fraction.
+- The minimap route is drawn from the zone's real yard scale (measured at three
+  points in the Barrens) instead of a fixed map fraction.
 - The waypoint arrow is off by default and a stored "on" from an earlier build is
   migrated off once.
 - Auto-refresh re-plans every 5 gathers.

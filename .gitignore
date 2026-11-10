@@ -1,5 +1,5 @@
-# Build output: the packaged zips are produced by tools/build_deploy_zip.py and
-# published from dist/, never committed.
+# Build output: packaged zips are produced by the BigWigs packager (see
+# .pkgmeta) and land in dist/, which is never committed.
 *.zip
 dist/
 
