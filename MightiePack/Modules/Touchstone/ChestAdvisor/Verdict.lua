@@ -4235,7 +4235,7 @@ Verdict.TWO_HAND_TOKENS = {
 -- candidate test, so every bow/gun/crossbow/thrown candidate against a
 -- character with anything in the off-hand was refused with W0 — "a two-handed
 -- weapon takes your off-hand" — a reason that is not true of the item. The live
--- capture `70/Phat-Angus/SavedVariables/Touchstone.lua` is exactly that row:
+-- capture `SavedVariables/Touchstone.lua` is exactly that row:
 -- item:3742 [Bow of Plunder], slot 18, W0.
 --
 -- The two sets therefore differ by design and must not be collapsed:

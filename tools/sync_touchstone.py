@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -2412,6 +2413,21 @@ def load_guarded(src_root: Path, name: str) -> str:
     return SKIP_GUARD + text
 
 
+# ── personal data scrub ────────────────────────────────────────────────
+# Upstream captures carry the author's own client paths: a character folder,
+# an account name, a Windows drive path. They are comments, but the pack ships
+# to strangers, so the sync rewrites them on the way in — every time, because
+# the next upstream sync would otherwise put them straight back.
+_SAVED_VARS = re.compile(r"\b\d+/[A-Za-z0-9]+-[A-Za-z0-9]+/SavedVariables/([A-Za-z0-9_]+\.lua)")
+_WIN_USER = re.compile(r"[A-Za-z]:[\\/]Users[\\/][^`'\"\s)]*")
+
+
+def scrub_personal(text: str) -> str:
+    text = _SAVED_VARS.sub(lambda m: "SavedVariables/" + m.group(1), text)
+    text = _WIN_USER.sub("<local client path>", text)
+    return text
+
+
 def generate(src_root: Path) -> dict:
     """Return {relative dest path: text} for every vendored file."""
     if not src_root.is_dir():
@@ -2423,7 +2439,7 @@ def generate(src_root: Path) -> dict:
         if editor is not None:
             text = editor(text)
         text = retarget_assets(text, name)
-        outputs[name] = text
+        outputs[name] = scrub_personal(text)
     return outputs
 
 
@@ -2497,6 +2513,9 @@ def audit_toc() -> list:
 
 def audit_outputs(outputs: dict) -> list:
     problems = []
+    for name, text in outputs.items():
+        if _SAVED_VARS.search(text) or _WIN_USER.search(text):
+            problems.append("{} still carries a client path after the scrub".format(name))
     for name, text in outputs.items():
         if not text.startswith(SKIP_GUARD):
             problems.append("{} does not start with the skip guard".format(name))
