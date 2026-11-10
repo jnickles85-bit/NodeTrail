@@ -7,6 +7,11 @@ package-as: MightiePack
 move-folders:
   MightiePack/MightiePack: MightiePack
 
+# Without this the packager generates a changelog from git history, which is the
+# commit log: it carries the author's local paths and co-author trailers. Ship the
+# hand-written one instead.
+manual-changelog: CHANGELOG.md
+
 # CurseForge packs this directory only. Everything the addon does not need at
 # runtime stays out of the zip: the spec suite, captured evidence, the sync and
 # build tooling, CI, and the repo-level docs.
@@ -15,7 +20,6 @@ ignore:
   - .gitignore
   - .luacheckrc
   - .pkgmeta
-  - CHANGELOG.md
   - HANDOFF.md
   - README.md
   - evidence
