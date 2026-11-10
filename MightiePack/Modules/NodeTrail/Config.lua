@@ -36,6 +36,12 @@ ns.defaults = {
     -- refuses to resurrect it (hours). A route started three days ago is
     -- not "the route you were running" any more.
     routeMaxAgeHours = 24,
+    -- Recipe-uses line in the herb tooltip: parked off (Mightie, 2026-11-09).
+    -- The scan and the gate keep running; this only hides the line. It lives on
+    -- the PROFILE because that is where Tooltip.lua reads it from — inside
+    -- `route` it was written but never read, so the parked feature could not have
+    -- been switched back on.
+    showAlchemyUses = false,
   },
   -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature, so its
   -- sub-toggle lives in NodeTrail's own saved variable (top level, NOT
@@ -77,9 +83,6 @@ ns.defaults = {
     mapID = nil,
     startedAt = 0,
     autoRefresh = true,
-  -- Recipe-uses line in the herb tooltip: parked off (Mightie 2026-11-09).
-  -- The scan and the gate keep running; this only hides the line.
-  showAlchemyUses = false,
     autoRefreshPicks = 5,
   },
 }
