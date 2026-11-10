@@ -4,8 +4,15 @@ if MightiePackTouchstoneSkip then return end
 -- Two pure pieces of knowledge, with no UI, no client dependency, and no
 -- mutable state: `classRoleOrder` (the documented per-class stat priorities)
 -- and `evaluate` (the deterministic comparator). Everything a scanner needs
--- to call them flows in as arguments; nothing is read from the environment,
--- so a unit test can drive every branch on a clean VM without fixtures.
+-- to call them flows in as arguments, so a unit test can drive every branch on
+-- a clean VM without fixtures.
+--
+-- ⚠ ONE exception to "nothing is read from the environment", added by card
+-- t_984bc8ac: the optional per-class/spec WEIGHT table (Weights.lua,
+-- StatForge.Weights), read at CALL time by the weighted resolution layer and
+-- by Verdict.weightsFor. It is probed for and degrades to the ordinal path
+-- when it is absent, exactly the posture gate 3 already takes toward the
+-- client's `issecretvalue`. Nothing else here reads a global.
 --
 -- Invariants (from the task body and the director's corrections on
 -- t_97a8ea03):
@@ -17,9 +24,13 @@ if MightiePackTouchstoneSkip then return end
 --     UPGRADE, and canUse == nil is never UPGRADE either.
 --   * Hybrid classes (Paladin, Shaman, and — C1b, t_03a1196c — Druid) carry
 --     MORE THAN ONE role and return nil unless a role is explicitly passed.
---     There is no silent default. Druid is the odd one: only its `spell` role
---     is documented, so `melee` is a documented role WITH no order (the
---     NO_ORDER sentinel below), not a missing entry.
+--     There is no silent default. Until card t_6c3f414a (DD-3) the Druid
+--     `melee` role was a documented role WITH no order (the NO_ORDER sentinel
+--     below); DD-3 gives it the feral order the corpus documents, so no
+--     shipped ORDERS entry carries NO_ORDER any more — the sentinel and the
+--     branch that reads it are kept as the mechanism that expresses "a
+--     documented role, no order", and the tests that exercise it construct
+--     their own entry.
 
 local Verdict = {}
 
@@ -56,8 +67,12 @@ local NO_ORDER = {}
 --
 -- The hybrids carry one order PER role, and there is no default across them.
 -- Paladin and Shaman each have a distinct documented order for their two
--- roles; Druid is the exception (C1b, t_03a1196c): its `melee` role has no
--- documented order, so that role resolves to nil rather than a guessed list.
+-- roles. Druid's `melee` role had no recorded corpus order until card
+-- t_6c3f414a (DD-3), which gives it the one the feral PLAYER's pack documents
+-- (strength > agility > stamina — the shape of druid-feral.dps, whose own
+-- first three terms are strength 1.0, agility 0.8, stamina 0.4); the card's
+-- brief states the same three words. NO_ORDER remains the way to say "a
+-- documented role, no order" and no shipped entry uses it now.
 Verdict.ORDERS = {
 	-- Pure classes: role argument is accepted but ignored.
 	WARRIOR  = { melee = { "Strength", "Stamina", "Agility" } },
@@ -69,12 +84,27 @@ Verdict.ORDERS = {
 	-- Hybrids: two orders, no default.
 	DRUID    = {
 		-- C1b (t_03a1196c), §9: Druid is a hybrid. Its `spell` role carries
-		-- the documented int>agi>sta (stat-weights §8.1). Its `melee` role
-		-- (feral) has NO documented order in the corpus — so it is present
-		-- as a role (the picker and the "no role picked" reason both see a
-		-- second role) but resolves to nil, and a feral Druid's chest rows
-		-- stay UNKNOWN instead of reading an Intellect-first arrow (R5).
-		melee = NO_ORDER,
+		-- the documented int>agi>sta (stat-weights §8.1).
+		--
+		-- Its `melee` role (feral) carried NO_ORDER until card t_6c3f414a
+		-- (DD-3), which gives it the feral order: strength > agility >
+		-- stamina. WHY THESE WORDS, and what they are NOT:
+		--   * The order is drawn from the feral PLAYER's own pack
+		--     (statforge-app presets['druid-feral'].dps: strength 1.0,
+		--     agility 0.8, stamina 0.4 — armory AP and crit follow), and the
+		--     card's brief names the same three words. It is the CAT's
+		--     priority; the BEAR reads the same ORDER (one role word serves
+		--     both physical specs) but its own WEIGHT table (DRUID.tank),
+		--     which is where stamina-first lives.
+		--   * The order is not used to choose the weight table and cannot be
+		--     (Druid weights resolve through weightsFor's role/literal
+		--     lookup). It words the reason and supplies the dominance terms;
+		--     Armor and the shield stat join the relevance set unconditionally.
+		--   * Strength first is a FERAL-specific claim (a cat's attack power
+		--     comes from strength in this era's feral model), not a
+		--     class-wide one: a Balance druid never sees this order, because
+		--     its role resolves to `spell`.
+		melee = { "Strength", "Agility", "Stamina" },
 		spell = { "Intellect", "Agility", "Stamina" },
 	},
 	PALADIN  = {
@@ -126,7 +156,7 @@ end
 -- The order tables above are keyed on the addon's OWN two role words
 -- (melee | spell). The CLIENT speaks a different three-word vocabulary: its
 -- C_SpecializationInfo spec role is the uppercase literal TANK / HEALER /
--- DAMAGER (ChestAdvisor.lua readSpecIdentity; Lena §3). Until this card the two
+-- DAMAGER (ChestAdvisor.lua readSpecIdentity; review §3). Until this card the two
 -- vocabularies never met — readSpecIdentity() was read and then consumed ONLY by
 -- the off-hand/shield gate, so a Protection character, whose spec is TANK, could
 -- not reach a stat order at all and every row read UNKNOWN with a reason telling
@@ -138,7 +168,7 @@ end
 --                      Protection character, not a true Prot weighting. A real
 --                      Prot model (stamina/defense/block-first) is a separate
 --                      design question that needs corpus sourcing; it is NOT
---                      settled here (Mira's ruling on t_0b4ddfa9).
+--                      settled here (the maintainer's ruling on t_0b4ddfa9).
 --   HEALER  -> spell  (the Holy order — the only healing order documented).
 --   DAMAGER -> melee  (Retribution's str>int>sta, the physical-damage order).
 --
@@ -156,12 +186,123 @@ local ROLE_ALIAS = {
 	-- names). Only TANK is mapped: `melee` is already the Warrior's own word, so
 	-- the alias is the identity for the stat order and a no-op for every existing
 	-- assertion. HEALER / DAMAGER are deliberately absent — they stay nil and
-	-- unchanged (Mira: "Adding DAMAGER is NOT needed and would change nothing").
+	-- unchanged (the maintainer: "Adding DAMAGER is NOT needed and would change nothing").
 	-- ⚠ The honest limitation: TANK -> "melee" means a Prot Warrior's ORDER is the
 	-- same as a Fury Warrior's. That is intended: the order only WORDS the reason
 	-- (point 3), the arrow comes from the dominance/trade-off test.
 	WARRIOR = { TANK = "melee" },
+	-- Feral bear (card t_6c3f414a, DD-3). TANK is mapped so that IF the
+	-- client's spec read ever says TANK for a druid, it folds onto the `melee`
+	-- order word (both feral shapes are physical) and the weight lookup reaches
+	-- Weights.DRUID.tank through the literal. The literal comes from the
+	-- talent-spec read (ChestAdvisor.lua: readSpecIdentity ->
+	-- C_SpecializationInfo.GetSpecializationInfo's 5th return, consumed in
+	-- buildSpec as clientRole = si.role), NOT from the shapeshift form —
+	-- nothing reads the form. No spec read on today's client has been observed
+	-- returning TANK for a feral druid, so the bear path cannot be reached in
+	-- real play yet; it is reachable only through a spec whose role literal is
+	-- TANK (tests drive it by passing clientRole = "TANK" directly). This
+	-- follows the PALADIN.tank pattern exactly: the ORDER is resolved through
+	-- the fold (`melee`), while the WEIGHT table is resolved through the
+	-- client's own literal (`tank` -> Weights.DRUID.tank), so the bear reads
+	-- the feral order with the bear pack.
+	--
+	-- ⚠ DAMAGER is deliberately ABSENT, and the reason is the opposite of
+	-- Paladin's. A Protection paladin's TANK is a third spec the ORDER
+	-- vocabulary has no word for; a druid's DAMAGER is the CLIENT's word for
+	-- TWO different specs — Balance (the caster, which the app's own
+	-- tabSpecs.DRUID calls "Balance -> caster weights") and Feral cat. Mapping
+	-- DAMAGER to `melee` would hand every Balance druid the feral order and
+	-- the cat pack. Balance reaches DRUID.damager through the literal instead
+	-- (weightsFor's first step), and the cat reaches `melee` through the
+	-- addon's own recorded role, which is the only vocabulary that can tell
+	-- the two DAMAGER specs apart. HEALER is absent for the same reason Resto
+	-- needs no alias: its literal already names DRUID.healer.
+	DRUID = { TANK = "melee" },
 }
+
+-- ---- The literal's SPECIFIC-ROLE constraint (card t_6c3f414a, DD-3) ----------
+-- A client literal normally BEATS the folded role word when both name a table
+-- (weightsFor's steps 1 and 2): TANK is a more specific fact about a Protection
+-- paladin than the folded "spell" is. ONE literal in the vocabulary is not more
+-- specific, and this table names it: the client uses DAMAGER for two different
+-- druid specs — Balance and Feral cat — and DRUID.damager is the Balance bridge
+-- (a CROSS-CLASS borrow of priest-shadow.dps, card t_0e5381e1). A feral cat is
+-- DAMAGER too, so without this constraint a cat whose addon role is `melee`
+-- would be judged by the BALANCE pack: Intellect 0.8, Spirit 0.6, Strength 0 —
+-- a caster shape served to a physical spec, which is the R5 defect in a new
+-- costume.
+--
+-- So a literal listed here may name a weight table ONLY when the character's
+-- resolved role is the one given. The cat keeps its own `melee` table (its
+-- DAMAGER literal is consumed by the ROLE step, not the literal step), Balance
+-- keeps `damager`, and the bear keeps `tank` (TANK is listed for the melee
+-- role). Review round 2 closes three wrong-pack cases: melee+HEALER would get
+-- the Resto pack, spell+TANK would get the bear pack, and melee+an unknown
+-- word would get the cat pack guessed.
+--
+-- ⚠ DELIBERATELY NOT PART OF ROLE_ALIAS. clientRoleWord feeds resolvedRole
+-- (ChestAdvisor.lua), i.e. the ORDER lookup, and there DAMAGER must stay
+-- unmapped for a druid: mapping it would resolve a cat that has picked no role
+-- to the CASTER order, and t_03a1196c (C1b, R5) ruled exactly that out. This
+-- table is read in ONE place — weightsFor's literal step — and nowhere else.
+local LITERAL_NEEDS_ROLE = {
+	DRUID = { DAMAGER = "spell", HEALER = "spell", TANK = "melee" },
+}
+
+-- ---- The role's SPECIFIC-LITERAL constraint (card t_6c3f414a, DD-3) ----------
+-- The mirror of the constraint above. A druid's `melee` role word is shared by
+-- TWO packs, the cat (DRUID.melee) and the bear (DRUID.tank), and the only
+-- thing that tells them apart is the client literal (DAMAGER -> cat via the
+-- role step, TANK -> bear via the literal step). A druid whose role is `melee`
+-- but whose client literal is missing or unreadable is therefore UNIDENTIFIED,
+-- and guessing the cat pack for it would be a guessed weighting; so a role
+-- listed here may name a weight table through the ROLE step only when the
+-- client supplied one of the literals listed for that role. With no literal,
+-- weightsFor returns nil and the row falls back to the ordinal path (the order
+-- still words the reason; only the pack is withheld) — the same fail-closed
+-- shape as a missing table everywhere else in this file. Read in ONE place:
+-- weightsFor's role step.
+local ROLE_NEEDS_LITERAL = {
+	DRUID = { melee = { DAMAGER = true, TANK = true } },
+}
+
+-- ---- The client's literal vocabulary (card t_41697d02, gate t_35b75690 F2) ---
+-- The set of role words the CLIENT can say is DERIVED from ROLE_ALIAS above —
+-- never spelled a second time — so the words the weight resolver knows and the
+-- words the order alias knows cannot drift apart. Today it is exactly the
+-- client's three: TANK, HEALER, DAMAGER, held in the uppercase form the client
+-- and ROLE_ALIAS speak (a weight table's KEYS are the lowercased form, so the
+-- lookups below lowercase them).
+local CLIENT_ROLE_LITERALS = {}
+for _, map in pairs(ROLE_ALIAS) do
+	for literal in pairs(map) do CLIENT_ROLE_LITERALS[literal] = true end
+end
+
+-- Which client word(s) a pack IS. A pack that is also a literal key publishes
+-- the client spec it serves: PRIEST.spell and PRIEST.damager are the SAME table
+-- object, so `spell` is the DAMAGER pack, and PRIEST.healer is the HEALER pack.
+-- Returns {} for a pack no literal key points at — a role-word table's pack
+-- (WARRIOR.melee, HUNTER.melee, PALADIN.spell) publishes no client spec, and
+-- that is what keeps the fail-closed below off those classes.
+local function literalWordsFor(byClass, table_)
+	local words = {}
+	for literal in pairs(CLIENT_ROLE_LITERALS) do
+		if rawget(byClass, literal:lower()) == table_ then words[#words + 1] = literal end
+	end
+	return words
+end
+
+-- True when the pack a FALL-THROUGH would resolve to is published for a
+-- DIFFERENT client word than the one the client named — the one case where a
+-- sibling pack must not answer: a Holy priest (HEALER) with no `healer` key
+-- would otherwise be judged by `spell`, which is the DAMAGER (Shadow) pack.
+local function servesAnotherLiteral(byClass, table_, named)
+	for _, word in ipairs(literalWordsFor(byClass, table_)) do
+		if word ~= named then return true end
+	end
+	return false
+end
 
 -- ---- Tank path (card t_89440dfa): the stat RELEVANCE set ---------------------
 --
@@ -193,13 +334,21 @@ function Verdict.relevanceSet(order)
 	return set
 end
 
--- ---- Armor type (install-17 playtest) ---------------------------------------
+-- ---- Armor type (install-17 playtest; re-ruled by the owner 2026-11-03) ------
 --
 -- Armor value only breaks a tie. It does not notice that a cloth belt is the
 -- wrong material for a mail-wearing paladin, so a cloth quest reward used to
--- read TRADE_OFF against equipped mail. For the slots that HAVE an armor type,
--- a material below the best type this class can wear at this level is never
--- an upgrade and never a trade-off.
+-- read TRADE_OFF against equipped mail. The install-17 rule compared the
+-- CANDIDATE against the best type this class can wear at this level, which
+-- blocked a leather drop for a paladin wearing CLOTH: the worn item is what the
+-- candidate replaces, so the worn item is what it must be measured against.
+-- For the slots that HAVE an armor type, and only when the worn material is
+-- readable:
+--   * worn material ranked ABOVE the candidate is a real cost, never a veto —
+--     an UPGRADE softens to TRADE_OFF, and a TRADE_OFF becomes NOT_UPGRADE;
+--   * worn material equal to or below the candidate changes nothing;
+--   * an empty slot, or a worn material the tooltip did not yield, falls
+--     through UNCHANGED (an unreadable worn item is not a downgrade).
 --
 -- ASSUMPTION (WoW: Forever classic beta). This client is Classic-era (1.12
 -- rules, no GetTalentInfo). Nothing in this repo or in the Forever UI extracts
@@ -267,29 +416,107 @@ function Verdict.tooltipArmorMaterial(lines)
 	return nil
 end
 
--- true, reason when the candidate's armor type is below the class's best.
--- nil when the rule does not apply (unknown class/level, no typed slot).
-function Verdict.lowerArmorReason(lines, spec)
-	if type(spec) ~= "table" then return nil end
-	local best = Verdict.bestArmor(spec.class, spec.level)
-	if type(best) ~= "string" then return nil end
+-- A reason string when the WORN item's armor type is ABOVE the candidate's —
+-- i.e. the player is wearing better material than the item being judged. nil
+-- when the rule does not apply (no typed slot on either side, or a worn side
+-- that was not read).
+--
+-- RULED BY THE OWNER 2026-11-03: the comparison is WORN vs CANDIDATE, not
+-- candidate vs class-best. `wornLines` is the equipped item's own tooltip lines,
+-- which the caller already holds in `eqLines`; when it is absent or carries no
+-- armour material the rule falls through UNCHANGED, never as a block.
+--
+-- THE NOTE NAMES WHAT IS WORN (card t_d88b7f28, items 1 and 2). It used to read
+-- "leather: you can wear mail" — the best material the CLASS could wear, which
+-- never mentions the item being replaced and so never explains the soft cost it
+-- is attached to. It now reads "leather: you're wearing mail": the actual trade.
+--
+-- That change removed this function's only use of the class and the level, and
+-- with them the `bestArmor` gate that sat in front of the whole rule. That gate
+-- was a fail-OPEN hole (item 2): with an unknown class or a level the table
+-- could not place, `Verdict.bestArmor` returned nil, the function returned nil,
+-- and a plate item judged against worn cloth stayed a clean UPGRADE — the one
+-- case the rule exists for. The worn-vs-candidate comparison needs neither fact,
+-- so it now runs whether or not a class-best is known, and `spec` is no longer
+-- a parameter (it had no other reader here). One definition, one call site.
+function Verdict.lowerArmorReason(lines, wornLines)
 	local mat = Verdict.tooltipArmorMaterial(lines)
 	if type(mat) ~= "string" then return nil end
+	local worn = Verdict.tooltipArmorMaterial(wornLines)
+	if type(worn) ~= "string" then return nil end
 	local rank = Verdict.ARMOR_RANK
-	if type(rank[mat]) ~= "number" or type(rank[best]) ~= "number" then return nil end
-	if rank[mat] < rank[best] then
-		return true, mat .. ": you can wear " .. best
+	if type(rank[mat]) ~= "number" or type(rank[worn]) ~= "number" then return nil end
+	if rank[worn] > rank[mat] then
+		return mat .. ": you're wearing " .. worn
 	end
 	return nil
 end
 
--- The three-outcome dominance test over the role's own order terms.
+-- ── ONE DIRECTION RULE, ONE COPY (card t_da23ec75) ─────────────────────────
+-- The direction of ONE term: 1 = the candidate is ahead, -1 = behind, 0 = level.
+--
+-- Absence is a DIRECTION here, not a zero (the absent-stat rule below states the
+-- same thing for the proof): a term present on one side only is that side being
+-- ahead, and a term absent on BOTH sides is no information at all. Values are
+-- compared directly when both sides carry the word.
+--
+-- THE TOOLTIP'S RESOLUTION IS HONOURED HERE (card t_645c7ae6, addendum (c)). A
+-- Hit or Crit difference smaller than one tooltip step is the tooltip's
+-- QUANTISATION, not a stat the player has, so it is LEVEL — `Verdict.
+-- levelWithinResolution`, the SAME helper `Verdict.weightedScore` uses, called
+-- at this one site rather than a second epsilon invented for the proof. It is a
+-- no-op for every word with no factor (the helper returns false when the word
+-- has no resolution), so only the two converted words move.
+--
+-- WHY IT HAS TO BE HERE AND NOT ONLY IN weightedScore. Once Hit and Crit are
+-- proof terms this function is a second place that subtracts two of their
+-- values, and the two values can arrive from DIFFERENT SURFACES: one side's line
+-- placed by the text parser (a tooltip percent, lifted by its factor — 12 rating
+-- renders "0.9%" and lifts back to 12.6), the other's explained by the client's
+-- own read (the exact integer count). Left unforgiven, that pair is decided by
+-- 0.6 of rounding — the exact defect card t_43f8cd6f closed one site away.
+--
+-- The proof (`Verdict.dominance`, next) and the two naming loops that word its
+-- answer (gate 9 of `Verdict.evaluate`) read THIS function. That is the card's
+-- point in one line: a pair must never be DECIDED by one rule and WORDED by
+-- another, so a dominance outcome can always name the term that produced it.
+local function termSign(word, c, e)
+	if Verdict.levelWithinResolution(word, c, e) then return 0 end
+	if c ~= nil and e ~= nil then
+		if c > e then return 1 end
+		if c < e then return -1 end
+		return 0
+	end
+	if c ~= nil then return 1 end
+	if e ~= nil then return -1 end
+	return 0
+end
+
+-- The three-outcome dominance test over a list of TERMS.
 --
 --   dominant  — C >= W on every term, and C > W on at least one  -> UPGRADE
 --   dominated — C <= W on every term, and C < W on at least one  -> NOT_UPGRADE
 --   trade-off — better on some, worse on others                  -> trade-off
 --   equal     — nothing differs                                 -> nil (the
 --               caller's existing "equal" tiebreak fall-through)
+--
+-- ⚠ WHAT `terms` IS (card t_da23ec75 — the supersede of "the role's own order
+-- terms"). It is the PROOF's term list, built by `Verdict.proofTerms`: the
+-- class/role's documented ORDER first (so every reason is worded in the order's
+-- own grammar, exactly as before) and then every word the pair's resolved pack
+-- PRICES at a non-zero weight. "Order = wording, priced set = proof."
+--
+-- WHY. The order is a prose ranking of five core stats; the packs price ten
+-- more words — Hit, Crit, AP, MP5, Defense, the survival
+-- words. While the proof read only the order, those prices were multiplied into
+-- a term the proof could not see: a pair that LOST crit still read a clean
+-- "upgrade: better on Agility" at every weight, because nothing in the proof
+-- knew crit existed. A price that cannot make a pair a trade-off is not being
+-- weighed; it is being asserted. This function is the one place that is fixed,
+-- and the order is still what WORDS the answer.
+--
+-- ⚠ Armor, Block and WeaponDps are NEVER terms of this proof, whatever their
+-- price — the reason for each is stated once, on `Verdict.PROOF_EXEMPT`.
 --
 -- ⚠ THE ABSENT-STAT RULE (AC-F), and the reading chosen.
 --
@@ -315,36 +542,30 @@ end
 -- reason says "absent" (tradeOffReason below).
 --
 -- ⚠ Armor and Block are deliberately NOT terms of this proof — they are the
--- tiebreak (see gate 9 below). E2 (t_8bc7d7f2, §4.1a) ruled "armour is never a
--- win, only a tiebreak" and graded AC-E13(b) "armour never overturns a
--- class-order loss"; a higher-armour/lower-primary pair must stay
--- NOT_UPGRADE, not become a trade-off.
+-- tiebreak (see gate 9 below). The exemption is a LIST, not a paragraph
+-- repeated at each call site: `Verdict.PROOF_EXEMPT` carries Armor, Block and
+-- WeaponDps with one reason each, and `Verdict.proofTerms` is its only reader.
+-- The ruling behind the first two is E2 (t_8bc7d7f2, §4.1a) — "armour is never a
+-- win, only a tiebreak", graded AC-E13(b) "armour never overturns a class-order
+-- loss": inside the proof a higher-armour/lower-primary pair would read
+-- TRADE_OFF and overturn the very loss that gate exists to keep.
 --
 -- Returns "dominant" | "dominated" | "trade-off" | nil, firstDiff
---   firstDiff — the first term (in order) where the two sides differ, or nil.
---               Callers use it ONLY to word a reason; it never decides.
-function Verdict.dominance(candStats, eqStats, order)
+--   firstDiff — the first term (in term order) where the two sides differ, or
+--               nil. Callers use it ONLY to word a reason; it never decides.
+function Verdict.dominance(candStats, eqStats, terms)
 	local cand = type(candStats) == "table" and candStats or {}
 	local eq   = type(eqStats)   == "table" and eqStats   or {}
 	local anyGreater, anyLesser = false, false
 	local firstDiff = nil
-	for _, word in ipairs(order or {}) do
-		local c = rawget(cand, word)
-		local e = rawget(eq,   word)
-		if c ~= nil and e ~= nil then
-			if c > e then anyGreater = true elseif c < e then anyLesser = true end
-		elseif c ~= nil then
+	for _, word in ipairs(terms or {}) do
+		local sign = termSign(word, rawget(cand, word), rawget(eq, word))
+		if sign > 0 then
 			anyGreater = true
-		elseif e ~= nil then
+		elseif sign < 0 then
 			anyLesser = true
 		end
-		if firstDiff == nil then
-			if not (c == nil and e == nil) and c ~= e then
-				-- nil vs a value counts as a difference (the absence rule above);
-				-- value vs value compares directly.
-				if c == nil or e == nil or c ~= e then firstDiff = word end
-			end
-		end
+		if sign ~= 0 and firstDiff == nil then firstDiff = word end
 	end
 	if anyGreater and anyLesser then return "trade-off", firstDiff end
 	if anyGreater then return "dominant", firstDiff end
@@ -389,6 +610,16 @@ local KNOWN = {
 	-- read hands us (11) can be folded in when it resolves that line — and so
 	-- that nothing else has to change for it to be a real word.
 	["SpellPower"] = true,
+	-- Card t_3cdbb70a (DD-1): the four sentences parseLine_ now reads — the
+	-- hit and crit phrasings, melee and spell. All four read ONE hit word and
+	-- ONE crit word: the two spellings print the same stat, and the client's
+	-- own recap says so verbatim ("Spell, melee, and ranged hit chance are
+	-- combined, as are spell, melee, and ranged critical chance." — the ruling
+	-- lives in the retirement note under WEIGHT_KEYS). Whether a word PRICES
+	-- for a given class is the weight table's answer, never this table's.
+	["Hit"]            = true,
+	["Crit"]           = true,
+	["FeralAttackPower"] = true,
 }
 
 -- ---- Defect 2 (card t_548f0341): the client's own stat read -----------------
@@ -401,18 +632,37 @@ local KNOWN = {
 -- Tier-B shield card added on purpose). It only RESOLVES a line the text parser
 -- could not place, in parseSide's reconciliation below.
 --
--- This table is the ONLY place a client key becomes a stat word, and it lists
--- ONLY the keys OBSERVED on the owner's own client (harvested 2026-10-07 from his
--- level-22 paladin's helm and worn shield). A key that is not verified is
--- ABSENT, so it resolves to nil and its line stays suppressive — the same
--- fail-closed answer as an absent API. That is deliberate: inventing a spelling
--- for Defense / Dodge / Parry / Block-rating / Hit / Crit (which are on none of
--- his 19 slots at level 22, so their client spellings are unharvested) is a
--- separate card that begins with its own harvest probe.
+-- This table is the ONLY place a client key becomes a stat word. It lists the
+-- keys VERIFIED on this client, and nothing else — a key that is not verified
+-- is ABSENT, so it resolves to nil and its line stays suppressive: the same
+-- fail-closed answer as an absent API (AC-C of card t_795eee9e, executed in
+-- ChestAdvisor/tests/t_795eee9e.js). Two verifications stand behind it:
+--
+--   * the owner's own live read (harvested 2026-10-07 from a level-22 character
+--     paladin's helm and worn shield): STAMINA / STRENGTH / AGILITY / SPIRIT
+--     in the `_SHORT` spelling, RESISTANCE0_NAME (the client's own name for
+--     Armor), ITEM_MOD_SPELL_POWER_SHORT;
+--   * the client's full key vocabulary (card t_795eee9e), the captured ground-truth
+--     inventory "StatForge - ITEM_MOD Key Inventory (client ground truth) -
+--     2026-10-04.md" — 133 keys extracted from the client binary (Wow.exe).
+--     Every mapping below is spelled out of that inventory, not invented; the
+--     inventory's own caveat still stands — the keys were extracted, not
+--     measured against this addon, so a key the client names but never returns
+--     for a real item stays harmless: it maps to a word the pair does not
+--     carry, and the sum is untouched.
 --
 -- Both the `_SHORT` and the bare form are tolerated, because the client spells
 -- the same key with and without the suffix depending on the stat (Stamina ships
 -- as `ITEM_MOD_STAMINA_SHORT`; Armor ships as the bare-ish `RESISTANCE0_NAME`).
+-- The matcher takes the LONGEST verified key the incoming key begins with, so
+-- a specific key wins, and a suffix the client appends can never be mistaken
+-- for a different stat: ITEM_MOD_HIT_RANGED_RATING reads from
+-- ITEM_MOD_HIT_RANGED_RATING (not from any sibling), and
+-- ITEM_MOD_RANGED_ATTACK_POWER reads RangedAttackPower, never the plain
+-- AttackPower key (the prefixes differ before the suffix, so that read is not
+-- possible). The vs-faction spellings (ITEM_MOD_*_VS_DEMON and the like) do
+-- fold onto the base stat with the longest match — they ARE that stat for the
+-- fight they name, and the addon prices one term for it.
 Verdict.ITEM_STAT_KEYS = {
 	ITEM_MOD_STAMINA     = "Stamina",
 	ITEM_MOD_STRENGTH    = "Strength",
@@ -422,6 +672,68 @@ Verdict.ITEM_STAT_KEYS = {
 	-- the owner's worn shield: 478 Armor on the tooltip == RESISTANCE0_NAME 478.
 	RESISTANCE0          = "Armor",
 	ITEM_MOD_SPELL_POWER = "SpellPower",
+	-- ── card t_795eee9e: the rest of the vocabulary the cited packs price ────
+	-- ── card t_3cdbb70a (DD-1): HIT and CRIT are SPLIT ─────────────────────
+	-- t_795eee9e folded melee, ranged and spell hit onto ONE word (and the
+	-- same for crit), on the reasoning that the packs price a single
+	-- hitRating / critRating. That reasoning was right about the PACK and
+	-- wrong about the CLASS: a caster priced a melee-hit item at its spell-hit
+	-- value, and a hybrid that uses both read the two halves as one number.
+	-- Card t_9d3273cb UNIFIES them, and this time the fold is the CLIENT's own
+	-- fact rather than an inference from the packs: on this client spell, melee
+	-- and ranged hit are ONE stat, and so are the three crits (the recap
+	-- sentence is quoted verbatim under WEIGHT_KEYS). DD-1's split therefore
+	-- separated two spellings of one stat, and the cost fell on the caster: his
+	-- spell-crit item priced 0.6 x 14 through the spell key while the SAME item
+	-- read through the crit key priced 0.
+	--
+	-- So all eight client keys read the one word each — the generic
+	-- `ITEM_MOD_HIT_RATING`, the MELEE and RANGED spellings, and the SPELL
+	-- spelling alike. Which class actually pays for the stat is the weight
+	-- table's answer: every table carries the pack's hitRating on HIT and its
+	-- critRating on CRIT, caster and melee alike (Weights.lua).
+	ITEM_MOD_HIT_RATING         = "Hit",
+	ITEM_MOD_HIT_MELEE_RATING   = "Hit",
+	ITEM_MOD_HIT_RANGED_RATING  = "Hit",
+	ITEM_MOD_HIT_SPELL_RATING   = "Hit",
+	ITEM_MOD_CRIT_RATING        = "Crit",
+	ITEM_MOD_CRIT_MELEE_RATING  = "Crit",
+	ITEM_MOD_CRIT_RANGED_RATING = "Crit",
+	ITEM_MOD_CRIT_SPELL_RATING  = "Crit",
+	-- Attack power: the pack's one attackPower term. The client's melee
+	-- spelling folds onto it; its ranged spelling keeps a SEPARATE word,
+	-- because the client treats it as a separate stat and one cited pack
+	-- (hunter-marksman) prices it under that name.
+	--
+	-- FERAL is its own word (card t_3cdbb70a, DD-1 item 1). The Classic line
+	-- reads "Increases attack power by N in Cat, Bear, Dire Bear, and Moonkin
+	-- forms only" — worth ZERO to a Warrior, Paladin, Shaman, Hunter or Rogue,
+	-- and t_795eee9e priced it at their AP weight (0.45 / 0.4 / 0.4 / 0.3 /
+	-- 0.4). One word, one term: the feral spelling must not fold onto
+	-- AttackPower. No pack in the quote prices a feral term, so FAP is 0 on
+	-- every table until DD-3 gives Feral a table of its own (out of scope
+	-- here), and the gate never closes a pair on it (wordUnpriced).
+	ITEM_MOD_ATTACK_POWER        = "AttackPower",
+	ITEM_MOD_MELEE_ATTACK_POWER  = "AttackPower",
+	ITEM_MOD_FERAL_ATTACK_POWER  = "FeralAttackPower",
+	ITEM_MOD_RANGED_ATTACK_POWER = "RangedAttackPower",
+	-- Per-5-second regeneration: the client's two separate keys.
+	ITEM_MOD_MANA_REGENERATION   = "MP5",
+	ITEM_MOD_HEALTH_REGEN        = "HP5",
+	-- The survival terms of the tank packs (defense / dodge / parry ratings).
+	ITEM_MOD_DEFENSE_SKILL_RATING = "Defense",
+	ITEM_MOD_DODGE_RATING         = "Dodge",
+	ITEM_MOD_PARRY_RATING         = "Parry",
+	-- Block VALUE is the Tier-B "N Block" stat, which the client's API names
+	-- ITEM_MOD_BLOCK_VALUE_SHORT. The owner's worn shield shows the API can
+	-- also OMIT it (Block 9 on the tooltip, no key in the read) — the text
+	-- path stays the reader there (AC-F), and this mapping only adds the API's
+	-- shape of the same line when the client does return it.
+	ITEM_MOD_BLOCK_VALUE         = "Block",
+	-- Weapon DPS, when the client names it (the inventory spells it
+	-- ITEM_MOD_DAMAGE_PER_SECOND_SHORT): the packs price it as weaponDps, and
+	-- where they do, the table prices it as WDN.
+	ITEM_MOD_DAMAGE_PER_SECOND   = "WeaponDps",
 }
 
 -- May the client's own stat read EXPLAIN this tooltip line?
@@ -542,24 +854,396 @@ function Verdict.lineCarriesNumber(line)
 	return plain:find("%d") ~= nil
 end
 
--- The disclosure (card t_b7a9e7a5, requirement 5). When a cosmetic line was
--- IGNORED rather than suppressing, the verdict still appears — and the fact
--- that something was skipped must be AVAILABLE to a caller, never silently
--- implied away. This renders that fact as a short, deterministic suffix, or ""
--- when nothing was skipped, so a caller can append it (or test it) without
--- owning the wording. It is deliberately NOT part of the headline verdict word:
--- the arrow still means exactly what it meant.
+-- ---- Card t_d8de0090: name the lines, do not only count them ----------------
+--
+-- The pre-card message was "partial read: 2 cosmetic lines ignored" — a COUNT.
+-- A player reading it cannot tell WHICH lines were set aside from his own
+-- comparison, so the disclosure satisfied the letter of the honesty rule (say
+-- something was skipped) and failed the point (say WHAT). Card t_d8de0090
+-- replaces the count with the lines themselves:
+--
+--   partial read: "You haven't collected this appearance" ignored
+--   partial read: "Collected appearance" and "Warbound until equipped" ignored
+--
+-- The words are the PLAYER'S words: the tooltip line as he reads it, with the
+-- client's colour escapes removed by `deColour_` — this module's ONE
+-- normaliser, the same one parseLine_, reconciliationSafe and
+-- lineCarriesNumber already share (card t_02877bb4 made that literal). Nothing
+-- is TRANSLATED here, and that is deliberate:
+--
+--   * A new table of "cosmetic strings" is exactly what card t_b7a9e7a5
+--     forbids. The client appends the next sentence whenever it likes, so a
+--     vocabulary that has to grow is a vocabulary that will be wrong.
+--   * The verdict-word map (ChestAdvisor's `TOOLTIP_UI.words`) names
+--     OUTCOMES, not tooltip prose: quoting the line keeps one map per job
+--     rather than overloading the outcome map with an English dictionary.
+--
+-- Truncation is VISIBLE (an ellipsis), never silent: a line longer than
+-- PARTIAL_LINE_MAX is cut and marked, and when more lines were skipped than
+-- PARTIAL_NAMES_MAX can be named the sentence states the remainder as a count
+-- ("and 2 more") instead of pretending to be complete. THE COUNT IS NOT LOST —
+-- the raw surface (`/up diag`) records the count and the untouched raw lines
+-- (ChestAdvisor.lua, card t_d8de0090 AC-D); this surface is the player-facing
+-- one and its job is to NAME them.
+local PARTIAL_LINE_MAX  = 40   -- own text of ONE line, before the ellipsis
+local PARTIAL_NAMES_MAX = 2    -- lines named before the rest become "and N more"
+local PARTIAL_ELLIPSIS  = "…"
+
+-- The player words of ONE tooltip line: de-coloured, whitespace-collapsed and
+-- trimmed, then visibly truncated. Pure; never throws; "" for a non-line (so a
+-- caller can skip it rather than print a stray pair of quotes).
+function Verdict.lineWords(line)
+	if type(line) ~= "string" then return "" end
+	local plain = deColour_(line)
+	plain = plain:gsub("%s+", " ")
+	plain = plain:gsub("^ ", ""):gsub(" $", "")
+	if plain == "" then return "" end
+	if #plain <= PARTIAL_LINE_MAX then return plain end
+	-- Cut on a WORD boundary inside the cap, so the text reads rather than
+	-- chops: take the last space of the capped prefix when there is a usable
+	-- one (a very short prefix would keep a single stray word and no context).
+	local cut = plain:sub(1, PARTIAL_LINE_MAX)
+	local spaceAt = cut:match("^.*() ")
+	if spaceAt ~= nil and spaceAt >= 12 then cut = plain:sub(1, spaceAt - 1) end
+	-- Never split a multi-byte character: bytes 0x80..0xBF are UTF-8
+	-- continuation bytes, and half a character renders as a replacement glyph
+	-- in the client's font. Back off to the character boundary.
+	while #cut > 0 do
+		local b = cut:byte(#cut)
+		if b < 0x80 or b > 0xBF then break end
+		cut = cut:sub(1, #cut - 1)
+	end
+	return cut .. PARTIAL_ELLIPSIS
+end
+
+-- The disclosure (card t_b7a9e7a5, requirement 5; REWORDED by card t_d8de0090).
+-- When a cosmetic line was IGNORED rather than suppressing, the verdict still
+-- appears — and the fact that something was skipped must be AVAILABLE to a
+-- caller, never silently implied away. This renders that fact as a short,
+-- deterministic suffix, or "" when nothing was skipped, so a caller can append
+-- it (or test it) without owning the wording. It is deliberately NOT part of
+-- the headline verdict word: the arrow still means exactly what it meant.
 --
 -- `ignored` is the array parseSide/statTable/evaluate hand back (raw lines, in
 -- the order they were met).
-function Verdict.partialNote(ignored)
-	local n = 0
+--
+-- `foreign` (card t_4ff4ebef, OPTIONAL) is the array of composed-but-not-the-item
+-- lines the parse set aside. It is a SEPARATE clause — "1 addon line not read" —
+-- because a foreign line is not the item's cosmetic prose and must never be
+-- added to the cosmetic count. Omitted (nil) by every caller that has no such
+-- list, which keeps the cosmetic-only wording byte-identical to what card
+-- t_d8de0090 shipped.
+--
+-- ⚠ The foreign count applies the SAME honesty rule as the cosmetic remainder
+-- (the reviewer's re-review of PR #44, item B, 2026-10-18): an entry that DE-COLOURS
+-- TO NOTHING is not a line the player could have read, so it never inflates
+-- "N addon lines not read". The commit message of 033a743 claimed such an
+-- entry "cannot carry a blank" — that claim was wrong: the foreign array is the
+-- raw set-aside list, and a colour-only line ("|cffffffff|r") inside a foreign
+-- block is recorded there verbatim. The predicate is Verdict.lineWords, the
+-- same normaliser that decides whether a cosmetic entry is real, so a line that
+-- de-colours to nothing counts in neither clause.
+--
+-- Shape of the sentence, and why each arm is what it is:
+--   ""                                              nothing was set aside at all
+--   partial read: "X" ignored                       one cosmetic line, quoted in full
+--   partial read: "X" and "Y" ignored               two, both named (t_d8de0090 AC-A)
+--   partial read: "X", "Y" and 2 more ignored       more unnamed REAL lines than
+--                                                   can be shown. Blank entries
+--                                                   in the array are NOT lines
+--                                                   and never inflate this
+--                                                   remainder (the owner's n1
+--                                                   ruling on PR #44: count
+--                                                   what was actually set
+--                                                   aside, not empty slots).
+--   partial read: 3 cosmetic lines ignored          DEGENERATE input only:
+--                                                   nothing can be quoted, so
+--                                                   there is no remainder to
+--                                                   inflate — the count is the
+--                                                   honest fallback (card
+--                                                   t_d8de0090 AC-C: a skip
+--                                                   that cannot be NAMED still
+--                                                   reports; "" would claim a
+--                                                   full read).
+--   partial read: 1 addon line not read             foreign only, counted (t_4ff4ebef)
+--   partial read: "X" ignored, 2 addon lines not read
+--                                                   both sides set aside — the
+--                                                   cosmetic half NAMES the lines
+--                                                   (t_d8de0090), the foreign half
+--                                                   keeps its COUNT clause
+--                                                   (t_4ff4ebef); a line is
+--                                                   never reported as both, and
+--                                                   the two clauses stay one
+--                                                   sentence so they cannot drift.
+function Verdict.partialNote(ignored, foreign)
+	local ni = 0        -- REAL lines: entries with player words (the n1 count)
+	local slots = 0     -- entries the parse set aside, blank or not
 	if type(ignored) == "table" then
-		for _ in ipairs(ignored) do n = n + 1 end
+		for _, line in ipairs(ignored) do
+			slots = slots + 1
+			if Verdict.lineWords(line) ~= "" then ni = ni + 1 end
+		end
 	end
-	if n == 0 then return "" end
-	if n == 1 then return "partial read: 1 cosmetic line ignored" end
-	return "partial read: " .. n .. " cosmetic lines ignored"
+	local nf = 0        -- REAL foreign lines: entries with player words (item B)
+	if type(foreign) == "table" then
+		for _, line in ipairs(foreign) do
+			-- The foreign clause's own n1: an entry that de-colours to nothing
+			-- is not a line the player could have read, so it never inflates
+			-- the count. A foreign list of NOTHING BUT such entries therefore
+			-- says nothing at all (falls through to the "" below).
+			if Verdict.lineWords(line) ~= "" then nf = nf + 1 end
+		end
+	end
+	-- `slots > 0` is the cosmetic half's own test: every REAL line is also a
+	-- slot, so the separate `ni > 0` it used to carry could never change the
+	-- answer (the reviewer's re-review note, PR #44).
+	if slots == 0 and nf == 0 then return "" end
+	-- The cosmetic half NAMES the lines it set aside, in the player's own words
+	-- (card t_d8de0090): up to PARTIAL_NAMES_MAX are quoted, the remainder is
+	-- stated as a count, and a list that cannot be named at all falls back to
+	-- the count rather than claiming a full read. Two counts, by the ruling:
+	-- the remainder ("and N more") counts only unnamed REAL lines — a blank
+	-- entry is not a line and never inflates it (the owner's n1 ruling on PR
+	-- #44) — while the un-namable fallback counts every entry the parse set
+	-- aside, because a skip that cannot be named must still report (card
+	-- t_d8de0090 AC-C).
+	--
+	-- ⚠ A blank slot is NOT unreachable from the rendered path (the reviewer's
+	-- re-review of PR #44, item A, 2026-10-18). The readers trim WHITESPACE,
+	-- and a colour-only line ("|cffffffff|r") is not whitespace: it survives
+	-- the trim, de-colours to nothing, is tagged cosmetic by parseLine_, and
+	-- lands in `ignored` like any other entry — measured, 3 real cosmetic
+	-- lines + one colour-only blank render `..., "B" and 1 more ignored` on
+	-- this module and `and 2 more` on the pre-ruling one. That is why the
+	-- ruling is pinned TWICE (a rendered-path fixture in upgrade_test.js and
+	-- the module-level one), not once: the module pin alone would leave the
+	-- reachability of the shape a claim instead of a measurement.
+	--
+	-- Card t_4ff4ebef: a foreign line is NOT a cosmetic line, so it gets its own
+	-- COUNT clause rather than being added to the cosmetic total or named as the
+	-- item's prose. With `foreign` nil there is no foreign clause at all, and
+	-- the sentence is byte-identical to what card t_d8de0090 shipped. One call
+	-- owns both clauses, so the two can never drift apart.
+	local parts = {}
+	if slots > 0 then
+		local named = {}
+		for _, line in ipairs(ignored) do
+			if #named < PARTIAL_NAMES_MAX then
+				local words = Verdict.lineWords(line)
+				if words ~= "" then named[#named + 1] = '"' .. words .. '"' end
+			end
+		end
+		if #named == 0 then
+			-- Nothing quotable in ANY entry (card t_d8de0090 AC-C): a skip that
+			-- cannot be NAMED still reports. This arm counts the ENTRIES the
+			-- parse set aside — blank entries are exactly the input it exists
+			-- for — while the n1 rule governs the NAMED remainder below, which
+			-- cannot fire here (rest would count the same thing twice).
+			parts[#parts + 1] = slots .. " cosmetic line"
+				.. ((slots == 1) and "" or "s") .. " ignored"
+		else
+			local rest = ni - #named
+			local list
+			if rest > 0 then
+				-- Commas, not a second "and": "A" and "B" and 2 more reads as a mistake.
+				list = table.concat(named, ", ") .. " and " .. rest .. " more"
+			elseif #named == 1 then
+				list = named[1]
+			else
+				list = named[1] .. " and " .. named[2]
+			end
+			parts[#parts + 1] = list .. " ignored"
+		end
+	end
+	if nf == 1 then
+		parts[#parts + 1] = "1 addon line not read"
+	elseif nf > 1 then
+		parts[#parts + 1] = nf .. " addon lines not read"
+	end
+	return "partial read: " .. table.concat(parts, ", ")
+end
+
+-- ==== PERCENT -> RATING: THE ONE CONVERSION POINT (card t_ea404bae) ========
+--
+-- THE MEASUREMENT. The owner's in-game read on 2026-10-18, on the live
+-- WoW: Forever client, via `/dump C_Item.GetItemStats(link)`:
+--
+--   Reliquary Mantle (ilvl 33)  ITEM_MOD_HIT_RATING_SHORT  = 4
+--                               tooltip "+0.4% hit"        => 10 rating = 1% hit
+--   Illusionary Rod  (ilvl 39)  ITEM_MOD_CRIT_RATING_SHORT = 14
+--                               tooltip "+1.0% crit"       => 14 rating = 1% crit
+--
+-- Both match the TBC level-60 rating conversions exactly. Two client facts are
+-- part of the read and are not to be re-litigated: plain `GetItemStats` prints
+-- NOTHING on this client (`C_Item.GetItemStats` works), and there is no
+-- `/touchstone stats` command — do not cite one anywhere.
+--
+-- WHICH UNIT WINS, AND WHY IT IS THE RATING (the reviewer's ruling on this card,
+-- 2026-10-19 — it REVERSES the direction the earlier commits on this branch
+-- took, and the reversal is deliberate: normalise to RATING, not to percent).
+-- The API key is ALWAYS a rating (`ITEM_MOD_*_RATING_SHORT`); there is no
+-- percent-valued key. A rating count is the client's own number for the stat,
+-- the one that grows as items get better and the one the game actually adds
+-- up. The tooltip's percent is that number RENDERED at a scale of ten or
+-- fourteen. So the RATING is the unit of record everywhere in this module, and
+-- the only number that ever needs arithmetic is the one the tooltip states: a
+-- percent, multiplied UP by its word's rating-per-percent constant.
+--
+-- SO apiStats DOES NO ARITHMETIC AT ALL (the earlier divisor is GONE). Every
+-- number the client's stat read contributes to a comparison crosses
+-- Verdict.apiStatWord/apiStats below — the module's single raw-key ->
+-- stat-word boundary, which runs BEFORE pricing (parseSide, the gates, the
+-- weighted layer, all downstream) — and it crosses UNCHANGED: it is already in
+-- the unit of record.
+--
+-- THE ONE CONVERSION SITE is Verdict.ratingFromPercent, called from exactly
+-- one place: the four hit/crit sentences in parseLine_. Nothing else in the
+-- addon multiplies or divides a stat value by ten or fourteen. The client path
+-- is pass-through and the tooltip path is lifted once, which is the whole
+-- discipline: a stat table converted twice is as wrong as one never converted,
+-- and a weight table that has been quietly rescaled is indistinguishable from
+-- a wrong one. Weights.lua is NOT touched by this card (AC-4/AC-7: the weights
+-- stay what the packs say; the numbers arriving at them change unit).
+--
+-- THE ARITHMETIC CONSEQUENCE IS STATED, NOT HIDDEN. A pack's price is now
+-- multiplied against a rating count instead of a percent, so a hit or crit
+-- term counts ten or fourteen times what the same pair counted before this
+-- card. That is what the ruling asks for and what the changed-verdict sweep
+-- measures row by row (docs/t_ea404bae-changed-verdicts.txt names every row
+-- that moved and why).
+--
+-- THE SPELL WORDS GET THE SAME FACTOR BECAUSE THEY ARE THE SAME WORDS (card
+-- t_9d3273cb). No separate spell constant exists here and none is invented: all
+-- four tooltip sentences — melee hit, spell hit, melee crit, spell crit — lift
+-- through this one function, and the two client keys that used to answer to a
+-- spell word now answer to HIT and CRIT alike. THE FACT is the client's own
+-- recap, read verbatim:
+--
+--   "Spell, melee, and ranged hit chance are combined, as are spell, melee,
+--    and ranged critical chance."
+--
+-- Card t_ea404bae's withdrawn addendum gave those two words no factor and left
+-- them on the unconfirmed lists; this card ends that. With one word and one
+-- factor a pair whose SAME true value arrives as a client read (rating) on one
+-- side and a tooltip (percent) on the other reads EQUAL — which is what the
+-- melee halves already did — instead of failing closed on a difference the
+-- units invented. Pinned by the mixed-unit case in
+-- ChestAdvisor/tests/t_9d3273cb.js.
+--
+-- DODGE and PARRY are deliberately NOT in this table: nobody has measured their
+-- scale, and inventing a factor for them would be an unmeasured claim wearing
+-- the same clothes as a measured one. They stay unconfirmed and their guard
+-- still fires (AC-5).
+Verdict.HIT_RATING_PER_PERCENT  = 10
+Verdict.CRIT_RATING_PER_PERCENT = 14
+
+-- WORD -> rating points per 1% of that word. A tooltip PERCENT times its entry
+-- is the RATING count the client's own read returns for the same stat. The
+-- whole table: a word absent from it carries no factor. Only Dodge and Parry
+-- are absent, deliberately (nobody has measured their scale — see the note
+-- above them); the four hit/crit sentences all lift through Hit and Crit here.
+-- Read by ratingFromPercent ONLY.
+Verdict.PERCENT_TO_RATING = {
+	Hit  = Verdict.HIT_RATING_PER_PERCENT,
+	Crit = Verdict.CRIT_RATING_PER_PERCENT,
+}
+
+-- THE conversion: a tooltip's percent -> the rating unit of record. ONE
+-- definition, ONE multiply, ONE call site (parseLine_'s sentence clause). A
+-- word with no entry passes through untouched, which is why this is not a
+-- second branch a future reader has to keep in sync with a table.
+--
+-- Public on purpose: the battery drives the table directly, and the
+-- non-vacuity leg can clear PERCENT_TO_RATING or the function and watch the
+-- numbers go back to the percent the tooltip printed. rawget, so a cleared
+-- table is a real absence rather than a stale copy.
+function Verdict.ratingFromPercent(word, pct)
+	local scale = rawget(Verdict, "PERCENT_TO_RATING")
+	local factor = type(scale) == "table" and rawget(scale, word) or nil
+	if type(factor) == "number" then return pct * factor end
+	return pct
+end
+
+-- ── CARD t_43f8cd6f (item 2): THE TOOLTIP'S RESOLUTION ──────────────────────
+-- The client prints these percentages to ONE decimal, so a tooltip percent is
+-- the item's rating count rendered at 0.1% resolution — and the inverse above
+-- (percent x factor) can therefore land up to HALF A STEP away from the count
+-- the client reports for the SAME item. Measured on the owner's scale:
+--
+--   12 crit rating renders "0.9%" and lifts back to 12.6   (0.6 out)
+--   10 crit rating renders "0.7%" and lifts back to  9.8   (0.2 out)
+--   14 crit rating renders "1.0%" and lifts back to 14.0   (exact)
+--
+-- Only multiples of 14 round-trip exactly, which is why the mixed-unit case at
+-- 14 (N12) was green while the defect was live: it was the one value where the
+-- error was zero. Once HIT and CRIT retired from the unconfirmed lists that
+-- error is PRICED, and 0.6 rating x the pack's 0.9 turned a weighted margin of
+-- 0.4546 into 0.5033 — TRADE_OFF flipped to UPGRADE for two readings of the
+-- SAME item. Two readings of one item must not disagree.
+--
+-- THE RULE (the reviewer's, card t_43f8cd6f): a HIT or CRIT difference SMALLER than
+-- one tooltip step counts as LEVEL. The tolerance swallows the QUANTISATION,
+-- never a real gap: a full step or more is still a difference, and the two
+-- client-read counts are integers, so a real 12-vs-13 is 1.0 and still counts.
+--
+-- WHERE IT IS HONOURED — and where it is NOT (card t_645c7ae6 rewrote this
+-- paragraph: it named ONE site and claimed Hit and Crit are in no order. BOTH
+-- claims were false, and the second one was already false when it was written).
+--
+--   * Verdict.weightedScore — the weighted layer's own subtraction. It levels
+--     the term before multiplying, so a sub-step difference contributes 0.
+--   * Verdict.termSign — the proof's single direction rule, read by
+--     Verdict.dominance AND by the two gate-9 loops that word its answer. Since
+--     card t_da23ec75 the proof decides on the pack's PRICED words, so Hit and
+--     Crit are proof terms whenever the pair's own pack prices them; the
+--     tolerance has to apply there too, or the proof decides a pair on 0.6 of
+--     rounding that the weighted layer forgives one call later.
+-- BOTH sites read Verdict.levelWithinResolution. One epsilon, one helper — a
+-- second copy is how the two would drift apart.
+--
+--   * Hit and Crit DO sit in an order, on the WEAPON path. The terms
+--     Verdict.tankWeaponOrder builds are the tank pack's priced words, so a
+--     Shaman tank weapon pair is compared on [Strength, Agility, Stamina, Hit,
+--     Crit, AttackPower, WeaponDps] — measured on this tree, not inferred from
+--     Verdict.ORDERS, which is what the old paragraph read. That path reaches
+--     Verdict.dominance directly (compareWeapon), and it is the second reason
+--     the tolerance lives in termSign rather than at one caller.
+--
+--   * Dodge and Parry carry no factor, so they introduce no rounding: a word
+--     with no resolution is never "levelled" by this helper (it returns false),
+--     which leaves their exact comparison — and the fail-closed guard behind
+--     them — exactly as it was. Hit and Crit DO carry factors (10 and 14 rating
+--     per 1%), so a hit or crit difference is levelled here, on both the melee
+--     and the spell sentence, which is the whole point of the tolerance.
+--
+-- The rule is declared HERE, beside the conversion that creates the
+-- uncertainty, and honoured at the two comparisons above through the one
+-- helper.
+Verdict.TOOLTIP_HALF_STEP_PERCENT = 0.05 -- one decimal place: half of 0.1%
+
+-- word -> the +/- uncertainty, in rating points, of a tooltip-derived value of
+-- that word; nil for a word with no factor (a percent that passed through
+-- unchanged was never rounded, so there is nothing to forgive).
+function Verdict.ratingResolution(word)
+	local scale = rawget(Verdict, "PERCENT_TO_RATING")
+	local factor = type(scale) == "table" and rawget(scale, word) or nil
+	local half = rawget(Verdict, "TOOLTIP_HALF_STEP_PERCENT")
+	if type(factor) ~= "number" or type(half) ~= "number" then return nil end
+	return factor * half
+end
+
+-- Are two values of `word` LEVEL as far as the tooltip's resolution can tell?
+-- Absent reads as 0 — the same convention Verdict.unconfirmedDifference and
+-- weightedScore already use. A word with no resolution is never "levelled"
+-- here: its caller's own exact comparison stands.
+function Verdict.levelWithinResolution(word, c, e)
+	local eps = Verdict.ratingResolution(word)
+	if type(eps) ~= "number" then return false end
+	local cn = type(c) == "number" and c or 0
+	local en = type(e) == "number" and e or 0
+	local d = cn - en
+	if d < 0 then d = -d end
+	return d < eps
 end
 
 -- A client stat key -> this module's stat word, or nil for a key we have not
@@ -583,22 +1267,49 @@ end
 -- ChestAdvisor.lua. This module never calls a client API, so the JS harness can
 -- drive every branch below with an injected table.
 --
--- Returns: words — stat word -> number, for the keys we have verified only
+-- Returns: words — stat word -> number, for the keys we have verified; number
+--                  values only (a verified key with a non-number value names
+--                  nothing — the client's silence, never a guess)
 --          named — the set of words it named (so a caller can ask "does the API
 --                  name a stat the text parse did not capture?")
--- A non-table (nil, a string, a secret sentinel) returns nil, nil: the caller's
--- byte-identical-to-today path.
+--          unmapped — (card t_795eee9e, AC-C) the string keys we could NOT
+--                  verify, sorted for a repeatable reason, or nil when the
+--                  read carries none. House doctrine (module line 20): a stat
+--                  word neither side can classify is UNKNOWN, never a
+--                  fabricated 0 — this list is how evaluate() refuses to
+--                  judge on the stats it does know while the client names a
+--                  stat it does not (never a silent drop, never a zero).
+-- A non-table (nil, a string, a secret sentinel) returns nil, nil, nil: the
+-- caller's byte-identical-to-today path (AC-B).
 function Verdict.apiStats(raw)
-	if type(raw) ~= "table" then return nil, nil end
+	if type(raw) ~= "table" then return nil, nil, nil end
 	local out, named = {}, {}
+	local unmapped = {}
 	for key, value in pairs(raw) do
 		local word = Verdict.apiStatWord(key)
-		if word ~= nil and type(value) == "number" then
-			out[word] = value
-			named[word] = true
+		if word ~= nil then
+			if type(value) == "number" then
+				-- Card t_ea404bae (the reviewer's ruling, 2026-10-19): the client's
+				-- number for these words is a RATING COUNT, and a rating is the
+				-- unit of record — it is passed through UNCHANGED. The one
+				-- conversion in this module runs the OTHER way, on the tooltip's
+				-- percent (ratingFromPercent above), so there is deliberately no
+				-- arithmetic here: a stat converted twice is as wrong as one
+				-- never converted.
+				out[word] = value
+				named[word] = true
+			end
+		elseif type(key) == "string" then
+			-- Card t_795eee9e, AC-C: a key the client returned that this
+			-- module has not verified is an UNVERIFIED STAT. It is recorded,
+			-- not dropped: the impure edge ships it with the words and
+			-- evaluate() turns it into the UNKNOWN answer for the pair.
+			unmapped[#unmapped + 1] = key
 		end
 	end
-	return out, named
+	table.sort(unmapped)
+	if #unmapped == 0 then unmapped = nil end
+	return out, named, unmapped
 end
 
 -- The three role words the CLIENT speaks (readSpecIdentity). Used to tell a
@@ -615,7 +1326,7 @@ local CLIENT_ROLES = { TANK = true, HEALER = true, DAMAGER = true }
 --                            item tooltip: "Durability 45 / 45",
 --                            "Requires Level 10", "Sell Price: 2s 10c",
 --                            "Chest <material>". Ignored — never a
---                            suppression (Vera C1: the B2 gate must not
+--                            suppression (gate C1: the B2 gate must not
 --                            swallow real tooltip chrome).
 --   unknown    (nil, "Unknown", "unknown") — a non-blank line we could NOT
 --                            place ("+15 Frost Resistance"): not a
@@ -626,7 +1337,7 @@ local CLIENT_ROLES = { TANK = true, HEALER = true, DAMAGER = true }
 -- tooltip fixture (tests/addon_test.js:886 — item name, type line,
 -- "Requires Level 14") and the scoping card's P1 probe. Anything NOT in
 -- this list and NOT stat-shaped still suppresses: unconfirmed lines
--- default to unknown (Vera C1, "suppress anything unconfirmed"). The
+-- default to unknown (gate C1, "suppress anything unconfirmed"). The
 -- item NAME line (free text — no content pattern can enumerate item
 -- names) is handled positionally by parseSide, where the scan path's
 -- line list starts at the name on a real client.
@@ -646,7 +1357,7 @@ local parseLine_ = function(line)
 	-- The capture's crafter line ships as "|cff00ff00<Made by …>|r"; the strip
 	-- leaves "<made by …>" which matches a narrow clause below (patch 3).
 	-- Without this, a broad shape rule ("^%|c") accepts a colored "Set: …" as
-	-- structural when the card rule says Set: must suppress (AC-E8, Vera
+	-- structural when the card rule says Set: must suppress (AC-E8, the gate
 	-- run-63).
 	local plain = deColour_(low)
 	-- "+12 Agility" -> num + word. The prefix class is only signs and
@@ -666,7 +1377,89 @@ local parseLine_ = function(line)
 	-- "Adds X" style lines, if the client ever uses them here.
 	local an, aw = trimmed:match("^%s*Adds%s*(%d+)%s+(%a+)")
 	if an and aw then return tonumber(an), aw end
-	-- Structural tooltip chrome (Vera C1). Case-insensitive, anchored.
+	-- ── card t_3cdbb70a (DD-1): the HIT and CRIT sentences ────────────────
+	-- The client prints these four phrasings, and until this card NOT ONE of
+	-- them was placeable: they carry a number, so they suppressed the item
+	-- ("cannot classify: Improves your chance to hit with spells by 1%.") and
+	-- every caster that read one got no verdict at all until the client's own
+	-- stat read happened to name the key — which is exactly the state DD-2
+	-- describes for the healing/school lines it owns.
+	--
+	-- ALL FOUR sentences are ONE stat each, as of card t_9d3273cb: the two
+	-- spell spellings and the two bare (melee/ranged) spellings read the SAME
+	-- two words, so each of the four states the PERCENT and each is lifted UP
+	-- to the rating unit of record by Verdict.ratingFromPercent — THE one
+	-- conversion site in this module (card t_ea404bae, the reviewer's ruling of
+	-- 2026-10-19). "Improves your chance to hit by 0.4%." is 4 hit rating, the
+	-- number the client's own C_Item read returns for the same item, so the two
+	-- paths agree and the comparator never has to know which one a value came
+	-- from.
+	--
+	-- THE TWO SPELL SENTENCES USED NOT TO BE CONVERTED (card t_43f8cd6f, item 3
+	-- pinned them to MAIN'S OWN SHAPE — `(%d+)`, no decimal, the number returned
+	-- as read). That is HISTORY as of card t_9d3273cb: the same two words now
+	-- stand behind all four sentences, so the same one conversion lifts all four
+	-- (see the block above). The reverted widening that card 43f8cd6f refused
+	-- was the split's own unit leaking into the spell half; with the split gone
+	-- there is no second unit to leak.
+	-- CARD t_9d3273cb NOW WIDENS THEM, deliberately and in the open: the four
+	-- sentences read ONE hit word and ONE crit word, so they must share ONE
+	-- shape. Leaving the spell halves at `%d+` would let "+0.4% hit" through
+	-- while refusing "+0.4% hit with spells" — the same stat, the same number,
+	-- refused for the spelling of the sentence it arrived in. Both halves read
+	-- `%d+%.?%d*` and both lift through the one conversion above.
+	--
+	-- SHAPES ARE EXACT AND NARROW (the card's OUT OF SCOPE: "any text-line
+	-- shape beyond the hit and crit wordings above"). An unrecognised spelling
+	-- — "improves your chance to critically hit with spells", a school-scoped
+	-- variant, "chance to hit with your spells" — falls through to the unknown
+	-- bucket and still suppresses, which is the fail-closed direction. The
+	-- optional "equip:" prefix and the trailing period are the only latitude:
+	-- both spellings appear on real tooltips and neither changes the meaning.
+	-- CARD t_ea404bae, THE DECIMAL PERCENT. the mixed-unit criterion the reviewer set
+	-- on the gate for this head is still load-bearing: the client renders
+	-- these sentences with a
+	-- DECIMAL percent where the reading is not a whole number — the owner's own
+	-- Mantle is "+0.4% hit" — while the client's stat read
+	-- for the same item is a RATING. A parser that only accepted `%d+` could not
+	-- read the tooltip half at all, so the same true value came out as a
+	-- difference — or worse, as unplaceable text that suppressed the pair. The
+	-- number is read as `%d+%.?%d*`: a whole number still reads exactly as
+	-- before ("by 1%" is 1), and the client's decimal spelling reads as the
+	-- number it prints ("by 1.0%" is 1, "by 0.4%" is 0.4) BEFORE the factor
+	-- lifts it to 14 or 4. The SHAPE is unchanged — same anchor, same
+	-- wordings, same optional "equip:" prefix and trailing period — so every
+	-- spelling this clause used to refuse is still refused.
+	--
+	-- THE DECIMAL IS A QUANTISED READING, and the quantisation is handled ONCE
+	-- (card t_43f8cd6f, item 2 — see TOOLTIP_HALF_STEP_PERCENT beside the
+	-- conversion above): a one-decimal percent cannot recover the client's
+	-- exact rating count, so the comparison treats a difference smaller than
+	-- one tooltip step as LEVEL instead of pricing the tooltip's rounding.
+	local stat_sentence = plain:gsub("^equip:%s*", ""):gsub("%s*%.$", "")
+	-- ALL FOUR clauses read `%d+%.?%d*` and all four lift through
+	-- Verdict.ratingFromPercent — the ONE conversion site. Card t_9d3273cb: the
+	-- two SPELL sentences read the SAME two words as the two melee sentences.
+	-- They were never a different stat (the client's recap, quoted under
+	-- WEIGHT_KEYS), so they were never a different word; holding them on a
+	-- separate key is what let a caster's spell-crit item price against a key
+	-- that carried a number while the crit key carried 0.
+	--
+	-- THE SHAPE IS ONE SHAPE, decimal included (card t_43f8cd6f had deliberately
+	-- kept these two clauses at origin/main's `%d+` because their retirement was
+	-- out of its scope). Unifying the WORDS without unifying the SHAPE would
+	-- leave "+0.4% hit" readable and "+0.4% hit with spells" unplaceable — the
+	-- same stat, refused on one spelling. Pinned by W6 of
+	-- ChestAdvisor/tests/t_9d3273cb.js.
+	local hitp = stat_sentence:match("^improves your chance to hit with spells by (%d+%.?%d*)%%$")
+	if hitp then return Verdict.ratingFromPercent("Hit", tonumber(hitp)), "Hit" end
+	local critp = stat_sentence:match("^improves your chance to get a critical strike with spells by (%d+%.?%d*)%%$")
+	if critp then return Verdict.ratingFromPercent("Crit", tonumber(critp)), "Crit" end
+	local meleehitp = stat_sentence:match("^improves your chance to hit by (%d+%.?%d*)%%$")
+	if meleehitp then return Verdict.ratingFromPercent("Hit", tonumber(meleehitp)), "Hit" end
+	local meleecritp = stat_sentence:match("^improves your chance to get a critical strike by (%d+%.?%d*)%%$")
+	if meleecritp then return Verdict.ratingFromPercent("Crit", tonumber(meleecritp)), "Crit" end
+	-- Structural tooltip chrome (gate C1). Case-insensitive, anchored.
 	-- Matched against `plain` (color/|r stripped) so a colored stat line
 	-- (e.g. "|cff9d9d9d+12 agility|r") still classifies as a stat below,
 	-- never as chrome.
@@ -686,7 +1479,7 @@ local parseLine_ = function(line)
 	-- The AC-E6 spec (scoping §6, t_970229ce doc) uses the plural forms for
 	-- Shoulder(s) and Wrist(s). The repo's own in-game-proven vocabulary
 	-- (WoWAI.lua:1034-1036, :1083-084) spells them singular. AC-E8 point 1
-	-- of mira's amendment (comment 58, t_7b8f504a): "the AC-E6 plural
+	-- of the maintainer's amendment (comment 58, t_7b8f504a): "the AC-E6 plural
 	-- spellings are NOT evidence." We accept both forms — the vocabulary is
 	-- a spelling-acceptance list and an unrecognised form degrades to
 	-- unknown (suppress), never to a wrong classification.
@@ -759,9 +1552,9 @@ local parseLine_ = function(line)
 	-- line.
 	--
 	-- NOTE (honest scope): the exact live spelling of the holdable line is
-	-- NOT captured in this repo (Lena §11.4 says the same of `Block`). The
+	-- NOT captured in this repo (review §11.4 says the same of `Block`). The
 	-- accepted set below covers the two forms the two local sources name —
-	-- the card's "Off Hand" and Lena's "held-in-off-hand" prose — and anything
+	-- the card's "Off Hand" and the review's "held-in-off-hand" prose — and anything
 	-- else falls through to suppression, i.e. it fails closed.
 	if low == "off hand" or low:match("^off hand%s+[%a%-']+$") then
 		return nil, nil, "structural"
@@ -771,7 +1564,57 @@ local parseLine_ = function(line)
 		or low:match("^held in off hand%s+[%a%-']+$") then
 		return nil, nil, "structural"
 	end
-	-- Structural chrome (Vera C1, E1, t_7b8f504a). Each of these ships on
+	-- ---- Card t_b91136cb: the WEAPON type line is structural chrome --------
+	--
+	-- A weapon's type line is the left-column slot word with the right-column
+	-- subtype — "Ranged  Wand", "Main Hand  Dagger", "Two-Hand  Sword" — and
+	-- on this client a weapon may print the BARE slot word alone: "Main Hand"
+	-- is the owner's live mace line and "Ranged" the wand fixture (both
+	-- quoted line-for-line from the client's own output in the t_16448f75
+	-- fixtures; "Two-Hand" bare is the same shape in the t_a25a6ad6 live
+	-- capture). None of these slot words is among the armour slot words
+	-- above, and "Off Hand …"/"Held In Off-hand …" (the ONLY off-hand type
+	-- lines this module accepts) do not cover a main-hand or two-hand
+	-- weapon, so before this card a weapon type line fell through to the
+	-- unplaceable tail, read cosmetic (no digit), and EVERY weapon hover
+	-- disclosed a "cosmetic line" that was the item's own chrome.
+	--
+	-- NARROW on purpose, per the card's rule: the bare slot word, or the
+	-- slot word plus ONE of the subtype words this client prints. A
+	-- stat-shaped or number-bearing line that begins the same words matches
+	-- none of these clauses and keeps failing closed — a subtype outside the
+	-- list degrades to the cosmetic path (disclosed, never chrome), never to
+	-- a wider acceptance. The slot word is matched LITERALLY (the
+	-- hyphen is a plain character) for the bare form, and as a pattern
+	-- whose `%-` is an escaped hyphen for the composite form, so
+	-- "Two-Hand  Sword" and "TwoHand  Sword" do not mix.
+	local WEAPON_SLOTS = {
+		{ plain = "ranged",    pat = "ranged" },
+		{ plain = "main hand", pat = "main hand" },
+		{ plain = "two-hand",  pat = "two%-hand" },
+		{ plain = "one-hand",  pat = "one%-hand" },
+	}
+	local WEAPON_SUBTYPES = {
+		"wand", "bow", "gun", "crossbow", "dagger", "sword", "mace",
+		"staff", "polearm", "axe", "thrown", "miscellaneous",
+		"fist weapon",
+	}
+	local is_weapon_type = false
+	for _, slot in ipairs(WEAPON_SLOTS) do
+		if low == slot.plain then
+			is_weapon_type = true
+			break
+		end
+		for _, sub in ipairs(WEAPON_SUBTYPES) do
+			if low:match("^" .. slot.pat .. "%s+" .. sub .. "$") then
+				is_weapon_type = true
+				break
+			end
+		end
+		if is_weapon_type then break end
+	end
+	if is_weapon_type then return nil, nil, "structural" end
+	-- Structural chrome (gate C1, E1, t_7b8f504a). Each of these ships on
 	-- real items in this era (captured in the repo; see the card's WHY
 	-- section and probe output at t_970229ce). Classifying as structural
 	-- rather than unknown is the right choice: they carry no stat delta
@@ -828,7 +1671,7 @@ local parseLine_ = function(line)
 	-- is a Lua pattern *quantifier* (the lazy/zero-or-one modifier), NOT a
 	-- literal hyphen — so "^unique-equipped$" matches "uniqueequipped" /
 	-- "uniqueeequipped" but never "unique-equipped". This clause was the
-	-- shipped bug (Vera run 63, Blocking 1): it was dead code and
+	-- shipped bug (gate run 63, Blocking 1): it was dead code and
 	-- "Unique-Equipped" still suppressed. The `%-` escape is the fix.
 	if plain:match("^unique%-equipped$") then return nil, nil, "structural" end
 	if plain:match("^item level%s+%d") then return nil, nil, "structural" end
@@ -855,9 +1698,15 @@ local parseLine_ = function(line)
 	-- unparsed on purpose: there is no Healing or FireSpellPower word to put
 	-- them in, and folding them into generic SpellPower would lie.
 	-- SpellPower is a known word so the line no longer suppresses. It is not
-	-- in any class order (see the playtest note on Verdict.ORDERS): a melee
-	-- character is judged on the item's other stats, and a caster is still
-	-- judged on the documented int/spi/sta order. Spell power does not decide.
+	-- in any class ORDER (see the playtest note on Verdict.ORDERS), so an
+	-- ORDINAL verdict is unchanged by it: a melee character is judged on the
+	-- item's other stats, and a caster is still judged on the documented
+	-- int/spi/sta order, and a pair whose only difference is spell power
+	-- stays level on the relevance set. What the owner's later ruling added
+	-- (card t_b7cd07e1, "Spell power gets a weight from the packs") is a
+	-- WEIGHT: this word now enters the weighted sum of an ordinal trade-off
+	-- as the SPOW word of WEIGHT_KEYS below, priced from the pack the table
+	-- cites (see the SPELL POWER note in Weights.lua).
 	local spn = plain:match(
 		"^equip:%s*increases damage and healing done by magical spells and effects by up to (%d+)%.?$")
 	if spn then return tonumber(spn), "SpellPower" end
@@ -887,8 +1736,8 @@ local parseLine_ = function(line)
 end
 
 -- Parse an enchant payload line into a (partial) stats table, using only the
--- verbatim shape observed in the capture (t_ea70928d ruling — jia-clean
--- amendment, Mightie signed off): "word +num" or "word +num and word +num"
+-- verbatim shape observed in the capture (t_ea70928d ruling — the implementer
+-- amendment, the maintainer signed off): "word +num" or "word +num and word +num"
 -- (1-2 pairs, case-insensitive, word-then-number, "+" attached to the number).
 -- The evidence base is n=1 (the Handstitched Leather Vest is the only
 -- enchanted fixture in phase-d-evidence/), so anything outside that shape
@@ -945,6 +1794,30 @@ local API_WORD_TEXT = {
 	Armor      = { "armor" },
 	SpellPower = { "spell power", "spellpower", "spell damage", "spell healing",
 	               "magical spells", "damage and healing", "spells and effects" },
+	-- card t_795eee9e: the extended reader's own phrasings. The plain one-word
+	-- lines (a "N Hit"-style spelling) fall back to the word's lowercased name
+	-- in lineNamesWord, so the entries below exist for the shapes the fallback
+	-- cannot see — the two-word and sentence spellings — and to say, in the
+	-- source, which lines claim which word.
+	Hit   = { "hit" },
+	Crit  = { "crit" },
+	-- card t_9d3273cb: there is no separate spell needle set any more, because
+	-- there is no separate spell word. The "hit" and "crit" needles above cover
+	-- the spell phrasings too, and that is not a loss of precision — a "hit with
+	-- spells" line IS the Hit stat. (Before this card the claim loop had to put
+	-- the longer spell needles first, since sorted order would otherwise let the
+	-- shorter "hit" win; with one word there is nothing to disambiguate.)
+	FeralAttackPower = { "in cat, bear", "feral attack power",
+	                     "dire bear", "moonkin" },
+	Defense = { "defense" },
+	Dodge   = { "dodge" },
+	Parry   = { "parry" },
+	Block   = { "block value", "block" },
+	AttackPower       = { "attack power", "attackpower" },
+	RangedAttackPower = { "ranged attack power" },
+	MP5 = { "mana per 5", "mana regen", "mp5" },
+	HP5 = { "health per 5", "health regen", "hp5" },
+	WeaponDps = { "weapon dps", "damage per second" },
 }
 
 -- Does this tooltip line talk about `word`? Pure string work; no number is read
@@ -970,12 +1843,47 @@ end
 -- the reader, and those lines used to suppress the item
 -- ("cannot classify: Item used in guide: …").
 --
--- A header starts a skip-to-end: the block and everything after it is foreign.
--- Sell price is the item's own terminator. A later line that carries a number
--- is an addon delta ("-8 Armor") and is foreign; a number-free line is
--- wardrobe chrome and stays, so the cosmetic path can ignore it and say so.
--- A genuine unparsed stat ("+15 Frost Resistance", a healing-only Equip line)
--- sits in the item body, before that terminator, and still suppresses.
+-- ⚠ THIS IS THE FALLBACK, NOT THE RULE (card t_4ff4ebef). The ruling is the
+-- structured read: `itemLines` (ChestAdvisor.lua) asks
+-- `C_TooltipInfo.GetHyperlink` first, and that read carries the item's own data
+-- and nothing another addon appended — measured on the owner's live client by
+-- card t_119d120c (9 lines structured vs 14 rendered; the annotation and the F6
+-- prompt are ABSENT from the structured side). On a client with the API there is
+-- nothing here to do, and a foreign line cannot reach the judge at all.
+--
+-- What is left here is the client WITHOUT the API, and on that path a line can
+-- only be recognised by its own text. Card t_4ff4ebef fixed two defects in how
+-- this fallback does that:
+--
+--   1. THE MARKER WAS A PREFIX. `plain:sub(1, #header) == header` matched a
+--      header only at the very START of a line. RestedXP spells its own line
+--      "Item used in guide: …", but a wrapper ("RestedXP: Item used in guide:
+--      …") put the same annotation out of reach — and the line then fell into
+--      the ordinary classifier: the number-free form was counted as a
+--      "cosmetic line ignored" (false — it is not the item's prose) and the
+--      number-carrying form SUPPRESSED the item ("cannot classify: RestedXP:
+--      Item used in guide: 12-14 Silverpine Forest"). The marker is now sought
+--      ANYWHERE in the de-coloured line, which is what "this line contains
+--      another addon's annotation" actually means.
+--   2. THE SET-ASIDE WAS INVISIBLE. Everything from the header onward was thrown
+--      away and `parseSide` never heard of it, so the tooltip could report a
+--      COMPLETE read of an item whose tooltip it had silently truncated. The
+--      split now hands the set-aside lines back (`Verdict.splitForeign`), and
+--      they are disclosed as FOREIGN — never as cosmetic, because they are not
+--      the item's own prose (the card's requirement 3: what the message reports
+--      must match what was actually set aside).
+--
+-- A header still starts a skip-to-end: the block that follows a header belongs
+-- to the addon ("If you replace this item…", "-8 Armor"), and those rows would
+-- otherwise parse as real stats. Dropping the tail is the safe direction — it is
+-- now a REPORTED drop rather than a silent one.
+--
+-- Sell price is the item's own terminator. A line after it that carries a number
+-- is an addon delta ("-8 Armor") and is foreign; a number-free line is wardrobe
+-- chrome and stays, so the cosmetic path can ignore it and say so. A genuine
+-- unparsed stat ("+15 Frost Resistance", a healing-only Equip line) sits in the
+-- item body, before that terminator, and still suppresses (fail-closed stays —
+-- the card's constraint).
 local FOREIGN_LINE_HEADERS = {
 	"item used in guide",
 	"if you replace this item",
@@ -983,42 +1891,65 @@ local FOREIGN_LINE_HEADERS = {
 	"touchstone:",
 }
 
-function Verdict.nativeLines(lines)
-	if type(lines) ~= "table" then return lines end
-	local out = {}
+-- Does this de-coloured, lower-cased, trimmed line carry one of the markers?
+-- CONTAINMENT, not prefix — see item 1 above. `find(..., true)` is a plain
+-- substring search, so a header can never be read as a Lua pattern.
+local function foreignMarker(plain)
+	for i = 1, #FOREIGN_LINE_HEADERS do
+		if plain:find(FOREIGN_LINE_HEADERS[i], 1, true) then return true end
+	end
+	return false
+end
+
+-- Split one side's raw lines into the ITEM's own lines and the lines set aside
+-- as foreign. Returns (kept, foreign): two arrays of the raw strings, in the
+-- order they were met. A non-table input passes straight through as
+-- (input, empty), so "no read" stays "no read".
+--
+-- This is the ONE definition of "not the item" on the rendered path. No other
+-- file keeps a list of foreign strings: ChestAdvisor.lua's disclosure renders
+-- what THIS returns rather than naming shapes of its own.
+function Verdict.splitForeign(lines)
+	if type(lines) ~= "table" then return lines, {} end
+	local kept, foreign = {}, {}
 	local drop = false
 	local seenSell = false
 	for _, line in ipairs(lines) do
-		if not drop and type(line) == "string" then
+		if type(line) == "string" then
 			local plain = deColour_(line:lower())
 			plain = plain:gsub("^%s+", ""):gsub("%s+$", "")
-			local foreign = false
-			for _, header in ipairs(FOREIGN_LINE_HEADERS) do
-				if plain:sub(1, #header) == header then
-					foreign = true
-					break
-				end
-			end
-			if not foreign and seenSell then
+			local isForeign = foreignMarker(plain)
+			if not isForeign and seenSell then
 				local epilogue = plain:match('^".*"$')
 					or plain:match("^<made by")
 					or plain:match("^made by%s+")
 				-- A numbered line after the sell price is an addon delta
 				-- ("-8 Armor"). A number-free line is wardrobe chrome; leave
 				-- it so the cosmetic path can ignore it and say so.
-				if not epilogue and plain:find("%d") then foreign = true end
+				if not epilogue and plain:find("%d") then isForeign = true end
 			end
-			if foreign then
+			if drop then
+				-- The block a header opened continues; it is not the item.
+				foreign[#foreign + 1] = line
+			elseif isForeign then
 				drop = true
+				foreign[#foreign + 1] = line
 			else
-				out[#out + 1] = line
+				kept[#kept + 1] = line
 				if plain:match("^sell%s*price") or plain:match("^sells for") then
 					seenSell = true
 				end
 			end
 		end
 	end
-	return out
+	return kept, foreign
+end
+
+-- The item's own lines, for callers that do not need to disclose the split.
+-- The SAME kept table `splitForeign` returns, so there is one rule, not two.
+function Verdict.nativeLines(lines)
+	local kept = Verdict.splitForeign(lines)
+	return kept
 end
 
 -- Parse a whole side (a list of raw tooltip lines) into:
@@ -1039,6 +1970,16 @@ end
 -- A line carrying a NUMBER that cannot be read still lands in `unknown` and
 -- still suppresses, unchanged (requirement 2 — the guard's whole point).
 --
+-- `foreign` (card t_4ff4ebef) is the FIFTH return: the raw lines the side's
+-- reader composed and this parse SET ASIDE as not-the-item (another addon's
+-- annotation and the block it opens). They are deliberately NOT in `ignored`:
+-- `ignored` means "the item's own prose that carried no number", and a foreign
+-- line is neither the item's nor cosmetic. Handing them back separately is what
+-- keeps the disclosure countable and honest — a reader that truncated the
+-- tooltip can say so, in its own words, instead of adding to a cosmetic total it
+-- has no business being in. Empty when nothing was set aside (always empty on a
+-- client whose structured read is present, because nothing foreign is in it).
+--
 -- `apiWords` (card t_548f0341, OPTIONAL) is the client's own stat read, already
 -- mapped to this module's stat words by Verdict.apiStats at the impure edge.
 -- It is used for ONE thing: a line the text parser cannot place is EXPLAINED
@@ -1047,9 +1988,17 @@ end
 -- the parse changes, and with `apiWords` nil every branch below is byte-identical
 -- to the pre-card behaviour — the fail-closed answer for an absent API.
 local parseSide = function(lines, side, apiWords)
-	local stats, procWord, unknown, ignored = {}, nil, nil, {}
-	if type(lines) ~= "table" then return stats, procWord, unknown, ignored end
-	lines = Verdict.nativeLines(lines) or lines
+	local stats, procWord, unknown, ignored, foreign = {}, nil, nil, {}, {}
+	if type(lines) ~= "table" then return stats, procWord, unknown, ignored, foreign end
+	-- Card t_4ff4ebef: the foreign split happens HERE, at the parse boundary, and
+	-- not as a caller's option. Anything set aside below never reaches the
+	-- classifier, so a line another addon composed can never be counted as this
+	-- item's "cosmetic" prose (nor suppress it) — while `foreign` is handed back
+	-- so the disclosure can say what was set aside instead of implying a
+	-- complete read.
+	local kept, setAside = Verdict.splitForeign(lines)
+	lines = kept or lines
+	foreign = type(setAside) == "table" and setAside or {}
 	local nonblank = function(l)
 		return type(l) == "string" and l:gsub("^%s+", ""):gsub("%s+$", "") ~= ""
 	end
@@ -1096,7 +2045,7 @@ local parseSide = function(lines, side, apiWords)
 		apiUsed[word] = true
 		stats[word] = api[word]
 	end
-	-- Name-line rule (Vera C1): a real item tooltip's position 1 is the item
+	-- Name-line rule (gate C1): a real item tooltip's position 1 is the item
 	-- NAME — free text no content pattern can enumerate, and a chest's name
 	-- may itself start with "Chest "+material. A name-shape is a letter-first
 	-- line ("Trailblazer Vest", "Chest of Frost Mail"); a stat-shape always
@@ -1179,7 +2128,7 @@ local parseSide = function(lines, side, apiWords)
 			elseif kind == "structural" then
 				-- Legitimate tooltip chrome (durability, requires-level,
 				-- sell price, type line): ignorable, NOT a suppression
-				-- (Vera C1).
+				-- (gate C1).
 			elseif nonblank(line) then
 				-- A non-blank line we could not place. Card t_b7a9e7a5
 				-- splits this tail in two, and ORDER MATTERS:
@@ -1218,7 +2167,60 @@ local parseSide = function(lines, side, apiWords)
 			end
 		end
 	end
-	return stats, procWord, unknown, ignored
+	-- ── FOLD THE UNCONFIRMED WORDS NO LINE NAMED (card t_e894c90f) ───────────
+	-- THE DEFECT, measured: everything above folds an apiStats word into a side
+	-- only when a LINE names it (`explain` -> `fold`). A word the client's read
+	-- carries and no tooltip line mentions was therefore never folded, never
+	-- suppressed, never reported — it was ABSENT from the pair, and the pair
+	-- decided on the words that survived. On the card's own shape (both sides
+	-- "+5 Stamina", candidate's client read Dodge 6, worn's Dodge 12, no naming
+	-- line) that read NOT_UPGRADE "equal": two measurably different unmeasured
+	-- ratings silently excluded. With a priced word in the same position the
+	-- pair could read UPGRADE over a stat the item does not have.
+	--
+	-- THE RULING (the reviewer, owner-delegated, 2026-10-20): OPTION A — fold ONLY the
+	-- words in UNCONFIRMED_UNITS that no line named, HERE at the parse boundary.
+	-- Final. Option B (fold every verified apiStats word) was rejected — it moved
+	-- 30 of 120 sweep rows for nothing this does not buy; C and as-is were
+	-- rejected because they leave a confident wrong answer in place.
+	--
+	-- WHY THE FOLD IS THE WHOLE FIX, and why it is at the BOTTOM of the parse and
+	-- not in the comparator: a folded word lands in `stats` exactly where a
+	-- naming line's word lands, so the EXISTING gates see it with no second copy
+	-- of the rule anywhere — gate 5b/8b (Verdict.unpricedWord) closes a pair on
+	-- an UNCONFIRMED_UNITS word by PRESENCE, naming it in the module's own
+	-- vocabulary. Dodge and Parry are presence-rule words (the difference-only
+	-- set is empty since t_9d3273cb), so this closes on their presence on either
+	-- side, equal values included. That bluntness is the ruling's, and it is
+	-- disclosed rather than discovered: moving them to UNCONFIRMED_DIFFERENCE_ONLY
+	-- would change TEXT behaviour too and is a separate ruling, not this card.
+	--
+	-- WHAT IT MUST NOT DO (the ruling's explicit bound): do not widen it to
+	-- priced words, do not touch Weights.lua, do not change a weight, and do not
+	-- fold a word a line DID name — a priced word's naming line is read by the
+	-- loop above and stays the primary path, and an unconfirmed word's naming
+	-- line is already claimed by `explain` (API_WORD_TEXT carries "dodge" and
+	-- "parry"), so `apiUsed[w]`/`rawget(stats, w)` are already set for it.
+	--
+	-- `type(rawget(api, w)) == "number"` is the same fail-closed bar as everywhere
+	-- else in this module: a non-number is not a value and is not folded. The
+	-- sorted order is for a repeatable choice when more than one unconfirmed
+	-- word is unnamed (pairs() is unordered), the same discipline as `apiOrder`.
+	if api then
+		local unconfirmed = rawget(Verdict, "UNCONFIRMED_UNITS")
+		if type(unconfirmed) == "table" then
+			local pending = {}
+			for w, flagged in pairs(unconfirmed) do
+				if flagged == true and not apiUsed[w] and rawget(stats, w) == nil
+					and type(rawget(api, w)) == "number" then
+					pending[#pending + 1] = w
+				end
+			end
+			table.sort(pending)
+			for i = 1, #pending do fold(pending[i]) end
+		end
+	end
+	return stats, procWord, unknown, ignored, foreign
 end
 
 -- Compare two sides along an ordered list of stat names.
@@ -1237,8 +2239,42 @@ local orderedCompare = function(candidate, equipped, order)
 	return "equal"
 end
 
+-- PLAYER WORDS, NEVER THE INTERNAL TOKEN (card t_b91b29f9, item 7). A reason
+-- is read on screen, so the stat it names must be spelled the way the player
+-- reads it on the item. Most words already are (Strength, Armor, SpellPower);
+-- the one below is a token DD-1 introduced and is NOT a player's spelling, so
+-- a feral trade-off read "better on FeralAttackPower".
+-- Only those are mapped: routing every word through STAT_LABEL would print
+-- "better on Str" and change wording nobody asked to change. ONE map, read by
+-- both the ordinal reasons and the weighted layer's gain/loss clause.
+-- (Card t_9d3273cb retires the two spell entries with the two spell words;
+-- "Hit" and "Crit" are already a player's spelling.)
+local REASON_WORD = {
+	FeralAttackPower = "Feral AP",
+}
+
+local function playerWord(statWord)
+	if type(statWord) ~= "string" then return statWord end
+	return REASON_WORD[statWord] or statWord
+end
+
+-- The vocabulary, published. The reason builders above are its only shipped
+-- consumers; it is exposed so a test can pin what a PLAYER will read (card
+-- t_b91b29f9, item 7) without grepping source — the alternative was a test that
+-- re-implements the map and therefore proves nothing about the shipped path.
+Verdict.playerWord = playerWord
+
 local function winReason(statWord)
-	return "upgrade: better on " .. (statWord or "a role stat")
+	return "upgrade: better on " .. (playerWord(statWord) or "a role stat")
+end
+
+-- The MIRROR of winReason, for the DOWNWARD call (card t_4590ab7e, item 1).
+-- One vocabulary, not two: the ordinal NOT_UPGRADE reason already words a loss
+-- as "worse on <stat> than what's equipped", so the weighted loss is worded with
+-- exactly that string rather than with a new one. `nil` statWord keeps the same
+-- "a role stat" fallback winReason uses, so neither direction can print a nil.
+local function loseReason(statWord)
+	return "worse on " .. (playerWord(statWord) or "a role stat") .. " than what's equipped"
 end
 
 -- Tank path (card t_89440dfa): the third verdict. A pair that is better on some
@@ -1272,6 +2308,992 @@ local function tradeOffReason(candStats, eqStats, firstDiff)
 		head = head .. " (" .. firstDiff .. " " .. cs .. " vs " .. es .. ")"
 	end
 	return head
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- (card t_984bc8ac) THE WEIGHTED RESOLUTION LAYER — the owner's supersede.
+--
+-- RULED 2026-10-04 (the Tier C note below, and the old gate-9 comment): "Read
+-- the numbers. Order by prose. No stat weight anywhere." SUPERSEDED
+-- 2026-10-13 by the owner: "Supersede. Ship card 2 to your spec." The history
+-- is kept, not deleted — the ruled text is still quoted below.
+--
+-- WHAT IT IS, and the three properties that make it safe:
+--   1. ADDITIVE. It runs ONLY where the ordinal dominance test returned
+--      "trade-off" (gate 9). A dominant candidate is UPGRADE and a dominated
+--      one NOT_UPGRADE with or without a weight; the Armor/Block tiebreak, the
+--      lower-armor material rule (allow()) and every suppression gate (5, 8)
+--      keep firing exactly as before, and BEFORE this layer.
+--   2. FAIL-SAFE. No table, no table for this class/spec, a table that does
+--      not validate, a non-number threshold, or a weighted total that is not
+--      clearly positive -> nil, and the caller returns TODAY'S EXACT
+--      TRADE_OFF. Weights never widen a verdict on absent data.
+--   3. DISCLOSED. A resolved verdict still names the deciding stat in the same
+--      player words the ordinal path used ("upgrade: better on Armor") and
+--      ALSO names the loss the weights accepted. No bare number, no internal
+--      token, no silent trade-off.
+--
+-- THE ONE ENVIRONMENT READ IN THIS MODULE (see the file header): the table is
+-- Weights.lua's StatForge.Weights. It is probed at CALL time and never cached,
+-- so a test VM can install, replace or delete it between two calls — which is
+-- how the fail-safes above are proven rather than argued.
+
+-- The weighted vocabulary: the stat words this addon can read off a tooltip,
+-- in a FIXED order. The order is load-bearing: it is the deterministic tie-break
+-- for which stat is named as the decider when two contribute equally.
+--
+-- SPOW (card t_b7cd07e1 — the owner's ruling "Spell power gets a weight from the
+-- packs"). The word is "SpellPower", the SAME word parseLine_ already produces
+-- for the classic sentence (Verdict KNOWN, the ITEM_MOD_SPELL_POWER mapping) —
+-- the schema reads the parsed table by that word, so the parser does not change.
+-- Appending last keeps every existing tie-break naming byte-identical: SPOW loses
+-- a naming tie to every word before it, and no pair in the suite names a tie
+-- between SPOW and another word, so the ordinal wording is unchanged everywhere.
+--
+-- The ten words card t_795eee9e added — HIT, CRIT, AP, RAP, MP5, HP5, DEF,
+-- DODGE, PARRY, WDN — the rest of the vocabulary the cited packs price
+-- (hitRating, critRating, attackPower, rangedAttackPower, mp5, hp5,
+-- defenseRating, dodgeRating, parryRating, weaponDps). They sit BEFORE SPOW,
+-- for the same non-vacuity reason as SPOW's own position: the companion
+-- weights_scoring-nonvacuity.js anchors its break on the SPOW line landing
+-- directly above a table's `source` line, so a new row must not come between
+-- them. And they sit AFTER Block: every pre-card tie-break names one of the
+-- first seven words, so inserting new words after them cannot change which
+-- word a pre-card pair names — the ordinal wording of every old pair is
+-- untouched, and the new words only ever name a pair that carries them.
+-- The word card t_3cdbb70a (DD-1) adds — FAP — also sits BEFORE SPOW and
+-- AFTER WDN, for the same two reasons: the non-vacuity anchor on the SPOW
+-- line, and "a pre-card pair's naming tie is untouched" (the new row comes
+-- after every word a pre-card pair could carry).
+--
+-- ── CARD t_9d3273cb: THE SPELL HALVES RETIRE — ONE HIT, ONE CRIT ─────────────
+-- DD-1 added two further keys here, the spell spellings of the same two pack
+-- numbers, and this card removes them. THE FACT is the client's own recap,
+-- read verbatim:
+--
+--   "Spell, melee, and ranged hit chance are combined, as are spell, melee,
+--    and ranged critical chance."
+--
+-- A spell-hit item and a melee-hit item therefore carry ONE stat, and one stat
+-- has one price. Two keys meant one item could be priced twice over: a caster's
+-- +14 crit rating item priced 0.6 x 14 = 8.4 through the spell key and 0 through
+-- the crit key, purely because the client printed the spell spelling of the
+-- stat's key. That is not a judgement the weights are entitled to make — the
+-- packs price hitRating and critRating once per spec, and every table now
+-- carries that one number on HIT and CRIT.
+--
+-- WHAT THIS MOVES, named rather than left to be discovered: on every CASTER
+-- table (spell / healer / damager) HIT and CRIT take the numbers the two spell
+-- keys used to carry; on every MELEE / TANK table nothing changes, because the
+-- numbers were already there. Two consequences follow, and both are pinned by
+-- ChestAdvisor/tests/t_9d3273cb.js: a caster's MELEE-hit item now PRICES at his
+-- own hit weight instead of being refused by a zero at HIT, and a warrior's
+-- SPELL-hit item prices at his hit weight instead of being refused. Those
+-- refusals were the split's whole purpose, and the recap is why they were never
+-- the right answer.
+--
+-- THE ORDER WHERE IT MATTERS IS UNCHANGED: "Hit" and "Crit" keep the exact
+-- positions they already held, so every pre-card tie-break names the word it
+-- named before and no ordinal verdict moves for a NAMING reason. A pair that
+-- moves moves because a number now prices where a zero used to, which is what
+-- docs/t_9d3273cb-changed-verdicts.txt measures row by row.
+local WEIGHT_KEYS = { "STR", "AGI", "STA", "INT", "SPI", "ARMOR", "BLOCK",
+                      "HIT", "CRIT", "AP", "RAP", "MP5", "HP5",
+                      "DEF", "DODGE", "PARRY", "WDN",
+                      "FAP", "SPOW" }
+-- The same set, as a lookup, for the two validators that must answer "is this
+-- one of the words above?" — derived from the list so the two cannot disagree.
+local WEIGHT_KEY_SET = {}
+for _, k in ipairs(WEIGHT_KEYS) do WEIGHT_KEY_SET[k] = true end
+local WEIGHT_WORD = {
+	STR = "Strength", AGI = "Agility", STA = "Stamina", INT = "Intellect",
+	SPI = "Spirit", ARMOR = "Armor", BLOCK = "Block",
+	HIT = "Hit", CRIT = "Crit", AP = "AttackPower", RAP = "RangedAttackPower",
+	MP5 = "MP5", HP5 = "HP5", DEF = "Defense", DODGE = "Dodge",
+	PARRY = "Parry", WDN = "WeaponDps",
+	-- card t_3cdbb70a (DD-1): feral-only attack power (see ITEM_STAT_KEYS for
+	-- why it is its own word). The two spell words are gone with their two keys
+	-- — card t_9d3273cb, see the retirement note above.
+	FAP = "FeralAttackPower",
+	SPOW = "SpellPower",
+}
+
+-- ── THE PROOF'S PRICED TERMS (card t_da23ec75) ──────────────────────────────
+--
+-- "Order = wording, priced set = proof." This is the second half of that
+-- sentence, as DATA and one pure function: `Verdict.proofTerms` builds the term
+-- list `Verdict.dominance` decides on, and gate 9 of `Verdict.evaluate` hands it
+-- the pair's own resolved pack.
+--
+-- WHAT GOES IN, in this order:
+--   1. the class/role's documented ORDER, verbatim, first. That is what keeps
+--      every pre-card reason byte-identical: the first differing order term is
+--      still the first term the proof meets, so a pair the old proof decided is
+--      worded exactly as it was.
+--   2. every word this pack prices at a non-zero weight, in WEIGHT_KEYS order
+--      (the same order `weightedScore` walks, so a naming tie between two priced
+--      words resolves the way the weighted layer resolves it).
+-- A word priced at 0 is NOT a term: gate 8b already refuses such a pair rather
+-- than pretending the word weighs nothing, so the proof never has to guess.
+--
+-- WHAT DOES NOT GO IN — `Verdict.PROOF_EXEMPT`, one reason each:
+--   * Armor, Block — they are the TIEBREAK, and only that. E2 (t_8bc7d7f2,
+--     §4.1a) ruled "armour is never a win, only a tiebreak" and graded
+--     AC-E13(b) "armour never overturns a class-order loss": inside the proof a
+--     higher-armour/lower-primary pair would read TRADE_OFF and overturn the
+--     loss, which is the ruling that gate 9's tiebreak exists to prevent.
+--   * WeaponDps — priced on the WEAPON path's own channel (compareDPS and
+--     option (b)'s "DPS as a minor term"), never by this proof. A weapon pair
+--     consults DPS exactly when its stats are level; making WeaponDps a stat
+--     term here would let a pack price outvote that ruled tie-break and would
+--     count the same number twice.
+Verdict.PROOF_EXEMPT = {
+	Armor = true,
+	Block = true,
+	WeaponDps = true,
+}
+
+-- Returns the proof's term list: the order's words (deduplicated, order kept)
+-- followed by this pack's priced words that the order does not already name.
+-- Neither input is mutated; a no-table weights argument returns just the order
+-- half (an unpriceable pair keeps the ordinal proof it had).
+--
+-- ⚠ AN ORDER WITH NO WORDS RETURNS NO TERMS AT ALL — not even the priced half.
+-- `Verdict.evaluate` normalises a nil spec.order to an empty table before gate
+-- 9, so the empty case, not the nil one, is what a shipping call actually hands
+-- over. Without an order there is no WORDING for a pair, and a class/role the
+-- corpus documents no order for must not be judged by a table either: that is
+-- C1b's rule ("stay UNKNOWN instead of reading a guessed arrow"). This is a
+-- guard for any FUTURE order-less class/role; since card t_6c3f414a no shipped
+-- ORDERS entry is order-less, so no shipping row reaches it today.
+function Verdict.proofTerms(order, weights)
+	if type(order) ~= "table" or #order == 0 then return {} end
+	local terms, seen = {}, {}
+	local function add(word)
+		if type(word) ~= "string" or seen[word] then return end
+		seen[word] = true
+		terms[#terms + 1] = word
+	end
+	for _, word in ipairs(order) do add(word) end
+	if type(weights) == "table" then
+		for _, key in ipairs(WEIGHT_KEYS) do
+			local w = rawget(weights, key)
+			if type(w) == "number" and w > 0 then
+				local word = WEIGHT_WORD[key]
+				if word ~= nil and not rawget(Verdict.PROOF_EXEMPT, word) then
+					add(word)
+				end
+			end
+		end
+	end
+	return terms
+end
+
+-- ── THE NAMED THRESHOLD ────────────────────────────────────────────────────
+-- The smallest weighted MARGIN that may overturn a TRADE_OFF — into an UPGRADE
+-- when the candidate is ahead, and into a NOT_UPGRADE when it is behind (card
+-- t_4590ab7e, item 1: ONE threshold, both directions).
+--
+-- THE FORMULA, read out of the code rather than asserted. `weightedScore`
+-- returns two numbers:
+--   delta    = sum of  w[k] * (cand[k] - eq[k])   — the weighted NET
+--   disagree = sum of |w[k] * (cand[k] - eq[k])|  — the TOTAL disagreement, i.e.
+--              the weighted gain PLUS the weighted loss
+-- so `delta / disagree` is exactly the SIGNED form
+--   (gain − loss) / (gain + loss)
+-- because `gain` is the sum of the positive terms and `loss` the magnitude of the
+-- negative ones, so `delta = gain − loss` and `disagree = gain + loss`. The margin
+-- the threshold is actually compared against is that quantity's MAGNITUDE,
+--   margin = |delta| / disagree = |gain − loss| / (gain + loss),
+-- so a lead and a deficit of the same size are the same distance from the bar and
+-- ONE constant governs both.
+--
+-- The equivalence to the "three times" claim is then algebra, not assertion, and
+-- it reads the same in both directions:
+--   a GAIN resolves  <=>  (g − l)/(g + l) >= 0.5  <=>  2g − 2l >= g + l  <=>  g >= 3l
+--   a LOSS resolves  <=>  (l − g)/(g + l) >= 0.5  <=>  2l − 2g >= g + l  <=>  l >= 3g
+-- i.e. the side that wins must outweigh the side that loses by at least three to
+-- one, whichever side that is.
+--
+-- WORKED ON REAL CASES, both directions of the same one-parameter family
+-- (WARRIOR.melee = STR 1.0 / STA 0.3, equal Armor, so with a +s Strength candidate
+-- against a +w Stamina worn item: gain = s, loss = 0.3w).
+--   the near-tie in the case set (`weights_scoring.js`, PAIR_NEARTIE: +3 Strength
+--   vs +4 Stamina): g = 3.0, l = 1.2 → margin = (3.0 − 1.2)/(3.0 + 1.2) = 1.8/4.2
+--   = 0.4286 < 0.5 and 3.0 >= 3 × 1.2 = 3.6 is FALSE — it stays TRADE_OFF.
+--   the clear win (PAIR_CLEARWIN: −1 Strength, +4 Stamina, +70 Armor): delta =
+--   −1.0 + 1.2 + 3.5 = 3.7, disagree = 5.7 → margin 0.649 >= 0.5 → UPGRADE, and
+--   g = 4.7 >= 3 × 1.0 = 3.0.
+--   the DOWNWARD boundary (candidate +3 Strength vs worn +30 Stamina): g = 3.0,
+--   l = 9.0 → margin = 6.0/12.0 = 0.5 exactly, and l = 9.0 = 3 × g — the first
+--   item that resolves downward, which is what `t_4590ab7e`'s test pins.
+--
+-- 0.5 is a POLICY choice, not a measurement, and it is the one number this
+-- layer adds to the repo. The card requires a threshold that is REAL, so the
+-- near-tie case in the case set sits just under it (margin 0.43) and the
+-- non-vacuity leg sets this to 0 and requires that case to redden.
+--
+-- A NON-NUMBER (nil, a string, a boolean) disables the layer entirely: no
+-- threshold, no verdict widening in EITHER direction. Public so a test can move
+-- it; no shipped path writes it.
+Verdict.WEIGHT_THRESHOLD = 0.5
+
+-- The weights table for a class/spec, VALIDATED — or nil. Public: it is the
+-- one place the resolution order and the validation can be driven directly.
+--
+-- The resolution order (the addon's own role vocabulary first, then the
+-- client's literal):
+--   1. `clientRole` — the client's uppercase literal, lowercased. This is how
+--      a class's THIRD spec is reachable: a Protection paladin's client role
+--      is TANK, which ROLE_ALIAS folds to "spell" for the ORDER (a
+--      conservative proxy — RULING (c) on t_0b4ddfa9), while a weight table
+--      can carry the real Prot pack. A "tank" key that could never be
+--      consulted would be dead data, so the literal wins over the folded word.
+--   2. `role` — the addon's own word ("melee" | "spell"), accepted only when
+--      it is a role this class actually documents. ChestAdvisor.lua's
+--      buildSpec passes the class TOKEN as `role` for a pure class with no
+--      role picked; that label must never be mistaken for a spec key.
+--   3. A PURE class falls back to its single documented order's key: a Warrior
+--      with no role picked has exactly one spec, and it is "melee". Step 3 is
+--      SKIPPED when the pack it resolves to is published for a DIFFERENT client
+--      role word than the one the client named — the F2 NOTE below.
+-- Anything else returns nil, and the ordinal path owns the row: an unknown
+-- class, a class with no table, a hybrid with no resolved role, a client word
+-- whose pack belongs to another client word (the F2 fail-closed), or a table
+-- that fails validation (below).
+--
+-- NOTE on step 3 (card t_6fda2ec5 — gate t_9362815f, F3; corrected by card
+-- t_41697d02 — gate t_35b75690, F2): that fallback is unconditional for a pure
+-- class whose pack is not published for a client role word. It fires whatever
+-- `role` was passed, so weightsFor("WARRIOR", "spell") and
+-- weightsFor("WARRIOR", nil, "HEALER") both resolve WARRIOR.melee instead of
+-- returning nil. That is deliberate — it mirrors classRoleOrder, which ignores
+-- `role` for a pure class too — and it is still what the shipped caller needs:
+-- a Warrior's only picker word is "melee", the client's DAMAGER literal folds
+-- to nil -> the class token -> this step, and no literal key points at
+-- WARRIOR.melee (WARRIOR.tank is a different table), so the fail-closed below
+-- does not reach it.
+--
+-- The correction. This NOTE used to say "no shipped caller reaches it". For
+-- PRIEST that is false, and has been since card t_f823566a made it a two-key
+-- class: a Holy priest's client role IS the literal HEALER, a shipped caller of
+-- step 1 — and with its key absent or unreadable, the class token falls through
+-- step 2 to step 3 and answers with `spell`, the SHADOW pack (the same table
+-- object as `damager`, so the table publishes `spell` as the DAMAGER pack), thus
+-- judging a Holy row by Shadow numbers and widening it instead of declining.
+-- A client word the table does not carry therefore REFUSES a fall-through pack
+-- that is published for another client word: the row reads its ordinal verdict
+-- and the reason says why. Executed in ChestAdvisor/tests/weights_scoring.js.
+--
+-- The table is refused WHOLE unless EVERY one of the schema's keys (WEIGHT_KEYS
+-- above — originally seven plus SPOW, extended to eighteen by card t_795eee9e
+-- and to nineteen by card t_3cdbb70a's FAP; card t_9d3273cb retired the two
+-- spell keys that once made it twenty-one)
+-- is a finite, non-negative number, `source` is a non-empty string, AND `source`
+-- CARRIES
+-- the provenance marker the weight file publishes (SF.WEIGHTS_MARKER). A
+-- partial table is not a table: a missing key is not a 0, and a stat the table
+-- does not price must not be silently dropped out of the sum. The marker check
+-- is what makes Weights.lua's honest label load-bearing rather than
+-- decorative — an unlabelled table is never used, and neither is one in an
+-- environment that cannot say what the marker is (fail-closed).
+--
+-- The OPTIONAL `directional` field (card DD-0) is ACCEPTED here — it is how a
+-- table declares the keys that deliberately override the pack its `source`
+-- names, and refusing it would force every honest non-pack value to be hidden
+-- as "sourced". Accepting it loosens NOTHING above: every key in WEIGHT_KEYS
+-- is still required and `source` still carries the marker. (This comment used
+-- to say "eight keys" — the count was true when DD-0 was written and is not
+-- any more: the set IS WEIGHT_KEYS, which card t_9d3273cb shortened by retiring
+-- DD-1's two spell keys. Naming the list instead of counting it is the only
+-- wording that cannot go stale; card t_d53877b1 §3 reports the same drift in
+-- the two places it was still written out — Weights.lua's header, which this
+-- card DID touch, and the citation diff's refusal message, which derives the
+-- number from the key list it prints.) What IS enforced is that the field is a list of
+-- KEYS — a table whose every entry names a key in WEIGHT_KEYS and is exactly
+-- `true`. An entry naming a key the table does not carry
+-- (or carrying a VALUE instead of `true`) refuses the table whole, because a
+-- DIRECTIONAL marker pointing at nothing is a claim no test can check, and this
+-- file's posture is to decline rather than to ignore. Absent is the normal
+-- case and means "no key in this table overrides its citation".
+function Verdict.weightsFor(class, role, clientRole)
+	if type(class) ~= "string" then return nil end
+	local store = (type(_G) == "table") and rawget(_G, "StatForge") or nil
+	local all = (type(store) == "table") and rawget(store, "Weights") or nil
+	if type(all) ~= "table" then return nil end
+	local byClass = rawget(all, class)
+	if type(byClass) ~= "table" then return nil end
+
+	local orders = rawget(Verdict.ORDERS, class)
+	if type(orders) ~= "table" then return nil end
+
+	-- The client's own word (when it has one) and whether this table carries it.
+	local named, carried = nil, false
+
+	local key = nil
+	if type(clientRole) == "string" then
+		local literal = clientRole:lower()
+		named = clientRole:upper()
+		-- card t_6c3f414a (DD-3): a literal that names a spec ONLY for one role
+		-- (LITERAL_NEEDS_ROLE) claims its table only when that role is this
+		-- character's. Everything else — every literal not listed there — is
+		-- untouched, so the Protection paladin's TANK still beats its folded
+		-- "spell" exactly as before.
+		local needs = rawget(LITERAL_NEEDS_ROLE, class)
+		local neededRole = (type(needs) == "table")
+			and rawget(needs, named) or nil
+		if neededRole ~= nil and role ~= neededRole then
+			-- The client's word belongs to ANOTHER role's spec for this class:
+			-- ignore it and let the role steps answer.
+		elseif type(rawget(byClass, literal)) == "table" then
+			key = literal
+			carried = true
+		end
+	end
+	-- an unidentified druid melee (no literal, or a literal that does not name one of its packs,
+	-- e.g. HEALER or a word the client does not have) gets no pack and keeps the ordinal path (review item 11, round 2).
+	if type(role) == "string" then
+		local needsLiteral = rawget(ROLE_NEEDS_LITERAL, class)
+		local allowed = (type(needsLiteral) == "table") and rawget(needsLiteral, role) or nil
+		if type(allowed) == "table" and (named == nil or rawget(allowed, named) ~= true) then
+			return nil
+		end
+	end
+	if key == nil and type(role) == "string"
+		and type(rawget(orders, role)) == "table"
+		and Verdict.classRoleOrder(class, role) ~= nil then
+		key = role
+	end
+	if key == nil and not isHybrid(class) then
+		for k in pairs(orders) do
+			key = k
+			break
+		end
+	end
+	if key == nil then return nil end
+
+	local table_ = rawget(byClass, key)
+	if type(table_) ~= "table" then return nil end
+
+	-- FAIL-CLOSED (card t_41697d02 — gate t_35b75690, F2). The client named one
+	-- of its own role words and this table does not carry it: if the pack the
+	-- fall-through resolved to is PUBLISHED for a different client word (see
+	-- servesAnotherLiteral), it must not answer this one. A Holy priest is the
+	-- case: with `healer` absent or unreadable, steps 2 and 3 used to land on
+	-- `spell` — the DAMAGER/Shadow pack, the same table object as `damager` —
+	-- and widen a Holy row to UPGRADE instead of declining to the ordinal
+	-- trade-off. Refusing hands the row back to the ordinal path, which is what
+	-- a missing table means everywhere else in this file. A pack no literal key
+	-- publishes (WARRIOR.melee) never trips this: a Fury warrior's DAMAGER
+	-- finds no key either, and there the fall-through is the shipped, correct
+	-- answer.
+	if named ~= nil and not carried and CLIENT_ROLE_LITERALS[named]
+		and servesAnotherLiteral(byClass, table_, named) then return nil end
+
+	local source = rawget(table_, "source")
+	if type(source) ~= "string" or source == "" then return nil end
+	-- The provenance gate. The marker is read OUT of the environment (Weights.lua
+	-- publishes it as StatForge.WEIGHTS_MARKER), never spelled here, so the label
+	-- the tables carry and the label the validator looks for cannot drift — and
+	-- `find` is plain (4th arg true): the marker is text, not a pattern.
+	local marker = rawget(store, "WEIGHTS_MARKER")
+	if type(marker) ~= "string" or marker == "" then return nil end
+	if not string.find(source, marker, 1, true) then return nil end
+	for _, k in ipairs(WEIGHT_KEYS) do
+		local w = rawget(table_, k)
+		-- NaN fails `w ~= w`; +inf fails the equality; -inf fails `w < 0`.
+		if type(w) ~= "number" or w ~= w or w < 0 or w == math.huge then
+			return nil
+		end
+	end
+	-- DIRECTIONAL (card DD-0): the OPTIONAL list of keys that override the pack
+	-- this table cites. This accepts the field and validates its SHAPE only — it
+	-- reads no number, moves no weight, and relaxes none of the checks above.
+	local directional = rawget(table_, "directional")
+	if directional ~= nil then
+		if type(directional) ~= "table" then return nil end
+		for k, v in pairs(directional) do
+			-- Exactly `true`, and a key this table actually carries: `source`
+			-- and any other name is not a weight, and a value is not a marker.
+			if v ~= true or WEIGHT_KEY_SET[k] ~= true then return nil end
+		end
+	end
+	return table_
+end
+
+-- ============================================================================
+-- Card t_e2603a9c (PR #34 item 1 — the owner's OPTION 3 ruling; it supersedes
+-- the HOLD card's option 2, under which this gate read the class ORDER):
+-- the unpriced-stat gate. One section, one word map, one reason shape.
+--
+-- THE RULING, as implemented: a compared stat closes the pair (UNKNOWN)
+-- ONLY if its word is in UNCONFIRMED_UNITS (and not in
+-- UNCONFIRMED_DIFFERENCE_ONLY).  A zero or missing weight means the stat is
+-- worth 0 to this spec; the weighted layer already yields 0 * delta = 0, so
+-- it contributes nothing and does NOT close the pair.  Card C1 (Vibe Check
+-- audit), option (a), supersedes the t_e2603a9c OPTION 3 zero-weight half.
+--
+-- Consequences, each pinned or cited:
+--  * SPOW IS PRICED wherever its pack prices it (non-zero: MAGE 1.2,
+--    PRIEST 1.2 / 0.8, PALADIN.melee 0.3 ... — and it is not listed): it
+--    flows into the weighted layer and this gate does not intercept it —
+--    the ruling names it explicitly. The t_b7cd07e1 AC-A pair (a MAGE
+--    trade-off whose only weighted gain is SpellPower) still answers its
+--    weighted UPGRADE (this card's AC-3 keeps that pin green), and the
+--    break-8 mutation — MAGE.spell.SPOW zeroed — re-gates the very pair by
+--    name (this card's requirement 3a).
+--  * A LISTED word answers UNKNOWN on EVERY row that carries it, in EVERY
+--    weight state — present table, zeroed weight, or no table at all. The
+--    unit being unconfirmed is a property of the stat, not of any class's
+--    weight, and the ruling's "otherwise the verdict is UNKNOWN" holds even
+--    where nothing resolves a pack.
+--  * A word whose RESOLVED weight is zero is worth 0 to this spec: the
+--    weighted layer already yields 0 * delta = 0, so it contributes nothing
+--    and does NOT close the pair.  Card C1 (Vibe Check audit), option (a),
+--    supersedes the t_e2603a9c OPTION 3 zero-weight half.
+--  * the RULING (b) tiebreak terms and WeaponDps are never reported by this gate because they
+--    are not on UNCONFIRMED_UNITS; since card C1 no weight state closes a
+--    pair, so no per-word exemption exists any more (the X guards in
+--    t_acc9fd97 pin that they come back nil). A pair with no resolved weight
+--    table is judged the same way — only the list can close it, and the
+--    ordinal path owns the rest of the row.
+--
+-- WHY THE SECTION SITS HERE: it needs WEIGHT_WORD (the single word map)
+-- above; every gate call site (gates 5b/8b of evaluate, the two decision
+-- points of compareWeapon) sits below and goes through Verdict.unpricedWord
+-- — the ONE pricing predicate, so no second copy of the rule can exist.
+--
+-- UNCONFIRMED_UNITS — the explicit part of the ruling, as DATA (AC-7).
+-- SHRINK-ONLY (requirement 1): an entry may leave this list only by a ruling
+-- event carrying BOTH (a) the owner's measured in-game read that replaces
+-- the entry with a unit statement, and (b) the owner's instruction. An entry
+-- that leaves without both is a finding to flag. WHY THIS IS NOT the
+-- t_b7a9e7a5 PERMANENT BAN: that ruling's rationale was that the banned stat
+-- has no price anywhere. THIS list is DESIGNED TO SHRINK TO EMPTY — empty is
+-- the goal: every entry is a unit the owner measures in-game (the item-2
+-- probe is that read), and each confirmed unit removes one entry.
+--
+-- ── CARD t_3cdbb70a (DD-1) TOOK HIT AND CRIT OFF THIS LIST; CARD t_d53877b1
+--    (THE OWNER'S OPTION C) PUTS THEM BACK, AS DIFFERENCE-ONLY ENTRIES ──────
+-- The two entries DD-1 removed read
+--     Hit  = true, -- hit rating vs percent: unconfirmed
+--     Crit = true, -- crit rating vs percent: unconfirmed
+-- and they are below again. This is NOT a revert of DD-1's split, and not a
+-- silent tidy-up in either direction; the sequence matters, so it is recorded.
+--
+-- WHY DD-1 REMOVED THEM: AC-B/AC-C required a caster's spell-hit item and a
+-- warrior's melee-hit item to resolve UPGRADE through their own half's weight.
+-- A PRESENCE-based list closes every row carrying the word in every weight
+-- state, so while Hit and Crit sat here neither AC could be satisfied and the
+-- split would have been inert. DD-1's answer was a per-class 0: the caster
+-- pack carried a 0 on the melee word, the melee pack a 0 on the spell word, so
+-- the wrong half closed by the zero-weight rule and the right half was priced.
+-- (Card t_9d3273cb retired the split, and both zeros with it: one word, one
+-- price. See the retirement note under WEIGHT_KEYS.)
+--
+-- WHY THEY ARE BACK (measured, not argued — card t_5074d195's probe, and the
+-- ruling recorded on t_d53877b1 §2): with the words off the list, the pack's
+-- number became a price the comparator multiplies into a DECISION, and the
+-- unit that number is expressed in has never been measured. The director's
+-- probe set the ROGUE's crit price from 0.9 to 1,000,000 on the card's own
+-- repro (+5 Agility against a worn +3 Agility, +1% crit): every one of the eight
+-- weights answered UPGRADE. That is the failure this guard is for — the tool
+-- asserted a win over the crit without reading what the crit was worth, in a
+-- unit nobody had measured. A priced word whose unit is unknown is not a price.
+--
+-- WHY "DIFFERENCE-ONLY" RATHER THAN PRESENCE (the ruling verbatim: "one
+-- predicate on the difference, not on the word's presence"). A presence rule
+-- would re-close every hit/crit row and make DD-1's split inert again — that
+-- is the option the owner did NOT choose. The difference rule is the narrow
+-- one: when the two sides carry the SAME value of the word, the unit cancels
+-- out of the comparison (0.9 per rating point times an equal number on both
+-- sides shifts both sides by the same unknown factor, so it cannot flip the
+-- verdict), and the pair is decided normally on the terms that do differ. When
+-- the values DIFFER, the unit is load-bearing and unmeasured, so the pair
+-- fails closed. The set below is what makes an entry difference-only; a word
+-- in this list but NOT in this set keeps the original presence rule (Dodge and
+-- Parry, which the ruling HOLDS unchanged).
+--
+-- ── CARD t_b91b29f9: THE SPLIT'S OWN HALVES JOIN THE SAME DISCIPLINE ────────
+-- DD-1 (t_3cdbb70a) added the two spell words and priced them on every caster
+-- pack, and put neither on these lists — so the caster's half of the split was
+-- priced in a per-rating unit nobody had measured while the melee half was
+-- guarded. Measured at the #34 head (docs on card t_b91b29f9): a MAGE pair whose
+-- only difference is "+2% spell crit" answered UPGRADE on the retired spell
+-- key's 0.6, and an otherwise-equal pair carrying "+1% spell crit"
+-- answered NOT_UPGRADE "equal" — the same fail-open the melee ruling closed,
+-- still open on the spell side. Same word shape, same ruling, so the same two
+-- lists and the same predicate: NOT a third mechanism.
+-- Card t_9d3273cb ends the episode: the two words are retired, so the two
+-- entries below are gone and their failure mode with them.
+--
+-- WHAT IS MEASURED, AND WHAT STILL BLOCKS THE DECISION (card t_b91b29f9).
+-- DD-1 did not settle the unit and this guard does not settle it either, but the
+-- owner's in-game read recorded on card t_b91b29f9 DOES measure the SCALE:
+-- these stats arrive as RATINGS at 10 (hit) and 14 (crit) rating points per 1%.
+-- A rating count is not a percent, and the weighted layer consumes whatever
+-- number the parse hands it — so the conversion is what makes the two units
+-- one unit, and card t_ea404bae lands it (as a RATING, on the tooltip path:
+-- see PERCENT_TO_RATING above).
+--
+-- ── CARD t_ea404bae: HIT AND CRIT RETIRE (THE UNIT IS SETTLED AS A RATING) ──
+-- The measurement below still stands, and so does the owner's word; what
+-- changed on 2026-10-19 is WHICH unit this module records. The reviewer's ruling
+-- reverses the direction an earlier commit on this branch took — normalise to
+-- RATING, not to percent (see the PERCENT_TO_RATING block above for the
+-- argument and for the one conversion site) — and the client's own C_Item
+-- number is that rating. The unit question for HIT and CRIT is therefore
+-- ANSWERED: the shrink-only rule's two conditions are both satisfied, and both
+-- words leave BOTH lists.
+--   (a) THE MEASUREMENT — the owner's in-game read, 2026-10-18, live client,
+--       `/dump C_Item.GetItemStats(link)`: Reliquary Mantle reports
+--       ITEM_MOD_HIT_RATING_SHORT = 4 against a "+0.4% hit" tooltip (10 rating
+--       per 1%), Illusionary Rod reports ITEM_MOD_CRIT_RATING_SHORT = 14
+--       against a "+1.0% crit" tooltip (14 per 1%). The constants above cite
+--       the same read.
+--   (b) THE OWNER'S WORD — recorded on card t_ea404bae: "HIT and CRIT come off
+--       the unconfirmed-unit list".
+-- This is the ONE ruling event the previous note anticipated, and it is NOT a
+-- loosening of the ruling: the guard existed because a priced word whose unit
+-- is unknown is not a price. The unit is no longer unknown — the client hands
+-- over ten and fourteen rating per percent, measured — so the price is a price
+-- the tool can spend. A differing pair these two entries used to close now
+-- reaches the weighted layer and is decided on the pack's own numbers.
+--
+-- ── CARD t_9d3273cb: THE LAST TWO ENTRIES RETIRE ───────────────────────────
+-- The two spell words leave with their two weight keys (see the retirement note
+-- under WEIGHT_KEYS). They were never a different stat from Hit and Crit — the
+-- client's own recap, read verbatim:
+--
+--   "Spell, melee, and ranged hit chance are combined, as are spell, melee,
+--    and ranged critical chance."
+--
+-- — and a word that does not exist needs no entry, no factor and no guard.
+-- WHAT REMAINS, and why this list is not empty: Dodge and Parry. Unmeasured,
+-- no factor, presence rule, unchanged; their guard still fires (AC-5 of card
+-- t_ea404bae).
+Verdict.UNCONFIRMED_UNITS = {
+	Dodge = true, -- dodge rating vs percent: unconfirmed
+	Parry = true, -- parry rating vs percent: unconfirmed
+	-- Card t_9d3273cb: THE TWO SPELL ENTRIES ARE GONE. They joined this list on
+	-- card t_b91b29f9 only because the split gave them a per-rating price with no
+	-- factor; with the split retired there is no such word to guard — a spell
+	-- crit item is a Crit item and prices at the crit weight, measured at 14
+	-- rating per 1%. Nothing else about this list changed.
+	--
+	-- Dodge and Parry are its remaining members, both by PRESENCE. The
+	-- difference-only set below is therefore EMPTY, which is the designed end
+	-- state its own note has described since t_d53877b1 — not an accident. The
+	-- predicate and its two call sites stay, so a future ruling can populate the
+	-- set without re-inventing the mechanism.
+}
+
+-- The difference-only half of the list above (card t_d53877b1). A word here is
+-- UNCONFIRMED (the unit question above is open) but does NOT close a pair by
+-- being PRESENT on one side; it closes it only when the two sides DIFFER. See
+-- Verdict.unconfirmedDifference, the one predicate that reads it, and the
+-- section note above for why the narrow rule is the ruling.
+--
+-- Card t_ea404bae removed Hit and Crit from this set together with the list
+-- above — one ruling event, both halves, so the two tables never disagree about
+-- a word. Card t_9d3273cb removed the two spell halves with their two words,
+-- and the set is now EMPTY: every word still guarded is guarded by PRESENCE.
+-- The mechanism stays (one predicate, two call sites) for the next ruling that
+-- needs it; ChestAdvisor/tests/t_ea404bae.js N8 pins the emptiness (with
+-- t_d53877b1.js G9 and t_b91b29f9.js M7 reading the same lists from the other
+-- side) so a stray entry cannot reappear unremarked.
+Verdict.UNCONFIRMED_DIFFERENCE_ONLY = {
+}
+
+-- wordUnpriced(word, _weights): the gate's pricing test for ONE word.
+--   _weights — retained for signature compatibility; unused since card C1
+--             (Vibe Check audit), option (a), made zero/missing weight a
+--             non-event (the weighted layer already yields 0 * delta = 0).
+--             Supersedes the t_e2603a9c OPTION 3 zero-weight half.
+--
+-- The ONLY word that closes the pair is one listed in UNCONFIRMED_UNITS
+-- (and not in UNCONFIRMED_DIFFERENCE_ONLY).  A zero or missing weight means
+-- the stat is worth 0 to this spec; it contributes nothing and does NOT
+-- close the pair.  The former per-word zero-weight exemptions (armour,
+-- weapon DPS, feral AP and the like) are now subsumed: a 0 weight is simply 0.
+--
+-- Card t_d53877b1 (option C): a difference-only entry is NOT closed by its
+-- absence-presence alone — Verdict.unconfirmedDifference closes it on the
+-- pair.  Falling through here lets the pair-level predicate own the
+-- difference.
+local function wordUnpriced(word, _weights)
+	local list = rawget(Verdict, "UNCONFIRMED_UNITS")
+	local only = rawget(Verdict, "UNCONFIRMED_DIFFERENCE_ONLY")
+	if type(list) == "table" and list[word] == true
+		and not (type(only) == "table" and only[word] == true) then
+		return true
+	end
+	return false
+end
+
+-- Public: Verdict.unpricedWord(stats, weights) — the first (sorted) word of
+-- `stats` on the unconfirmed-unit list (UNCONFIRMED_UNITS), or nil when no
+-- word qualifies. `weights` is accepted for compatibility and ignored since
+-- card C1. An empty stats table carries no word and answers nil. Every gate
+-- call site — the candidate side (evaluate gate 5b) and the equipped side
+-- (evaluate gate 8b; the same two decision points in compareWeapon) — asks
+-- through this one predicate.
+function Verdict.unpricedWord(stats, weights)
+	if type(stats) ~= "table" then return nil end
+	local words, seen = {}, {}
+	for w in pairs(stats) do
+		if type(w) == "string" and not seen[w] then
+			seen[w] = true
+			words[#words + 1] = w
+		end
+	end
+	table.sort(words)
+	for _, w in ipairs(words) do
+		if wordUnpriced(w, weights) then return w end
+	end
+	return nil
+end
+
+-- Public: Verdict.unpricedWordReason(word) — the gate's ONE reason shape: the
+-- word in the module's own vocabulary (never the client key the read came
+-- from), in player-facing wording.  Since card C1 (Vibe Check audit),
+-- option (a), the gate closes a pair only for a listed word whose unit is
+-- unconfirmed; a zero or missing weight is worth 0 and does not close the
+-- pair.  The phrase "no confirmed value for this stat for this class" is
+-- true of the one remaining cause.
+function Verdict.unpricedWordReason(word)
+	return "cannot judge: " .. word
+		.. " (no confirmed value for this stat for this class)"
+end
+
+-- Public: Verdict.unconfirmedDifference(candStats, eqStats) — THE PAIR-LEVEL
+-- PREDICATE the owner's option C rules for (card t_d53877b1 §2):
+--
+--   "Differing crit or hit => UNKNOWN while HIT/CRIT is on the unconfirmed
+--    list. One predicate on the difference, not on the word's presence."
+--
+-- Returns the first difference-only word (see UNCONFIRMED_DIFFERENCE_ONLY, in
+-- the unconfirmed list's own fixed order — `table.sort`ed, so the answer is
+-- repeatable) whose value is not equal on the two sides, or nil when every such
+-- word is level. That set has been EMPTY since card t_9d3273cb retired its last
+-- two words, so on the shipped tree this answers nil on every pair.
+--
+-- CARD t_9d3273cb EMPTIED this set: its last two members were DD-1's spell
+-- halves, retired together with the two weight keys they belonged to. So on the
+-- shipped tree the loop below has nothing to walk and this function answers nil
+-- on every pair — not because the comparison found a word LEVEL, but because
+-- there is no word left in the set to read. Hit and Crit had already left it on
+-- card t_ea404bae, with their unit measured at 10 and 14 rating per 1%.
+--
+-- THE EMPTINESS IS NOT ASSERTED HERE — it is pinned by execution, in the
+-- batteries that own each half: ChestAdvisor/tests/t_ea404bae.js N8 asserts the
+-- difference-only set is EMPTY (its designed end state since t_d53877b1),
+-- t_d53877b1.js G9 asserts the same pair readings for the same lists, and
+-- t_b91b29f9.js M7 asserts the spell words read nil on both. (An earlier
+-- version of this note credited t_9d3273cb.js, which pins the WORDS and their
+-- PRICES — not the set's emptiness — so a reader following it found nothing.)
+-- The predicate itself stays, with its two call sites (evaluate's gate 8c and
+-- compareWeapon's decision point), so a future ruling can populate the set
+-- without re-inventing the mechanism.
+--
+-- ONE PREDICATE, ONE PLACE. Every pair call site asks here — evaluate's gate 8c
+-- (armour rows) and compareWeapon's own decision point (weapon rows) — so no
+-- second copy of the rule can exist, which is the same discipline the
+-- unpriced-stat gate already holds.
+--
+-- EQUAL MEANS EQUAL AFTER THE ABSENCE RULE, and this is the whole point of the
+-- difference form. The comparator treats a stat absent from one side as that
+-- side carrying none of it (`weightedScore` subtracts `(c or 0) - (e or 0)`;
+-- dominance reads a one-sided term as a gain or a loss). So "absent" and a
+-- literal 0 are the SAME value to every consumer downstream, and a pair with
+-- Hit 0 against no Hit cannot be moved by the unit either — treating them as a
+-- difference would close a row on a distinction the verdict could not see.
+-- Anything not a number is read as 0 for the same reason (the stats tables are
+-- built by the parser and are numbers in every shipped path; this is the
+-- fail-safe, not a second parser).
+--
+-- The REASON is the unpriced-stat gate's own shape, deliberately: from the
+-- player's seat the cause is the same one sentence — the advisor has no value
+-- it can trust for that stat for this class — and a second wording would be a
+-- second thing to keep true. The WORD is the module's vocabulary (Dodge and
+-- Parry on the shipped tree), never the client key the read came from.
+function Verdict.unconfirmedDifference(candStats, eqStats)
+	local list = rawget(Verdict, "UNCONFIRMED_UNITS")
+	local only = rawget(Verdict, "UNCONFIRMED_DIFFERENCE_ONLY")
+	if type(list) ~= "table" or type(only) ~= "table" then return nil end
+	local words = {}
+	for word, flagged in pairs(list) do
+		if flagged == true and only[word] == true then words[#words + 1] = word end
+	end
+	table.sort(words)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+	for _, word in ipairs(words) do
+		local c, e = rawget(cand, word), rawget(eq, word)
+		if type(c) ~= "number" then c = 0 end
+		if type(e) ~= "number" then e = 0 end
+		if c ~= e then return word end
+	end
+	return nil
+end
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- (card t_ee04ad6d) THE EQUAL CLAIM ON THE WEAPON PATH, AND WHAT IT MUST NOT HIDE
+--
+-- THE DEFECT (the reviewer, on the owner's Shaman tank, 2026-10-20). Two main-hand
+-- maces, +20 Crit against +12 Crit, the SAME printed weapon damage per second:
+--
+--     NOT_UPGRADE, reason "equal weapon damage per second (5.50)"
+--
+-- Both counts ARE parsed, and Verdict.weaponStatLed answers false for a melee
+-- role and for a role that did not resolve, so Verdict.compareDPS decides alone
+-- on that branch and nothing on it reads the pair's Hit or Crit. A real, priced,
+-- tooltip-separable crit difference was hidden behind a confident "equal": not a
+-- missing answer, a WRONG CONFIDENT one, which is the fail-open shape this file
+-- keeps removing. Measured pre-state, both spellings, and the near-equal control
+-- that must survive: ChestAdvisor/tests/t_ee04ad6d.js.
+--
+-- WHAT THIS IS NOT. Not a new order, not a new weight, not a re-basing of the
+-- melee weapon onto its stats: the ruling that a melee weapon is judged on its
+-- damage per second (card t_16448f75, option (b)) stands on every pair whose
+-- stats are level. It closes exactly the one thing the DPS basis cannot say:
+-- that two weapons are THE SAME when their Hit or Crit is not.
+--
+-- THE MEASUREMENT is the tooltip's own, through Verdict.levelWithinResolution
+-- (strict `d < eps`, over the 10 and 14 rating-per-percent factors this file's
+-- PERCENT_TO_RATING table carries, half a printed step each): ONE helper, ONE
+-- epsilon, no second threshold anywhere. A difference the tooltip cannot resolve
+-- a client count against a one-decimal percent, say 12 against a lifted 12.6,
+-- is LEVEL and the "equal" claim stands. That is the control the card demands,
+-- and it is what keeps this gate from turning every weapon comparison into a
+-- non-answer.
+-- ───────────────────────────────────────────────────────────────────────────
+
+-- Public: Verdict.beyondResolution(candStats, eqStats): the first word, in a
+-- fixed order, whose two values differ by MORE than the tooltip's own step can
+-- resolve; nil when every such word is level (or when there is no scale to
+-- honour).
+--
+-- The words are exactly the ones a resolution is MEASURED for, the keys of
+-- PERCENT_TO_RATING (Hit and Crit on this tree), SORTED so the answer is
+-- repeatable, so the vocabulary cannot drift from the scale it spends, and a
+-- word with no factor (a percent that passed through unrounded) is never claimed
+-- as a gap here.
+--
+-- absent == 0 and a non-number == that side's silence, exactly as
+-- Verdict.unconfirmedDifference reads them: both are conventions every consumer
+-- downstream already uses, and a pair whose difference is only representational
+-- must not be closed by this predicate. It returns a WORD, never a verdict:
+-- what the caller does with it is the caller's rule.
+--
+-- THE ABSENT-SCALE DIRECTION, stated because it is a choice and not an accident:
+-- a tree with no scale table (or an empty one) gets nil, so the pre-card DPS
+-- claim stands. Naming a gap requires a MEASUREMENT, and the scale IS the only
+-- thing that can measure one; inventing a step for a tree that lost its scale
+-- would be the second epsilon this card forbids. That state cannot exist on a
+-- shipped tree (the scale is published above and its two values are pinned by
+-- t_ea404bae's battery, whose non-vacuity leg clears it to prove the pin bites),
+-- so the fail-open is bounded to a tree that is already red elsewhere.
+function Verdict.beyondResolution(candStats, eqStats)
+	local scale = rawget(Verdict, "PERCENT_TO_RATING")
+	if type(scale) ~= "table" then return nil end
+	local words = {}
+	for word in pairs(scale) do words[#words + 1] = word end
+	if #words == 0 then return nil end
+	table.sort(words)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+	for _, word in ipairs(words) do
+		local c, e = rawget(cand, word), rawget(eq, word)
+		if type(c) ~= "number" then c = 0 end
+		if type(e) ~= "number" then e = 0 end
+		if c ~= e and not Verdict.levelWithinResolution(word, c, e) then
+			return word
+		end
+	end
+	return nil
+end
+
+-- The refusal's player words, in the unpriced-stat gate's own shape: name the
+-- WORD, then say why the answer is not available. It states both halves of what
+-- the tool actually knows: the tie on damage per second, and the gap it cannot
+-- place, because "cannot judge" on its own reads as a failed read rather than
+-- as a comparison this path declines to make.
+function Verdict.equalClaimReason(word)
+	return "cannot judge: " .. word
+		.. " (the weapons tie on damage per second, but their " .. word
+		.. " differs by more than the tooltip's step)"
+end
+
+-- Public: Verdict.gateCloses(words, class, role, clientRole) — the gate's
+-- OWN decision for the COMPARED words of a row: the word it would name, or
+-- nil when the pair is not gate-owned. The changed-verdicts sweep calls it
+-- to separate the gate's legitimate closures from real ordinal drift (its
+-- AC-F) — the SAME code path the verdict uses, not a second copy of the rule
+-- in the harness. Only a word on the unconfirmed-unit list closes a row,
+-- whatever the weight state (card C1); class/role/clientRole are kept for
+-- the callers' signature and are unused.
+function Verdict.gateCloses(words, _class, _role, _clientRole)
+	if type(words) ~= "table" then return nil end
+	local list, seen = {}, {}
+	for i = 1, #words do
+		local w = words[i]
+		if type(w) == "string" and not seen[w] then
+			seen[w] = true
+			list[#list + 1] = w
+		end
+	end
+	table.sort(list)
+	for _, w in ipairs(list) do
+		if wordUnpriced(w) then return w end
+	end
+	return nil
+end
+
+-- Score one pair against a validated weights table.
+--   returns delta (weighted gain minus weighted loss; > 0 = candidate ahead),
+--           disagree (the sum of the ABSOLUTE weighted terms), and the player
+--           WORD of the largest weighted gain and of the largest weighted loss
+--           (nil when there is none).
+-- A term level on both sides — or absent on both — contributes nothing and
+-- cannot be named. nil when nothing in the vocabulary moved at all.
+local function weightedScore(candStats, eqStats, weights)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+	local delta, disagree = 0, 0
+	local gainWord, lossWord, gainValue, lossValue = nil, nil, 0, 0
+	for _, k in ipairs(WEIGHT_KEYS) do
+		local word = WEIGHT_WORD[k]
+		local c, e = rawget(cand, word), rawget(eq, word)
+		if c ~= nil or e ~= nil then
+			-- CARD t_43f8cd6f: a hit/crit difference under one tooltip step is
+			-- the tooltip's own rounding, not a stat the player has — see
+			-- Verdict.TOOLTIP_HALF_STEP_PERCENT. Level it here, at the one
+			-- subtraction that prices those two words; every other word's
+			-- comparison is untouched (its resolution is nil).
+			local d = (c or 0) - (e or 0)
+			if Verdict.levelWithinResolution(word, c, e) then d = 0 end
+			local term = weights[k] * d
+			delta  = delta + term
+			disagree = disagree + (term < 0 and -term or term)
+			if term > gainValue then gainValue, gainWord = term, word end
+			if term < lossValue then lossValue, lossWord = term, word end
+		end
+	end
+	if disagree == 0 then return nil end
+	return delta, disagree, gainWord, lossWord
+end
+
+-- The largest RAW loss on a relevance-set term, when the weights priced no
+-- loss at all. Used for the reason ONLY (never for the verdict): a pair whose
+-- weighted terms are all gains or level can still be an ordinal trade-off —
+-- two stats down, one up, with the down ones priced at 0 for this spec — and
+-- the player must not be told a clean win over an item that drops 8 Intellect.
+--
+-- A term the candidate does not carry AT ALL is still a loss when the worn item
+-- carries it: that is the same absence the dominance test reads as "lesser",
+-- and the reason names it as a word (the "absent, never 0" wording rule is
+-- about the reason's own printed deltas, not about ranking a loss here).
+local function largestRawLossWord(candStats, eqStats, order)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+	local worst, worstBy = nil, 0
+	for _, word in ipairs(Verdict.relevanceSet(order)) do
+		local c, e = rawget(cand, word), rawget(eq, word)
+		local lost = nil
+		if type(e) == "number" then
+			if type(c) == "number" then
+				if c < e then lost = e - c end
+			else
+				lost = e
+			end
+		end
+		if lost ~= nil and lost > worstBy then worstBy, worst = lost, word end
+	end
+	return worst
+end
+
+-- The MIRROR of largestRawLossWord, for the DOWNWARD call (card t_4590ab7e,
+-- item 1). The same asymmetry it exists to fix applies to the other side: a
+-- weighted loss can be decided by a term the table prices while the OTHER,
+-- outweighed term is priced at 0 — a tank losing Stamina on a +7 Strength swap
+-- has a weighted loss AND a raw gain the weights never priced. Naming only the
+-- loss would print a clean loss over an item that adds 7 Strength, exactly the
+-- dishonest wording largestRawLossWord prevents in the other direction.
+--
+-- The same absence rule: a term the WORN item does not carry AT ALL is still a
+-- gain when the candidate carries it. Used for the reason ONLY, never for the
+-- verdict.
+local function largestRawGainWord(candStats, eqStats, order)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+	local best, bestBy = nil, 0
+	for _, word in ipairs(Verdict.relevanceSet(order)) do
+		local c, e = rawget(cand, word), rawget(eq, word)
+		local gained = nil
+		if type(c) == "number" then
+			if type(e) == "number" then
+				if c > e then gained = c - e end
+			else
+				gained = c
+			end
+		end
+		if gained ~= nil and gained > bestBy then bestBy, best = gained, word end
+	end
+	return best
+end
+
+-- The layer's whole answer, in BOTH directions (card t_4590ab7e, item 1):
+--   * the weighted margin CLEARS the threshold in the candidate's favour ->
+--     "UPGRADE" + reason;
+--   * the weighted margin clears it AGAINST the candidate -> "NOT_UPGRADE" +
+--     reason — the symmetric downward call. Before this, a net LOSS of the same
+--     magnitude returned nil and the caller kept TRADE_OFF, so the same player
+--     saw a clear win called "Upgrade" and an equally clear loss called
+--     "Trade-off";
+--   * anything else — no move, an exact tie, a margin under the threshold -> nil,
+--     and the caller keeps today's TRADE_OFF.
+-- ONE threshold constant governs both directions; nothing here adds a second.
+local function weightedResolution(candStats, eqStats, spec)
+	local threshold = Verdict.WEIGHT_THRESHOLD
+	if type(threshold) ~= "number" or threshold ~= threshold then return nil end
+	local weights = Verdict.weightsFor(spec and spec.class, spec and spec.role,
+		spec and spec.clientRole)
+	if weights == nil then return nil end
+	local delta, disagree, gainWord, lossWord =
+		weightedScore(candStats, eqStats, weights)
+	-- A tie (delta == 0), or no move at all (delta == nil), is NOT a widened
+	-- verdict in EITHER direction: the two sides are weighted level, and the
+	-- caller's TRADE_OFF is the honest reading.
+	if delta == nil or delta == 0 then return nil end
+	-- The margin is dimensionless (the net divided by the total disagreement), so
+	-- the SAME threshold governs a gain and a loss: one number, both directions.
+	local margin = (delta < 0 and -delta or delta) / disagree
+	if margin < threshold then return nil end
+	if delta > 0 then
+		-- The why. The deciding GAIN is always named in the same player words the
+		-- ordinal reason used. The loss is named too — the largest weighted one
+		-- where the table prices one, and otherwise the largest RAW one (see
+		-- largestRawLossWord), so a resolved trade-off is never worded as a clean
+		-- win. Bare numbers and internal tokens never appear here.
+		local reason = winReason(gainWord)
+		local loss = lossWord or largestRawLossWord(candStats, eqStats, spec and spec.order)
+		if loss ~= nil and loss ~= gainWord then
+			reason = reason .. " — the weighted gain outweighs the " .. playerWord(loss) .. " loss"
+		end
+		return "UPGRADE", reason
+	end
+	-- The DOWNWARD call (card t_4590ab7e, item 1). The deciding LOSS is named in
+	-- the ordinal NOT_UPGRADE vocabulary (loseReason), and the outweighed gain is
+	-- named too — the largest weighted one where the table prices one, and
+	-- otherwise the largest RAW one (largestRawGainWord) — so a resolved loss is
+	-- never worded as a clean loss over an item that clearly adds something.
+	local reason = loseReason(lossWord)
+	local gain = gainWord or largestRawGainWord(candStats, eqStats, spec and spec.order)
+	if gain ~= nil and gain ~= lossWord then
+		reason = reason .. " — the weighted loss outweighs the " .. playerWord(gain) .. " gain"
+	end
+	return "NOT_UPGRADE", reason
 end
 
 -- ---- The stat weights (card t_3a744b4a): the ONE scoring path --------------
@@ -1688,6 +3710,13 @@ Verdict.LEGACY_DOMINANCE_DECIDES = false
 --                                                  dominated -> NOT_UPGRADE |
 --                                                  trade-off -> TRADE_OFF |
 --                                                  all-equal -> NOT_UPGRADE.
+--      ⚠ SUPERSEDED IN PART (card t_984bc8ac, owner's ruling 2026-10-13): the
+--      trade-off arm now FIRST offers the pair to the weighted layer
+--      (weightedResolution above), which may resolve it to UPGRADE when the
+--      weights clearly favour the candidate. Every other arm is unchanged, and
+--      with no weights table the trade-off arm returns exactly what it always
+--      did. (The 2026-10-04 "no stat weight anywhere" text that used to sit
+--      here is quoted, dated, in the layer's own section.)
 --      The role's stat ORDER no longer decides; it words the reason only.
 --      Armor/Block keep their ruled two-sided tiebreak wording when they are
 --      the only term that moved, and a one-sided term is never a 0 (AC-F).
@@ -1701,7 +3730,32 @@ Verdict.LEGACY_DOMINANCE_DECIDES = false
 --               worn = <API words|nil> } as resolved by Verdict.apiStats at the
 --               impure edge. Purely additive: read only by parseSide's
 --               reconciliation, and nil leaves every branch byte-identical.
-function Verdict.evaluate(candidate, equipped, spec, apiBySide)
+-- One side of `apiBySide`, resolved into (word table, unverified-key list).
+-- Two shapes cross from the impure edge (card t_548f0341 introduced the read;
+-- card t_795eee9e added the key list): the legacy plain words table — the
+-- Defect-2 suites and direct test drivers still hand these in — and the
+-- wrapper the live edge now ships: { words = <word table>,
+-- unmapped = <sorted array of keys|nil> }. Both resolve the same way, so a
+-- caller that prints the read (Verdict.statTable) and the verdict (evaluate)
+-- never diverge on it. A non-table side is "no data", exactly like a nil side.
+local function apiSideResolve(side)
+	if type(side) ~= "table" then return nil, nil end
+	local words = rawget(side, "words")
+	if type(words) == "table" then
+		local unmapped = rawget(side, "unmapped")
+		return words, (type(unmapped) == "table" and unmapped or nil)
+	end
+	return side, nil
+end
+
+-- `slotWord` (card t_d88b7f28, item 3) is OPTIONAL and is the display word for
+-- the worn slot this pair is judged in ("chest", "legs", "finger"). It is used by
+-- ONE branch — the empty-slot shortcut, gate 6 — so that the reason names the
+-- slot the player is actually looking at. It is a plain word and not a slot
+-- table on purpose: ChestAdvisor's SLOT_WORD (which agrees with WoWAI's
+-- EQUIP_SLOT and StatForge's SLOT_NAMES) stays the ONLY slot vocabulary, and a
+-- caller that cannot name its slot passes nothing rather than inventing one.
+function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	local function norm(side)
 		-- Returns: explicit (bool), canUse (nil|true|false), lines (nil|table)
 		-- Three distinct shapes:
@@ -1746,10 +3800,12 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 	-- these labels the worn fold is unreachable dead code — the defect
 	-- this card exists for.
 	local api = type(apiBySide) == "table" and apiBySide or nil
+	local candWords, candUnmapped = apiSideResolve(api and rawget(api, "candidate"))
+	local wornWords, wornUnmapped = apiSideResolve(api and rawget(api, "worn"))
 	local candStats, candProc, candUnknown =
-		parseSide(candLines, "candidate", api and api.candidate or nil)
+		parseSide(candLines, "candidate", candWords)
 	local eqStats,   eqProc,   eqUnknown   =
-		parseSide(eqLines,   "worn",      api and api.worn or nil)
+		parseSide(eqLines,   "worn",      wornWords)
 
 	-- Gate (1) — nothing on either side to compare.
 	if not isReadable(candLines) and not isReadable(eqLines) then
@@ -1792,7 +3848,21 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 			detail = "client returned a non-boolean value of type " .. type(candCanUse)
 		end
 		return "UNKNOWN", "eligibility unconfirmed (fail-closed): " .. detail
-			.. " — the client did not affirmatively confirm this character can use this item"
+		.. " — the client did not affirmatively confirm this character can use this item"
+	end
+
+	-- Gate (5a) — the client's own stat read for the CANDIDATE returns a key
+	--     this module has not verified (card t_795eee9e, AC-C): the item
+	--     carries a stat the comparison cannot classify. House doctrine
+	--     (module line 20) — never a fabricated 0, never a silent drop — so
+	--     the answer is UNKNOWN, naming the key the client itself returned,
+	--     not a decision on the subset of stats it does know. Runs before
+	--     the empty-slot shortcut (gate 6) and the gate-5 text suppress
+	--     alike: an unclassified stat on the candidate wins in both slot
+	--     states, the same AC-E13(a) placement gate 5 itself has.
+	if type(candUnmapped) == "table" and #candUnmapped > 0 then
+		return "UNKNOWN", "cannot classify: " .. candUnmapped[1]
+			.. " (a client stat key this addon has not verified)"
 	end
 
 	-- Gate (5) — a suppressing line on the CANDIDATE: a proc line
@@ -1809,35 +3879,106 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 		return "UNKNOWN", "cannot classify: " .. which
 	end
 
+	-- Gate (5b) — a mapped word whose unit is UNCONFIRMED, on the
+	--     CANDIDATE (card t_e2603a9c, item 1 — the owner's OPTION 3 ruling):
+	--     the word closes the pair only when its unit is on the ruled
+	--     UNCONFIRMED_UNITS list (Dodge and Parry by PRESENCE, the rule still
+	--     live); a zero or missing weight is worth 0 since card C1 and does
+	--     not close it. The difference-only set that gate 8c reads is EMPTY
+	--     since card t_9d3273cb retired its last two words, so every word
+	--     reaching this gate now either prices or closes right here. Hit and
+	--     Crit left the list on card t_ea404bae and are priced like any other
+	--     word. Without this gate the pair would be decided on the priced
+	--     words alone, the unpriced stat silently dropped.
+	--     (The card's repro: +5 Agility against a worn +3 Agility, +1% crit,
+	--     answered UPGRADE on the Agility half. That is what it answers again
+	--     since card t_ea404bae retired Crit from the list with its unit
+	--     measured — and the reason it is acceptable is written on that card's
+	--     HONESTY REQUIREMENT: on this pair the crit is a PASSENGER on the
+	--     dominance walk, not a deciding term, until card t_da23ec75 makes
+	--     hit/crit terms of the dominance proof. "It decides" and "the crit
+	--     decided it" are different claims and only the first one is true
+	--     here.) The answer is UNKNOWN, the word in the module's
+	--     own vocabulary, never the client key the read came from. Runs after
+	--     the gate-5 suppress (a line the pair cannot even classify wins that
+	--     reason) and before the empty-slot shortcut (gate 6) — the same
+	--     AC-E13(a) placement as gates 5a/5: a stat the spec does not price
+	--     cannot be waved in to fill a slot.
+	-- specWeights is not read by the gate (card C1); it is resolved here
+	-- because the dominance proof below takes its terms from it (proofTerms).
+	local specWeights =
+		Verdict.weightsFor(spec_.class, spec_.role, spec_.clientRole)
+	local candUnpriced = Verdict.unpricedWord(candStats)
+	if candUnpriced ~= nil then
+		return "UNKNOWN", Verdict.unpricedWordReason(candUnpriced)
+	end
+
 	-- Gate (6) — genuinely empty slot (the caller sent nil).
 	--     Only reachable when candCanUse == true (gate 3 above already
 	--     failed every other case) and the candidate carries no suppress
 	--     (gate 5 above).
-	-- Lower armor is never an upgrade and never a trade-off. Unknown lines have
-	-- already returned, so this does not hide a stat we failed to read.
-	local function allow(verdict, reason)
+	-- Lower armor is a SOFT cost against the WORN item, never a veto (owner
+	-- ruling 2026-11-03 — card t_c1b7f815; the rule used to compare the
+	-- candidate against the class's best and hard-blocked upgrades the player
+	-- could actually wear). A worn material ranked above the candidate turns an
+	-- UPGRADE into TRADE_OFF and, exactly as before, a TRADE_OFF into
+	-- NOT_UPGRADE. `emptySlot` short-circuits the rule where nothing is worn.
+	-- Unknown lines have already returned, so this does not hide a stat we
+	-- failed to read, and an unreadable WORN material falls through unchanged.
+	-- The slot the reason names (card t_d88b7f28, item 3): the word the caller
+	-- supplied, or — for a caller that has no slot identity to give — a phrase
+	-- true of every slot. The reason used to be the constant "no chest equipped;
+	-- this item would fill the slot" for every row, head to ring, and each
+	-- display caller had to string-match that sentence and rewrite it. One such
+	-- rewrite still exists in the git history of ChestAdvisor.lua; this is the
+	-- contract that replaces it.
+	local slotName = nil
+	if type(slotWord) == "string" and slotWord:match("%S") ~= nil then
+		slotName = slotWord
+	end
+	local function allow(verdict, reason, emptySlot)
 		if verdict ~= "UPGRADE" and verdict ~= TRADE_OFF then
 			return verdict, reason
 		end
-		local blocked, why = Verdict.lowerArmorReason(candLines, spec_)
-		if blocked then return "NOT_UPGRADE", why end
+		if emptySlot then return verdict, reason end
+		local why = Verdict.lowerArmorReason(candLines, eqLines)
+		if why ~= nil then
+			if verdict == "UPGRADE" then
+				return TRADE_OFF, reason .. "; " .. why
+			end
+			return "NOT_UPGRADE", why
+		end
 		return verdict, reason
 	end
 
 	if eqLines == nil and candExplicit and candCanUse == true then
-		return allow("UPGRADE", "no chest equipped; this item would fill the slot")
+		if slotName ~= nil then
+			return allow("UPGRADE",
+				"no " .. slotName .. " equipped; this item would fill the slot", true)
+		end
+		return allow("UPGRADE",
+			"nothing equipped in that slot; this item would fill it", true)
 	end
 
 	-- Gate (7) — a slot FILLED by an item whose stats we could not read.
 	--     Not an empty slot: the shortcut above is long past, and a strictly
 	--     weaker candidate must not read as UPGRADE against the fabricated
-	--     zeros a failed read would give. (Vera defect 4: a missing read is
+	--     zeros a failed read would give. (gate defect 4: a missing read is
 	--     not a zero.) A line list that is empty, or that yielded no stat
 	--     word and no unrecognised word either, is the "un-readable" state —
 	--     and so is one whose non-blank lines could not be classified at all
 	--     (B2: they suppress rather than silently reading as zero).
 	if next(eqStats) == nil and eqProc == nil and eqUnknown == nil then
 		return "UNKNOWN", "the equipped item's stats could not be read; cannot judge"
+	end
+
+	-- Gate (8a) — the same shape on the EQUIPPED side (card t_795eee9e, AC-C):
+	--     an unverified key in the client's read of the worn item suppresses
+	--     too — the player is not compared against a half-read item, and the
+	--     unknown stat is never priced as the zero it is not.
+	if type(wornUnmapped) == "table" and #wornUnmapped > 0 then
+		return "UNKNOWN", "cannot classify: " .. wornUnmapped[1]
+			.. " (a client stat key this addon has not verified)"
 	end
 
 	-- Gate (8) — a suppressing line on the EQUIPPED side: the same proc /
@@ -1849,13 +3990,54 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 		return "UNKNOWN", "cannot classify: " .. which
 	end
 
+	-- Gate (8b) — THE SAME gate on the EQUIPPED side (card t_e2603a9c, item
+	--     1): the card's repro carries the unpriced word here — a +5 Agility
+	--     candidate against a worn +3 Agility, +1% crit, which only this gate
+	--     sees. One side of the pair is enough to fail it closed; the word
+	--     and the reason grammar are the candidate side's (one map, one shape).
+	--     Both sides are asked through the same predicate.
+	local wornUnpriced = Verdict.unpricedWord(eqStats)
+	if wornUnpriced ~= nil then
+		return "UNKNOWN", Verdict.unpricedWordReason(wornUnpriced)
+	end
+
+	-- Gate (8c) — THE DIFFERENCE-BASED UNCONFIRMED-UNIT GUARD (card t_d53877b1,
+	-- the owner's OPTION C; the rule and its reasoning sit on
+	-- Verdict.unconfirmedDifference above, ONE predicate, no second copy).
+	-- The set this gate reads is EMPTY as of card t_9d3273cb: its last two
+	-- members were the two spell words, retired with their two weight keys (the
+	-- client's recap is quoted verbatim under WEIGHT_KEYS — spell, melee and
+	-- ranged hit are one stat, and so are the three crits). Hit and Crit left
+	-- earlier, on card t_ea404bae, with their unit measured at 10 and 14 rating
+	-- per 1%. So no pair fails closed here today, and every hit/crit pair
+	-- reaches gate 9 and the weighted layer with the rating the unit of record
+	-- on both paths. THE GATE ITSELF STAYS, with its one predicate and its two
+	-- call sites: it is the mechanism a future unmeasured word re-enters
+	-- through, and deleting it would only mean inventing it again later.
+	-- While the two sides carry the SAME value the unit cancels and the pair is
+	-- decided normally; the moment they DIFFER the price
+	-- is load-bearing and unmeasured, and the pair fails closed instead of
+	-- asserting a win (or a loss) over a number the tool cannot read.
+	-- PLACEMENT: after gates 8/8b — both stats tables are known here, and the
+	-- unreadable/suppressed shapes have already answered with their own reasons
+	-- — and BEFORE gate 9, so no dominance outcome is ever computed on a pair
+	-- this guard owns. It sits BELOW the empty-slot shortcut (gate 6) on
+	-- purpose: filling an empty slot carries no comparison, so there is no
+	-- difference for the unit to contaminate.
+	local unconfirmedDiff = Verdict.unconfirmedDifference(candStats, eqStats)
+	if unconfirmedDiff ~= nil then
+		return "UNKNOWN", Verdict.unpricedWordReason(unconfirmedDiff)
+	end
+
 	-- Gate (9) — the verdict.
 	--
 	-- Tank path (card t_89440dfa): the ORDER no longer decides. The verdict comes
-	-- from the three-outcome dominance test (Verdict.dominance) over the
-	-- relevance SET (Verdict.relevanceSet) — the order's own words plus Armor and
-	-- Block. The order is then used ONLY to word the reason, via the first term
-	-- on which the two sides differ (dominance's second return).
+	-- from the three-outcome dominance test (Verdict.dominance) over the PROOF's
+	-- term list (Verdict.proofTerms, card t_da23ec75): the class/role's order
+	-- first — it is what words the reason — and then every word the pair's own
+	-- pack prices at a non-zero weight. Armor and Block are the tiebreak, not
+	-- terms (PROOF_EXEMPT). The order is then used ONLY to word the reason, via
+	-- the first term on which the two sides differ (dominance's second return).
 	--
 	--   dominant  -> UPGRADE              (>= everywhere, > somewhere; green arrow)
 	--   trade-off -> TRADE_OFF            (its own non-green mark + deltas)
@@ -1879,7 +4061,7 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 		if result == "loses" then
 			for _, word in ipairs(order) do
 				if (candStats[word] or 0) < (eqStats[word] or 0) then
-					return "NOT_UPGRADE", "worse on " .. word .. " than what's equipped"
+					return "NOT_UPGRADE", loseReason(word)
 				end
 			end
 			return "NOT_UPGRADE", "not better than what's equipped"
@@ -1908,6 +4090,13 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide)
 		return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 	end
 
+	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
+	-- every word this pair's own pack prices (proof). One list, built by one
+	-- function, read by the proof AND by the two loops that word its answer
+	-- below, so the term that decided a pair is always the term the reason
+	-- names. `specWeights` is gate 5b's resolution: the same table both sides
+	-- of this comparison were already priced against.
+	local terms = Verdict.proofTerms(order, specWeights)
 -- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
 -- the profile's weighted total, in the threshold order the card spells out. The
 -- number (and the profile's own name) travel back to the caller as the third
@@ -1923,15 +4112,16 @@ if not Verdict.LEGACY_DOMINANCE_DECIDES then
 end
 
 if Verdict.LEGACY_DOMINANCE_DECIDES then
-	local outcome, firstDiff = Verdict.dominance(candStats, eqStats, order)
+	local outcome, firstDiff = Verdict.dominance(candStats, eqStats, terms)
 
 	if outcome == "dominant" then
 		-- Word the win with the SAME grammar the legacy path used: the first
-		-- term of the role's own order on which the candidate is strictly
-		-- better. (Every role term is two-sided in this branch, so `or 0` is
-		-- only reachable for a term absent on BOTH sides, which is 0 vs 0.)
-		for _, word in ipairs(order) do
-			if (candStats[word] or 0) > (eqStats[word] or 0) then
+		-- term of the proof on which the candidate is strictly better. Order
+		-- words come first, so every pre-card win names the order term it named
+		-- before; a win that only a PRICED word establishes (nothing in the
+		-- order differs) now names that word instead of the bare fallback.
+		for _, word in ipairs(terms) do
+			if termSign(word, rawget(candStats, word), rawget(eqStats, word)) > 0 then
 				return allow("UPGRADE", winReason(word))
 			end
 		end
@@ -1939,15 +4129,24 @@ if Verdict.LEGACY_DOMINANCE_DECIDES then
 	end
 
 	if outcome == "dominated" then
-		for _, word in ipairs(order) do
-			if (candStats[word] or 0) < (eqStats[word] or 0) then
-				return "NOT_UPGRADE", "worse on " .. word .. " than what's equipped"
+		-- The mirror: the first term the candidate is strictly worse on.
+		for _, word in ipairs(terms) do
+			if termSign(word, rawget(candStats, word), rawget(eqStats, word)) < 0 then
+				return "NOT_UPGRADE", loseReason(word)
 			end
 		end
 		return "NOT_UPGRADE", "not better than what's equipped"
 	end
 
 	if outcome == "trade-off" then
+		-- (card t_984bc8ac) The weighted layer gets the FIRST word here and the
+		-- ordinal answer the last: it returns nil unless a weights table for
+		-- this class/spec validates AND the weighted margin clears
+		-- Verdict.WEIGHT_THRESHOLD. With no table it is a pure pass-through, so
+		-- the line below is byte-for-byte today's behaviour. `allow` still
+		-- wraps both answers, so the lower-armor material rule outranks them.
+		local wv, wReason = weightedResolution(candStats, eqStats, spec_)
+		if wv ~= nil then return allow(wv, wReason) end
 		return allow(TRADE_OFF, tradeOffReason(candStats, eqStats, firstDiff))
 	end
 
@@ -1962,7 +4161,7 @@ if Verdict.LEGACY_DOMINANCE_DECIDES then
 	--   * E2 ruled "armour is never a win, only a tiebreak" and graded
 	--     AC-E13(b) "armour never overturns a class-order loss — worse primary
 	--     + higher armor is NOT_UPGRADE". If Armor sat inside the proof, that
-	--     pair would read TRADE_OFF and overturn the loss. Mira: "E2 … stands".
+	--     pair would read TRADE_OFF and overturn the loss. The maintainer: "E2 … stands".
 	--   * Their semantics are a two-sided value comparison, absence NEUTRAL
 	--     (never a fabricated 0), a literal 0 a VALUE. rawget keeps absence
 	--     distinguishable from zero (AC-E13(c)/(d)).
@@ -1990,7 +4189,7 @@ end
 --
 -- The off-hand slot is special: a shield, a held-in-off-hand item and an
 -- off-hand weapon are three different things that share one wear slot. The
--- client itself groups them (Lena §2: `isEquippedInOffhand` = SHIELD |
+-- client itself groups them (review §2: `isEquippedInOffhand` = SHIELD |
 -- WEAPONOFFHAND | HOLDABLE), so the ONLY comparison this addon ever allows in
 -- slot 17 is LIKE-FOR-LIKE — candidate and worn item in the same off-hand
 -- class. Every other case declines with a named reason. The failure mode of
@@ -2063,7 +4262,7 @@ Verdict.OFFHAND_CLOSING_TOKENS = {
 --
 -- The `worn` slot each one answers to is the client's own constants
 -- (Blizzard_FrameXMLBase/Constants.lua:151-153): main hand 16, ranged 18
--- (INVSLOT_RANGED). INVTYPE_WEAPON is positional (Lena §2) — the client resolves
+-- (INVSLOT_RANGED). INVTYPE_WEAPON is positional (review §2) — the client resolves
 -- it by the slot it is WORN in; as a bag candidate the reference's `forceMainhand`
 -- (ProfileRules.lua:313-316) is the shape we follow: a generic one-hander is
 -- evaluated as a MAIN-HAND item, never as a shield/frill replacement.
@@ -2080,7 +4279,7 @@ Verdict.WEAPON_TOKENS = {
 -- compute the row's invSlot. A second copy here would be a second source of
 -- truth for the same client constants, so there is deliberately none.)
 
--- Shield-capable classes, as our own statement of the era ruleset (Lena §3:
+-- Shield-capable classes, as our own statement of the era ruleset (review §3:
 -- there is NO proficiency API on this client — `canUseShields` / `UseShields` /
 -- `shieldProficiency` are 0 hits in the pinned tree, re-confirmed independently).
 -- This table, not a client call, is what G1 reads: a shield candidate on a
@@ -2099,7 +4298,7 @@ Verdict.SHIELD_CLASSES = {
 }
 
 -- The reason strings of §5. Ours, newly written — not translations of the
--- reference addon's localised ones (Lena §9). Every decline the gate can return
+-- reference addon's localised ones (review §9). Every decline the gate can return
 -- is named here: if a decline has no string, it cannot be audited.
 local REASON = {
 	G0 = "not judged: a two-handed weapon occupies both hands",
@@ -2130,8 +4329,8 @@ Verdict.REASON = REASON
 --                   off-hand item in this era). All three off-hand tokens are
 --                   declined with the §5 G2 reason.
 --
--- `role` is the client's own TANK/HEALER/DAMAGER word (Lena §3). Where a class
--- had two specs of the SAME role (Lena's §4 note about Warrior and Paladin) the
+-- `role` is the client's own TANK/HEALER/DAMAGER word (review §3). Where a class
+-- had two specs of the SAME role (review §4 note about Warrior and Paladin) the
 -- disambiguation would need the spec NAME; on this client's three role words
 -- that collision is only Warrior Arms-vs-Fury, and BOTH of those land in the
 -- same `allowed` bucket, so no name is needed for either. `contested` is a
@@ -2172,7 +4371,7 @@ Verdict.OFF_HAND_BUCKETS = {
 		DAMAGER = { shield = "irrelevant" },
 	},
 	SHAMAN = {
-		-- Lena §4: the shaman row is CONTESTED in our corpus. Marked, not
+		-- review §4: the shaman row is CONTESTED in our corpus. Marked, not
 		-- hidden. A shield is a legitimate off-hand for every shaman role,
 		-- so this is `allowed` for all three and the marker never changes a
 		-- verdict; `roles` covers all three words at once.
@@ -2196,7 +4395,7 @@ Verdict.OFF_HAND_BUCKETS = {
 -- ---- Defect 1 (card t_548f0341): is this spec read a REAL specialization? ----
 --
 -- The client's C_SpecializationInfo returns, for a character with no
--- specialization yet (the owner's level-22 paladin, verbatim probe):
+-- specialization yet (a live level-22 character, verbatim probe):
 --     idx=1  name=Paladin  ROLE=DAMAGER
 -- i.e. the spec NAME is the CLASS's own display name and the role is the
 -- class's default. That is not a specialization, and treating it as one is the
@@ -2235,13 +4434,13 @@ function Verdict.substantiated(spec)
 end
 
 -- The spec's shield classification, as one lookup shared by the gate and the
--- diag record (Lena §6: the bucket survives as (a) the reason string and (b) the
+-- diag record (review §6: the bucket survives as (a) the reason string and (b) the
 -- diag record). Returns "required" | "allowed" | "irrelevant" | nil, where nil
 -- means "the policy could not be resolved for this character" (an unknown
 -- class, a role word we do not cover, no readable role, or a same-role collision
 -- whose name we could not disambiguate) — the caller turns that into G3.
 --
--- The classification is CLASS-INDEPENDENT on purpose (jia-clean's build note #2,
+-- The classification is CLASS-INDEPENDENT on purpose (the implementer's build note #2,
 -- policy §7): it consults the table and nothing else — no SHIELD_CLASSES, no
 -- client API — so a wrong or missing class table cannot change what G4 and G2
 -- do. `shield` is a class capability, `bucket` is a spec policy; they are
@@ -2256,7 +4455,7 @@ function Verdict.shieldPolicy(spec)
 
 	-- ---- Defect 1 (card t_548f0341): a CLASS-AS-SPEC read is not authoritative
 	--
-	-- At level 22 the owner's paladin has no specialization, so the client
+	-- At level 22 a character has no specialization, so the client
 	-- returns the CLASS as the spec name and the class's default role:
 	--     idx=1  name=Paladin  ROLE=DAMAGER
 	-- Read literally that DAMAGER resolves the PALADIN/DAMAGER bucket
@@ -2340,7 +4539,7 @@ end
 --     bucket nor any client API, and it is deliberately NOT gated behind the
 --     class-capability check: the guarantee "the off-hand slot never receives
 --     UPGRADE against a worn item of a different off-hand class" holds for the
---     mage and the rogue exactly as it holds for the warrior (jia-clean's build
+--     mage and the rogue exactly as it holds for the warrior (the implementer's build
 --     note #2). A wrong bucket or a missing class table cannot weaken it.
 --   * Every decline returns a NAMED string from REASON, so the diag ledger can
 --     say which rule fired. A decline with no name is not auditable.
@@ -2366,7 +4565,7 @@ function Verdict.offHandGate(candLoc, wornLoc, mainLoc, spec)
 	end
 
 	-- G1 — the candidate is a shield and this class cannot equip one in this
-	-- era (Lena §3: there is no proficiency API to ask, so the class table IS
+	-- era (review §3: there is no proficiency API to ask, so the class table IS
 	-- the answer). Named here rather than left to the eligibility gate, so the
 	-- ledger records WHY the shield was declined instead of relying on an
 	-- untested CanUseItem to suppress it silently.
@@ -2383,7 +4582,7 @@ function Verdict.offHandGate(candLoc, wornLoc, mainLoc, spec)
 	end
 
 	-- G3 — the spec gate. The bucket key is class token + role word, and BOTH
-	-- must be present: a nil spec (the client read failed — Lena §3 fail-closed)
+	-- must be present: a nil spec (the client read failed — review §3 fail-closed)
 	-- or a missing role word declines. Never a default bucket.
 	local bucket = Verdict.shieldPolicy(spec)
 	if bucket == nil then return REASON.G3 end
@@ -2436,13 +4635,25 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Tier C (t_b058b5df) — WEAPONS, judged on tooltip-read DPS.
 --
--- RULED (2026-10-04): "Read the numbers. Order by prose. No stat weight
--- anywhere." The damage range, the speed and the DPS are values the CLIENT
+-- ⚠ THE RULING BELOW WAS SUPERSEDED ON 2026-10-13 (card t_984bc8ac). Kept,
+-- not deleted, so the history stays legible:
+--
+--   RULED (2026-10-04), the owner: "Read the numbers. Order by prose. No stat
+--   weight anywhere. … No per-stat multiplier is used, invented, hard-coded or
+--   imported (AC-G)." He SUPERSEDED it on 2026-10-13: "Supersede. Ship card 2
+--   to your spec." Per-class/spec weights now ship (Weights.lua), and the
+--   ARMOUR/stat comparator consults them in its trade-off arm — see the
+--   weighted resolution layer above.
+--
+-- WHAT THE SUPERSEDE DOES NOT CHANGE, which is why the ruling is quoted here
+-- inside the WEAPON block: a weapon is still judged on the DPS the CLIENT
+-- PRINTS. The damage range, the speed and the DPS are values the CLIENT
 -- PRINTS on the item's own tooltip — read them, do the arithmetic the client
--- already shows, and compare. No per-stat multiplier is used, invented,
--- hard-coded or imported (AC-G). The one place a class-specific rule appears
--- is W1, and it is a boolean MANDATE (this spec is built around a shield), not
--- a weight.
+-- already shows, and compare. The weighted layer is reached from
+-- Verdict.evaluate's STAT arm only: no weapon verdict passes through it, and
+-- no per-stat weight is applied to a weapon (AC-G). The one place a
+-- class-specific rule appears is W1, and it is a boolean MANDATE (this spec is
+-- built around a shield), not a weight.
 --
 -- Why a weapon needs its own reader (AC-B): the armour/stat comparator reads
 -- lines shaped `+12 Agility`. A weapon's tooltip carries three shapes the
@@ -2567,9 +4778,14 @@ end
 
 -- The DPS comparator. Strictly-greater on the candidate side is UPGRADE;
 -- strictly-less is NOT_UPGRADE; equal is NOT_UPGRADE (the armour comparator's
--- rule — EQUAL is never an upgrade). Returns verdict, reason.
+-- rule, EQUAL is never an upgrade). Returns verdict, reason, tie, where `tie`
+-- is the branch it took ("more" | "less" | "equal" | "fills" |
+-- "unknown-candidate" | "unknown-worn"). `tie` exists so a caller can react to
+-- WHICH claim was made without matching on the player-facing sentence: the
+-- weapon path's equal-claim gate (card t_ee04ad6d) is the one caller that does,
+-- and a reason string is for the player, not a control-flow token.
 --
--- `wornSlotFilled` (Vera round 1, defect D1) disambiguates the two causes of
+-- `wornSlotFilled` (the gate round 1, defect D1) disambiguates the two causes of
 -- "no readable numbers on the worn side":
 --   * false/nil — the row's slot holds NOTHING, an EMPTY slot: a legitimate
 --     free fill.
@@ -2586,20 +4802,20 @@ local function compareDPS(candNumbers, wornNumbers, wornSlotFilled)
 	local c = weaponDPS(candNumbers)
 	local w = weaponDPS(wornNumbers)
 	if c == nil then
-		return "UNKNOWN", "cannot read the weapon's damage-per-second"
+		return "UNKNOWN", "cannot read the weapon's damage-per-second", "unknown-candidate"
 	end
 	if w == nil then
 		if wornSlotFilled or (type(wornNumbers) == "table" and next(wornNumbers) ~= nil) then
-			return "UNKNOWN", "cannot read the worn weapon's damage-per-second"
+			return "UNKNOWN", "cannot read the worn weapon's damage-per-second", "unknown-worn"
 		end
-		return "UPGRADE", "upgrade: fills the weapon slot"
+		return "UPGRADE", "upgrade: fills the weapon slot", "fills"
 	end
 	if c > w then
-		return "UPGRADE", ("upgrade: more weapon damage per second (%.2f vs %.2f)"):format(c, w)
+		return "UPGRADE", ("upgrade: more weapon damage per second (%.2f vs %.2f)"):format(c, w), "more"
 	elseif c < w then
-		return "NOT_UPGRADE", ("less weapon damage per second (%.2f vs %.2f)"):format(c, w)
+		return "NOT_UPGRADE", ("less weapon damage per second (%.2f vs %.2f)"):format(c, w), "less"
 	end
-	return "NOT_UPGRADE", ("equal weapon damage per second (%.2f)"):format(c)
+	return "NOT_UPGRADE", ("equal weapon damage per second (%.2f)"):format(c), "equal"
 end
 
 -- The weapon gate (§5.1 shape rules) — the ONLY class-specific rule in Tier C,
@@ -2660,6 +4876,449 @@ end
 Verdict.weaponNumbers = weaponNumbers
 Verdict.weaponDPS = weaponDPS
 Verdict.compareDPS = compareDPS
+-- (The role-aware side of Tier C — Verdict.weaponStatLed / compareWeapon and the
+-- stat-side view Verdict.weaponStatLines — is defined below, beside the rule it
+-- implements. Those two are set as function FIELDS on the table at their own
+-- definition site; nothing here reads a local declared later in this chunk.)
+-- ───────────────────────────────────────────────────────────────────────────
+--
+-- THE DEFECT (found by the owner on his live priest, 2026-10-13). His hover:
+--
+--   Touchstone: UPGRADE — more weapon damage per second (5.90 vs 5.80)
+--   -2 Int, -4 Spell Power, +1 Str vs Makeshift Stormcaller
+--
+-- A main-hand mace carrying no caster stat was called an UPGRADE over a staff
+-- with +2 Intellect and +4 spell damage, on 0.10 weapon DPS. `compareDPS` above
+-- takes no role and no stats and cannot: it reads two DPS numbers and nothing
+-- else. The stats were PARSED (they are in the delta line) and did not
+-- participate in the verdict. For a caster the weapon is a STAT STICK and
+-- tooltip DPS is close to irrelevant, so the verdict was simply decided on the
+-- wrong basis.
+--
+-- THE RULE (the card's, and why it is not a weighted sum):
+--   * a MELEE role keeps DPS as the basis — what a warrior is told does not
+--     change, byte-for-byte, reason string included (AC-B);
+--   * a SPELL role is judged on the CASTER STATS by the SAME stat comparison
+--     the armour path already uses (dominance over the relevance set, then the
+--     weighted layer), so "DPS must not outvote a real caster-stat difference"
+--     holds absolutely — DPS is not an input at all;
+--   * DPS is kept ONLY as the TIE-BREAK: when the two weapons' stats are level
+--     on every term (or neither weapon carries one), the stats cannot decide and
+--     today's DPS comparator answers, with today's exact reason string.
+--
+-- Option (b) of the card — "DPS kept as a minor term that cannot overturn a
+-- caster-stat advantage" — is what this is, implemented as an exact
+-- fall-through rather than a weighted sum. Why not a weighted sum: it would
+-- need a DPS<->stat EXCHANGE RATE and a second threshold constant, and there is
+-- no sourced rate between one point of weapon DPS and one point of Intellect on
+-- this build. AC-H forbids adding a second threshold constant without reporting
+-- first; a fall-through adds none, invents no rate, and leaves every DPS-worded
+-- reason a melee row (or a stats-level spell row) sees exactly as it is today.
+--
+-- SPELL POWER WAS NOT A TERM when this card shipped — deliberately. The card
+-- names "Intellect / Spirit / spell power" as the caster's stats and then
+-- requires "the same stat comparison the armour path already uses (and
+-- therefore the weights)". That vocabulary was then the seven words
+-- Weights.lua prices (WEIGHT_KEYS: STR, AGI, STA, INT, SPI, ARMOR, BLOCK);
+-- spell power was NOT one of them, and parseLine_'s own ruling above said it
+-- in terms: "Spell power does not decide." A pair whose only difference is
+-- spell power therefore had no stat term to decide on and fell through to the
+-- DPS tie-break. Making spell power a NEW deciding term would have changed the
+-- shared stat comparator, which that card may not do (AC-G).
+-- REPORTED rather than hidden: the card's changed-verdict doc carries it.
+--
+-- ⚠ SUPERSEDED LATER by the owner's ruling card t_b7cd07e1 ("Spell power gets
+-- a weight from the packs"): SPOW then became the eighth word of WEIGHT_KEYS
+-- (the card t_795eee9e extension that moved it to last — behind the ten words
+-- that card added — does not change what this paragraph reports: on THIS
+-- weapon path spell power is STILL in no class order, so it still never names
+-- the ordinal terms, and the fall-through to the DPS tie-break is intact).
+-- What that does, and does not change, on THIS weapon path: a pair whose only
+-- difference is spell power is STILL level on the role's order words (spell
+-- power is in no class order) and still falls through to the DPS tie-break;
+-- a pair that is an ordinal trade-off now carries the SPOW term in the
+-- weighted layer, because this branch ends in Verdict.evaluate. The
+-- t_b7cd07e1 sweep (shape 17 of weights_changed_verdicts.js) measures that
+-- movement, and its owner's pinned pair above is a DOMINATED row — worse on
+-- Intellect, never better on any relevance word — so it stays NOT_UPGRADE
+-- regardless of the new word.
+--
+-- WHERE THE ROLE COMES FROM. `spec.role` is the ONE role resolution point
+-- (ChestAdvisor.lua `resolvedRole` -> `buildSpec`): the folded order word
+-- ("melee" | "spell") for a hybrid that resolved, the CLASS TOKEN for a pure
+-- class (a pure class ignores the role argument), and nil for a hybrid that
+-- resolved nothing. `Verdict.weaponStatLed` reads the ORDERS table by the same
+-- rule `classRoleOrder` applies, so a pure caster class (MAGE / PRIEST /
+-- WARLOCK, whose single order is keyed `spell`) is stat-led with no player
+-- input, and a hybrid is stat-led only when its role RESOLVED to `spell`. An
+-- unresolved role is today's behaviour (AC-E): a missing role never widens a
+-- verdict, it only leaves the row on the basis it already had.
+--
+-- THE W0 MIRROR (reported in the doc, NOT ruled here). The owner's candidate is
+-- 1H against a worn 2H, so wearing it FREES slot 17 — the mirror of W0
+-- (candidate 2H, off-hand occupied -> UNKNOWN). NOTHING in this file or in
+-- ChestAdvisor.lua accounts for the freed slot in either role: the comparison is
+-- candidate versus worn main hand, and the off-hand's contribution is not an
+-- input. The scoping doc this file cites (t_97a8ea03 §5.1) is NOT present in
+-- docs/ and no other doc rules this direction. So the mirror stays as it is,
+-- unchanged by this card, and is written down rather than invented.
+
+-- Is this ONE tooltip line nothing but the weapon's own damage arithmetic
+-- ("19 - 36 Damage", "19 - 36 Damage  Speed 2.50", "(11.0 damage per second)",
+-- "Speed 2.50")? This is the ONLY test that authorises dropping a line before
+-- the stat parse, and it is TOTAL: the damage / speed / DPS shapes are removed
+-- from the whole line and the line is chrome only when nothing but whitespace is
+-- left. A line that also carries a stat (the hypothetical column join
+-- "19 - 36 Damage  Speed 2.50  +5 Intellect") leaves "+5 intellect" behind, so
+-- it is NOT chrome — it stays in the list and suppresses exactly as it does
+-- today. The strip therefore cannot hide a stat: an unplaceable line that is not
+-- chrome still reads as UNKNOWN (fail-closed, unchanged).
+local function isWeaponChrome(line)
+	if type(line) ~= "string" then return false end
+	-- The dashes are normalised exactly as parseWeaponLine above does: Lua
+	-- patterns match BYTES, so the multi-byte UTF-8 en/em dash cannot sit in a
+	-- character class as a single element.
+	local low = line:gsub("\226\128\147", "-"):gsub("\226\128\148", "-")
+	low = low:lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if low == "" then return false end
+	local rest = low:gsub("%d+%s*%-%s*%d+%s+damage", " ")
+	rest = rest:gsub("%([%d]+[%.%,]?%d*%s*damage%s+per%s+second%)", " ")
+	rest = rest:gsub("speed%s*:?%s*[%d]+[%.%,]?%d*", " ")
+	rest = rest:gsub("^%s+", ""):gsub("%s+$", "")
+	return rest == ""
+end
+
+-- The stat-side view of a weapon's line list: the same list minus its own
+-- damage chrome. A COPY — the caller's table is the tooltip's own read and is
+-- never mutated (the row stores it, and the tooltip's delta line parses it
+-- again). A non-table (nil, a string, a failed read) passes straight through, so
+-- "no read" stays "no read".
+local function weaponStatLines(lines)
+	if type(lines) ~= "table" then return lines end
+	local kept = {}
+	for _, line in ipairs(lines) do
+		if not isWeaponChrome(line) then kept[#kept + 1] = line end
+	end
+	return kept
+end
+-- Exposed for the same reason weaponNumbers/weaponDPS above are: the tests drive
+-- the shipped strip rather than a re-implementation of it (and can therefore pin
+-- that a line carrying a stat is never dropped).
+Verdict.weaponStatLines = weaponStatLines
+
+-- Is this character's weapon judged as a STAT item, or on its DPS?
+--
+-- Answered from the ORDERS table by the same rule classRoleOrder applies (a pure
+-- class ignores the role argument; a hybrid requires a resolved one), and from
+-- the resolved role word alone:
+--   * CLASS unknown, or not in ORDERS -> false (today's DPS basis);
+--   * a HYBRID (more than one order)  -> stat-led iff role == "spell", so
+--     PALADIN / SHAMAN / DRUID only when the folded role resolved to `spell`,
+--     and their melee rows — and their role-less rows — keep DPS;
+--   * a HYBRID whose client literal is TANK and which HAS a tank weight pack
+--     (card t_6c3f414a, DD-3) -> ALSO stat-led, because that row is judged on
+--     the TANK role's terms (tankWeaponOrder below) instead of on DPS. This is
+--     the feral BEAR: a druid's TANK folds to `melee` for the ORDER (so
+--     Druid can reach DRUID.tank at all), and without this clause the bear's
+--     weapon would be compared on DPS alone while its own pack prices
+--     Strength, Agility, Stamina, Defense, Dodge and health-regen. Every other
+--     class is unchanged: a PURE class never reaches this clause (its role
+--     argument is ignored), a PALADIN tank is already stat-led through
+--     `spell`, and a class with no TANK alias and no tank pack (SHAMAN) stays
+--     on DPS — the clause is `tankWeaponOrder(...) ~= nil`, not `TANK == role`.
+--     The third argument is OPTIONAL: called with two arguments the function
+--     answers exactly what it answered before DD-3, which is what keeps every
+--     existing caller and assertion byte-identical.
+--   * a PURE class (exactly one order) -> stat-led iff its own order is the
+--     `spell` one: MAGE, PRIEST, WARLOCK. A recorded role cannot override it,
+--     exactly as it cannot change a pure class's order.
+-- No class token is spelled here and no second table is introduced: this reads
+-- the SAME Verdict.ORDERS the orders come from, so a class added there can never
+-- be silently missing from this rule.
+function Verdict.weaponStatLed(class, role, clientRole)
+	if type(class) ~= "string" then return false end
+	local orders = Verdict.ORDERS[class]
+	if type(orders) ~= "table" then return false end
+	local count, only = 0, nil
+	for key in pairs(orders) do
+		count = count + 1
+		only = key
+	end
+	if count == 0 then return false end
+	if count > 1 then
+		if role == "spell" then return true end
+		-- card t_6c3f414a: the TANK literal, and only where the class has
+		-- DECLARED a tank path (a TANK alias folding to this very role) and a
+		-- tank pack resolves for it. Both conditions matter: without the alias
+		-- test a SHAMAN — hybrid, no ROLE_ALIAS entry, no tank pack — would go
+		-- stat-led the moment the client said TANK, and tankWeaponOrder would
+		-- hand it its own MELEE pack's words. Without the pack test the alias
+		-- would be a promise no table keeps.
+		if type(clientRole) ~= "string" or clientRole:upper() ~= "TANK" then
+			return false
+		end
+		if Verdict.clientRoleWord(class, "TANK") ~= role then return false end
+		return Verdict.tankWeaponOrder(class, role, clientRole) ~= nil
+	end
+	return only == "spell"
+end
+
+-- ---- The TANK role's terms on the WEAPON path (card t_4590ab7e, item 2) -----
+-- WHY THIS EXISTS. `ROLE_ALIAS` folds the client's TANK word onto the caster word
+-- `"spell"` so the ORDER lookup has a word to resolve: PALADIN has no `tank` key in
+-- ORDERS, and retargeting the alias to "tank" would send that lookup to a key that
+-- does not exist — a nil order, i.e. UNKNOWN for every Prot row. That fold is
+-- correct for the ORDER and it is left EXACTLY as it is.
+--
+-- It is wrong for the WEAPON path. `compareWeapon`'s stat-led branch compares the
+-- weapon on the ORDER's terms, so a Prot paladin's weapon was compared on the
+-- CASTER order (Intellect > Stamina > Strength): a main hand carrying nothing but
+-- +2 Intellect read "UPGRADE — upgrade: better on Intellect" for a Protection
+-- paladin and NOT_UPGRADE for a Protection warrior. That is a caster's stat stick,
+-- not a tank's weapon.
+--
+-- So the weapon path asks a different question and this function answers it: what
+-- are the TERMS of the tank role? They are not invented — they are the stats the
+-- character's OWN tank weight pack prices above zero, in the fixed WEIGHT_KEYS
+-- order, with Armor and Block left OUT because those two are the tiebreak
+-- everywhere and are never a term of the dominance proof (E2 / §4.1a). For the
+-- shipped PALADIN.tank pack (STR 0.5, STA 1.0, ARMOR 0.35, BLOCK 0.35 —
+-- paladin-prot.survival) that is exactly "Strength" then "Stamina". The pack is
+-- DATA: if Intellect should ever count for a Prot paladin, the pack is edited and
+-- this follows it. No second order table is spelled here.
+--
+-- After card t_795eee9e the tank vocabulary can also carry DEFENSE, DODGE and
+-- PARRY (client keys ITEM_MOD_DEFENSE_SKILL_RATING, ITEM_MOD_DODGE_RATING and
+-- ITEM_MOD_PARRY_RATING, all verified in the client inventory), and a pack that
+-- prices them prices them BEHIND Block and AHEAD of SPOW in the WEIGHT_KEYS
+-- order — so a prot warrior pack edited to price defenseRating would read
+-- "Strength, Stamina, Defense", and this function already reports that term in
+-- the right place with no further change.
+--
+-- nil — the caller keeps today's order, byte for byte — when the client named no
+-- role, named one that is not TANK, the class is not a hybrid (a PURE class ignores
+-- the role argument, exactly as classRoleOrder and weaponStatLed do, so a Warrior
+-- tank is untouched), no tank pack resolves, or the pack prices no term at all.
+-- Every one of those is a "the weights cannot speak" answer, and the ordinal path
+-- keeps the row — the same fail-closed shape as a missing weights table (AC-E).
+function Verdict.tankWeaponOrder(class, role, clientRole)
+	if type(class) ~= "string" then return nil end
+	if type(clientRole) ~= "string" or clientRole:upper() ~= "TANK" then return nil end
+	if not isHybrid(class) then return nil end
+	local weights = Verdict.weightsFor(class, role, clientRole)
+	if weights == nil then return nil end
+	local words = {}
+	for _, k in ipairs(WEIGHT_KEYS) do
+		if k ~= "ARMOR" and k ~= "BLOCK" then
+			local w = rawget(weights, k)
+			if type(w) == "number" and w > 0 then words[#words + 1] = WEIGHT_WORD[k] end
+		end
+	end
+	if #words == 0 then return nil end
+	return words
+end
+
+-- THE TIER C ENTRY POINT — one function for BOTH callers (the bag walk and the
+-- quest-reward judgement), so the role-aware rule cannot exist on one surface
+-- and not the other.
+--
+--   candLines / wornLines — the raw lines the caller already read (nil worn on
+--                           an EMPTY slot);
+--   wornSlotFilled        — the caller's own fact about the worn slot (D1);
+--   spec                  — the character's resolved spec (class/role/order);
+--   canUse                — the caller's eligibility answer. `true` by the time
+--                           the shipped paths call this (they return first on
+--                           anything else), and passed through rather than
+--                           assumed: the eligibility gate is a HARD gate
+--                           everywhere else in this file.
+--   apiBySide             — OPTIONAL. The same { candidate = ..., worn = ... }
+--                           client-read table Verdict.evaluate takes. nil (what
+--                           both shipped callers pass today) leaves every branch
+--                           byte-identical; when present, the stat-led branch
+--                           reads the client's own stat words through
+--                           apiSideResolve exactly as evaluate does, which is
+--                           the only way a Dodge/Parry read (words the text
+--                           reader cannot place on a weapon line) reaches the
+--                           weapon path's two gates.
+-- Returns verdict, reason — the same contract as compareDPS.
+function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide)
+	local candNumbers = weaponNumbers(candLines)
+	local wornNumbers = weaponNumbers(wornLines)
+
+	local statLed = type(spec) == "table"
+		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
+		and type(spec.order) == "table"
+	if not statLed then
+		-- EVERY other case — a melee role, a hybrid with no resolved role, an
+		-- unknown class, a stat-led class whose order did not resolve, no spec at
+		-- all — is today's comparator, byte-for-byte, reason string included.
+		local verdict, reason, tie = compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		-- (card t_ee04ad6d) THE ONE EXCEPTION, and it is the claim this path
+		-- cannot support: an "equal" on damage per second while the two sides
+		-- differ MORE than the tooltip's own step on a word it can measure (Hit,
+		-- Crit). The DPS numbers are level; the pair is not the same, and the
+		-- basis in force cannot place the difference, so the row declines and
+		-- NAMES the word instead of asserting sameness. The more/less branches
+		-- are deliberately NOT gated: they claim an ordering on the DPS channel,
+		-- which stays true, and widening this into "a melee weapon is judged on
+		-- its stats" is the re-basing card t_16448f75 ruled out. The parse runs
+		-- only on the equal branch, so every other weapon row costs exactly what
+		-- it cost before this card.
+		if tie == "equal" then
+			local candStats = parseSide(weaponStatLines(candLines), "candidate", nil)
+			local eqStats   = parseSide(weaponStatLines(wornLines), "worn",      nil)
+			local hidden = Verdict.beyondResolution(candStats, eqStats)
+			if hidden ~= nil then
+				return "UNKNOWN", Verdict.equalClaimReason(hidden)
+			end
+		end
+		return verdict, reason
+	end
+
+	-- (card t_4590ab7e, item 2) WHICH ROLE REACHES THE WEAPON PATH. Where the
+	-- client named TANK, the terms are the TANK role's own (tankWeaponOrder): the
+	-- stats its tank weight pack prices. Everywhere else `order` IS spec.order, so
+	-- the melee/spell rows — and every row on a class with no tank pack — are
+	-- byte-identical to today. The ORDER itself is untouched: spec.order still
+	-- resolved through the ROLE_ALIAS fold (`spell`), which is what keeps a Prot
+	-- paladin's rows out of the UNKNOWN branch.
+	local order = Verdict.tankWeaponOrder(spec.class, spec.role, spec.clientRole)
+		or spec.order
+	local cmpSpec = spec
+	if order ~= spec.order then
+		cmpSpec = { class = spec.class, role = spec.role,
+			clientRole = spec.clientRole, level = spec.level, order = order }
+	end
+
+	local api = type(apiBySide) == "table" and apiBySide or nil
+	local candWords, candUnmapped = apiSideResolve(api and rawget(api, "candidate"))
+	local wornWords, wornUnmapped = apiSideResolve(api and rawget(api, "worn"))
+	if type(candUnmapped) == "table" and #candUnmapped > 0 then
+		return "UNKNOWN", "cannot classify: " .. candUnmapped[1]
+			.. " (a client stat key this addon has not verified)"
+	end
+	if type(wornUnmapped) == "table" and #wornUnmapped > 0 then
+		return "UNKNOWN", "cannot classify: " .. wornUnmapped[1]
+			.. " (a client stat key this addon has not verified)"
+	end
+
+	-- An EMPTY slot keeps today's exact answer AND reason: filling the main hand
+	-- with a caster weapon is still an upgrade. Deliberately NOT routed through
+	-- evaluate(): its gate 6 words this with the chest sentinel its callers
+	-- rewrite per slot, and there is no such rewrite on the weapon branch.
+	if wornLines == nil then
+		-- (card t_e2603a9c, item 1 — the R6 placement rule on the weapon
+		-- path: a candidate carrying a word whose unit is unconfirmed (the
+		-- UNCONFIRMED_UNITS list) cannot be waved in to fill the slot,
+		-- whatever its DPS; since card C1 only a ruled unconfirmed unit
+		-- closes the pair, and on the weapon path it can arrive only through
+		-- apiBySide.) The parse must succeed for the gate to speak; a
+		-- side that does not parse keeps the pre-card shortcut, so a
+		-- suppression never changes answer or reason (the byte-identical rule
+		-- holds for such rows).
+		local fillSide = weaponStatLines(candLines)
+		local fillStats, fillProc, fillUnknown = parseSide(fillSide, "candidate", candWords)
+		if fillProc == nil and fillUnknown == nil then
+			local unpricedFill = Verdict.unpricedWord(fillStats)
+			if unpricedFill ~= nil then
+				return "UNKNOWN", Verdict.unpricedWordReason(unpricedFill)
+			end
+		end
+		return "UPGRADE", "upgrade: fills the weapon slot"
+	end
+
+	local candSide, eqSide = weaponStatLines(candLines), weaponStatLines(wornLines)
+	-- WHY THIS PARSES THE SIDES *AND* evaluate() PARSES THEM AGAIN. Gate 7 of
+	-- evaluate() reads "a filled slot whose stats yielded nothing" as
+	-- UNREADABLE. For ARMOUR that is right — every armour piece prints Armor, so
+	-- nothing readable means the read failed. For a WEAPON it is wrong: a
+	-- stat-less weapon is a real, common item and its tooltip was read
+	-- completely. So the no-stat-content WORN side is decided HERE, where the
+	-- parse can tell "carries no stats" from "could not be read", and evaluate()
+	-- keeps doing what it has always done for every pair with stats on the worn
+	-- side. The cost is one extra parse of ~10 short lines on the hover path;
+	-- there is no client call and no state.
+	local candStats, candProc, candUnknown = parseSide(candSide, "candidate", candWords)
+	local eqStats,   eqProc,   eqUnknown   = parseSide(eqSide,   "worn",      wornWords)
+	local suppressed = candProc ~= nil or candUnknown ~= nil
+		or eqProc ~= nil or eqUnknown ~= nil
+	-- (card t_e2603a9c, item 1 — the unpriced-stat gate, applied at the
+	-- WEAPON's decision points per the #39 seam: ChestAdvisor.
+	-- _twoHandCombinedWorn hands the COMBINED side to THIS function as
+	-- plain lines, and the seam names the compareWeapon calls as the
+	-- application place. So ONE correction — the Verdict.unpricedWord
+	-- vocabulary, one word map, no second parser — reaches the two-hander
+	-- judgement exactly as it reaches the stat-led armour pair.) Either side
+	-- carrying a word whose unit is unconfirmed (the UNCONFIRMED_UNITS list)
+	-- fails the pair closed BEFORE the weapon's early decisions — the
+	-- statless-worn UPGRADE and the level-stats DPS call — none of which
+	-- reaches the matching gate inside Verdict.evaluate. Since card C1 only
+	-- a ruled unconfirmed unit closes the pair, and on the weapon path it
+	-- can arrive only through apiBySide. The `statLed == nil` guard ABOVE
+	-- owns the scope: a class without a resolved order stays on the plain
+	-- DPS call, and the DPS-only answer otherwise stands, untouched.
+	if not suppressed then
+		local unpriced = Verdict.unpricedWord(candStats)
+			or Verdict.unpricedWord(eqStats)
+		if unpriced ~= nil then
+			return "UNKNOWN", Verdict.unpricedWordReason(unpriced)
+		end
+		-- Gate 8c on the WEAPON path (card t_d53877b1, option C): the same
+		-- difference-based unconfirmed-unit guard through the same ONE predicate
+		-- — a weapon can carry a hit/crit line as readily as a chest piece, and
+		-- a pair left unguarded here would answer on the DPS channel a question
+		-- the armour path refuses. Same reason shape, same words.
+		local unconfirmedDiff = Verdict.unconfirmedDifference(candStats, eqStats)
+		if unconfirmedDiff ~= nil then
+			return "UNKNOWN", Verdict.unpricedWordReason(unconfirmedDiff)
+		end
+	end
+	local outcome = nil
+	if not suppressed then
+		outcome = Verdict.dominance(candStats, eqStats, order)
+	end
+
+	if not suppressed and next(eqStats) == nil then
+		-- The worn weapon carries NO stat at all: a KNOWN absence (every line on
+		-- it parsed cleanly, so nothing suppressed and no stat is hidden), not a
+		-- failed read.
+		if outcome == "dominant" then
+			-- The candidate carries something the worn item does not. Dominance's
+			-- own one-sided rule counts that as a gain, and the reason is worded
+			-- with the same winReason() grammar evaluate() uses, so the tooltip's
+			-- reason-word parsing cannot tell the two apart.
+			-- (No `allow` wrapper is needed here: a weapon tooltip names no typed
+			-- armour slot, so lowerArmorReason is nil for every weapon pair.)
+			for _, word in ipairs(order) do
+				if (candStats[word] or 0) > 0 then return "UPGRADE", winReason(word) end
+			end
+			return "UPGRADE", winReason()
+		end
+		-- Nothing the stats can decide on: both weapons carry no stat, or the
+		-- candidate's only stat is outside the role's order (spell power — see
+		-- this section's note). The DPS tie-break is today's answer.
+		return compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+	end
+
+	if not suppressed and outcome == nil then
+		-- The stats are LEVEL on every term of the role's own order (or absent on
+		-- both sides): there is no caster-stat difference for DPS to outvote, so
+		-- DPS decides — today's comparator, today's strings. This is the whole of
+		-- option (b)'s "DPS as a minor term": level stats are the only case in
+		-- which DPS is consulted at all.
+		return compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+	end
+
+	-- The stats decide — or a line suppressed somewhere, which is fail-closed
+	-- exactly as on the armour path. This IS the armour comparator, called with
+	-- the same spec the armour rows are judged by: one dominance walk, one
+	-- weighted layer, one set of reason strings. `cmpSpec` differs from `spec`
+	-- ONLY in its `order` — and only where the client named TANK (card
+	-- t_4590ab7e, item 2); the weights the layer consults are reached through
+	-- class/role/clientRole, which are carried across unchanged.
+	return Verdict.evaluate({ canUse = canUse, line = candSide },
+		{ line = eqSide }, cmpSpec, api)
+end
 
 -- Tank path (card t_89440dfa): the relevance-set and dominance helpers are
 -- exposed beside the additive tooltip helpers above, for the same reason — the
@@ -2705,15 +5364,85 @@ Verdict.compareDPS = compareDPS
 --                  a caller that wants to disclose a partial read renders
 --                  Verdict.partialNote(ignored) — the verdict is unaffected
 --                  either way, which is the whole point of the rule.
+--          foreign — (card t_4ff4ebef) an array of the lines the reader composed
+--                  but the item did not: another addon's annotation and the
+--                  block it opens. Optional FOURTH return, kept out of
+--                  `ignored` on purpose — a foreign line is not the item's
+--                  cosmetic prose. Render Verdict.partialNote(ignored, foreign)
+--                  to disclose both truthfully.
 -- `lines` is never mutated; the input table is only read.
 -- `apiWords` (card t_548f0341, OPTIONAL) is the client's own stat read for this
--- side, already mapped by Verdict.apiStats at the impure edge. It resolves an
--- unplaceable line exactly as the comparator's own parse does, so the numbers a
--- caller prints are the numbers the verdict was decided on.
+-- side, mapped by Verdict.apiStats at the impure edge. Since card t_795eee9e
+-- the live edge ships the wrapper shape { words = ..., unmapped = ... }; the
+-- resolution is apiSideResolve, the SAME function evaluate() uses, so the
+-- numbers a caller prints are the numbers the verdict was decided on. It
+-- resolves an unplaceable line exactly as the comparator's own parse does.
 function Verdict.statTable(lines, side, apiWords)
-	local stats, proc, unknown, ignored =
-		parseSide(lines, side == "worn" and "worn" or "candidate", apiWords)
-	return stats, (proc or unknown), ignored
+	-- Both sides keep their own half of this call (merge of origin/main into
+	-- card t_795eee9e): the api read still crosses apiSideResolve — the live
+	-- edge ships { words = ..., unmapped = ... }, so handing the wrapper to
+	-- parseSide would feed it a table with no words — while main's foreign
+	-- channel is handed straight back to the caller, which is what the
+	-- disclosure reads as the FOURTH return.
+	local words = apiSideResolve(apiWords)
+	local stats, proc, unknown, ignored, foreign =
+		parseSide(lines, side == "worn" and "worn" or "candidate", words)
+	return stats, (proc or unknown), ignored, foreign
+end
+
+-- Both sides' skipped lines as ONE list (card t_d8de0090). The disclosure has
+-- to name the lines set aside on EITHER side — the EQUIPPED item's cosmetic
+-- chrome is the other half of the comparison the verdict describes — and the
+-- tooltip and the scan's raw record must agree about WHICH lines those are.
+--
+-- Before this card that combination lived in the UI file (partialReadSuffix in
+-- ChestAdvisor.lua), which meant the player-facing surface and any raw record
+-- would each have needed their own copy of it: exactly the second definition
+-- two surfaces drift apart on. One function, called by both.
+--
+-- `apiBySide` is the SAME { candidate = ..., worn = ... } table Verdict.evaluate
+-- took, so a line the client's own stat read EXPLAINS is not reported as
+-- skipped (card t_548f0341's agreement rule). nil leaves both sides on the
+-- unexplained path — the fail-closed answer.
+--
+-- Returns a new array (candidate lines first, then worn); inputs are never
+-- mutated.
+function Verdict.ignoredLines(candLines, wornLines, apiBySide)
+	local api = type(apiBySide) == "table" and apiBySide or nil
+	local out = {}
+	local _, _, candIgnored =
+		Verdict.statTable(candLines, "candidate", api and api.candidate or nil)
+	for _, line in ipairs(candIgnored or {}) do out[#out + 1] = line end
+	if type(wornLines) == "table" then
+		local _, _, wornIgnored =
+			Verdict.statTable(wornLines, "worn", api and api.worn or nil)
+		for _, line in ipairs(wornIgnored or {}) do out[#out + 1] = line end
+	end
+	return out
+end
+
+-- Both sides' FOREIGN lines as ONE list (card t_b8c890e6). The disclosure has
+-- to count the lines set aside on EITHER side — the EQUIPPED item's addon
+-- annotation is the other half of the comparison the verdict describes — and
+-- the player-facing tooltip and /up diag's raw record must agree about WHICH
+-- lines those are. This mirrors Verdict.ignoredLines for the foreign half:
+-- ONE function the raw record calls, so the two surfaces name the same lines
+-- (the tooltip's partialReadSuffix composes the same splitForeign over both
+-- sides and is byte-identical to this on the same strings).
+--
+-- splitForeign reads no client state, so this takes no apiBySide — the
+-- strings the caller passes ARE the read the verdict was decided on, and a
+-- non-table side contributes nothing. Candidate first, then worn, the same
+-- order ignoredLines uses. Returns a new array; inputs are never mutated.
+function Verdict.foreignLines(candLines, wornLines)
+	local out = {}
+	local _, foreign = Verdict.splitForeign(candLines)
+	for _, line in ipairs(foreign or {}) do out[#out + 1] = line end
+	if type(wornLines) == "table" then
+		local _, wornForeign = Verdict.splitForeign(wornLines)
+		for _, line in ipairs(wornForeign or {}) do out[#out + 1] = line end
+	end
+	return out
 end
 
 -- Display labels for the stat words. A LABEL, not a weight: it only shortens a
@@ -2728,6 +5457,11 @@ local STAT_LABEL = {
 	Armor     = "Armor",
 	Block     = "Block",
 	SpellPower = "Spell Power",
+	-- card t_3cdbb70a (DD-1): the feral word needs a player-facing label or a
+	-- delta reads "FeralAttackPower" on screen. (Card t_9d3273cb retired the two
+	-- spell labels with their two words; "Hit" and "Crit" already read as
+	-- themselves.)
+	FeralAttackPower = "Feral AP",
 }
 
 function Verdict.statLabel(word)

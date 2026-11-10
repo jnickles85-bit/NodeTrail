@@ -155,7 +155,7 @@ local TRADEOFF_SIZE = 12
 -- shirt, tabard, and every INVTYPE_NON_EQUIP_* token. Tier A (t_1c8e911b)
 -- pulled the five stat-stick slots IN: neck, finger (×2), trinket (×2).
 -- Tier B (t_73e20edb) pulls the OFF-HAND slot IN: shield, off-hand weapon and
--- held-in-off-hand (Lena §2's OFF_HAND class).
+-- held-in-off-hand (review §2's OFF_HAND class).
 --
 -- Tier C (t_b058b5df) pulls the WEAPON family IN, judged on tooltip-read DPS
 -- (Verdict.weaponNumbers / compareDPS): the main-hand one-handers (INVTYPE_WEAPON,
@@ -185,12 +185,12 @@ local EQUIP_SLOTS = {
 	["INVTYPE_FINGER"]   = 11,  -- pair slots — PAIR_SLOTS below
 	["INVTYPE_TRINKET"]  = 13,  -- pair slots — PAIR_SLOTS below
 	["INVTYPE_CLOAK"]    = 15,
-	["INVTYPE_SHIELD"]       = 17,  -- Tier B: the OFF_HAND class (Lena §2)
+	["INVTYPE_SHIELD"]       = 17,  -- Tier B: the OFF_HAND class (review §2)
 	["INVTYPE_WEAPONOFFHAND"] = 17,
 	["INVTYPE_HOLDABLE"]      = 17,
 	-- Tier C: the WEAPON family (main hand 16, ranged 18). Routed to the DPS
 	-- comparator by the `isWeaponRow` test in the walk below, NOT to the armour
-	-- comparator. INVTYPE_WEAPON is positional (Lena §2): the client resolves it
+	-- comparator. INVTYPE_WEAPON is positional (review §2): the client resolves it
 	-- to the slot it is WORN in, so as a candidate it is a main-hand weapon.
 	["INVTYPE_WEAPON"]         = 16,
 	["INVTYPE_2HWEAPON"]       = 16,
@@ -245,7 +245,7 @@ local SLOT_WORD = {
 	[13] = "trinket",
 	[14] = "trinket",   -- pair slots share one word (Tier A)
 	[16] = "main hand", -- Tier C: the main-hand weapon slot
-	[17] = "off hand",  -- Tier B (Lena §1: the sister project's own word for INVSLOT_OFFHAND)
+	[17] = "off hand",  -- Tier B (review §1: the sister project's own word for INVSLOT_OFFHAND)
 	[18] = "ranged",    -- Tier C: the ranged weapon slot (INVSLOT_RANGED)
 }
 
@@ -532,7 +532,7 @@ end
 -- than the present. pcall-wrapped and secret-tolerant: this is an
 -- untested-by-us client read, treated like CanUseItem.
 --
--- Tier C (t_b058b5df) round 2 (Vera D2): a structured tooltip line's
+-- Tier C (t_b058b5df) round 2 (the gate D2): a structured tooltip line's
 -- leftText / rightText can be a SECRET value — the client marks the fields of
 -- a structured read while the player is on an addon-restricted map. The value
 -- is a STRING, so `type(v) == "string"` does NOT screen it, and both tostring()
@@ -691,9 +691,9 @@ end
 -- (GetSpecialization -> index, GetSpecializationInfo(index) -> ..., role, ...),
 -- consumed by Blizzard's own camelot-only character sheet
 -- (Camelot/PaperDollFrame.lua:2400-2404). `role` is the 5th return and its
--- values are the three literals TANK / HEALER / DAMAGER (Lena §3).
+-- values are the three literals TANK / HEALER / DAMAGER (review §3).
 --
--- This read is UNTESTED BY US (Lena §11.2) — observed present and consumed by
+-- This read is UNTESTED BY US (review §11.2) — observed present and consumed by
 -- the client's own UI, never observed returning TANK for a protection warrior
 -- on a live character. So it is treated exactly like CanUseItem: pcall, and
 -- anything other than a clean three-way role string is nil, which the gate
@@ -758,11 +758,19 @@ end
 --
 -- Returns: word (the table's own role word or nil), source ("recorded" |
 -- "client" | nil). The source lets the diag say where the role came from.
-local function resolvedRole(token)
+--
+-- `si` (card t_984bc8ac, OPTIONAL) is an already-read readSpecIdentity() result.
+-- The weights layer needs the client's OWN literal (TANK/HEALER/DAMAGER) — the
+-- alias above folds it into one of the two ORDER words, which is all the order
+-- needs, but a WEIGHT table carries a third spec ("tank") the order vocabulary
+-- cannot express. buildSpec therefore reads the identity ONCE and threads it in
+-- here, so the spec build still costs one client read, not two. Callers that do
+-- not pass it get exactly the old behaviour (one read, inside).
+local function resolvedRole(token, si)
 	local recorded = playerRole(token)
 	if recorded ~= nil then return recorded, "recorded" end
 	if type(token) ~= "string" then return nil, nil end
-	local si = readSpecIdentity()
+	si = si or readSpecIdentity()
 	local alias = (si and Verdict and Verdict.clientRoleWord)
 		and Verdict.clientRoleWord(token, si.role) or nil
 	if alias then return alias, "client" end
@@ -771,13 +779,8 @@ end
 
 local function buildSpec()
 	local token = classToken()
-	local role  = resolvedRole(token)
-	-- Card t_3a744b4a: resolvedRole above decides the ORDER (and keeps its
-	-- own rulings); this read only names the WEIGHT profile. The client's
-	-- word is the honest one — a Protection paladin is TANK even though the
-	-- order alias sends it to the "spell" order — so the tooltip can show
-	-- [Protection] instead of a label nobody can check.
-	local specIdentity = readSpecIdentity()
+	local si    = readSpecIdentity()
+	local role  = resolvedRole(token, si)
 	local order = (Verdict and Verdict.classRoleOrder) and Verdict.classRoleOrder(token, role) or nil
 	-- A hybrid without a resolved role is not "acting as its class token":
 	-- the display label must say the role is missing, not invent one.
@@ -790,8 +793,14 @@ local function buildSpec()
 		local ok, lv = pcall(UnitLevel, "player")
 		if ok and type(lv) == "number" then level = lv end
 	end
+	-- clientRole is the client's own literal, passed through for the WEIGHT
+	-- lookup only (Verdict.weightsFor): it is what lets a Protection paladin
+	-- reach a Prot weight table at all, since `role` above is the FOLDED word
+	-- ("spell") that the order needs. Nothing else reads this field, and it is
+	-- nil wherever the client does not offer the read — which the weights layer
+	-- treats as "no literal", never as a default.
 	return { order = order, role = label, class = token, level = level,
-	         clientRole = specIdentity and specIdentity.role or nil }
+	         clientRole = (si and si.role) or nil }
 end
 
 -- ---- Tooltip surface (card t_ed71a583) ---------------------------------------
@@ -1031,7 +1040,14 @@ end
 -- A secret/withheld value is the same: silence, never a guess at the number.
 --
 -- `idOrLink` is the item id (or the link; the client accepts both). Returns:
---   words — stat word -> number, verified keys only, or nil
+--   { words = <stat word -> number, verified keys only>,
+--     unmapped = <sorted array of string keys this module could not verify,
+--                 or nil> } — the card t_795eee9e wrapper — or nil. evaluate()
+--   turns a non-empty `unmapped` into the UNKNOWN answer (AC-C: an unverified
+--   stat is never a silent drop, never a zero); Verdict.statTable reads only
+--   the words. The wrapper and the legacy plain-words shape both resolve
+--   through Verdict's apiSideResolve (the same function in both), so the
+--   display and the verdict never diverge on the read.
 local function apiStatsOf(idOrLink)
 	if idOrLink == nil then return nil end
 	if not (C_Item and type(C_Item.GetItemStats) == "function") then return nil end
@@ -1043,13 +1059,15 @@ local function apiStatsOf(idOrLink)
 		if sok and sec then return nil end
 	end
 	if not (Verdict and type(Verdict.apiStats) == "function") then return nil end
-	local words = Verdict.apiStats(raw)
-	return words
+	local words, unmapped = Verdict.apiStats(raw)
+	if type(words) ~= "table" then return nil end
+	return { words = words, unmapped = unmapped }
 end
 
--- Both sides' API words, ready to hand to Verdict.evaluate's fourth argument.
--- nil when the API could not read a side, which parseSide reads as "explain
--- nothing" — the unchanged suppression behaviour.
+-- Both sides' stat reads, ready to hand to Verdict.evaluate's fourth argument
+-- (or Verdict.statTable per side). nil when the API could not read a side,
+-- which parseSide reads as "explain nothing" — the unchanged suppression
+-- behaviour.
 local function apiBySideOf(candIdOrLink, wornIdOrLink)
 	local cand = apiStatsOf(candIdOrLink)
 	local worn = apiStatsOf(wornIdOrLink)
@@ -1109,7 +1127,21 @@ local function describeUpgradeParts(row, order)
 		and type(Verdict.deltaText) == "function") then
 		return shown, nil
 	end
-	local word = reason:match("better on (%a+)") or reason:match("more (%a+) %(")
+	-- Card t_b91b29f9 (item 7): the reason names the stat in PLAYER words, and
+	-- one of those is TWO words long: "Feral AP", the only entry in Verdict's
+	-- REASON_WORD map. Capture up to the reason's own em-dash clause (or the
+	-- end) so a multi-word label survives whole; anchored on the "upgrade: "
+	-- prefix so the trade-off sentence "better on some stats, worse on others"
+	-- is never read as a stat word.
+	-- (Card t_9d3273cb retired the other two two-word labels — "Spell Hit" and
+	-- "Spell Crit" — with their words, so "Feral AP" is now the only multi-word
+	-- one, and this capture is still the reason it works. The spell word does NOT
+	-- need it: a reason prints "SpellPower", the API token, not the tooltip's
+	-- "Spell Power" — STAT_LABEL is the tooltip spelling and REASON_WORD has no
+	-- spell entry, so the token passes through verbatim.)
+	local word = reason:match("^%s*upgrade:%s*better on (.-)%s*—")
+		or reason:match("^%s*upgrade:%s*better on (.-)%s*$")
+		or reason:match("more (%a+) %(")
 	-- Card t_548f0341: the tooltip's arithmetic reads the SAME API-resolved
 	-- tables the verdict was decided on, so a reconciled line cannot print one
 	-- number while the verdict rested on another.
@@ -1152,35 +1184,57 @@ end
 -- identical when the tooltip was fully read).
 local function partialReadSuffix(row)
 	if not (Verdict and type(Verdict.statTable) == "function"
-		and type(Verdict.partialNote) == "function") then
+		and type(Verdict.partialNote) == "function"
+		and type(Verdict.ignoredLines) == "function"
+		and type(Verdict.foreignLines) == "function"
+		and type(Verdict.splitForeign) == "function") then
 		return ""
 	end
-	-- The client's own stat read, at the SAME precedence describeUpgrade uses:
-	-- the read stored on the row when the verdict was decided (a quest reward
-	-- row, which carries no id) and otherwise re-derived from the row's own
-	-- item id (a bag row). Both branches feed the identical parse the verdict
-	-- used, so the disclosure cannot disagree with the answer it describes.
-	local api
-	if type(row.api) == "table" then
-		api = row.api
+	-- Card t_d8de0090: PREFER the cosmetic half the scan already recorded on
+	-- the row. The disclosure describes the read the VERDICT was decided on,
+	-- so the honest source is the parse that decided it — not a second parse
+	-- made later, which can disagree the moment the item changes (an enchant,
+	-- a buff, a reload) and would then contradict the answer it describes.
+	-- The scan records `ignored` through the same helper this function falls
+	-- back to, so both paths name the same lines.
+	local ignored
+	if type(row.ignored) == "table" then
+		ignored = row.ignored
 	else
-		api = apiBySideOf(row.id, type(row.wornLink) == "string"
-			and itemIDOf(row.wornLink) or nil)
+		-- The client's own stat read, at the SAME precedence describeUpgrade
+		-- uses: the read stored on the row when the verdict was decided (a
+		-- quest reward row, which carries no id) and otherwise re-derived
+		-- from the row's own item id (a bag row written before this card's
+		-- field existed). Both branches feed the identical parse the verdict
+		-- used.
+		local api
+		if type(row.api) == "table" then
+			api = row.api
+		else
+			api = apiBySideOf(row.id, type(row.wornLink) == "string"
+				and itemIDOf(row.wornLink) or nil)
+		end
+		-- Candidate AND worn: a cosmetic line on the EQUIPPED item is the same
+		-- partial read, and that item's lines are the other half of the
+		-- comparison that produced this verdict. Verdict.ignoredLines owns
+		-- that combination so this surface and the raw record cannot differ.
+		ignored = Verdict.ignoredLines(row.lines, row.chestWornLines, api)
 	end
-	local _, _, candIgnored = Verdict.statTable(row.lines, "candidate",
-		api and api.candidate or nil)
-	local note = Verdict.partialNote(candIgnored)
-	-- The worn side is read too: a cosmetic line on the EQUIPPED item is the
-	-- same partial read, and the equipped item's lines are the other half of
-	-- the comparison that produced this verdict.
-	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0 then
-		local _, _, eqIgnored = Verdict.statTable(row.chestWornLines, "worn",
-			api and api.worn or nil)
-		local combined = {}
-		for _, l in ipairs(candIgnored or {}) do combined[#combined + 1] = l end
-		for _, l in ipairs(eqIgnored or {}) do combined[#combined + 1] = l end
-		note = Verdict.partialNote(combined)
-	end
+	-- Card t_4ff4ebef: the FOREIGN half comes from Verdict.foreignLines — the
+	-- ONE combiner, which is also what /up diag's raw record prints, so the
+	-- tooltip and the record cannot name different lines. (the reviewer's re-review
+	-- note on PR #44: this function used to re-implement that combine here,
+	-- which is one shape too many.) It is the pure text split of the recorded
+	-- line strings, reading no client state at all, so the strings recorded on
+	-- the row ARE the read the verdict was decided on and the split cannot
+	-- drift from it. Both sides are combined: a foreign line on the EQUIPPED
+	-- item is the same partial read — the other half of this comparison —
+	-- exactly as the cosmetic half above.
+	local foreign = Verdict.foreignLines(row.lines, row.chestWornLines)
+	-- One partialNote call owns both halves — cosmetic NAMED (card t_d8de0090),
+	-- foreign COUNTED (card t_4ff4ebef) — so the two clauses cannot drift
+	-- apart and neither line can be reported as the other.
+	local note = Verdict.partialNote(ignored, foreign)
 	if note == "" then return "" end
 	return " " .. TOOLTIP_GREY .. "(" .. note .. ")" .. TOOLTIP_RESET
 end
@@ -1512,7 +1566,7 @@ end
 -- (ForeverGear/Bags.lua:77-78).
 --
 -- The §5a amendment of docs/whisperstone/phase-d-live-gate.md (2026-09-30,
--- the player's ruling on the beta client: "All we need is the green arrow",
+-- the maintainer's ruling on the beta client: "All we need is the green arrow",
 -- "Arrow only -- drop the bar") retires the old W1 orange bar
 -- (f.__texture) and its "DO-NOT: keep it" obligation -- the player's own
 -- verdict supersedes. The arrow is all that is left (§5b corrects where it
@@ -1602,7 +1656,7 @@ local function makeMarker(index, link, verdict, reason, roleLabel, slotWordText)
 		-- BAG BUTTON (see anchorMarker's render step) and the hover hook
 		-- rides the button's own mouse — the frame carries neither in this
 		-- round. The W1 orange bar (f.__texture, SetColorTexture) is
-		-- retired (player's ruling, §5a; carried into §5b).
+		-- retired (maintainer's ruling, §5a; carried into §5b).
 		--
 		-- NOT EnableMouse'd — the cell's mouse belongs to the button.
 		-- The old §5a frame covered the cell with a mouse surface and
@@ -1802,7 +1856,7 @@ end
 
 -- Anchor a marker to the bag slot it belongs to.
 --
--- B (Vera round 3, t_b9c4291e): in the pinned client (Gethe/wow-ui-source@
+-- B (the gate round 3, t_b9c4291e): in the pinned client (Gethe/wow-ui-source@
 -- forever), bag item slots are dynamically created ItemButtons drawn from a
 -- frame pool, not global "Bag<X>Slot<Y>" frames
 -- (Blizzard_UIPanels_Game/Mainline/ContainerFrame.lua:777 — CreateFramePool;
@@ -1974,7 +2028,7 @@ local function anchorMarker(f, bag, slot, link, slotWordText)
 	return true
 end
 
--- B3 (Vera round 2): markerNext used to grow monotonically, so every rescan
+-- B3 (the gate round 2): markerNext used to grow monotonically, so every rescan
 -- that produced at least one UPGRADE allocated a brand-new pool slot — in a
 -- live session (constant bag churn) the pool of marker frames grew without
 -- bound. clearMarkers is the natural reset point: a scan that re-runs after
@@ -2314,6 +2368,48 @@ local function frameIsShown(f)
 	return ok and shown == true
 end
 
+-- Card t_379344b6 — the ONE word the pair pickers return instead of a pick.
+-- Defined in the MAIN CHUNK, not inside the quest-scope block below: the bag
+-- walk (ChestAdvisor.scan, defined later) and the quest walk both use it, and
+-- a local declared inside the do-block below would be invisible to the bag
+-- walk — it would compile to a global lookup (nil at runtime) and the fail
+-- closed branch would die. Both pickers share this one word: no drift, and no
+-- raw token or internal key name reaches the player.
+-- The row's `reason` string is what both wear surfaces print verbatim (the
+-- tooltip line and the /up log). The verdict stays UNKNOWN — the word map
+-- already renders that token ("Can't judge", TOOLTIP_UI above), and the
+-- comparator's four-token contract gains no fifth token (U2/b: the
+-- vocabulary is closed).
+local PAIR_UNREADABLE_REASON = "a fixed pick is not a verdict — the stats of neither item could be read"
+
+-- Card t_379344b6: does NEITHER worn pair member yield a single stat through
+-- the comparator's OWN read? `Verdict.statTable` IS the comparator's parser —
+-- the text parse, or the client's own stat read explaining a line the text
+-- parse cannot place — and it is the same read the row's final verdict decides
+-- on. No second parser in this file: a second parser is the drift this
+-- project keeps catching, and a divergent parser is a silent wrong answer.
+--
+-- A member the final comparison could actually read must NOT fail the pick
+-- closed: the card's invariance is that whenever either side is readable the
+-- pick keeps today's behaviour byte-for-byte (verdict and reason), and the
+-- client's own stat read is a read the final comparison uses.
+--
+-- `false` is the only safe default when the helper does not exist (a
+-- Verdict.lua that predates this card): the pick degrades to exactly today's
+-- behaviour, the posture the gates beside take.
+local function pairBothUnreadable(lines1, link1, lines2, link2)
+	if not (Verdict and type(Verdict.statTable) == "function") then return false end
+	-- Capture each read to its FIRST return (the stats table) before next():
+	-- statTable returns (stats, note, ignored), and a bare call passed as
+	-- next()'s argument hands the note through AS the key — "invalid key to
+	-- 'next'" is how an unreadable member would otherwise raise instead of
+	-- answering. Locals keep only the one value next() is owed.
+	local t1 = Verdict.statTable(lines1, "worn", apiStatsOf(link1))
+	if next(t1) ~= nil then return false end
+	local t2 = Verdict.statTable(lines2, "worn", apiStatsOf(link2))
+	return next(t2) == nil
+end
+
 -- The quest surface is its own scope. Lua 5.1 allows 200 locals in the
 -- main chunk; this block used to spend dozens of them. What it defines
 -- lives here and is published on ChestAdvisor for the walks that run
@@ -2451,10 +2547,10 @@ local function questRewardLink(button, index)
 	--
 	-- PROVENANCE of those line numbers: the reference extracts of 1.60.1.70009
 	-- and 1.60.1.70205, which agree with each other exactly. The INSTALLED
-	-- client is wow_classic_beta 1.60.1.70245 (the Version row in .build.info;
-	-- WowB.exe FileVersion agrees) -- one patch build NEWER than both extracts,
+	-- client is wowf / WoW: Forever 1.60.1.70245 (the Version row in .build.info;
+	-- Wow.exe FileVersion agrees) -- one patch build NEWER than both extracts,
 	-- and no extract of .70245 exists on this machine, so the LINE numbers are
-	-- unverified against the build the owner plays while the
+	-- unverified against the build the maintainer plays while the
 	-- BEHAVIOUR is not in question: four shipped addons on the installed build
 	-- (ForeverGear/Quest.lua:60-79, GearQuestForever/Indicator.lua:1408-1413,
 	-- AtlasBIStooltips' LibExtraTip, Auctionator) branch on exactly this flag
@@ -2490,11 +2586,18 @@ end
 -- The row's worn opponent, mirroring the bag walk's pick: for a pair slot, the
 -- WEAKER worn member (via the same spec'd comparator); otherwise the row's own
 -- worn slot. nil means an empty slot (a legitimate fill).
+-- Card t_379344b6: a pair whose TWO members are both unreadable has no weaker
+-- member to name — the second return says so, and the caller answers UNKNOWN
+-- with the ONE word above instead of picking member 1 (a fixed pick is not
+-- a verdict).
 local function questWornLink(loc, invSlot, wornLinks, spec)
 	local pair = PAIR_SLOTS[loc]
 	if not pair then return wornLinks[invSlot] end
 	local l1, l2 = wornLinks[pair[1]], wornLinks[pair[2]]
 	if not l1 or not l2 then return nil end
+	if pairBothUnreadable(itemLines(l1), l1, itemLines(l2), l2) then
+		return nil, PAIR_UNREADABLE_REASON
+	end
 	local v12 = Verdict.evaluate(
 		{ canUse = true, line = itemLines(l1) },
 		{ line = itemLines(l2) },
@@ -2502,6 +2605,268 @@ local function questWornLink(loc, invSlot, wornLinks, spec)
 	)
 	return (v12 == "UPGRADE") and l2 or l1
 end
+
+-- Card t_562a6e80 — the WORN side a two-hander is judged against when it
+-- displaces the off-hand (the W0 shape): the COMBINED stat content of the
+-- equipped main hand + off hand, not either alone.
+--
+-- The player is swapping the pair for one two-hander, so the opponent is what
+-- the pair currently contributes together. `parseSide` already ACCUMULATES
+-- repeated stat lines on one side (the t_ea70928d additive fold), so
+-- concatenating the two line lists is exactly the combined weighted score of
+-- main hand + off hand through the SAME entry point (compareWeapon), the SAME
+-- weight tables, the SAME threshold and the SAME reason vocabulary the live
+-- path otherwise uses.
+--
+-- FAIL-CLOSED (the card's AC-B, the same rule PR #31 case 5 pins): a FILLED
+-- half whose lines could not be read is UNKNOWN with a reason -- never a
+-- silent one-sided pass over the other half. An EMPTY half (not equipped) is
+-- a legitimate absence and simply contributes nothing. A FILLED half that DID
+-- read but carries a line the parser cannot place fails closed through the
+-- comparator's own gate 8 ("cannot classify: <line>"), unchanged.
+--
+-- ROUND 2 (the gate's defect on the live surface): the DPS TERM of the pair.
+-- Round 1 left the DPS number to the concatenated raw list and to the
+-- comparator's first-line-per-side read. With TWO WEAPONS on the worn side
+-- that read keeps the MAIN HAND's DPS and silently drops the off-hand
+-- weapon's, so a two-hander that BEATS the main hand alone but LOSES to the
+-- pair still read "more weapon damage per second (22.50 vs 11.00)" — the
+-- one-sided pass AC-B exists to prevent, on the shape the card calls out by
+-- name — and the reason printed a number the verdict did not use. The seam
+-- now owns the DPS term, with the comparator's OWN readers (no second parser
+-- — this file's standing rule):
+--   * a FILLED main hand is a weapon slot, and a FILLED off hand whose token
+--     is the off-hand weapon class is a weapon too;
+--   * each such WEAPON half must carry a readable comparable DPS (the
+--     client-printed parenthesised DPS, else (min+max)/2 per speed — the ONE
+--     fallback weaponDPS already owns; no new vocabulary, no new constant);
+--   * a FILLED off hand the client PROVES is not a weapon (its own off-hand
+--     shield / holdable classes) contributes zero DPS — t_16448f75's pinned
+--     sword + shield arm ("the combined side carries the sword's 7.5 dps")
+--     is exactly this rule;
+--   * an off-hand token the client does not classify is NOT cleared: the
+--     safe direction is "I cannot prove it contributes nothing."
+-- When every filled half is cleared and at least one weapon half read, the
+-- combined side carries ONE parenthesised DPS line: the PAIR's comparable
+-- DPS, the sum of the readable weapon halves. That one number is what
+-- weaponNumbers' first-line read picks up (two raw DPS lines would never
+-- pick up the sum — that was the defect) and what the reason prints
+-- ("22.50 vs 26.00", not "22.50 vs 11.00"). When a filled weapon half did
+-- not read, NO dps line is injected — never a partial sum — and the
+-- comparison settles the way an unreadable weapon already settles: the
+-- comparator's own fail-close ("cannot read the worn weapon's damage-per-
+-- second") on a DPS-led row, and the stat-decided verdicts on a stat-led row
+-- are untouched, because a missing DPS line only costs the tie-break, never
+-- a stat that decided. The halves' damage-range / speed / DPS chrome is
+-- dropped with the comparator's OWN chrome test (Verdict.weaponStatLines —
+-- the only authoriser for dropping such lines before the stat parse, and
+-- TOTAL on exactly these shapes) so a dropped half's lone numbers cannot
+-- leak back in through the raw-list read; the STATS of both halves stay,
+-- additive, exactly as round 1.
+--
+-- A Verdict.lua that predates the round-2 readers degrades to the round-1
+-- seam (the plain concatenation for the comparator's own read), guarded
+-- like the gates beside it.
+--
+-- SET-ASIDE (card t_2fc01686, item 1): the off hand the client PROVES is a
+-- non-weapon (its own shield / holdable off-hand classes — never the off-
+-- hand weapon class) carries armor and block. Those are SHIELD stats, never
+-- weapon stats, and the era's weight tables price armor (the caster tables
+-- bridge it at 0.2), so a 1200-Armor shield swamps a strictly better
+-- staff's Intellect and the row reads "worse on Armor" — a shield's
+-- protection deciding a weapon swap (the reviewer repro). The player IS
+-- about to lose that armor, so exclusion without naming would hide a real
+-- cost: the addon's own fail-close rule says a missing read is not a zero,
+-- never the reverse — and silence about the cost the comparison made was
+-- the reported failure. So the off hand's Armor and Block lines are set
+-- aside BEFORE the combined side is built (dropped from the scored lines)
+-- and the reason carries a note naming the exact set-aside lines (the
+-- client's own text) and the fact the swap drops them — the cost stays on
+-- the face of the verdict, and the tooltip's own comparison line shows the
+-- delta alongside. Only lines whose ENTIRE read is Armor/Block are set
+-- aside (one stat per tooltip line, the client's shape; a hypothetical
+-- mixed line stays whole — dropping its other stats would be a bigger
+-- fabrication than scoring the armor). The main-hand half is untouched
+-- (its armor/block is not the shield identity this card rules on), and an
+-- unclassified off-hand token is untouched (not proven a shield).
+--
+-- OFF-HAND FACTOR (card t_2fc01686, item 3): a DUAL-WIELD pair's comparable
+-- DPS prices the off-hand weapon's damage at 50% — the era's off-hand
+-- damage rule. Round 2 summed the readable weapon halves at FULL rate, and
+-- the reason's bare pair number gave the player no way to know what the
+-- off hand was counted as, so the factor is one named constant beside the
+-- readers it feeds, and the reason carries the same fact in player words
+-- (the note) — "Upgrade (30.00 vs 18.50)" is not a mystery number. A
+-- proven non-weapon off half still contributes its zero exactly as round 2
+-- ruled (t_16448f75's "15.00 vs 7.50" sword + shield arm is untouched).
+--
+-- SEAM (#34, t_795eee9e — the extended hybrid stat reader; NOT implemented
+-- here, per the card's seam instruction: name it, document the application
+-- site, do not build it). This function — `twoHandCombinedWorn`, published
+-- as `ChestAdvisor._twoHandCombinedWorn` — hands the COMBINED side to the
+-- comparator as a plain list of raw lines. #34's new vocabulary (HIT,
+-- CRIT, and the rest of the 18-word reader) enters any comparison through
+-- the comparator's OWN stat parse inside Verdict.compareWeapon / Verdict.
+-- evaluate; #34's unverified-key fail-close (its gates 5a/8a) applies to
+-- the combined side's lines there, candidate side included. The CALL
+-- SITES are the application place, not this line list: the two shipped
+-- calls of Verdict.compareWeapon in this file (the quest-reward judgement
+-- just below, and the bag-walk scan further down) are where #34's
+-- correction lands when it ships.
+local OFFHAND_DPS_FACTOR = 0.5
+local function twoHandCombinedWorn(mainFilled, mainLines, offFilled, offLines, offToken)
+	local function readable(t)
+		return type(t) == "table" and #t > 0
+	end
+	if mainFilled and not readable(mainLines) then
+		return nil, "UNKNOWN",
+			"not judged: the equipped main-hand item's stats could not be read"
+	end
+	if offFilled and not readable(offLines) then
+		return nil, "UNKNOWN",
+			"not judged: the equipped off-hand item's stats could not be read"
+	end
+	local function both()
+		local out = {}
+		for _, l in ipairs(mainLines or {}) do out[#out + 1] = l end
+		for _, l in ipairs(offLines or {}) do out[#out + 1] = l end
+		return out
+	end
+	if type(Verdict.weaponNumbers) == "function"
+		and type(Verdict.weaponDPS) == "function"
+		and type(Verdict.weaponStatLines) == "function"
+		and type(Verdict.OFF_HAND_TOKENS) == "table" then
+		-- The comparable DPS of one half, through the comparator's own read:
+		-- the printed parenthesised DPS, or its (min+max)/2-per-speed
+		-- fallback. nil = the half carries no readable DPS.
+		local function halfDps(lines)
+			local nums = Verdict.weaponNumbers(lines)
+			if nums == nil then return nil end
+			return Verdict.weaponDPS(nums)
+		end
+		-- A FILLED main hand sits in the weapon slot: a weapon half.
+		local mainDps = mainFilled and halfDps(mainLines) or nil
+		local mainClear = (not mainFilled) or type(mainDps) == "number"
+		local offDps = nil
+		local offClear
+		if not offFilled then
+			offClear = true
+		elseif offToken == "INVTYPE_WEAPONOFFHAND" then
+			-- The ONE off-hand class that deals weapon damage (Verdict.
+			-- WEAPON_TOKENS deliberately excludes it: Tier B owns slot 17).
+			offDps = halfDps(offLines)
+			offClear = type(offDps) == "number"
+		elseif type(offToken) == "string" and offToken ~= ""
+			and Verdict.OFF_HAND_TOKENS[offToken] == true then
+			-- Proven non-weapon off hand (the client's own shield / holdable
+			-- classes): a legitimate zero, not a missing read.
+			offClear = true
+		else
+			-- Not classified by the client's own off-hand classes: not
+			-- cleared, so no sum may rest on "it contributes nothing."
+			offClear = false
+		end
+		-- SET-ASIDE (item 1): the off half's Armor / Block, proven a
+		-- non-weapon off hand — judged line by line with the comparator's
+		-- OWN per-line read (Verdict.statTable; no second parser, this
+		-- file's standing rule).
+		local setAside = {}
+		local offKept
+		if offFilled and offToken ~= "INVTYPE_WEAPONOFFHAND"
+			and type(Verdict.OFF_HAND_TOKENS) == "table"
+			and Verdict.OFF_HAND_TOKENS[offToken] == true
+			and type(Verdict.statTable) == "function" then
+			local kept = {}
+			local asideAny = false
+			for _, l in ipairs(offLines or {}) do
+				local aside = false
+				if type(l) == "string" then
+					local st = Verdict.statTable({ l }, "worn")
+					if type(st) == "table" then
+						-- ALL of the line's stat words are Armor / Block
+						-- (an empty read is not one of them).
+						local allArmorBlock = next(st) ~= nil
+						for word in pairs(st) do
+							if word ~= "Armor" and word ~= "Block" then
+								allArmorBlock = false
+								break
+							end
+						end
+						aside = allArmorBlock
+					end
+				end
+				if aside then
+					asideAny = true
+					setAside[#setAside + 1] = l
+				else
+					kept[#kept + 1] = l
+				end
+			end
+			if asideAny then
+				offKept = kept
+			end
+		end
+		offKept = offKept or offLines
+		local combined
+		if type(Verdict.weaponStatLines) == "function" then
+			local input = {}
+			for _, l in ipairs(mainLines or {}) do input[#input + 1] = l end
+			for _, l in ipairs(offKept or {}) do input[#input + 1] = l end
+			combined = Verdict.weaponStatLines(input)
+		else
+			combined = both()
+		end
+		local pairInjected = false
+		if mainClear and offClear
+			and (type(mainDps) == "number" or type(offDps) == "number") then
+			-- The PARENS are the shape: parseWeaponLine takes the DPS
+			-- from the client's own "(N damage per second)" line, so the
+			-- injected one must wear them or the comparator reads nothing.
+			-- The off-hand WEAPON half is priced at the era's 50% damage
+			-- factor (item 3); a proven non-weapon half contributes its
+			-- legitimate zero, unchanged from round 2.
+			local pairDps = (mainDps or 0)
+				+ (type(offDps) == "number" and offDps * OFFHAND_DPS_FACTOR or 0)
+			combined[#combined + 1] = ("(%.2f damage per second)"):format(pairDps)
+			pairInjected = true
+		end
+		-- The reason notes — factual, on the face of the verdict, so the
+		-- numbers a player reads are never unexplained. The set-aside note
+		-- names the exact lines (the client's own text) the comparison left
+		-- out and the swap drops; the factor note names the 50% the pair's
+		-- number assumed.
+		local notes = {}
+		if #setAside > 0 then
+			local joined = setAside[1]
+			for i = 2, #setAside do joined = joined .. " and " .. setAside[i] end
+			if #setAside == 1 then
+				notes[#notes + 1] = ("(the off-hand's %s is set aside from this comparison — you lose it on the swap)"):format(joined)
+			else
+				notes[#notes + 1] = ("(the off-hand's %s are set aside from this comparison — you lose them on the swap)"):format(joined)
+			end
+		end
+		if pairInjected and offToken == "INVTYPE_WEAPONOFFHAND"
+			and type(offDps) == "number" then
+			notes[#notes + 1] = "(the off-hand weapon's damage is counted at 50%)"
+		end
+		-- Success shape: (side, nil, nil, notes). The CALLER reads the second
+		-- return as the failure flag (`if failV ~= nil`) — a non-nil value
+		-- THERE means failure, so the success path must carry nils in
+		-- positions two and three, exactly as the failure shape's first
+		-- return does. The notes list rides in the fourth slot ONLY.
+		return combined, nil, nil, notes
+	end
+	-- A Verdict.lua that predates the round-2 readers: the round-1 seam,
+	-- byte-for-byte (plain concatenation for the comparator's own read).
+	return both(), nil
+end
+
+-- Published on ChestAdvisor for the bag-walk scan (ChestAdvisor.scan), which
+-- runs OUTSIDE this quest-scope `do` block. The block's own header comment
+-- (above) is the standing rule: locals defined here are published on the
+-- table for the walks that run later (vendor, scan). The quest-reward path,
+-- inside this same scope, calls twoHandCombinedWorn directly as a local.
+ChestAdvisor._twoHandCombinedWorn = twoHandCombinedWorn
 
 -- The judgement: the SAME comparator the bag walk uses, on a reward candidate.
 -- Returns verdict, reason, row. Branch order matches the bag walk exactly:
@@ -2534,7 +2899,14 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 	if not invSlot then
 		return done("UNKNOWN", "out of scope: this reward is not a slot the advisor judges")
 	end
-	local wornLink = questWornLink(loc, invSlot, wornLinks, spec)
+	local wornLink, pairDecline = questWornLink(loc, invSlot, wornLinks, spec)
+	if pairDecline ~= nil then
+		-- Card t_379344b6: neither worn member's stats could be read, so there
+		-- is no opponent for this reward to beat — fail closed with the ONE
+		-- word the bag picker shares. No fixed member is named (row.wornLink
+		-- stays unset), because a fixed pick is not a verdict.
+		return done("UNKNOWN", pairDecline)
+	end
 	row.wornLink = wornLink
 	local isWeaponRow = Verdict
 		and type(Verdict.WEAPON_TOKENS) == "table"
@@ -2546,14 +2918,40 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 		local candLines = itemLines(link)
 		local wornLinesR = wornLink and itemLines(wornLink) or nil
 		row.lines, row.chestWornLines = candLines, wornLinesR
-		local candNumbers = Verdict.weaponNumbers(candLines)
-		local wornNumbers = wornLink and Verdict.weaponNumbers(wornLinesR) or nil
 		local wornSlotFilled = wornLink ~= nil
 		local wdecline = nil
+		-- t_2fc01686: any reason notes the combined side carries (the
+		-- set-aside shield stats / the 50% pair factor) are appended to
+		-- this row's verdict reason below, so the face of the verdict
+		-- explains its own arithmetic. nil unless the W0 combined shape
+		-- was this judgement.
+		local w0Notes = nil
 		if type(Verdict.weaponGate) == "function" then
 			wdecline = Verdict.weaponGate(loc, wornOffLoc, offHandSpec)
 		end
-		if wdecline ~= nil then return done("UNKNOWN", wdecline) end
+		if wdecline ~= nil then
+			if wdecline ~= Verdict.REASON.W0 then
+				return done("UNKNOWN", wdecline)
+			end
+			-- Card t_562a6e80: the W0 shape (two-hander + occupied off-hand) is
+			-- judged against the COMBINED main-hand + off-hand side -- the
+			-- production shape PR #31 proved at the comparator -- instead of a
+			-- flat UNKNOWN. An unreadable equipped half still fails closed
+			-- (AC-B); W1 and every other decline are untouched.
+			local ohLink = wornLinks[17]
+			local ohLines = ohLink and itemLines(ohLink) or nil
+			-- Round 2: `wornOffLoc` is the off hand's equip token (the same
+			-- read weaponGate consumed for the W0/W1 decision above) — the
+			-- seam classifies the off half by it, the only place a shield is
+			-- proven a non-weapon and an off-hand weapon a DPS contributor.
+			local side, failV, failR, notes = twoHandCombinedWorn(
+				wornLink ~= nil, wornLinesR, true, ohLines, wornOffLoc)
+			if failV ~= nil then return done(failV, failR) end
+			wornLinesR = side
+			wornSlotFilled = true
+			row.chestWornLines = side
+			w0Notes = notes
+		end
 		local canUseV = canUse(id)
 		if canUseV ~= true then
 			if canUseV == false then
@@ -2563,7 +2961,26 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 			end
 			return done("UNKNOWN", "the client could not classify this weapon")
 		end
-		local v, reason = Verdict.compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		-- Card t_16448f75: the verdict is ROLE-AWARE — a caster's weapon is
+		-- judged on its STATS, a melee weapon on its DPS. ONE entry point,
+		-- shared with the bag walk's weapon branch, so the two surfaces cannot
+		-- drift. Guarded like the gates beside it: a Verdict.lua that predates
+		-- this card has no compareWeapon and degrades to exactly today's DPS
+		-- comparator.
+		local v, reason
+		if type(Verdict.compareWeapon) == "function" then
+			local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
+			v, reason = Verdict.compareWeapon(candLines, wornLinesR, wornSlotFilled,
+				spec, canUseV, api)
+		else
+			v, reason = Verdict.compareDPS(Verdict.weaponNumbers(candLines),
+				wornLink and Verdict.weaponNumbers(wornLinesR) or nil, wornSlotFilled)
+		end
+		if type(reason) == "string" and w0Notes ~= nil then
+			for _, n in ipairs(w0Notes) do
+				reason = reason .. " " .. n
+			end
+		end
 		return done(v, reason)
 	end
 
@@ -2609,17 +3026,16 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 	-- row.id. A bag row needs no such key; this one does.
 	local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
 	row.api = api
+	-- The row's own slot word (card t_d88b7f28, item 3): the empty-slot reason
+	-- names the slot it fills instead of saying "chest" for every row. Taken from
+	-- the addon's ONE slot vocabulary (slotWord → SLOT_WORD), not a second one.
 	local v, reason, weighted = Verdict.evaluate(
 		{ canUse = canUseV, line = lines },
 		{ line = wornLines },
 		spec,
-		api
+		api,
+		slotWord(invSlot)
 	)
-	-- The frozen gate 6 sentinel names the chest slot; rewrite it with this
-	-- row's own slot word (the same rewrite the bag walk performs).
-	if reason == "no chest equipped; this item would fill the slot" then
-		reason = "no " .. slotWord(invSlot) .. " equipped; this item would fill the slot"
-	end
 	return done(v, reason, weighted)
 end
 
@@ -3797,6 +4213,9 @@ local TOAST_GOOD = { 0.33, 1.0, 0.33 }
 --                 how long a toast may outlive its stated lifetime.
 local TOAST = {
 	accent = { 0.400, 0.988, 0.945 },   -- #66FCF1, the window's own accent
+	-- Fold: the toast's timing is the module's shipped contract (and what
+	-- tests/toast_test_spec.lua + tests/toast_trace_spec.lua grade), so the
+	-- vendored copy keeps its own fade-in/fade-out lengths.
 	fadeIn = 0.18,
 	fadeOut = 0.25,
 	slide = 18,
@@ -3805,6 +4224,9 @@ local TOAST = {
 
 -- The persisted setting lives on the EXISTING per-character SavedVariables store
 -- (AC-E: do not add a new store). Default ON — a missing key reads as ON.
+-- Fold: 3.5 s is the lifetime this module ships and the one its specs
+-- measure. Upstream's own default (6 s) is a different panel; the
+-- player-facing number stays the fold's.
 local TOAST_DEFAULTS = { enabled = true, lifetime = 3.5 }
 local function toastIsEnabled()
 	local t = ChestAdvisorDB and ChestAdvisorDB.toast
@@ -3812,16 +4234,26 @@ local function toastIsEnabled()
 	return t.enabled ~= false          -- only an explicit `false` disables
 end
 
--- The lifetime a show actually counts down from, in seconds. The persisted knob
--- wins when it holds a sane number (TOAST_DEFAULTS.lifetime is the shipped
--- default); anything else reads as the default. This is the value /up diag
--- compares the MEASURED on-screen time against, so it must be the same one
--- showToastItem counts down — one reader, no second copy.
+-- The toast's lifetime in seconds. TOAST_DEFAULTS.lifetime is the default; the
+-- persisted `ChestAdvisorDB.toast.lifetime` overrides it, clamped to 1..30 so a
+-- hand-edited SavedVariables file cannot park the panel on screen for a whole
+-- session or flash it for one frame. THE ONLY CLAMP: `toastClampLifetime` below
+-- is the one implementation, and both readers of the setting go through it —
+-- `toastLifetime` (the display path) and the `/up toast lifetime` setter (card
+-- t_d88b7f28, item 4). A typed value and a hand-edited one therefore cannot
+-- disagree, and the setter cannot write an unclamped number. A non-number
+-- (including NaN) falls back to the default.
+local TOAST_LIFETIME_MIN, TOAST_LIFETIME_MAX = 1, 30
+local function toastClampLifetime(v)
+	if type(v) ~= "number" or v ~= v then return TOAST_DEFAULTS.lifetime end
+	if v < TOAST_LIFETIME_MIN then return TOAST_LIFETIME_MIN end
+	if v > TOAST_LIFETIME_MAX then return TOAST_LIFETIME_MAX end
+	return v
+end
 local function toastLifetime()
 	local t = ChestAdvisorDB and ChestAdvisorDB.toast
-	local v = type(t) == "table" and t.lifetime or nil
-	if type(v) == "number" and v > 0 and v <= 60 then return v end
-	return TOAST_DEFAULTS.lifetime
+	local v = type(t) == "table" and rawget(t, "lifetime") or nil
+	return toastClampLifetime(v)
 end
 
 local toastFrame = nil
@@ -3846,16 +4278,13 @@ local toastFired = 0                 -- count of toasts actually drawn (test/dia
 --   deferred     — at least one item is held for PLAYER_REGEN
 --   fadeIn/Out   — the two animation groups, built once
 --   ticker       — the lifetime countdown's ticker handle
---   fadeFor      — the show id whose EXPIRY the fade-out group is playing for;
---                  nil when no fade-out is in flight (t_4bae0617)
---   shownAt      — GetTime() at the show; showMs/lastEnd are the measured
---                  on-screen duration and how the show ended (/up diag reads
---                  them, so a tester gets a NUMBER instead of a stopwatch)
+--   afterId      — the lifetime countdown's After-chain generation (card
+--                  t_d88b7f28, item 5): the client's NewTicker-less fallback,
+--                  cancelled by bumping this number
 local toastRT = {
 	current = nil, hovered = false, lifetimeLeft = 0,
 	held = {}, deferred = false,
-	fadeIn = nil, fadeOut = nil, ticker = nil,
-	fadeFor = nil, shownAt = nil, showMs = nil, lastEnd = nil,
+	fadeIn = nil, fadeOut = nil, ticker = nil, afterId = 0,
 	-- t_fe7a636a: the show's deadline in the client's own clock, and
 	-- the counters for the repairs below. `deadline` is refreshed by the
 	-- countdown every tick, so a finish step can require that the
@@ -3863,7 +4292,28 @@ local toastRT = {
 	-- animation callback arrived.
 	deadline = nil, fadeArmedAt = nil, lastTickPrinted = nil,
 	revived = 0, alphaRestored = 0,
+	-- t_4bae0617: the measurement. `shownAt` is GetTime() at the show;
+	-- showMs and lastEnd are the measured on-screen time and the word
+	-- for how that show ended (nil until one has).
+	shownAt = nil, showMs = nil, lastEnd = nil,
 }
+
+-- Stop whichever countdown driver is running. ONE stop path, used by arming, by
+-- expiry, by a finish and by the right-click dismissal, so a rotation (a new
+-- showId while the old toast is up) cannot leave two drivers running.
+-- Defined HERE, above the frame builder, because the click handler below calls it
+-- at click time and a Lua local declared later in the chunk is not in scope for a
+-- closure compiled earlier (it would silently be a global).
+local function toastStopTimer()
+	if type(toastRT.ticker) == "table" and type(toastRT.ticker.Cancel) == "function" then
+		pcall(toastRT.ticker.Cancel, toastRT.ticker)
+	end
+	toastRT.ticker = nil
+	-- An After callback cannot be un-scheduled, so the fallback chain below is
+	-- cancelled by GENERATION: a pending step compares its own id with the live
+	-- one and returns without rescheduling. Bumping the id is the cancel.
+	toastRT.afterId = (toastRT.afterId or 0) + 1
+end
 
 -- ---- t_fe7a636a: the toast's own trace ---------------------------------
 --
@@ -3942,6 +4392,14 @@ ChestAdvisor.toastDebug = function(mode)
 end
 
 local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure
+toastMeasure = function()
+	if type(toastRT.shownAt) ~= "number" or type(GetTime) ~= "function" then
+		return nil
+	end
+	local ok, now = pcall(GetTime)
+	if not ok or type(now) ~= "number" then return nil end
+	return math.floor((now - toastRT.shownAt) * 1000 + 0.5)
+end
 
 -- The persisted position (U3/4). Same discipline as the window's own
 -- savePosition/restorePosition in UI.lua: store only NUMBERS, because the
@@ -4002,6 +4460,18 @@ end
 -- walk, not a single delta, so it takes the mock's fallback. This only ever runs
 -- for an UPGRADE row, which is exactly the case the scan already proved c > w
 -- (or an empty-slot fill), so the sign is known and no delta is fabricated.
+--
+-- Card t_16448f75 (the gate-visible integration): a UPGRADE row can now be won on a
+-- caster's STATS, where the DPS delta is NOT the reason — the mace/staff pair
+-- that motivated the card has a DPS GAIN and is now a NOT_UPGRADE, and the
+-- converse exists too (a staff winning on Intellect with a lower DPS). Printing
+-- "· -1.4 DPS vs equipped" on a green upgrade would be a number that explains
+-- nothing and contradicts the verdict, so the DPS delta is used ONLY when it
+-- AGREES with the verdict (c > w — the case the DPS comparator itself would call
+-- an upgrade); otherwise the mock's wording stands, as it already does for a
+-- weapon row with no readable DPS. `> 0` rather than `>= 0` because equal DPS is
+-- not what made the row an upgrade either. Every DPS-decided row is unchanged:
+-- there, an UPGRADE implies c > w, so the branch is entered exactly as before.
 local function buildToastMessage(item)
 	local fallback = { text = TOAST_FALLBACK_SUB, delta = nil }
 	if not (Verdict and type(Verdict.WEAPON_TOKENS) == "table"
@@ -4019,7 +4489,7 @@ local function buildToastMessage(item)
 	local worn = wornLink and Verdict.weaponNumbers(itemLines(wornLink)) or nil
 	local c = Verdict.weaponDPS(cand)
 	local w = Verdict.weaponDPS(worn)
-	if c and w then
+	if c and w and c > w then
 		local delta = c - w
 		return {
 			text = slotWord(invSlot) .. " · "
@@ -4058,19 +4528,60 @@ local function toastPlayFadeIn(f, showId)
 	if type(f.SetAlpha) ~= "function" then return end
 	pcall(f.SetAlpha, f, 0)
 	if type(toastRT.fadeIn) == "table" and type(toastRT.fadeIn.Play) == "function" then
-		pcall(toastRT.fadeIn.Play, toastRT.fadeIn)
-		TRACE.line("fadeIn play id=" .. tostring(showId))
-	else
-		-- A client with no animation system still gets a visible toast.
-		pcall(f.SetAlpha, f, 1)
-		f.alpha = 1
+		local played = pcall(toastRT.fadeIn.Play, toastRT.fadeIn)
+		if played then
+			TRACE.line("fadeIn play id=" .. tostring(showId))
+			-- t_fe7a636a: `Play` can succeed and the group still never
+			-- start (this client drops a group that was Stopped and Played
+			-- in one frame). The alpha this function set to 0 is then the
+			-- panel's resting alpha, and the restore below is the only
+			-- thing making the show visible — so name that repair, with the
+			-- alpha it rescued, instead of leaving a flash unexplained.
+			local running = true
+			if type(toastRT.fadeIn.IsPlaying) == "function" then
+				local okp, playing = pcall(toastRT.fadeIn.IsPlaying, toastRT.fadeIn)
+				if okp then running = (playing == true) end
+			end
+			if not running then
+				toastRT.alphaRestored = (toastRT.alphaRestored or 0) + 1
+				TRACE.line("alpha restore id=" .. tostring(showId) .. " was=0.000")
+			end
+			-- THE RESTING ALPHA, set the moment the animation takes over. A
+			-- finished Alpha animation restores the frame's OWN alpha — the one
+			-- this function just set to 0 — and the classic client drops a
+			-- group's OnFinished when it is Stopped and Played in one frame,
+			-- which toastStopAnimations + this Play do on EVERY show. So the
+			-- group's OnFinished cannot be the only thing that makes the panel
+			-- visible: the animation still animates 0 -> 1 over its duration,
+			-- and when it ends the panel is opaque instead of vanishing.
+			-- SetToFinalAlpha(true) (set when the group is built) is the
+			-- client-side half; this is the half that survives the quirk.
+			pcall(f.SetAlpha, f, 1)
+			f.alpha = 1
+			return
+		end
 	end
+	-- A client with no animation system (or a Play that failed) still gets a
+	-- visible toast.
+	pcall(f.SetAlpha, f, 1)
+	f.alpha = 1
 end
 
 local function toastBuildAnimations(f)
 	if type(f.CreateAnimationGroup) ~= "function" then return end
 	do
 		local ag = f:CreateAnimationGroup()
+		-- A FINISHED Alpha animation does not hold its last value: the client
+		-- restores the frame's own alpha, which toastPlayFadeIn set to 0. That is
+		-- why the toast used to fade in and then vanish for the rest of its
+		-- lifetime. SetToFinalAlpha keeps the animation's last alpha on the frame,
+		-- and the OnFinished below sets it explicitly for a client whose group
+		-- does not honour that flag — the same `f.alpha = 1` the degraded path in
+		-- toastPlayFadeIn uses. Guarded exactly like the other optional client
+		-- APIs: an older client without either call still ends up visible.
+		if type(ag.SetToFinalAlpha) == "function" then
+			pcall(ag.SetToFinalAlpha, ag, true)
+		end
 		if type(ag.CreateAnimation) == "function" then
 			local a = ag:CreateAnimation("Alpha")
 			if type(a.SetFromAlpha) == "function" then a:SetFromAlpha(0) end
@@ -4082,22 +4593,44 @@ local function toastBuildAnimations(f)
 			end
 			if type(s.SetDuration) == "function" then s:SetDuration(TOAST.fadeIn) end
 		end
-		-- t_fe7a636a: the fade-IN group reports its own OnFinished to the
-		-- trace and does nothing else. It has no finish path at all; if this
-		-- client delivers OnFinished from a Stop() (the behaviour the
-		-- fade-out's guard exists for), the trace says so instead of a
-		-- comment asserting it.
 		if type(ag.SetScript) == "function" then
+			ag:SetScript("OnFinished", function()
+				-- A dismissal can outlive the fade-in: toastExpire stops the
+				-- fade-in before playing the fade-out, but a stale finish must
+				-- never snap the panel back to opaque while it is fading out.
+				local fo = toastRT.fadeOut
+				local fadingOut = type(fo) == "table" and type(fo.IsPlaying) == "function"
+					and fo:IsPlaying()
+				if not fadingOut then
+					if type(f.SetAlpha) == "function" then pcall(f.SetAlpha, f, 1) end
+					f.alpha = 1
+				end
+			end)
+		end
+		-- t_fe7a636a: the fade-IN group reports its own OnFinished to the
+		-- trace — and CHAINS to whatever the build above installed (the
+		-- alpha restore this file needs when a finished Alpha animation
+		-- would otherwise restore the frame's own alpha). Chaining, not
+		-- replacing: the trace must not undo the upstream fix it explains.
+		if type(ag.SetScript) == "function" then
+			local prior = type(ag.GetScript) == "function"
+				and ag:GetScript("OnFinished") or nil
 			ag:SetScript("OnFinished", function()
 				TRACE.line("animation finished: group=fadeIn id="
 					.. tostring(toastRT.showId)
 					.. " fadeFor=" .. tostring(toastRT.fadeFor))
+				if type(prior) == "function" then pcall(prior) end
 			end)
 		end
 		toastRT.fadeIn = ag
 	end
 	do
 		local ag = f:CreateAnimationGroup()
+		-- The fade-out ends at alpha 0; holding it keeps a stale frame alpha from
+		-- undoing the hide the group itself performs.
+		if type(ag.SetToFinalAlpha) == "function" then
+			pcall(ag.SetToFinalAlpha, ag, true)
+		end
 		if type(ag.CreateAnimation) == "function" then
 			local a = ag:CreateAnimation("Alpha")
 			if type(a.SetFromAlpha) == "function" then a:SetFromAlpha(1) end
@@ -4109,27 +4642,12 @@ local function toastBuildAnimations(f)
 		-- not the only hide: the classic client drops it when the same group
 		-- was Stopped and Played in one frame, and a finish step that errors
 		-- must not leave the panel up. toastExpire also arms a timer.
-		--
-		-- t_4bae0617 — THE EARLY-HIDE BUG. A Stop() on this group reports
-		-- OnFinished too (that is the same client behaviour that makes the
-		-- Stopped+Played note above necessary). toastPlayFadeIn Stops BOTH
-		-- groups before every show, so a show that had only just been drawn
-		-- immediately reported "fade-out finished": the handler ran the finish
-		-- step on the toast it had just started and the panel vanished within a
-		-- frame of appearing — exactly the "goes away extremely fast" report,
-		-- and it hit EVERY toast, because the stop happens on every show.
-		-- The group may therefore only end a show when a fade-out was actually
-		-- ARMED for an expiry: toastRT.fadeFor names that show id, and it is nil
-		-- while no fade-out is in flight.
 		if type(ag.SetScript) == "function" then
 			ag:SetScript("OnFinished", function()
-				local id = toastRT.fadeFor
 				TRACE.line("animation finished: group=fadeOut id="
 					.. tostring(toastRT.showId)
-					.. " fadeFor=" .. tostring(id))
-				if id == nil then return end
-				toastRT.fadeFor = nil
-				pcall(toastFinishShow, id, "fadeOnFinished")
+					.. " fadeFor=" .. tostring(toastRT.fadeId))
+				pcall(toastFinishShow, toastRT.fadeId, "fadeOnFinished")
 			end)
 		end
 		toastRT.fadeOut = ag
@@ -4223,38 +4741,34 @@ local function buildToastFrame()
 			local item = toastRT.current
 			if button == "RightButton" then
 				-- Dismiss. No bag window is touched on this path.
-				-- t_4bae0617: this is the OTHER way a show ends, so it records the
-				-- same measured duration, and it disarms the fade BEFORE the Stop
-				-- below (a Stop reports OnFinished on this client).
-				toastRT.lastEnd = "dismissed"
-				-- t_fe7a636a: a dismiss is the one end that may come before the
-				-- deadline (the player asked for it). It is traced as both an
-				-- expire and a finish so every end reads in the same vocabulary.
-				local dismissedLeft = tonumber(toastRT.lifetimeLeft) or 0
-				if dismissedLeft < 0 then dismissedLeft = 0 end
-				TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=dismiss")
-				TRACE.line("finish id=" .. tostring(toastRT.showId)
-					.. " reason=dismiss lifeLeft=" .. TRACE.sec(dismissedLeft))
-				toastRT.deadline = nil
-				toastRT.fadeArmedAt = nil
-				local ms = toastMeasure and toastMeasure()
-				if ms then toastRT.showMs = ms end
-				toastRT.shownAt = nil
-				toastRT.fadeFor = nil
 				toastStopAnimations()
-				-- …and stop the countdown, or the ticker would fire the fade-out
-				-- a moment later on a toast that is already gone.
-				if type(toastRT.ticker) == "table"
-					and type(toastRT.ticker.Cancel) == "function" then
-					pcall(toastRT.ticker.Cancel, toastRT.ticker)
-				end
-				toastRT.ticker = nil
+				-- …and stop the countdown, or the driver would fire the fade-out
+				-- a moment later on a toast that is already gone. THE SAME STOP
+				-- PATH as expiry and finish (card t_d88b7f28, item 5): the
+				-- NewTicker-less client's After chain is cancelled by generation
+				-- here too, which an inline ticker-only cancel could not do.
+				toastStopTimer()
 				if type(self.Hide) == "function" then pcall(self.Hide, self) end
 				self.shown = false
 				toastActive = false
 				toastRT.current = nil
 				toastRT.hovered = false
 				toastRT.lifetimeLeft = 0
+				-- t_4bae0617: the measured time this show was up, and the word
+				-- for how it ended, taken BEFORE the clock stamp is cleared.
+				local dismissedMs = toastMeasure and toastMeasure() or nil
+				if dismissedMs then toastRT.showMs = dismissedMs end
+				toastRT.shownAt = nil
+				toastRT.lastEnd = "dismissed"
+				-- t_fe7a636a: a dismiss is the one end that may come before the
+				-- deadline (the player asked for it). It is traced as both an
+				-- expire and a finish so every end reads in the same vocabulary.
+				TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=dismiss")
+				TRACE.line("finish id=" .. tostring(toastRT.showId)
+					.. " reason=dismiss lifeLeft=" .. TRACE.sec(0))
+				toastRT.deadline = nil
+				toastRT.fadeArmedAt = nil
+				toastRT.fadeFor = nil
 				-- Dismiss THIS toast. Anything still queued is a DIFFERENT upgrade
 				-- the player has not seen, and it is already marked "told" — so
 				-- dropping the queue here would lose it silently. Continue the
@@ -4338,13 +4852,54 @@ end
 -- outlive its stated lifetime by, and it costs nothing at this cadence.
 local toastExpire
 
+-- THE NO-TICKER FALLBACK (card t_d88b7f28, item 5 — a defect that predates #89).
+-- `toastStartTimer` used to RETURN when the client had no C_Timer.NewTicker, so
+-- nothing decremented `lifetimeLeft` and the panel stayed on screen for the rest
+-- of the session. This is the same countdown built from C_Timer.After: one step
+-- every TOAST.tick, each step re-arming the next.
+--
+-- WHAT IT PRESERVES: the lifetime, the tick's granularity, the hover pause (a
+-- paused step spends no time and re-arms itself — the same rule the ticker's
+-- callback follows), the dragging pause, the showId guard, and cancellation on
+-- the same paths as the ticker (toastStopTimer).
+-- WHAT IT CANNOT DO: a fired After callback cannot be un-fired, so between a
+-- cancel and its due time one no-op step still runs (it returns immediately).
+-- Nothing player-visible depends on it: the check is `afterId`, not the timer's
+-- existence. It is also not testable as "API absent" — see the note in
+-- ChestAdvisor/tests/t_d88b7f28.js: this suite drives it by removing
+-- C_Timer.NewTicker from the stub, which is the shape a client without it has.
+local function toastStartAfterChain(showId)
+	if type(C_Timer) ~= "table" or type(C_Timer.After) ~= "function" then
+		return false
+	end
+	toastStopTimer()
+	local myId = toastRT.afterId
+	local function step()
+		if toastRT.afterId ~= myId then return end
+		if not toastActive then return end
+		if showId ~= nil and toastRT.showId ~= showId then return end
+		if not (toastRT.hovered or (toastFrame and toastFrame.dragging)) then
+			toastRT.lifetimeLeft = toastRT.lifetimeLeft - TOAST.tick
+			if toastRT.lifetimeLeft <= 0 then
+				toastExpire()
+				return
+			end
+		end
+		pcall(C_Timer.After, TOAST.tick, step)
+	end
+	pcall(C_Timer.After, TOAST.tick, step)
+	return true
+end
+
 local function toastStartTimer(showId)
-	if type(C_Timer) ~= "table" or type(C_Timer.NewTicker) ~= "function" then
+	if type(C_Timer) ~= "table" then
 		return
 	end
-	if toastRT.ticker and type(toastRT.ticker.Cancel) == "function" then
-		pcall(toastRT.ticker.Cancel, toastRT.ticker)
+	if type(C_Timer.NewTicker) ~= "function" then
+		toastStartAfterChain(showId)
+		return
 	end
+	toastStopTimer()
 	toastRT.ticker = C_Timer.NewTicker(TOAST.tick, function()
 		if not toastActive then return end
 		if showId ~= nil and toastRT.showId ~= showId then return end
@@ -4395,21 +4950,6 @@ end
 -- Hide the panel and let the queue continue. Idempotent per show id: the
 -- fade's OnFinished and the lifetime fallback both call it, and a second call
 -- must not skip a toast the first call already put on screen.
---
--- t_4bae0617: how long the CURRENT show has been on screen, in milliseconds,
--- from the client's own clock (GetTime) — measured, never the configured value
--- echoed back. BOTH end paths use it (this one and the right-click dismiss), so
--- the number /up diag prints always describes the show it names. nil when the
--- client has no clock or no show is stamped.
-toastMeasure = function()
-	if type(toastRT.shownAt) ~= "number" or type(GetTime) ~= "function" then
-		return nil
-	end
-	local ok, now = pcall(GetTime)
-	if not ok or type(now) ~= "number" then return nil end
-	return math.floor((now - toastRT.shownAt) * 1000 + 0.5)
-end
-
 toastFinishShow = function(showId, reason)
 	if showId ~= nil and toastRT.showId ~= showId then return end
 	if not toastActive then return end
@@ -4433,6 +4973,9 @@ toastFinishShow = function(showId, reason)
 	if lifeLeft < 0 then lifeLeft = 0 end
 	TRACE.line("finish id=" .. tostring(showId) .. " reason=" .. reason
 		.. " lifeLeft=" .. TRACE.sec(lifeLeft), now)
+	-- t_4bae0617: the measurement this end just made, kept for /up diag
+	-- and the specs. `shownAt` is cleared so a later read cannot measure
+	-- a show that is already gone.
 	local ms = toastMeasure()
 	if ms then toastRT.showMs = ms end
 	toastRT.shownAt = nil
@@ -4446,10 +4989,7 @@ toastFinishShow = function(showId, reason)
 	toastRT.current = nil
 	toastRT.hovered = false
 	toastRT.lifetimeLeft = 0
-	if type(toastRT.ticker) == "table" and type(toastRT.ticker.Cancel) == "function" then
-		pcall(toastRT.ticker.Cancel, toastRT.ticker)
-	end
-	toastRT.ticker = nil
+	toastStopTimer()
 	toastStopAnimations()
 	if type(f) == "table" then
 		if type(f.Hide) == "function" then pcall(f.Hide, f) end
@@ -4477,15 +5017,20 @@ end
 -- stuck near-transparent "...und!" panel. A timer finishes the show anyway, and
 -- so does a finish step that errors.
 toastExpire = function(reason)
-	if type(toastRT.ticker) == "table" and type(toastRT.ticker.Cancel) == "function" then
-		pcall(toastRT.ticker.Cancel, toastRT.ticker)
-	end
-	toastRT.ticker = nil
+	toastStopTimer()
 	if not toastActive then return end
-	toastRT.lastEnd = "expired"
 	local showId = toastRT.showId
+	toastRT.lastEnd = "expired"
 	TRACE.line("expire id=" .. tostring(showId) .. " reason="
 		.. tostring(reason or "timer"))
+	toastRT.fadeId = showId
+	-- t_fe7a636a: the fade-out is now in flight for THIS show. The
+	-- guard is the fold's own marker (upstream's fadeId names the show
+	-- the group was armed for, not whether a fade is still running), and
+	-- toastFinishShow clears it, so a scan can tell "a show whose
+	-- lifetime is spent but whose fade is still playing" from a dead one.
+	toastRT.fadeFor = showId
+	toastRT.fadeArmedAt = TRACE.now()
 	local f = toastFrame
 	local fade = toastRT.fadeOut
 	local fadeFinishes = type(fade) == "table" and type(fade.Play) == "function"
@@ -4496,14 +5041,7 @@ toastExpire = function(reason)
 		if type(toastRT.fadeIn) == "table" and type(toastRT.fadeIn.Stop) == "function" then
 			pcall(toastRT.fadeIn.Stop, toastRT.fadeIn)
 		end
-		-- Arm the group for THIS show (t_4bae0617): the OnFinished handler only
-		-- ends a show whose fade-out was armed here, so the Stop() a later show
-		-- does cannot end it. Cleared before Play so a Play that throws does not
-		-- leave a stale arm behind.
-		toastRT.fadeFor = showId
-		toastRT.fadeArmedAt = TRACE.now()
 		local played = pcall(fade.Play, fade)
-		if not played then toastRT.fadeFor = nil end
 		if played and type(C_Timer) == "table" and type(C_Timer.After) == "function" then
 			local delay = (TOAST.fadeOut or 0.25) + 0.05
 			C_Timer.After(delay, function()
@@ -4573,19 +5111,15 @@ showToastItem = function(item)
 		-- the screen under a stationary mouse) the pointer never left the panel — so
 		-- clearing it would silently un-pause the new toast.
 		toastRT.lifetimeLeft = toastLifetime()
-		-- t_4bae0617: stamp the client clock so the show's real duration can be
-		-- measured when it ends (and read back from /up diag).
-		if type(GetTime) == "function" then
-			local okClock, t0 = pcall(GetTime)
-			toastRT.shownAt = (okClock and type(t0) == "number") and t0 or nil
-		else
-			toastRT.shownAt = nil
-		end
+		-- t_4bae0617: the show's own clock stamp. The measured on-screen
+		-- time is then the client's number, not the addon's opinion.
+		toastRT.shownAt = TRACE.now()
 		-- t_fe7a636a: the deadline this show must survive to, on the same
 		-- clock the countdown ticks on. The finish step refuses to end a
 		-- show before it.
-		toastRT.deadline = (toastRT.shownAt or TRACE.now()) + toastRT.lifetimeLeft
+		toastRT.deadline = toastRT.shownAt + toastRT.lifetimeLeft
 		toastRT.fadeArmedAt = nil
+		toastRT.fadeFor = nil
 		toastRT.lastTickPrinted = nil
 		-- Re-anchor from the persisted position on every show: the panel may have
 		-- been dragged since it was built, and the resting point is what is saved.
@@ -4852,13 +5386,14 @@ ChestAdvisor.toastState = function()
 		-- suppression/debug text on screen (AC-E2 of t_632f27e9).
 		hovered = toastRT.hovered,
 		lifetimeLeft = toastRT.lifetimeLeft,
+		-- card t_d88b7f28, item 4: the CLAMPED setting the next toast will get,
+		-- so /up diag and the tests can read what the player's value resolves to.
+		lifetime = toastLifetime(),
 		held = #toastRT.held,
 		deferred = toastRT.deferred,
-		-- t_4bae0617: the LIFETIME, measured. `lifetime` is what a show counts
-		-- down from; `showMs` is how long the last show was actually on screen
-		-- (nil until one has ended); `lastEnd` is how it ended. /up diag prints
-		-- them so "it goes away too fast" becomes a number, not an impression.
-		lifetime = toastLifetime(),
+		-- t_4bae0617: the measurement, read by /up diag and the specs.
+		-- showMs is nil until a show has ended; lastEnd is the word for
+		-- how that end happened ("expired" / "dismissed").
 		showMs = toastRT.showMs,
 		lastEnd = toastRT.lastEnd,
 		-- t_fe7a636a: the trace switch and the repairs the fix performed.
@@ -4870,26 +5405,26 @@ ChestAdvisor.toastState = function()
 		alphaRestored = toastRT.alphaRestored or 0,
 	}
 end
-
--- ---- t_4bae0617: the deterministic test toast ---------------------------------
+-- ---- t_4bae0617: the deterministic test toast ---------------------------
 --
--- An upgrade toast otherwise needs a real bag item the scan happens to judge an
--- UPGRADE, which can take an hour of play — so nothing about its lifetime, fade
--- or dismiss behaviour could be checked on demand. `/up toasts` raises one
--- through the REAL path: the entry is queued exactly where a scan queues one and
--- drawn by showToastItem (no second renderer, no second queue), and the message
--- is built by buildToastMessage like any other show.
+-- An upgrade toast otherwise needs a real bag item the scan happens to judge
+-- an UPGRADE, which can take an hour of play — so nothing about its lifetime,
+-- fade or dismiss behaviour could be checked on demand. `/up toasts` raises
+-- one through the REAL path: the entry is queued exactly where a scan queues
+-- one and drawn by showToastItem (no second renderer, no second queue), and
+-- the message is built by buildToastMessage like any other show.
 --
 -- The synthetic entry carries NO link and NO item id, which is the point: the
--- icon falls back cleanly through the same `tex or TOAST_FALLBACK_ICON` the real
--- path uses, and buildToastMessage takes its documented fallback wording. It
--- touches NOTHING the scan owns — no toastedLinks (so the dedupe set is not
--- polluted), no ChestAdvisorDB.log (that is written only by a verdict), and no
--- baseline flag (toastSeenFirstScan is only ever set by maybeToastUpgrades).
+-- icon falls back cleanly through the same `tex or TOAST_FALLBACK_ICON` the
+-- real path uses, and buildToastMessage takes its documented fallback
+-- wording. It touches NOTHING the scan owns — no toastedLinks (so the dedupe
+-- set is not polluted), no ChestAdvisorDB.log (written only by a verdict), and
+-- no baseline flag (toastSeenFirstScan is only ever set by
+-- maybeToastUpgrades).
 --
 -- Returns { started, queued, dropped }: the first call draws immediately, the
--- second while one is up JOINS THE QUEUE (a rotation, never a second panel), and
--- the tail past TOAST_MAX is a stated drop like the scan's own.
+-- second while one is up JOINS THE QUEUE (a rotation, never a second panel),
+-- and the tail past TOAST_MAX is a stated drop like the scan's own.
 local TOAST_TEST_NAME = "Test Upgrade"
 ChestAdvisor.testToast = function(n)
 	n = tonumber(n) or 1
@@ -4916,6 +5451,22 @@ ChestAdvisor.testToast = function(n)
 end
 ChestAdvisor._maybeToastUpgrades = maybeToastUpgrades
 ChestAdvisor._toastIsEnabled = toastIsEnabled
+-- The lifetime as a SETTING (card t_d88b7f28, item 4). The slash handler lives
+-- OUTSIDE this block (it cannot see these locals), so the setting is reached
+-- through these entries — and `_toastSetLifetime` is the ONLY writer: it runs
+-- the clamp above and returns what it STORED, so the caller's confirmation
+-- quotes the clamped number and no second copy of the arithmetic exists. The two
+-- bounds are published for the same reason: the usage message names the range
+-- the clamp actually enforces.
+ChestAdvisor._toastLifetime = toastLifetime
+ChestAdvisor._toastSetLifetime = function(v)
+	local stored = toastClampLifetime(v)
+	ChestAdvisorDB.toast = ChestAdvisorDB.toast or {}
+	ChestAdvisorDB.toast.lifetime = stored
+	return stored
+end
+ChestAdvisor._toastLifetimeMin = TOAST_LIFETIME_MIN
+ChestAdvisor._toastLifetimeMax = TOAST_LIFETIME_MAX
 end
 -- Fold (MightiePack Touchstone module): the toast panel/frame is created by
 -- Enable() on first enabled load, not at file load.
@@ -5079,7 +5630,7 @@ ChestAdvisor.scan = function()
 	-- itemsScanned is the total bag cells the walk inspected (in scope
 	-- or not); itemsWalked is the in-scope subset that produced a
 	-- verdict; perSkip maps an out-of-scope equip-location token to the
-	-- count skipped at that token (the whole point of the player's
+	-- count skipped at that token (the whole point of the maintainer's
 	-- ruling: the token is what identifies WHY something was skipped —
 	-- an INVTYPE_NECK skip and an INVTYPE_WEAPON skip are different
 	-- skips and both must be named). capDropped counts UPGRADE items
@@ -5176,6 +5727,9 @@ ChestAdvisor.scan = function()
 					-- both robe and chest. For pair scopes (Tier A, t_1c8e911b) the
 					-- lookup asks for the WEAKEST pair member; see the pick below.
 					local wornLink
+					-- Card t_379344b6: set when the pair pick fails closed —
+					-- both members unreadable — before the verdict chain runs.
+					local pairDecline
 					local pair = PAIR_SLOTS[loc]
 					if pair then
 						-- Tier A (AC-C): an EMPTY pair member is a legitimate free
@@ -5185,31 +5739,45 @@ ChestAdvisor.scan = function()
 						local l1, l2 = wornLinks[s1], wornLinks[s2]
 						if not l1 or not l2 then
 							-- Empty member: the pick is nil and the row reads UPGRADE
-							-- via the "no <word> equipped" reason (gate 6, rewritten
-							-- below to name the role's slot word).
+							-- via the "no <word> equipped" reason, worded by
+							-- evaluate's gate 6 from the slot word the row's own
+							-- evaluate call below supplies (card t_d88b7f28).
 							wornLink = nil
 						else
-							-- Both members present: pick the WEAKER worn member to
-							-- compare against. The candidate's verdict does NOT need
-							-- to decide this — we ask the spec'd comparator "is
-							-- member-1 strictly better than member-2?" (using the
-							-- SAME role-aware spec the row's final verdict uses, so
-							-- no numeric weight is invented, no class is assumed,
-							-- and unknown words read UNKNOWN end-to-end).
-							local v12, _ = Verdict.evaluate(
-								{ canUse = true, line = cachedLines(l1) },
-								{ line = cachedLines(l2) },
-								spec
-							)
-							-- v12 == "UPGRADE" means member-1 is strictly better than
-							-- member-2 along the role's stat order (or wins the Armor
-							-- tiebreak) → member-2 is the weaker. Otherwise member-1
-							-- is the weaker (or indistinguishable — the row's final
-							-- verdict against it will carry the UNKNOWN through).
-							if v12 == "UPGRADE" then
-								wornLink = l2
+							local l1lines, l2lines = cachedLines(l1), cachedLines(l2)
+							-- Card t_379344b6: a pair whose TWO members are both
+							-- unreadable has no weaker member to name. Pre-card,
+							-- the UNKNOWN the picker asked for fell through the
+							-- v12 test and the member-1 pick below stayed — a fixed
+							-- member, named as the opponent the row then compared
+							-- against (or the reason blamed). That is not a
+							-- verdict: the row fails closed with the ONE word the
+							-- quest picker shares, and names no member.
+							if pairBothUnreadable(l1lines, l1, l2lines, l2) then
+								pairDecline = PAIR_UNREADABLE_REASON
 							else
-								wornLink = l1
+								-- Both members present: pick the WEAKER worn member to
+								-- compare against. The candidate's verdict does NOT need
+								-- to decide this — we ask the spec'd comparator "is
+								-- member-1 strictly better than member-2?" (using the
+								-- SAME role-aware spec the row's final verdict uses, so
+								-- no numeric weight is invented, no class is assumed,
+								-- and unknown words read UNKNOWN end-to-end).
+								local v12, _ = Verdict.evaluate(
+									{ canUse = true, line = l1lines },
+									{ line = l2lines },
+									spec
+								)
+								-- v12 == "UPGRADE" means member-1 is strictly better than
+								-- member-2 along the role's stat order (or wins the Armor
+								-- tiebreak) → member-2 is the weaker. Otherwise member-1
+								-- is the weaker (or indistinguishable — the row's final
+								-- verdict against it will carry the UNKNOWN through).
+								if v12 == "UPGRADE" then
+									wornLink = l2
+								else
+									wornLink = l1
+								end
 							end
 						end
 					else
@@ -5242,7 +5810,16 @@ ChestAdvisor.scan = function()
 						and type(Verdict.offHandGate) == "function" then
 						offHandDecline = Verdict.offHandGate(loc, wornOffLoc, mainHandLoc, offHandSpec)
 					end
-					if isWeaponRow then
+					-- Card t_379344b6: the pair's structural failure runs FIRST —
+					-- a pair whose two members are both unreadable has no
+					-- opponent to compare against, full stop. It is stated before
+					-- the spec-degradation arms (classIsUnknown) because a ring or
+					-- trinket row the character cannot READ of its worn pair is
+					-- not fixed by resolving a role, and the reason the player
+					-- gets must say what is actually true.
+					if pairDecline ~= nil then
+						v, reason = "UNKNOWN", pairDecline
+					elseif isWeaponRow then
 						-- The weapon read is the SAME reader every other
 						-- path uses (card t_119d120c): C_TooltipInfo
 						-- .GetHyperlink, positionally walked. The DPS
@@ -5251,10 +5828,7 @@ ChestAdvisor.scan = function()
 						local wlines = cachedLines(link)
 						lines = wlines
 						wornLines = wornLink and cachedLines(wornLink) or nil
-						local candNumbers = Verdict.weaponNumbers(wlines)
-						local wornNumbers = wornLink
-							and Verdict.weaponNumbers(wornLines) or nil
-						-- D1 (Vera round 1): does this row's worn slot
+						-- D1 (the gate round 1): does this row's worn slot
 						-- actually HOLD something? `wornLink` is the
 						-- caller's fact -- non-nil means the slot is
 						-- FILLED, so "no readable numbers" there is an
@@ -5269,8 +5843,41 @@ ChestAdvisor.scan = function()
 						-- available (UnitClass); the off-hand token comes from
 						-- the pre-read.
 						local wdecline = nil
+						-- t_2fc01686: any reason notes the combined side carries (the
+						-- set-aside shield stats / the 50% pair factor) are appended to
+						-- this row's verdict reason below, so the face of the verdict
+						-- explains its own arithmetic. nil unless the W0 combined shape
+						-- was this judgement.
+						local w0Notes = nil
 						if type(Verdict.weaponGate) == "function" then
 							wdecline = Verdict.weaponGate(loc, wornOffLoc, offHandSpec)
+						end
+						if wdecline ~= nil and wdecline == Verdict.REASON.W0 then
+							-- Card t_562a6e80: the W0 shape (two-hander + occupied
+							-- off-hand) is judged against the COMBINED main-hand +
+							-- off-hand side -- the production shape PR #31 proved at
+							-- the comparator -- not a flat UNKNOWN. An unreadable
+							-- equipped half still fails closed (AC-B); every other
+							-- decline passes through below untouched.
+							local ohLink = wornLinks[17]
+							local ohLines = ohLink and cachedLines(ohLink) or nil
+							-- via ChestAdvisor._twoHandCombinedWorn: this walk runs
+							-- OUTSIDE the quest-scope `do` block where the local
+							-- lives, so it reaches the same function through the
+							-- published table entry (the block's header comment is
+							-- the rule). The quest-reward walk above calls the
+							-- local directly, in scope.
+							local side, failV, failR, notes = ChestAdvisor._twoHandCombinedWorn(
+								wornLink ~= nil, wornLines, true, ohLines,
+								wornOffLoc)
+							if failV ~= nil then
+								wdecline = failR
+							else
+								wornLines = side
+								wornSlotFilled = true
+								wdecline = nil
+								w0Notes = notes
+							end
 						end
 						if wdecline ~= nil then
 							v, reason = "UNKNOWN", wdecline
@@ -5291,7 +5898,31 @@ ChestAdvisor.scan = function()
 									reason = "the client could not classify this weapon"
 								end
 							else
-								v, reason = Verdict.compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+								-- Card t_16448f75: the ROLE-AWARE
+								-- entry point — a caster's weapon is
+								-- judged on its STATS, a melee weapon on
+								-- its DPS, and DPS is the tie-break when
+								-- the stats are level. ONE function, the
+								-- same one the quest-reward judgement
+								-- calls. Guarded like the gates above: a
+								-- Verdict.lua that predates this card has
+								-- no compareWeapon and degrades to
+								-- exactly today's DPS comparator.
+								if type(Verdict.compareWeapon) == "function" then
+									local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
+									v, reason = Verdict.compareWeapon(wlines,
+										wornLines, wornSlotFilled, spec, canUseV, api)
+								else
+									v, reason = Verdict.compareDPS(
+										Verdict.weaponNumbers(wlines),
+										wornLink and Verdict.weaponNumbers(wornLines) or nil,
+										wornSlotFilled)
+								end
+								if type(reason) == "string" and w0Notes ~= nil then
+									for _, n in ipairs(w0Notes) do
+										reason = reason .. " " .. n
+									end
+								end
 							end
 						end
 					elseif offHandDecline ~= nil then
@@ -5305,12 +5936,11 @@ ChestAdvisor.scan = function()
 						end
 					else
 						canUseV = canUse(id)
-						-- E3 (AC-E4): Verdict.lua gate 6 (frozen this slice) returns
-						-- the constant "no chest equipped; this item would fill the
-						-- slot"; re-write that sentinel to this row's own slot word
-						-- so empty legs read "no legs equipped; …". Only the gate-6
-						-- shape is rewritten; every other reason passes through.
-						local EMPTY_SLOT_SENTINEL = "no chest equipped; this item would fill the slot"
+						-- The row's own slot word (card t_d88b7f28, item 3) rides
+						-- into evaluate, so an empty legs row reads "no legs
+						-- equipped; …" at the SOURCE. The frozen gate-6 sentinel
+						-- and its rewrite are gone: one vocabulary (SLOT_WORD),
+						-- one place the sentence is built.
 						local v2, r2, w2 = Verdict.evaluate(
 							{ canUse = canUseV, line = lines },
 							{ line = wornLines },
@@ -5318,13 +5948,38 @@ ChestAdvisor.scan = function()
 							-- Card t_548f0341 (Defect 2): the client's own
 							-- stat read for both sides; nil when the API
 							-- cannot read them (fail-closed, unchanged).
-							apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
+							apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil),
+							slotWord(invSlot)
 						)
 						v, reason = v2, r2
-						if reason == EMPTY_SLOT_SENTINEL then
-							reason = "no " .. slotWord(invSlot) .. " equipped; this item would fill the slot"
-						end
 					end
+					-- Card t_d8de0090: WHAT was set aside, recorded at the
+					-- read the verdict was decided on. AC-D: the raw
+					-- surface (/up diag) keeps the COUNT and the RAW LINES;
+					-- the tooltip is the surface that NAMES them
+					-- (Verdict.partialNote). Both sides are recorded — the
+					-- equipped item's chrome is the other half of this
+					-- comparison — through the ONE helper the tooltip also
+					-- falls back to, with the same client stat read
+					-- (`apiBySideOf` on this row's own ids), so the note and
+					-- this record can never name different lines.
+					local ignoredNow = (Verdict
+						and type(Verdict.ignoredLines) == "function")
+						and Verdict.ignoredLines(lines, wornLines,
+							apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil))
+						or nil
+					-- Card t_b8c890e6 (item 3): the FOREIGN half, recorded the
+					-- same way — the lines set aside on BOTH sides, candidate
+					-- first then worn, through the ONE helper Verdict owns. The
+					-- tooltip's partialReadSuffix composes the same splitForeign
+					-- over these same recorded strings, so the raw record and
+					-- the player surface disclose the SAME lines — and /up diag
+					-- now prints it beside ignored=N as foreign=N
+					-- foreignLines=…, exactly what the tooltip counts.
+					local foreignNow = (Verdict
+						and type(Verdict.foreignLines) == "function")
+						and Verdict.foreignLines(lines, wornLines)
+						or nil
 					if type(v) == "string" and type(reason) == "string" then
 						verdicts[link] = {
 							bag = bag, slot = slot, id = id,
@@ -5374,7 +6029,28 @@ ChestAdvisor.scan = function()
 							equipLoc = loc,
 							invSlot = invSlot,
 							slotWord = slotWord(invSlot),
-							-- Tier B (Lena §6): the spec bucket for this character
+							-- Card t_d8de0090 (AC-D): the lines this row's
+							-- read skipped, verbatim and in the order met.
+							-- nil when nothing was skipped, so a fully-read
+							-- row's record (and the SavedVariables dump) is
+							-- byte-identical to before this card. The RAW
+							-- surface keeps these lines; the player-facing
+							-- tooltip renders the names instead
+							-- (Verdict.partialNote), and /up diag prints both
+							-- this list and its count.
+							ignored = (type(ignoredNow) == "table" and #ignoredNow > 0)
+								and ignoredNow or nil,
+							-- Card t_b8c890e6 (item 3): the addon lines set aside on
+							-- either side, verbatim and in the order met — nil when
+							-- nothing was set aside, so a fully-read row's record
+							-- (and the SavedVariables dump) stays byte-identical to
+							-- before this card. The RAW surface keeps the COUNT and
+							-- the RAW LINES, exactly as ignored above; the tooltip
+							-- renders the same strings as its count clause
+							-- ("N addon line(s) not read").
+							foreign = (type(foreignNow) == "table" and #foreignNow > 0)
+								and foreignNow or nil,
+							-- Tier B (review §6): the spec bucket for this character
 								-- ("required" / "allowed" / "irrelevant"). Recorded on
 								-- OFF-HAND rows only — it is that slot's policy, and on
 								-- every other row the field would be noise a reader
@@ -5472,7 +6148,7 @@ ChestAdvisor.scan = function()
 	-- E3 (scope 3): the walk ledger is persisted here as the canonical
 	-- record the AC-E9 diag print reads. A reader must be able to answer
 	-- "why did this item produce no marker?" from this ledger alone —
-	-- per-equip-location skip counts are the whole point of the player's
+	-- per-equip-location skip counts are the whole point of the maintainer's
 	-- ruling (the token is what identifies WHY an item was skipped). The
 	-- capDropped field is scope item 5: the cap stays (64), but how many
 	-- UPGRADE items it silently dropped is now stated instead of hidden.
@@ -5555,6 +6231,12 @@ end
 do
 local function initLogAndSlash()
 local toastIsEnabled = ChestAdvisor._toastIsEnabled
+-- card t_d88b7f28, item 4: the toast lifetime SETTING, reached through the toast
+-- scope's own clamp (one implementation, in that block; see _toastSetLifetime).
+local toastLifetime = ChestAdvisor._toastLifetime
+local toastSetLifetime = ChestAdvisor._toastSetLifetime
+local toastLifetimeMin = ChestAdvisor._toastLifetimeMin
+local toastLifetimeMax = ChestAdvisor._toastLifetimeMax
 local maybeToastUpgrades = ChestAdvisor._maybeToastUpgrades
 -- ---- #5 Disagreement log (t_bc9c69d3) ---------------------------------------
 --
@@ -5828,6 +6510,11 @@ ChestAdvisor.formatLogStamp = function(entry)
 end
 
 -- ---- Slash commands ----------------------------------------------------------
+-- F3 (the maintainer, carried on this card rather than grown): `/up rescan` routed and
+-- echoed correctly but was never LISTED here, so the one surface a player learns
+-- commands from stayed silent about it (pre-existing at 3862c2a, not a
+-- regression). One line is added, in the same lowercase player-word idiom as its
+-- neighbours. Nothing else in this listing changed.
 local function helpText()
 	return "Touchstone — item upgrade advisor (head, shoulders, chest, back, wrists, hands, waist, legs, feet, neck, finger, trinket, off hand; weapons judged on tooltip DPS)\n"
 		.. "  /ts opens the window (aliases: /up = /upgrade = /chestadvice = /ts)\n"
@@ -5838,17 +6525,17 @@ local function helpText()
 		.. "  /up role clear clear the recorded role for this class\n"
 		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
 		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
-		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real\n"
-		.. "                 queue, so its lifetime, fade and right-click dismiss can be checked without\n"
-		.. "                 waiting for a real upgrade. Run it twice to see the rotation. /up diag reports\n"
-		.. "                 how many fired and how long the last one was actually on screen.\n"
+		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real path\n"
+		.. "  /up toast lifetime <s>  seconds the toast stays up, 1-30 (persisted; default 3.5)\n"
 		.. "  /up toastdebug [on|off|dump]  print every transition of one toast with GetTime stamps\n"
 		.. "                 (off by default; /up toasts raises one, dump prints the last lines)\n"
 		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
 		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
 		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
-		.. "  /up log        list the disagreement log — items you equipped that Touchstone did NOT call UPGRADE (persisted; last 50)\n"
+		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) in one pass\n"
+		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
 		.. "  /up log clear  empty the disagreement log\n"
+		.. "  /up rescan     re-scan your bags now — the marks are drawn from a fresh read (an upgrade, a trade-off, or no mark)\n"
 		.. "  /up diag       write a SavedVariables + global diag record, print rows + walk ledger to chat"
 end
 
@@ -5899,11 +6586,42 @@ end
 -- anything but an explicit `false` as enabled), so an existing character with no
 -- `toast` table gets the toast by default — a missing-key read is never OFF.
 local function cmdToast(msg)
+	-- /up toast lifetime <seconds> (card t_d88b7f28, item 4). Until this, the
+	-- only way to change the toast's lifetime was to hand-edit SavedVariables:
+	-- toastLifetime() read `ChestAdvisorDB.toast.lifetime` and NOTHING wrote it.
+	-- The value goes through toastClampLifetime — the ONE clamp — so the setter
+	-- stores exactly what the reader would have produced, and a typo'd 300 is
+	-- stored as 30 rather than accepted and clamped later. A non-number is
+	-- REJECTED (not coerced to the default) and the message names the range.
+	local raw = msg:match("^toast%s+lifetime%s*(.*)$")
+	if raw ~= nil then
+		raw = raw:gsub("%s+$", "")
+		if raw == "" then
+			return true, "toast lifetime is " .. tostring(toastLifetime())
+				.. "s — usage: /up toast lifetime <seconds, " .. toastLifetimeMin
+				.. "-" .. toastLifetimeMax .. ">"
+		end
+		local n = tonumber(raw)
+		if n == nil or n ~= n then
+			return false, "toast lifetime must be a number of seconds, "
+				.. toastLifetimeMin .. "-" .. toastLifetimeMax
+				.. " (got '" .. raw .. "')"
+		end
+		local stored = toastSetLifetime(n)
+		if stored ~= n then
+			-- Say so: a silently corrected setting reads like a failed command.
+			return true, "toast lifetime " .. tostring(stored) .. "s (clamped from "
+				.. tostring(n) .. ", range " .. toastLifetimeMin .. "-"
+				.. toastLifetimeMax .. ")"
+		end
+		return true, "toast lifetime " .. tostring(stored) .. "s"
+	end
 	local word = msg:match("^toast%s+(%a+)%s*$")
 	if word == nil then
 		local on = toastIsEnabled()
 		return true, "toast is currently " .. (on and "on" or "off")
-			.. " — usage: /up toast <on|off>"
+			.. ", lifetime " .. tostring(toastLifetime())
+			.. "s — usage: /up toast <on|off> | /up toast lifetime <seconds>"
 	end
 	local w = word:lower()
 	ChestAdvisorDB.toast = ChestAdvisorDB.toast or {}
@@ -5923,10 +6641,9 @@ local function cmdToast(msg)
 end
 
 -- /up toasts (alias /up testtoast) — t_4bae0617: raise the upgrade toast on
--- demand, so its lifetime, fade and dismiss can be checked without waiting for a
--- real upgrade to drop. It goes through ChestAdvisor.testToast, which queues and
--- shows through the REAL path; see that function for what it deliberately does
--- not touch (no dedupe entry, no log row, no baseline change).
+-- demand, so its lifetime, fade and dismiss can be checked without waiting
+-- for a real upgrade to drop. It goes through ChestAdvisor.testToast, which
+-- queues and shows through the REAL path.
 local function cmdTestToast()
 	if type(ChestAdvisor.testToast) ~= "function" then
 		return false, "the toast surface is not loaded (is the Touchstone module off?)"
@@ -5935,7 +6652,8 @@ local function cmdTestToast()
 		return false, "the toast is off — /up toast on, then /up toasts"
 	end
 	ChestAdvisor.testToast(1)
-	local st = type(ChestAdvisor.toastState) == "function" and ChestAdvisor.toastState() or {}
+	local st = type(ChestAdvisor.toastState) == "function"
+		and ChestAdvisor.toastState() or {}
 	return true, string.format(
 		"test toast: %s | queued: %s | lifetime: %.1fs — /up diag reports fired and the measured time",
 		st.shown and "showing" or "not showing", tostring(st.queue or 0),
@@ -6022,6 +6740,28 @@ local function cmdGlyphs(msg)
 	return true, "marker glyphs " .. w
 end
 
+-- /up reset — restore the four Settings defaults in ONE pass and say so in ONE
+-- line. Card t_4ddeae90 (defect 2): the Settings button used to fire the four
+-- subcommands above in sequence, and the slash wrapper echoes a success once per
+-- call, so one click printed four lines where a hand-toggled setting prints one.
+--
+-- The fix is NOT an echo-suppression flag on the shared path. A quiet mode that
+-- leaked into the normal path would silently kill the confirmation on the
+-- individual toggles — the exact regression this card warns about — and it would
+-- put a second owner on the echo decision. Instead the reset is ONE command that
+-- writes through the SAME four writers above, so each ChestAdvisorDB key still
+-- has exactly one place its values are spelled, and it returns one summary. The
+-- four writers' own confirmations are discarded on purpose: their writes are the
+-- point, the line below is what the player sees.
+local function cmdReset()
+	cmdDetail("detail full")
+	cmdTooltip("tooltip on")
+	cmdToast("toast on")
+	cmdGlyphs("glyphs off")
+	return true, "settings reset to defaults: tooltip detail full, tooltip line on,"
+		.. " toast on, marker glyphs off"
+end
+
 -- /ts scale <0.5-1.5> — the window scale the Settings slider also writes.
 -- The host already persists that number (U6); this is the command a player
 -- can type. The host owns the clamp. Absent host: say so, do not error.
@@ -6070,7 +6810,7 @@ local function cmdLog(msg)
 	end
 	local log = ChestAdvisorDB and ChestAdvisorDB.log or nil
 	if type(log) ~= "table" or #log == 0 then
-		return true, "no disagreements logged yet (equip an item Touchstone called NOT_UPGRADE and it is recorded here)"
+		return true, "no disagreements logged yet (equip an item Touchstone did not call an upgrade and it is recorded here)"
 	end
 	local lines = { "disagreements logged: " .. tostring(#log) .. " (oldest first)" }
 	for i = 1, #log do
@@ -6080,12 +6820,18 @@ local function cmdLog(msg)
 			-- session-relative number and a raw slot index. An entry written
 			-- before this card has no `at`/`slotName`. A previous session's
 			-- GetTime is not an age, so that row prints "earlier".
+			-- Card t_ab9a2e66 (R1): the verdict FIELD renders through the ONE
+			-- word map the tooltip and the Log tab already share — same item,
+			-- one vocabulary. `TOOLTIP_UI` is this chunk's own local, so the
+			-- map cannot be absent here (unlike LogTab, a separate TOC entry
+			-- that can paint before this file loads). No second table and no
+			-- fallback branch: word() already owns both degenerate cases.
 			local stamp = formatEntryTime(e.at, e.time)
 			local slotLabel = type(e.slotName) == "string" and e.slotName
 				or ("slot " .. tostring(e.slot))
 			lines[#lines + 1] = string.format(
 				"%d) %s  %s  %s role=%s(%s) link=%s reason=%s",
-				i, stamp, slotLabel, tostring(e.verdict),
+				i, stamp, slotLabel, TOOLTIP_UI.word(e.verdict),
 				tostring(e.role), tostring(e.roleSource), tostring(e.link), tostring(e.reason))
 		end
 	end
@@ -6235,6 +6981,7 @@ local function cmdDiag()
 		.. " level=" .. tostring(d.level)
 		.. " role=" .. tostring(d.role)
 		.. " api.canUse=" .. tostring(d.api and d.api.canUse)
+	-- t_ab9a2e66 (R4): this dump KEEPS the raw verdict tokens ON PURPOSE — here the token is the identifier a human greps for; field renders of an entry's verdict use the player word (TOOLTIP_UI.word), the diagnostic dump keeps the token. Do not re-open.
 	if type(d.rows) == "table" and #d.rows > 0 then
 		for _, r in ipairs(d.rows) do
 			local line
@@ -6259,20 +7006,37 @@ local function cmdDiag()
 						.. " specSubstantiated=" .. tostring(r.specSubstantiated)
 				end
 			end
+			-- Card t_d8de0090 (AC-D): the RAW surface keeps the count AND the
+			-- untouched raw lines. The player-facing tooltip names the lines
+			-- instead; here the token is the diagnostic — the same ruling as
+			-- R4 above, where the raw verdict token is what a human greps for.
+			-- Printed only for a row that skipped something, so a fully-read
+			-- row's line is byte-identical to before this card.
+			if type(r.ignored) == "table" and #r.ignored > 0 then
+				line = line .. " ignored=" .. tostring(#r.ignored)
+					.. " ignoredLines=" .. table.concat(r.ignored, " | ")
+			end
+			-- Card t_b8c890e6 (item 3): the FOREIGN half beside the cosmetic
+			-- one — the same COUNT and the same RAW LINES the tooltip discloses
+			-- ("N addon line(s) not read"), so the raw surface opens exactly
+			-- what the player surface discloses. Same printed-per-skip rule:
+			-- absent (and the line byte-identical) for a fully-read row.
+			if type(r.foreign) == "table" and #r.foreign > 0 then
+				line = line .. " foreign=" .. tostring(#r.foreign)
+					.. " foreignLines=" .. table.concat(r.foreign, " | ")
+			end
 			summary = summary .. "\n" .. line
 		end
 	else
 		summary = summary .. "\n(no verdict rows stored — /up rescan first)"
 	end
-	-- t_632f27e9: the toast's own state — the notification layer's behaviour
-	-- belongs in the DIAG path (a human explicitly asking), never in the
-	-- toast itself, which carries no suppression/debug text (AC-E2).
-	--
-	-- t_4bae0617: this block used to sit INSIDE the walk-ledger branch below, so
-	-- a tester who ran /up toasts on a fresh login (no scan ledger yet) got no
-	-- toast line at all. It is unconditional now: the toast's lifetime is
-	-- measurable with no scan behind it, which is the point of the test command.
-	-- `fired` and `last show on screen` are the numbers to read.
+	-- E3 (AC-E9): the walk ledger is part of the /up diag OUTPUT, not just
+	-- the record. A reader must be able to answer "why did this item
+	-- produce no marker?" from the diag text alone — no file open. The
+	-- per-token skip lines are the whole point of the maintainer's ruling:
+	-- the token is what identifies WHY something was skipped (a weapon
+	-- skip is a different skip from a neck skip and both should read
+	-- differently on this line).
 	local ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil
 	if type(ts) == "table" then
 		local measured = "not shown yet"
@@ -6287,15 +7051,10 @@ local function cmdDiag()
 				.. " | queued: " .. tostring(ts.queue)
 				.. " | told this session: " .. tostring(ts.told)
 				.. " | cap-dropped: " .. tostring(ts.dropped)
-				-- t_cf2ad83c (U3): the behaviour that card added, so a human
-				-- asking for diagnostics can see the hold and the hover pause.
 				.. "\nhovered: " .. tostring(ts.hovered)
 				.. " | lifetime left: " .. tostring(ts.lifetimeLeft)
 				.. " | held for combat: " .. tostring(ts.held)
 				.. " | deferred: " .. tostring(ts.deferred)
-				-- t_4bae0617: the configured lifetime next to the MEASURED
-				-- on-screen time of the last show, so "it went away too fast" is
-				-- a comparison of two numbers instead of an impression.
 				.. "\nconfigured lifetime: "
 				.. string.format("%.2fs", tonumber(ts.lifetime) or 0)
 				.. " | last show on screen: " .. measured
@@ -6307,14 +7066,7 @@ local function cmdDiag()
 				.. " | deadline left: "
 				.. (tonumber(ts.deadlineLeft)
 					and string.format("%.2fs", ts.deadlineLeft) or "-")
-	end
-	-- E3 (AC-E9): the walk ledger is part of the /up diag OUTPUT, not just
-	-- the record. A reader must be able to answer "why did this item
-	-- produce no marker?" from the diag text alone — no file open. The
-	-- per-token skip lines are the whole point of the player's ruling:
-	-- the token is what identifies WHY something was skipped (a weapon
-	-- skip is a different skip from a neck skip and both should read
-	-- differently on this line).
+		end
 	if type(d.ledger) == "table" then
 		local ld = d.ledger
 		summary = summary
@@ -6324,6 +7076,9 @@ local function cmdDiag()
 			.. "\ncap (MARKER_MAX): 64 — cap-dropped this scan: " .. tostring(ld.capDropped)
 			.. "\nclass state: " .. tostring(ld.classState or "unknown")
 			.. "\nrole: " .. tostring(ld.role or "none")
+		-- t_632f27e9: the toast's own state — the notification layer's behaviour
+		-- belongs in the DIAG path (a human explicitly asking), never in the
+		-- toast itself, which carries no suppression/debug text (AC-E2).
 		-- t_c3fe7d1d: the quest-reward surface's own state, same reasoning as the
 		-- toast block above — the reward arrows' behaviour belongs in the diag
 		-- path (a human asking), never as on-screen debug text.
@@ -6662,6 +7417,11 @@ local function dispatch(msg)
 		ok, out = cmdDetail(trimmed)
 	elseif subword == "glyphs" then
 		ok, out = cmdGlyphs(trimmed)
+	elseif subword == "reset" then
+		-- t_4ddeae90: the one-line reset the Settings button calls. Its summary
+		-- is echoed once by the slash wrapper below, like every other
+		-- single-line confirmation.
+		ok, out = cmdReset()
 	elseif subword == "scale" then
 		ok, out = cmdScale(trimmed)
 	elseif subword == "log" then

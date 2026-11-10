@@ -133,14 +133,25 @@ local function labelledCheck(parent, name, text, x, y)
 end
 
 local function build(host)
+  -- ---------------------------------------------------------------------
+  -- Card t_4ddeae90 (defect 1): the vertical rhythm below is COMPRESSED.
+  -- The old offsets (18/56/96/140/200/226/248/278/304/344/392/416, gaps of
+  -- 8-24) put the About block at y -494 in a 515-unit content area, and its
+  -- 11 rendered lines (11 x 12 -- GameFontHighlight is FRIZQT__.TTF height 12
+  -- with spacing 0 in this client) need 132, so the block ended at 626: 111
+  -- units past the frame and nothing clips it. Every control is still here,
+  -- in the same order and at the same x; only the y offsets and the gaps
+  -- moved. Budget: 432 of the 515 units are widget height (About included),
+  -- which leaves 83 for the whole stack's spacing -- so the gaps run 3-7
+  -- instead of 8-24.
   local title = SF.UI_CreateLabel(host, "Options", "GameFontNormalLarge")
-  title:SetPoint("TOPLEFT", 20, -18)
+  title:SetPoint("TOPLEFT", 20, -4)
   title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   host.title = title
 
   local hideMini = StatForgeDB and StatForgeDB.minimapHide
   local cb1 = CreateFrame("CheckButton", nil, host, "UICheckButtonTemplate")
-  cb1:SetPoint("TOPLEFT", 16, -56)
+  cb1:SetPoint("TOPLEFT", 16, -24)
   cb1:SetChecked(not hideMini)
   local l1 = SF.UI_CreateLabel(host, "Show minimap button", "GameFontHighlight")
   l1:SetPoint("LEFT", cb1, "RIGHT", 4, 0)
@@ -155,7 +166,7 @@ local function build(host)
   -- the `/sf diag` / `/up diag` chat commands are unchanged — this is an
   -- additional surface, not a replacement, so the command path keeps working.
   local diagBtn = SF.UI_CreateButton(host, "Diagnostics", 160, 28)
-  diagBtn:SetPoint("TOPLEFT", 16, -96)
+  diagBtn:SetPoint("TOPLEFT", 16, -60)
   diagBtn:SetScript("OnClick", function() SF.ShowDiagnosticsPanel() end)
   local l2 = SF.UI_CreateLabel(host, "Copy this client's API report when a verdict looks wrong",
     "GameFontHighlight")
@@ -163,16 +174,17 @@ local function build(host)
   l2:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.diagButton = diagBtn
 
-  -- Window scale. The mouse wheel on the window already changes this number
-  -- and StatForgeDB.ui.scale already remembers it; this is the control a
-  -- player can find without knowing the wheel exists. /ts scale does the same.
-  -- The slider steps by 0.05, finer than the wheel. Applying the scale while
-  -- the mouse is still down rescales the window under the cursor, so a small
-  -- drag runs the value to the end of the track. A drag updates the label
-  -- only; the scale is applied on mouse-up. A SetValue that is not a drag
-  -- still applies immediately.
+  -- Window scale. This slider and `/ts scale <0.5-1.5>` are the two controls;
+  -- the number lives in the same StatForgeDB.ui.scale the window position uses.
+  -- Card t_75261b9a: the mouse wheel is NOT one of them any more. The wheel is
+  -- this client's camera zoom, and a window-level handler took it away whenever
+  -- the panel was open, storing each stray scroll in StatForgeDB.ui.scale.
+  -- The slider steps by 0.05. Applying the scale while the mouse is still down
+  -- rescales the window under the cursor, so a small drag runs the value to the
+  -- end of the track. A drag updates the label only; the scale is applied on
+  -- mouse-up. A SetValue that is not a drag still applies immediately.
   local scaleLabel = SF.UI_CreateLabel(host, "Window scale", "GameFontHighlight")
-  scaleLabel:SetPoint("TOPLEFT", 20, -140)
+  scaleLabel:SetPoint("TOPLEFT", 20, -94)
   host.scaleLabel = scaleLabel
 
   local lo, hi = 0.5, 1.5
@@ -183,7 +195,7 @@ local function build(host)
   local slider = CreateFrame("Slider", nil, host)
   slider:SetOrientation("HORIZONTAL")
   slider:SetSize(360, 20)
-  slider:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", 0, -10)
+  slider:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", 0, -3)
   slider:SetMinMaxValues(lo, hi)
   slider:SetValueStep(SLIDER_STEP)
   if type(slider.SetObeyStepOnDrag) == "function" then
@@ -261,17 +273,17 @@ local function build(host)
   -- "What Touchstone shows". Every control writes through the slash handler
   -- that already owns the ChestAdvisorDB key, then syncShown re-reads it.
   local shows = SF.UI_CreateLabel(host, "What Touchstone shows", "GameFontNormal")
-  shows:SetPoint("TOPLEFT", 20, -200)
+  shows:SetPoint("TOPLEFT", 20, -135)
   shows:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   host.showsHeader = shows
 
   local detailLabel = SF.UI_CreateLabel(host, "Tooltip detail", "GameFontHighlight")
-  detailLabel:SetPoint("TOPLEFT", 20, -226)
+  detailLabel:SetPoint("TOPLEFT", 20, -152)
   host.detailLabel = detailLabel
 
-  local detailFull = labelledCheck(host, "TouchstoneOptDetailFull", "Full", 16, -248)
-  local detailCompact = labelledCheck(host, "TouchstoneOptDetailCompact", "Compact", 150, -248)
-  local detailUpgrades = labelledCheck(host, "TouchstoneOptDetailUpgrades", "Upgrades only", 320, -248)
+  local detailFull = labelledCheck(host, "TouchstoneOptDetailFull", "Full", 16, -167)
+  local detailCompact = labelledCheck(host, "TouchstoneOptDetailCompact", "Compact", 150, -167)
+  local detailUpgrades = labelledCheck(host, "TouchstoneOptDetailUpgrades", "Upgrades only", 320, -167)
   detailFull:SetScript("OnClick", function()
     advisorSlash("detail full")
     syncShown(host)
@@ -291,19 +303,19 @@ local function build(host)
   local detailHint = SF.UI_CreateLabel(host,
     "Full always includes the numbers. Compact shows them while Shift is held. Upgrades only hides not-an-upgrade lines.",
     "GameFontHighlight")
-  detailHint:SetPoint("TOPLEFT", 20, -278)
+  detailHint:SetPoint("TOPLEFT", 20, -203)
   detailHint:SetWidth(820)
   detailHint:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.detailHint = detailHint
 
-  local tooltipCheck = labelledCheck(host, "TouchstoneOptTooltip", "Tooltip line", 16, -304)
+  local tooltipCheck = labelledCheck(host, "TouchstoneOptTooltip", "Tooltip line", 16, -220)
   tooltipCheck:SetScript("OnClick", function(self)
     advisorSlash(self:GetChecked() and "tooltip on" or "tooltip off")
     syncShown(host)
   end)
   host.tooltipCheck = tooltipCheck
 
-  local toastCheck = labelledCheck(host, "TouchstoneOptToast", "Upgrade toast", 220, -304)
+  local toastCheck = labelledCheck(host, "TouchstoneOptToast", "Upgrade toast", 220, -220)
   toastCheck:SetScript("OnClick", function(self)
     advisorSlash(self:GetChecked() and "toast on" or "toast off")
     syncShown(host)
@@ -311,7 +323,7 @@ local function build(host)
   host.toastCheck = toastCheck
 
   local glyphCheck = labelledCheck(host, "TouchstoneOptGlyphs",
-    "Colorblind-safe markers (+ upgrade, ^ trade-off)", 420, -304)
+    "Colorblind-safe markers (+ upgrade, ^ trade-off)", 420, -220)
   glyphCheck:SetScript("OnClick", function(self)
     advisorSlash(self:GetChecked() and "glyphs on" or "glyphs off")
     syncShown(host)
@@ -319,12 +331,18 @@ local function build(host)
   host.glyphCheck = glyphCheck
 
   local resetBtn = SF.UI_CreateButton(host, "Reset to defaults", 180, 28)
-  resetBtn:SetPoint("TOPLEFT", 16, -344)
+  resetBtn:SetPoint("TOPLEFT", 16, -258)
+  -- Card t_4ddeae90 (defect 2): ONE command, ONE chat line. This used to fire
+  -- the four settings subcommands in a row, and the success echo prints once
+  -- per call, so a single click produced four lines ("tooltip detail full",
+  -- "tooltip on", "toast on", "marker glyphs off") where a hand-toggled setting
+  -- prints one. `/up reset` restores the same four defaults through the SAME
+  -- four writers (so each key still has exactly one owner) and echoes a single
+  -- summary. No echo-suppression flag on the shared path: a quiet mode that
+  -- leaked would silently kill the confirmation on the individual toggles,
+  -- which is the regression this fix most invites.
   resetBtn:SetScript("OnClick", function()
-    advisorSlash("detail full")
-    advisorSlash("tooltip on")
-    advisorSlash("toast on")
-    advisorSlash("glyphs off")
+    advisorSlash("reset")
     syncShown(host)
   end)
   local resetHint = SF.UI_CreateLabel(host, "Tooltip, toast, and marker glyphs. Does not clear role or the log.",
@@ -334,12 +352,12 @@ local function build(host)
   host.resetButton = resetBtn
 
   local roleHeader = SF.UI_CreateLabel(host, "Role", "GameFontNormal")
-  roleHeader:SetPoint("TOPLEFT", 20, -392)
+  roleHeader:SetPoint("TOPLEFT", 20, -293)
   roleHeader:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   host.roleHeader = roleHeader
 
   local classLabel = SF.UI_CreateLabel(host, "Class:", "GameFontHighlight")
-  classLabel:SetPoint("TOPLEFT", 20, -416)
+  classLabel:SetPoint("TOPLEFT", 20, -309)
   host.classLabel = classLabel
   -- The reset control and class label are unnamed, so tests reach them here.
   -- Named checkboxes and the role row register themselves in CreateFrame.
@@ -377,8 +395,24 @@ local function build(host)
   host.roleSpell = roleSpell
   host.roleClear = roleClear
 
+  -- Card t_4ddeae90 (defect 1): the About block is anchored to the content
+  -- frame's BOTTOM edge, not to the role row above it. It used to chain off
+  -- roleRow's BOTTOM (-18, y -494); its 11 rendered lines need 132 units, so
+  -- it ended 111 units below the 515-unit content frame and -- with no clip and
+  -- no scroll anywhere in this tab -- the tail (/up diag and the Tip line) was
+  -- drawn over the panel's border in open space.
+  --
+  -- Two things fix it. The stack above is compressed (see build()'s header),
+  -- which is where the room came from; and the block's own bottom is now
+  -- DECLARED (515 - 4 = 511) instead of "wherever the stack above happens to
+  -- end". The audit could not measure the client's rendered line height, so a
+  -- top-anchored fix would be only as safe as that guess -- a bottom anchor
+  -- cannot fall outside the panel at any line height. With the evidence-based
+  -- metrics (GameFontHighlight = FRIZQT__.TTF height 12, spacing 0) the stack
+  -- above ends at 369, leaving 10 units of clearance to the role row and 6 to
+  -- the bottom of its 32-tall checkboxes.
   local about = SF.UI_CreateLabel(host, "", "GameFontHighlight")
-  about:SetPoint("TOPLEFT", roleRow, "BOTTOMLEFT", 4, -18)
+  about:SetPoint("BOTTOMLEFT", host, "BOTTOMLEFT", 20, 4)
   about:SetWidth(840)
   about:SetJustifyH("LEFT")
   about:SetText(

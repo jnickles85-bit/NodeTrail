@@ -12,7 +12,7 @@ SF.VERSION = "0.8.3"
 -- client interface numbers this one build targets (Classic Era, the Forever beta,
 -- and the modern family). Diagnostics compares the running client's number against
 -- this SET. Treating it as a single value was audit B7 (card t_4412b04b): a client
--- running a DIFFERENT declared flavour (the owner's `_classic_beta_` reports 16001)
+-- running a DIFFERENT declared flavour (the `_forever_` client reports 16001)
 -- was compared against "11509" and the report printed a FALSE `tocMatch=false` on
 -- every `/sf diag`.
 --
@@ -20,7 +20,7 @@ SF.VERSION = "0.8.3"
 -- `ADDON`/`CLIENT` lines, Probe header). The parsed list below is what the matcher
 -- actually iterates, so the string and the set cannot drift apart silently.
 -- tests/toc-interface-current-state.js pins the exact set; keep them in sync.
-SF.TOC_INTERFACE = "11509, 16001, 120100"
+SF.TOC_INTERFACE = "11509, 16001, 120105"
 
 --- Parse a comma/space-delimited Interface directive into an array of numeric
 --- strings. Tolerant of the exact spacing used in the TOC; drops non-numeric

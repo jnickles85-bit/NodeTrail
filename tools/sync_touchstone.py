@@ -1,29 +1,50 @@
 #!/usr/bin/env python3
-"""Vendor Touchstone 0.8.3 into MightiePack/Modules/Touchstone.
+"""Vendor Touchstone from StatForge into MightiePack/Modules/Touchstone.
 
 Copies the twelve upstream files (eleven .lua + the marker.tga asset) from a
-``--src`` checkout, applies the five mechanical edits from
-``TOUCHSTONE-FOLD-DESIGN.md`` by anchored text replacement, and then audits the
-MightiePack TOC.
+StatForge `main` checkout, applies the fold's edits from
+``TOUCHSTONE-FOLD-DESIGN.md`` (plus the cards layered on it) by anchored text
+replacement, and then audits the MightiePack TOC.
+
+The source is StatForge ``main``, cloned at run time, and the resolved commit is
+printed so every sync names the upstream it was generated from::
+
+    https://github.com/jnickles85-bit/StatForge.git@80accdd
+
+``--src`` still points the run at a local checkout (a pristine deploy folder or
+a worktree) instead of cloning; the resolved commit — when the folder is a git
+checkout — is printed the same way.
 
 Every edit is anchored: if a marker is missing *or* occurs more than once the
 script exits non-zero and writes nothing for that file. A half-patched module is
 worse than a failed sync.
 
 Usage:
-    python3 tools/sync_touchstone.py --src /mnt/c/Users/jnick/touchstone-deploy
-    python3 tools/sync_touchstone.py --src ... --verify-only
+    python3 tools/sync_touchstone.py                     # clone StatForge main
+    python3 tools/sync_touchstone.py --ref 80accdd       # …or pin a commit
+    python3 tools/sync_touchstone.py --src /mnt/c/.../touchstone-deploy
+    python3 tools/sync_touchstone.py --verify-only
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEST_ROOT = REPO_ROOT / "MightiePack" / "Modules" / "Touchstone"
 TOC_PATH = REPO_ROOT / "MightiePack" / "MightiePack.toc"
+
+# The fold is generated from StatForge, not from a hand-kept local folder: the
+# default source is the repository's own main, cloned at run time, and the
+# resolved commit is printed with the result so a vendored tree can always be
+# traced back to the upstream it came from.
+SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
+SOURCE_REF = "main"
 
 # Order is load-bearing; see the design doc section 5. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).
@@ -245,9 +266,9 @@ def edit_chestadvisor(text: str) -> str:
         text,
         "ChestAdvisor/ChestAdvisor.lua",
         "ca.init-toast-surface-call",
-        "ChestAdvisor._toastIsEnabled = toastIsEnabled\nend\ninitToastSurface()\nend\n",
+        "ChestAdvisor._toastLifetimeMax = TOAST_LIFETIME_MAX\nend\ninitToastSurface()\nend\n",
         (
-            "ChestAdvisor._toastIsEnabled = toastIsEnabled\n"
+            "ChestAdvisor._toastLifetimeMax = TOAST_LIFETIME_MAX\n"
             "end\n"
             "-- Fold (MightiePack Touchstone module): the toast panel/frame is created by\n"
             "-- Enable() on first enabled load, not at file load.\n"
@@ -453,11 +474,15 @@ def edit_toast_trace(text: str) -> str:
         name,
         "ca.toast-deadline-state",
         (
-            "\tfadeFor = nil, shownAt = nil, showMs = nil, lastEnd = nil,\n"
+            "\tcurrent = nil, hovered = false, lifetimeLeft = 0,\n"
+            "\theld = {}, deferred = false,\n"
+            "\tfadeIn = nil, fadeOut = nil, ticker = nil, afterId = 0,\n"
             "}\n"
         ),
         (
-            "\tfadeFor = nil, shownAt = nil, showMs = nil, lastEnd = nil,\n"
+            "\tcurrent = nil, hovered = false, lifetimeLeft = 0,\n"
+            "\theld = {}, deferred = false,\n"
+            "\tfadeIn = nil, fadeOut = nil, ticker = nil, afterId = 0,\n"
             "\t-- t_fe7a636a: the show's deadline in the client's own clock, and\n"
             "\t-- the counters for the repairs below. `deadline` is refreshed by the\n"
             "\t-- countdown every tick, so a finish step can require that the\n"
@@ -465,6 +490,10 @@ def edit_toast_trace(text: str) -> str:
             "\t-- animation callback arrived.\n"
             "\tdeadline = nil, fadeArmedAt = nil, lastTickPrinted = nil,\n"
             "\trevived = 0, alphaRestored = 0,\n"
+            "\t-- t_4bae0617: the measurement. `shownAt` is GetTime() at the show;\n"
+            "\t-- showMs and lastEnd are the measured on-screen time and the word\n"
+            "\t-- for how that show ended (nil until one has).\n"
+            "\tshownAt = nil, showMs = nil, lastEnd = nil,\n"
             "}\n"
         ),
     )
@@ -474,7 +503,7 @@ def edit_toast_trace(text: str) -> str:
         text,
         name,
         "ca.toast-trace-helpers",
-        "local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure\n",
+        "local drawToast, advanceToast, showToastItem, toastFinishShow\n",
         (
             "-- ---- t_fe7a636a: the toast's own trace ---------------------------------\n"
             "--\n"
@@ -567,8 +596,8 @@ def edit_toast_trace(text: str) -> str:
             "\tif type(f.SetAlpha) ~= \"function\" then return end\n"
             "\tpcall(f.SetAlpha, f, 0)\n"
             "\tif type(toastRT.fadeIn) == \"table\" and type(toastRT.fadeIn.Play) == \"function\" then\n"
-            "\t\tpcall(toastRT.fadeIn.Play, toastRT.fadeIn)\n"
-            "\telse\n"
+            "\t\tlocal played = pcall(toastRT.fadeIn.Play, toastRT.fadeIn)\n"
+            "\t\tif played then\n"
         ),
         (
             "local function toastPlayFadeIn(f, showId)\n"
@@ -576,9 +605,47 @@ def edit_toast_trace(text: str) -> str:
             "\tif type(f.SetAlpha) ~= \"function\" then return end\n"
             "\tpcall(f.SetAlpha, f, 0)\n"
             "\tif type(toastRT.fadeIn) == \"table\" and type(toastRT.fadeIn.Play) == \"function\" then\n"
-            "\t\tpcall(toastRT.fadeIn.Play, toastRT.fadeIn)\n"
-            "\t\tTRACE.line(\"fadeIn play id=\" .. tostring(showId))\n"
-            "\telse\n"
+            "\t\tlocal played = pcall(toastRT.fadeIn.Play, toastRT.fadeIn)\n"
+            "\t\tif played then\n"
+            "\t\t\tTRACE.line(\"fadeIn play id=\" .. tostring(showId))\n"
+            "\t\t\t-- t_fe7a636a: `Play` can succeed and the group still never\n"
+            "\t\t\t-- start (this client drops a group that was Stopped and Played\n"
+            "\t\t\t-- in one frame). The alpha this function set to 0 is then the\n"
+            "\t\t\t-- panel's resting alpha, and the restore below is the only\n"
+            "\t\t\t-- thing making the show visible — so name that repair, with the\n"
+            "\t\t\t-- alpha it rescued, instead of leaving a flash unexplained.\n"
+            "\t\t\tlocal running = true\n"
+            "\t\t\tif type(toastRT.fadeIn.IsPlaying) == \"function\" then\n"
+            "\t\t\t\tlocal okp, playing = pcall(toastRT.fadeIn.IsPlaying, toastRT.fadeIn)\n"
+            "\t\t\t\tif okp then running = (playing == true) end\n"
+            "\t\t\tend\n"
+            "\t\t\tif not running then\n"
+            "\t\t\t\ttoastRT.alphaRestored = (toastRT.alphaRestored or 0) + 1\n"
+            "\t\t\t\tTRACE.line(\"alpha restore id=\" .. tostring(showId) .. \" was=0.000\")\n"
+            "\t\t\tend\n"
+        ),
+    )
+
+    # ---- the measurement (card t_4bae0617) -----------------------------------
+    # The toast's own on-screen time, from the client's clock. The specs and
+    # /up diag read it, and it is the number that turned "it is a flash" from a
+    # report into a measurement. `shownAt` is stamped by the show; every end
+    # path clears it, so nil means "nothing measured yet", never zero.
+    text = replace_once(
+        text,
+        name,
+        "ca.toast-measure",
+        "local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure\n",
+        (
+            "local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure\n"
+            "toastMeasure = function()\n"
+            "\tif type(toastRT.shownAt) ~= \"number\" or type(GetTime) ~= \"function\" then\n"
+            "\t\treturn nil\n"
+            "\tend\n"
+            "\tlocal ok, now = pcall(GetTime)\n"
+            "\tif not ok or type(now) ~= \"number\" then return nil end\n"
+            "\treturn math.floor((now - toastRT.shownAt) * 1000 + 0.5)\n"
+            "end\n"
         ),
     )
 
@@ -593,15 +660,18 @@ def edit_toast_trace(text: str) -> str:
         ),
         (
             "\t\t-- t_fe7a636a: the fade-IN group reports its own OnFinished to the\n"
-            "\t\t-- trace and does nothing else. It has no finish path at all; if this\n"
-            "\t\t-- client delivers OnFinished from a Stop() (the behaviour the\n"
-            "\t\t-- fade-out's guard exists for), the trace says so instead of a\n"
-            "\t\t-- comment asserting it.\n"
+            "\t\t-- trace — and CHAINS to whatever the build above installed (the\n"
+            "\t\t-- alpha restore this file needs when a finished Alpha animation\n"
+            "\t\t-- would otherwise restore the frame's own alpha). Chaining, not\n"
+            "\t\t-- replacing: the trace must not undo the upstream fix it explains.\n"
             "\t\tif type(ag.SetScript) == \"function\" then\n"
+            "\t\t\tlocal prior = type(ag.GetScript) == \"function\"\n"
+            "\t\t\t\tand ag:GetScript(\"OnFinished\") or nil\n"
             "\t\t\tag:SetScript(\"OnFinished\", function()\n"
             "\t\t\t\tTRACE.line(\"animation finished: group=fadeIn id=\"\n"
             "\t\t\t\t\t.. tostring(toastRT.showId)\n"
             "\t\t\t\t\t.. \" fadeFor=\" .. tostring(toastRT.fadeFor))\n"
+            "\t\t\t\tif type(prior) == \"function\" then pcall(prior) end\n"
             "\t\t\tend)\n"
             "\t\tend\n"
             "\t\ttoastRT.fadeIn = ag\n"
@@ -616,21 +686,15 @@ def edit_toast_trace(text: str) -> str:
         "ca.toast-fadeout-onfinished-trace",
         (
             "\t\t\tag:SetScript(\"OnFinished\", function()\n"
-            "\t\t\t\tlocal id = toastRT.fadeFor\n"
-            "\t\t\t\tif id == nil then return end\n"
-            "\t\t\t\ttoastRT.fadeFor = nil\n"
-            "\t\t\t\tpcall(toastFinishShow, id)\n"
+            "\t\t\t\tpcall(toastFinishShow, toastRT.fadeId)\n"
             "\t\t\tend)\n"
         ),
         (
             "\t\t\tag:SetScript(\"OnFinished\", function()\n"
-            "\t\t\t\tlocal id = toastRT.fadeFor\n"
             "\t\t\t\tTRACE.line(\"animation finished: group=fadeOut id=\"\n"
             "\t\t\t\t\t.. tostring(toastRT.showId)\n"
-            "\t\t\t\t\t.. \" fadeFor=\" .. tostring(id))\n"
-            "\t\t\t\tif id == nil then return end\n"
-            "\t\t\t\ttoastRT.fadeFor = nil\n"
-            "\t\t\t\tpcall(toastFinishShow, id, \"fadeOnFinished\")\n"
+            "\t\t\t\t\t.. \" fadeFor=\" .. tostring(toastRT.fadeId))\n"
+            "\t\t\t\tpcall(toastFinishShow, toastRT.fadeId, \"fadeOnFinished\")\n"
             "\t\t\tend)\n"
         ),
     )
@@ -709,10 +773,7 @@ def edit_toast_trace(text: str) -> str:
             "toastFinishShow = function(showId)\n"
             "\tif showId ~= nil and toastRT.showId ~= showId then return end\n"
             "\tif not toastActive then return end\n"
-            "\tlocal ms = toastMeasure()\n"
-            "\tif ms then toastRT.showMs = ms end\n"
-            "\ttoastRT.shownAt = nil\n"
-            "\ttoastRT.fadeFor = nil\n"
+            "\ttoastRT.showId = (toastRT.showId or 0) + 1\n"
         ),
         (
             "toastFinishShow = function(showId, reason)\n"
@@ -738,6 +799,9 @@ def edit_toast_trace(text: str) -> str:
             "\tif lifeLeft < 0 then lifeLeft = 0 end\n"
             "\tTRACE.line(\"finish id=\" .. tostring(showId) .. \" reason=\" .. reason\n"
             "\t\t.. \" lifeLeft=\" .. TRACE.sec(lifeLeft), now)\n"
+            "\t-- t_4bae0617: the measurement this end just made, kept for /up diag\n"
+            "\t-- and the specs. `shownAt` is cleared so a later read cannot measure\n"
+            "\t-- a show that is already gone.\n"
             "\tlocal ms = toastMeasure()\n"
             "\tif ms then toastRT.showMs = ms end\n"
             "\ttoastRT.shownAt = nil\n"
@@ -745,6 +809,7 @@ def edit_toast_trace(text: str) -> str:
             "\ttoastRT.deadline = nil\n"
             "\ttoastRT.fadeArmedAt = nil\n"
             "\ttoastRT.lastTickPrinted = nil\n"
+            "\ttoastRT.showId = (toastRT.showId or 0) + 1\n"
         ),
     )
 
@@ -755,23 +820,16 @@ def edit_toast_trace(text: str) -> str:
         "ca.toast-expire-reason",
         (
             "toastExpire = function()\n"
-            "\tif type(toastRT.ticker) == \"table\" and type(toastRT.ticker.Cancel) == \"function\" then\n"
-            "\t\tpcall(toastRT.ticker.Cancel, toastRT.ticker)\n"
-            "\tend\n"
-            "\ttoastRT.ticker = nil\n"
+            "\ttoastStopTimer()\n"
             "\tif not toastActive then return end\n"
-            "\ttoastRT.lastEnd = \"expired\"\n"
             "\tlocal showId = toastRT.showId\n"
         ),
         (
             "toastExpire = function(reason)\n"
-            "\tif type(toastRT.ticker) == \"table\" and type(toastRT.ticker.Cancel) == \"function\" then\n"
-            "\t\tpcall(toastRT.ticker.Cancel, toastRT.ticker)\n"
-            "\tend\n"
-            "\ttoastRT.ticker = nil\n"
+            "\ttoastStopTimer()\n"
             "\tif not toastActive then return end\n"
-            "\ttoastRT.lastEnd = \"expired\"\n"
             "\tlocal showId = toastRT.showId\n"
+            "\ttoastRT.lastEnd = \"expired\"\n"
             "\tTRACE.line(\"expire id=\" .. tostring(showId) .. \" reason=\"\n"
             "\t\t.. tostring(reason or \"timer\"))\n"
         ),
@@ -781,13 +839,17 @@ def edit_toast_trace(text: str) -> str:
         name,
         "ca.toast-expire-arm-trace",
         (
-            "\t\ttoastRT.fadeFor = showId\n"
-            "\t\tlocal played = pcall(fade.Play, fade)\n"
+            "\ttoastRT.fadeId = showId\n"
         ),
         (
-            "\t\ttoastRT.fadeFor = showId\n"
-            "\t\ttoastRT.fadeArmedAt = TRACE.now()\n"
-            "\t\tlocal played = pcall(fade.Play, fade)\n"
+            "\ttoastRT.fadeId = showId\n"
+            "\t-- t_fe7a636a: the fade-out is now in flight for THIS show. The\n"
+            "\t-- guard is the fold's own marker (upstream's fadeId names the show\n"
+            "\t-- the group was armed for, not whether a fade is still running), and\n"
+            "\t-- toastFinishShow clears it, so a scan can tell \"a show whose\n"
+            "\t-- lifetime is spent but whose fade is still playing\" from a dead one.\n"
+            "\ttoastRT.fadeFor = showId\n"
+            "\ttoastRT.fadeArmedAt = TRACE.now()\n"
         ),
     )
     text = replace_once(
@@ -840,20 +902,20 @@ def edit_toast_trace(text: str) -> str:
         name,
         "ca.toast-show-deadline",
         (
-            "\t\telse\n"
-            "\t\t\ttoastRT.shownAt = nil\n"
-            "\t\tend\n"
+            "\t\ttoastRT.lifetimeLeft = toastLifetime()\n"
             "\t\t-- Re-anchor from the persisted position on every show: the panel may have\n"
         ),
         (
-            "\t\telse\n"
-            "\t\t\ttoastRT.shownAt = nil\n"
-            "\t\tend\n"
+            "\t\ttoastRT.lifetimeLeft = toastLifetime()\n"
+            "\t\t-- t_4bae0617: the show's own clock stamp. The measured on-screen\n"
+            "\t\t-- time is then the client's number, not the addon's opinion.\n"
+            "\t\ttoastRT.shownAt = TRACE.now()\n"
             "\t\t-- t_fe7a636a: the deadline this show must survive to, on the same\n"
             "\t\t-- clock the countdown ticks on. The finish step refuses to end a\n"
             "\t\t-- show before it.\n"
-            "\t\ttoastRT.deadline = (toastRT.shownAt or TRACE.now()) + toastRT.lifetimeLeft\n"
+            "\t\ttoastRT.deadline = toastRT.shownAt + toastRT.lifetimeLeft\n"
             "\t\ttoastRT.fadeArmedAt = nil\n"
+            "\t\ttoastRT.fadeFor = nil\n"
             "\t\ttoastRT.lastTickPrinted = nil\n"
             "\t\t-- Re-anchor from the persisted position on every show: the panel may have\n"
         ),
@@ -917,22 +979,35 @@ def edit_toast_trace(text: str) -> str:
         name,
         "ca.toast-dismiss-trace",
         (
-            "\t\t\t\ttoastRT.lastEnd = \"dismissed\"\n"
-            "\t\t\t\tlocal ms = toastMeasure and toastMeasure()\n"
+            "\t\t\t\tif type(self.Hide) == \"function\" then pcall(self.Hide, self) end\n"
+            "\t\t\t\tself.shown = false\n"
+            "\t\t\t\ttoastActive = false\n"
+            "\t\t\t\ttoastRT.current = nil\n"
+            "\t\t\t\ttoastRT.hovered = false\n"
+            "\t\t\t\ttoastRT.lifetimeLeft = 0\n"
         ),
         (
+            "\t\t\t\tif type(self.Hide) == \"function\" then pcall(self.Hide, self) end\n"
+            "\t\t\t\tself.shown = false\n"
+            "\t\t\t\ttoastActive = false\n"
+            "\t\t\t\ttoastRT.current = nil\n"
+            "\t\t\t\ttoastRT.hovered = false\n"
+            "\t\t\t\ttoastRT.lifetimeLeft = 0\n"
+            "\t\t\t\t-- t_4bae0617: the measured time this show was up, and the word\n"
+            "\t\t\t\t-- for how it ended, taken BEFORE the clock stamp is cleared.\n"
+            "\t\t\t\tlocal dismissedMs = toastMeasure and toastMeasure() or nil\n"
+            "\t\t\t\tif dismissedMs then toastRT.showMs = dismissedMs end\n"
+            "\t\t\t\ttoastRT.shownAt = nil\n"
             "\t\t\t\ttoastRT.lastEnd = \"dismissed\"\n"
             "\t\t\t\t-- t_fe7a636a: a dismiss is the one end that may come before the\n"
             "\t\t\t\t-- deadline (the player asked for it). It is traced as both an\n"
             "\t\t\t\t-- expire and a finish so every end reads in the same vocabulary.\n"
-            "\t\t\t\tlocal dismissedLeft = tonumber(toastRT.lifetimeLeft) or 0\n"
-            "\t\t\t\tif dismissedLeft < 0 then dismissedLeft = 0 end\n"
             "\t\t\t\tTRACE.line(\"expire id=\" .. tostring(toastRT.showId) .. \" reason=dismiss\")\n"
             "\t\t\t\tTRACE.line(\"finish id=\" .. tostring(toastRT.showId)\n"
-            "\t\t\t\t\t.. \" reason=dismiss lifeLeft=\" .. TRACE.sec(dismissedLeft))\n"
+            "\t\t\t\t\t.. \" reason=dismiss lifeLeft=\" .. TRACE.sec(0))\n"
             "\t\t\t\ttoastRT.deadline = nil\n"
             "\t\t\t\ttoastRT.fadeArmedAt = nil\n"
-            "\t\t\t\tlocal ms = toastMeasure and toastMeasure()\n"
+            "\t\t\t\ttoastRT.fadeFor = nil\n"
         ),
     )
 
@@ -975,12 +1050,17 @@ def edit_toast_trace(text: str) -> str:
         "ca.toast-state-trace",
         (
             "\t\tlifetime = toastLifetime(),\n"
-            "\t\tshowMs = toastRT.showMs,\n"
-            "\t\tlastEnd = toastRT.lastEnd,\n"
+            "\t\theld = #toastRT.held,\n"
+            "\t\tdeferred = toastRT.deferred,\n"
             "\t}\n"
         ),
         (
             "\t\tlifetime = toastLifetime(),\n"
+            "\t\theld = #toastRT.held,\n"
+            "\t\tdeferred = toastRT.deferred,\n"
+            "\t\t-- t_4bae0617: the measurement, read by /up diag and the specs.\n"
+            "\t\t-- showMs is nil until a show has ended; lastEnd is the word for\n"
+            "\t\t-- how that end happened (\"expired\" / \"dismissed\").\n"
             "\t\tshowMs = toastRT.showMs,\n"
             "\t\tlastEnd = toastRT.lastEnd,\n"
             "\t\t-- t_fe7a636a: the trace switch and the repairs the fix performed.\n"
@@ -1025,10 +1105,12 @@ def edit_toast_trace(text: str) -> str:
         name,
         "ca.toastdebug-dispatch",
         (
-            "\telseif subword == \"toasts\" or subword == \"testtoast\" then\n"
-            "\t\tok, out = cmdTestToast()\n"
+            "\telseif subword == \"toast\" then\n"
+            "\t\tok, out = cmdToast(trimmed)\n"
         ),
         (
+            "\telseif subword == \"toast\" then\n"
+            "\t\tok, out = cmdToast(trimmed)\n"
             "\telseif subword == \"toasts\" or subword == \"testtoast\" then\n"
             "\t\tok, out = cmdTestToast()\n"
             "\telseif subword == \"toastdebug\" then\n"
@@ -1048,27 +1130,32 @@ def edit_toast_trace(text: str) -> str:
             "\t\t.. \"  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\\n\"\n"
         ),
     )
+    # ---- /up diag: the toast block is UNCONDITIONAL --------------------------
+    # Upstream nests the toast's diag block inside the walk-ledger branch, so a
+    # tester who runs /up toasts on a fresh login (no scan ledger yet) gets no
+    # toast line at all — and the toast's lifetime is exactly what is measurable
+    # with no scan behind it (card t_4bae0617). The block is lifted out of that
+    # branch and installed above it, one indentation level shallower, carrying
+    # the measurement and the card t_fe7a636a trace fields.
     text = replace_once(
         text,
         name,
-        "ca.toast-diag-trace",
+        "ca.diag-toast-unconditional",
+        "\t\tlocal ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil\n\t\tif type(ts) == \"table\" then\n\t\t\tsummary = summary .. \"\\n--- toast ---\"\n\t\t\t\t\t.. \"\\nenabled: \" .. tostring(ts.enabled)\n\t\t\t\t\t.. \" | shown: \" .. tostring(ts.shown)\n\t\t\t\t\t.. \" | queued: \" .. tostring(ts.queue)\n\t\t\t\t\t.. \" | told this session: \" .. tostring(ts.told)\n\t\t\t\t\t.. \" | cap-dropped: \" .. tostring(ts.dropped)\n\t\t\t\t\t-- t_cf2ad83c (U3): the behaviour this card added, so a human\n\t\t\t\t\t-- asking for diagnostics can see the hold and the hover pause.\n\t\t\t\t\t.. \"\\nhovered: \" .. tostring(ts.hovered)\n\t\t\t\t\t.. \" | lifetime left: \" .. tostring(ts.lifetimeLeft)\n\t\t\t\t\t.. \" | held for combat: \" .. tostring(ts.held)\n\t\t\t\t\t.. \" | deferred: \" .. tostring(ts.deferred)\n\t\tend\n",
+        "",
+    )
+    text = replace_once(
+        text,
+        name,
+        "ca.diag-toast-unconditional-move",
         (
-            "\t\t\t\t.. \"\\nconfigured lifetime: \"\n"
-            "\t\t\t\t.. string.format(\"%.2fs\", tonumber(ts.lifetime) or 0)\n"
-            "\t\t\t\t.. \" | last show on screen: \" .. measured\n"
+            "\tif type(d.ledger) == \"table\" then\n"
+            "\t\tlocal ld = d.ledger\n"
         ),
-        (
-            "\t\t\t\t.. \"\\nconfigured lifetime: \"\n"
-            "\t\t\t\t.. string.format(\"%.2fs\", tonumber(ts.lifetime) or 0)\n"
-            "\t\t\t\t.. \" | last show on screen: \" .. measured\n"
-            "\t\t\t\t-- t_fe7a636a: the trace switch and the repairs, so a flash\n"
-            "\t\t\t\t-- report comes with the numbers that explain it.\n"
-            "\t\t\t\t.. \" | trace: \" .. (ts.debug and \"ON\" or \"off\")\n"
-            "\t\t\t\t.. \"\\nrevived this session: \" .. tostring(ts.revived)\n"
-            "\t\t\t\t.. \" | alpha restored: \" .. tostring(ts.alphaRestored)\n"
-            "\t\t\t\t.. \" | deadline left: \"\n"
-            "\t\t\t\t.. (tonumber(ts.deadlineLeft)\n"
-            "\t\t\t\t\tand string.format(\"%.2fs\", ts.deadlineLeft) or \"-\")\n"
+        "\tlocal ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil\n\tif type(ts) == \"table\" then\n\t\tlocal measured = \"not shown yet\"\n\t\tif type(ts.showMs) == \"number\" then\n\t\t\tmeasured = string.format(\"%.2fs\", ts.showMs / 1000)\n\t\t\t\t.. \" (\" .. tostring(ts.lastEnd or \"?\") .. \")\"\n\t\tend\n\t\tsummary = summary .. \"\\n--- toast ---\"\n\t\t\t\t.. \"\\nenabled: \" .. tostring(ts.enabled)\n\t\t\t\t.. \" | shown: \" .. tostring(ts.shown)\n\t\t\t\t.. \" | fired: \" .. tostring(ts.fired)\n\t\t\t\t.. \" | queued: \" .. tostring(ts.queue)\n\t\t\t\t.. \" | told this session: \" .. tostring(ts.told)\n\t\t\t\t.. \" | cap-dropped: \" .. tostring(ts.dropped)\n\t\t\t\t.. \"\\nhovered: \" .. tostring(ts.hovered)\n\t\t\t\t.. \" | lifetime left: \" .. tostring(ts.lifetimeLeft)\n\t\t\t\t.. \" | held for combat: \" .. tostring(ts.held)\n\t\t\t\t.. \" | deferred: \" .. tostring(ts.deferred)\n\t\t\t\t.. \"\\nconfigured lifetime: \"\n\t\t\t\t.. string.format(\"%.2fs\", tonumber(ts.lifetime) or 0)\n\t\t\t\t.. \" | last show on screen: \" .. measured\n\t\t\t\t-- t_fe7a636a: the trace switch and the repairs, so a flash\n\t\t\t\t-- report comes with the numbers that explain it.\n\t\t\t\t.. \" | trace: \" .. (ts.debug and \"ON\" or \"off\")\n\t\t\t\t.. \"\\nrevived this session: \" .. tostring(ts.revived)\n\t\t\t\t.. \" | alpha restored: \" .. tostring(ts.alphaRestored)\n\t\t\t\t.. \" | deadline left: \"\n\t\t\t\t.. (tonumber(ts.deadlineLeft)\n\t\t\t\t\tand string.format(\"%.2fs\", ts.deadlineLeft) or \"-\")\n\t\tend\n"
+        + (
+            "\tif type(d.ledger) == \"table\" then\n"
+            "\t\tlocal ld = d.ledger\n"
         ),
     )
 
@@ -1135,31 +1222,11 @@ def edit_toast_trace(text: str) -> str:
     #     with the delta list (which still carries every stat, zero-weight ones
     #     included) as the supporting detail line.
     name = "ChestAdvisor/ChestAdvisor.lua"
-    text = replace_once(
-        text,
-        name,
-        "ca.spec-client-role",
-        "\tlocal role  = resolvedRole(token)\n",
-        (
-            "\tlocal role  = resolvedRole(token)\n"
-            "\t-- Card t_3a744b4a: resolvedRole above decides the ORDER (and keeps its\n"
-            "\t-- own rulings); this read only names the WEIGHT profile. The client's\n"
-            "\t-- word is the honest one — a Protection paladin is TANK even though the\n"
-            "\t-- order alias sends it to the \"spell\" order — so the tooltip can show\n"
-            "\t-- [Protection] instead of a label nobody can check.\n"
-            "\tlocal specIdentity = readSpecIdentity()\n"
-        ),
-    )
-    text = replace_once(
-        text,
-        name,
-        "ca.spec-client-role-return",
-        "\treturn { order = order, role = label, class = token, level = level }",
-        (
-            "\treturn { order = order, role = label, class = token, level = level,\n"
-            "\t         clientRole = specIdentity and specIdentity.role or nil }"
-        ),
-    )
+    # Card t_3a744b4a's spec edits are gone: upstream #89/#90 (t_984bc8ac) reads
+    # the client identity ONCE in buildSpec and publishes `clientRole` on the spec
+    # table itself, which is exactly what the weighted layer needs. Re-stitching
+    # `local specIdentity = readSpecIdentity()` here would be a second read of the
+    # same client call, in the same function, for a field upstream already fills.
     text = replace_once(
         text,
         name,
@@ -1293,8 +1360,24 @@ end
         text,
         name,
         "ca.quest-evaluate-weighted",
-        "\tlocal v, reason = Verdict.evaluate(\n\t\t{ canUse = canUseV, line = lines },\n\t\t{ line = wornLines },\n\t\tspec,\n\t\tapi\n\t)\n",
-        "\tlocal v, reason, weighted = Verdict.evaluate(\n\t\t{ canUse = canUseV, line = lines },\n\t\t{ line = wornLines },\n\t\tspec,\n\t\tapi\n\t)\n",
+        (
+            "\tlocal v, reason = Verdict.evaluate(\n"
+            "\t\t{ canUse = canUseV, line = lines },\n"
+            "\t\t{ line = wornLines },\n"
+            "\t\tspec,\n"
+            "\t\tapi,\n"
+            "\t\tslotWord(invSlot)\n"
+            "\t)\n"
+        ),
+        (
+            "\tlocal v, reason, weighted = Verdict.evaluate(\n"
+            "\t\t{ canUse = canUseV, line = lines },\n"
+            "\t\t{ line = wornLines },\n"
+            "\t\tspec,\n"
+            "\t\tapi,\n"
+            "\t\tslotWord(invSlot)\n"
+            "\t)\n"
+        ),
     )
     text = replace_once(
         text,
@@ -1337,6 +1420,168 @@ end
     )
 
     text = edit_chestadvisor_tiebreak(text)
+
+    # ---- the test toast, and the timing the module ships (card t_4bae0617) ----
+    # These two features have no home in StatForge: they were added to the local
+    # deploy copy the fold used to vendor from, so moving the source to StatForge
+    # main means the fold has to carry them itself. Nothing here is invented —
+    # it is the shipped behaviour from the deploy, re-anchored onto the new toast.
+    text = replace_once(
+        text,
+        name,
+        "ca.testtoast-command",
+        (
+            "ChestAdvisor._maybeToastUpgrades = maybeToastUpgrades\n"
+        ),
+        (
+            "-- ---- t_4bae0617: the deterministic test toast ---------------------------\n"
+            "--\n"
+            "-- An upgrade toast otherwise needs a real bag item the scan happens to judge\n"
+            "-- an UPGRADE, which can take an hour of play — so nothing about its lifetime,\n"
+            "-- fade or dismiss behaviour could be checked on demand. `/up toasts` raises\n"
+            "-- one through the REAL path: the entry is queued exactly where a scan queues\n"
+            "-- one and drawn by showToastItem (no second renderer, no second queue), and\n"
+            "-- the message is built by buildToastMessage like any other show.\n"
+            "--\n"
+            "-- The synthetic entry carries NO link and NO item id, which is the point: the\n"
+            "-- icon falls back cleanly through the same `tex or TOAST_FALLBACK_ICON` the\n"
+            "-- real path uses, and buildToastMessage takes its documented fallback\n"
+            "-- wording. It touches NOTHING the scan owns — no toastedLinks (so the dedupe\n"
+            "-- set is not polluted), no ChestAdvisorDB.log (written only by a verdict), and\n"
+            "-- no baseline flag (toastSeenFirstScan is only ever set by\n"
+            "-- maybeToastUpgrades).\n"
+            "--\n"
+            "-- Returns { started, queued, dropped }: the first call draws immediately, the\n"
+            "-- second while one is up JOINS THE QUEUE (a rotation, never a second panel),\n"
+            "-- and the tail past TOAST_MAX is a stated drop like the scan's own.\n"
+            "local TOAST_TEST_NAME = \"Test Upgrade\"\n"
+            "ChestAdvisor.testToast = function(n)\n"
+            "\tn = tonumber(n) or 1\n"
+            "\tif n < 1 then n = 1 end\n"
+            "\tlocal started, queued, dropped = 0, 0, 0\n"
+            "\tfor _ = 1, math.floor(n) do\n"
+            "\t\tlocal entry = { name = TOAST_TEST_NAME, test = true }\n"
+            "\t\t-- The cap is the same one a scan batch obeys, so a tester cannot use\n"
+            "\t\t-- this to grow a queue the real path could never grow.\n"
+            "\t\tif #toastQueue >= TOAST_MAX then\n"
+            "\t\t\ttoastDropped = toastDropped + 1\n"
+            "\t\t\tdropped = dropped + 1\n"
+            "\t\telse\n"
+            "\t\t\ttoastQueue[#toastQueue + 1] = entry\n"
+            "\t\t\tqueued = queued + 1\n"
+            "\t\t\tif not toastActive then\n"
+            "\t\t\t\tshowToastItem(table.remove(toastQueue, 1))\n"
+            "\t\t\t\tqueued = queued - 1\n"
+            "\t\t\t\tstarted = started + 1\n"
+            "\t\t\tend\n"
+            "\t\tend\n"
+            "\tend\n"
+            "\treturn { started = started, queued = queued, dropped = dropped }\n"
+            "end\n"
+            "ChestAdvisor._maybeToastUpgrades = maybeToastUpgrades\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        name,
+        "ca.testtoast-command-slash",
+        (
+            "\treturn true, \"toast \" .. w\n"
+            "end\n"
+        ),
+        (
+            "\treturn true, \"toast \" .. w\n"
+            "end\n"
+            "\n"
+            "-- /up toasts (alias /up testtoast) — t_4bae0617: raise the upgrade toast on\n"
+            "-- demand, so its lifetime, fade and dismiss can be checked without waiting\n"
+            "-- for a real upgrade to drop. It goes through ChestAdvisor.testToast, which\n"
+            "-- queues and shows through the REAL path.\n"
+            "local function cmdTestToast()\n"
+            "\tif type(ChestAdvisor.testToast) ~= \"function\" then\n"
+            "\t\treturn false, \"the toast surface is not loaded (is the Touchstone module off?)\"\n"
+            "\tend\n"
+            "\tif not toastIsEnabled() then\n"
+            "\t\treturn false, \"the toast is off — /up toast on, then /up toasts\"\n"
+            "\tend\n"
+            "\tChestAdvisor.testToast(1)\n"
+            "\tlocal st = type(ChestAdvisor.toastState) == \"function\"\n"
+            "\t\tand ChestAdvisor.toastState() or {}\n"
+            "\treturn true, string.format(\n"
+            "\t\t\"test toast: %s | queued: %s | lifetime: %.1fs — /up diag reports fired and the measured time\",\n"
+            "\t\tst.shown and \"showing\" or \"not showing\", tostring(st.queue or 0),\n"
+            "\t\ttonumber(st.lifetime) or 0)\n"
+            "end\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        name,
+        "ca.testtoast-help",
+        (
+            "\t\t.. \"  /up toast <on|off>  turn the \\\"Upgrade found!\\\" toast on or off (persisted; default on)\\n\"\n"
+        ),
+        (
+            "\t\t.. \"  /up toast <on|off>  turn the \\\"Upgrade found!\\\" toast on or off (persisted; default on)\\n\"\n"
+            "\t\t.. \"  /up toasts / /up testtoast  raise one \\\"Test Upgrade\\\" toast NOW — the real panel and the real path\\n\"\n"
+        ),
+    )
+
+    # The toast's timing is the MODULE's contract, not upstream's: the specs pin
+    # 3.5 s of lifetime, a 0.25 s fade-out and a 0.18 s fade-in, and every one of
+    # those numbers is what the shipped panel has always used. StatForge main
+    # changed its own defaults (6 s / 1.0 s); adopting them silently would change
+    # the panel under the player and break the measurement the specs grade, so the
+    # fold keeps its numbers and says so here rather than in a hidden diff.
+    text = replace_once(
+        text,
+        name,
+        "ca.toast-timing-pin",
+        (
+            "local TOAST = {\n"
+            "\taccent = { 0.400, 0.988, 0.945 },   -- #66FCF1, the window's own accent\n"
+            "\tfadeIn = 0.25,\n"
+            "\tfadeOut = 1.0,\n"
+            "\tslide = 18,\n"
+            "\ttick = 0.25,\n"
+            "}\n"
+        ),
+        (
+            "local TOAST = {\n"
+            "\taccent = { 0.400, 0.988, 0.945 },   -- #66FCF1, the window's own accent\n"
+            "\t-- Fold: the toast's timing is the module's shipped contract (and what\n"
+            "\t-- tests/toast_test_spec.lua + tests/toast_trace_spec.lua grade), so the\n"
+            "\t-- vendored copy keeps its own fade-in/fade-out lengths.\n"
+            "\tfadeIn = 0.18,\n"
+            "\tfadeOut = 0.25,\n"
+            "\tslide = 18,\n"
+            "\ttick = 0.25,\n"
+            "}\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        name,
+        "ca.toast-lifetime-pin",
+        "local TOAST_DEFAULTS = { enabled = true, lifetime = 6 }\n",
+        (
+            "-- Fold: 3.5 s is the lifetime this module ships and the one its specs\n"
+            "-- measure. Upstream's own default (6 s) is a different panel; the\n"
+            "-- player-facing number stays the fold's.\n"
+            "local TOAST_DEFAULTS = { enabled = true, lifetime = 3.5 }\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        name,
+        "ca.toast-lifetime-help",
+        (
+            "\t\t.. \"  /up toast lifetime <s>  seconds the toast stays up, 1-30 (persisted; default 6)\\n\"\n"
+        ),
+        (
+            "\t\t.. \"  /up toast lifetime <s>  seconds the toast stays up, 1-30 (persisted; default 3.5)\\n\"\n"
+        ),
+    )
 
     return text
 
@@ -1784,7 +2029,7 @@ VERDICT_WEIGHTS_ANCHOR = "-- The tri-state comparator.\n"
 # kept behind LEGACY_DOMINANCE_DECIDES (below) so it stays reachable from a test
 # and the shipped default is the weighted verdict.
 VERDICT_GATE9_ANCHOR = (
-    "\tlocal outcome, firstDiff = Verdict.dominance(candStats, eqStats, order)\n"
+    "\tlocal outcome, firstDiff = Verdict.dominance(candStats, eqStats, terms)\n"
 )
 
 VERDICT_GATE9_OPEN = _tabify(
@@ -2281,12 +2526,73 @@ def audit_outputs(outputs: dict) -> list:
     return problems
 
 
+def _git(args: list, cwd: Path) -> str:
+    """Run one git command, returning its stripped stdout (raises on failure)."""
+    done = subprocess.run(
+        ["git", "-C", str(cwd)] + args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise SyncError("git {}: {}".format(" ".join(args), done.stderr.strip()))
+    return done.stdout.strip()
+
+
+def git_commit(root: Path) -> str:
+    """The short commit of a git checkout, or "" when the folder is not one."""
+    if not (root / ".git").exists():
+        return ""
+    try:
+        return _git(["rev-parse", "--short", "HEAD"], root)
+    except SyncError:
+        return ""
+
+
+def resolve_source(src: str | None, ref: str) -> tuple:
+    """Return (checkout root, printed label, temp clone to clean up or None)."""
+    if src:
+        root = Path(src).expanduser().resolve()
+        if not root.is_dir():
+            raise SyncError("--src is not a directory: {}".format(root))
+        sha = git_commit(root)
+        return root, "{}@{}".format(root, sha or "unknown"), None
+
+    clone = Path(tempfile.mkdtemp(prefix="touchstone-src-"))
+    done = subprocess.run(
+        ["git", "clone", "--depth", "1", "--branch", ref, SOURCE_URL, str(clone)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        shutil.rmtree(clone, ignore_errors=True)
+        raise SyncError(
+            "git clone {} ({}) failed: {}".format(SOURCE_URL, ref, done.stderr.strip())
+        )
+    sha = git_commit(clone)
+    if not sha:
+        shutil.rmtree(clone, ignore_errors=True)
+        raise SyncError("cloned source has no commit: {}".format(clone))
+    return clone, "{}@{}".format(SOURCE_URL, sha), clone
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--src",
-        required=True,
-        help="path to the pristine touchstone-deploy checkout",
+        default=None,
+        help=(
+            "path to a pristine Touchstone checkout; omit to clone "
+            "{} ({}) at run time".format(SOURCE_URL, SOURCE_REF)
+        ),
+    )
+    parser.add_argument(
+        "--ref",
+        default=SOURCE_REF,
+        help="git ref to clone when --src is not given (default: {})".format(SOURCE_REF),
     )
     parser.add_argument(
         "--verify-only",
@@ -2294,9 +2600,10 @@ def main(argv=None) -> int:
         help="regenerate in memory and audit everything, but write nothing",
     )
     args = parser.parse_args(argv)
-    src_root = Path(args.src)
 
+    temp_clone = None
     try:
+        src_root, source, temp_clone = resolve_source(args.src, args.ref)
         outputs = generate(src_root)
         problems = audit_toc() + audit_outputs(outputs)
         if problems:
@@ -2305,6 +2612,7 @@ def main(argv=None) -> int:
             return 2
         if not args.verify_only:
             write_outputs(src_root, outputs)
+        print("sync_touchstone: source {}".format(source))
         print(
             "sync_touchstone: {} lua files {}; toc ok".format(
                 len(outputs), "verified" if args.verify_only else "written"
@@ -2314,6 +2622,9 @@ def main(argv=None) -> int:
     except SyncError as exc:
         print("sync_touchstone: ERROR: " + str(exc), file=sys.stderr)
         return 1
+    finally:
+        if temp_clone is not None:
+            shutil.rmtree(temp_clone, ignore_errors=True)
 
 
 if __name__ == "__main__":

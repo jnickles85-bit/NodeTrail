@@ -68,6 +68,18 @@ local function touchstoneSlash(msg)
     SF.DeepProbe()
     return
   end
+  if arg == "stats" or (arg:match("^stats%s") ~= nil) then
+    -- Card t_acc9fd97 (item 2): the owner's unit reading. The item comes
+    -- from the link the owner pastes into the command; the arm word is
+    -- matched on the lowercased msg (as every other arm is) but the LINK is
+    -- re-pulled from the RAW msg — an item link's hex must not be folded.
+    -- The probe reports the client's own C_Item.GetItemStats pairs verbatim
+    -- (key, value, type), which is the evidence that decides the
+    -- HIT/CRIT/DODGE/PARRY rating-vs-percent question the card defers.
+    local link = (msg or ""):match("^%s*stats%s+(.-)%s*$")
+    SF.StatProbe(link)
+    return
+  end
   if arg == "export" then
     -- Retired by card t_adf556d6. The arm is gone; the word is NOT silently
     -- swallowed into ToggleMain, it says what happened so an old habit learns.

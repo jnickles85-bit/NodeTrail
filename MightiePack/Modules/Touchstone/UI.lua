@@ -270,9 +270,18 @@ local function restorePosition(frame)
 end
 
 -- U6 (card t_6696b35a): window scale, only because the frame already exists
--- and SetScale is one call. Wheel up grows, wheel down shrinks, clamped so a
--- stray delta cannot make the window unreadably small or huge. The number is
--- the same StatForgeDB.ui table the position already uses — no new variable.
+-- and SetScale is one call. The Settings slider and `/ts scale <0.5-1.5>` are
+-- the two controls, and the value is clamped so a stray number cannot make the
+-- window unreadably small or huge. The number is the same StatForgeDB.ui table
+-- the position already uses — no new variable.
+--
+-- Card t_75261b9a: there is deliberately NO mouse wheel on this window. The
+-- wheel is this client's camera zoom, and the panel covers a large part of the
+-- screen, so a window-level OnMouseWheel took the zoom away for as long as the
+-- window was open and silently wrote every stray scroll into
+-- StatForgeDB.ui.scale, where it survived /reload. Do not put a wheel handler
+-- or EnableMouseWheel(true) back on `f`; the slider (OptionsTab.lua) and
+-- `/ts scale` are the scale surface.
 local SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.5, 1.5, 0.1
 
 function SF.SetWindowScale(scale)
@@ -394,17 +403,12 @@ local function createMainFrame()
   -- ESC close
   tinsert(UISpecialFrames, "StatForgeMainFrame")
 
-  f:EnableMouseWheel(true)
-  f:SetScript("OnMouseWheel", function(self, delta)
-    local current = 1
-    if type(self.GetScale) == "function" then
-      local s = self:GetScale()
-      if type(s) == "number" then current = s end
-    end
-    local step = SCALE_STEP
-    if type(delta) ~= "number" or delta < 0 then step = -SCALE_STEP end
-    SF.SetWindowScale(current + step)
-  end)
+  -- Card t_75261b9a: this is where `f:EnableMouseWheel(true)` +
+  -- OnMouseWheel used to live, rescaling the window on any scroll over it.
+  -- They are gone on purpose — see the note on SCALE_STEP above. A wheel over
+  -- the panel belongs to the camera; the slider and `/ts scale` are the scale
+  -- controls. Nothing here reads the wheel, so nothing here can persist a
+  -- stray scroll into StatForgeDB.ui.scale.
 
   f:SetScript("OnHide", function()
     -- The tab hosts are children of the window, so hiding the window hides them

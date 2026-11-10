@@ -168,7 +168,7 @@ end
 --- Does the client's interface number match ANY value the TOC declares?
 --- The TOC's `## Interface:` line is a SET (Constants.lua: SF.TOC_INTERFACE_TARGETS),
 --- not one number. The single-value compare this replaces was audit B7 (card
---- t_4412b04b): the owner's `_classic_beta_` client reports 16001, which the TOC
+--- t_4412b04b): the `_forever_` client reports 16001, which the TOC
 --- declares, yet the report printed a false `tocMatch=false` on every `/sf diag`.
 --- Returns true/false, or nil when the client's number is unusable (the caller then
 --- reports `unknown` — nil MUST NOT be collapsed into false).

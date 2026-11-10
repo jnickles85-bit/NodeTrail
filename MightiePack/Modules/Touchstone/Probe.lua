@@ -223,5 +223,111 @@ function SF.DeepProbe()
   for _, line in ipairs(lines) do
     SF.Print("probe: " .. line)
   end
-  SF.Print("probe saved — just tell Mira, no /reload needed.")
+  SF.Print("probe saved, no /reload needed.")
+end
+
+-- ---- Card t_acc9fd97: the raw stat-pair probe — the owner's unit reading ---------
+--
+-- THE QUESTION IT SERVES. The weight packs price the HIT / CRIT / DODGE /
+-- PARRY terms per rating point, but the client's own tooltips print
+-- percentages ("+1% Crit") and C_Item.GetItemStats returns whatever the
+-- client reports — the two are not proven equal by anything in this repo.
+-- The card defers the unit decision to the owner's in-game read, and this is
+-- that read: for a NAMED item it reports the client's own stat pairs
+-- verbatim — the key exactly as the client spelled it, the value exactly as
+-- returned, and the Lua type the client used for it. No conversion, no
+-- interpretation, no verdict.
+--
+-- THE ITEM COMES FROM ITS OWN LINK — right-click, Copy Link to Item, pasted
+-- into the command (the owner's own surface, pinned in card t_119d120c's
+-- evidence). No cursor API is called: GetCursorItem has no evidenced
+-- existence on this client, and a stale pool button is exactly the wrong
+-- item this reading must never report on. The first printed line names the
+-- item the pairs belong to (its id standing in when the name read is
+-- missing), so a mis-pasted link is visible before any number is trusted.
+--
+-- EVERY stage fails closed and says what it could not do. No number in this
+-- output is a guess, and nothing here requires the item to be owned or worn.
+function SF.StatProbe(link)
+  -- The arm passes the LINK from the raw (un-lowercased) message; the guard
+  -- below is the same contract at the direct-call edge: no link, or a link
+  -- without an id, asks for the pasted-link form instead of inventing an
+  -- item to read.
+  local function wantLink()
+    SF.Print("statprobe: paste the item's own link (right-click it, Copy Link to Item), "
+      .. "then run: /touchstone stats <link>")
+  end
+  if type(link) ~= "string" or link:match("^%s*$") ~= nil then
+    return wantLink()
+  end
+  local idStr = link:match("item:(%d+)")
+  if not idStr then
+    return wantLink()
+  end
+  local id = tonumber(idStr)
+
+  -- The item's name for the label line: the ONE proven name read (the
+  -- advisor's single C_Item.GetItemInfo call). Best-effort on purpose — a
+  -- missing name never blocks the pairs, and the id stands in the label.
+  local name = nil
+  if C_Item and type(C_Item.GetItemInfo) == "function" then
+    local ok, n = pcall(C_Item.GetItemInfo, link)
+    if ok and type(n) == "string" and n ~= "" then
+      name = n
+    end
+  end
+  local label = (name ~= nil and name) or ("item id " .. tostring(id))
+  SF.Print("stat probe — item: " .. label)
+
+  -- THE READ — the advisor's own edge pattern (ChestAdvisor.lua's apiStatsOf):
+  -- same call, same pcall discipline, same secret checks. The only
+  -- difference is the contract: that edge maps the pairs into the module's
+  -- words; this one reports them verbatim.
+  if not (C_Item and type(C_Item.GetItemStats) == "function") then
+    return SF.PrintError("stat probe: this client offers no C_Item.GetItemStats — the pairs cannot be read")
+  end
+  local ok, raw = pcall(C_Item.GetItemStats, id)
+  if not ok then
+    return SF.PrintError("stat probe: C_Item.GetItemStats raised for this item — " .. stripLocation(raw))
+  end
+  if type(raw) ~= "table" then
+    return SF.PrintError("stat probe: the client returned nothing for this item (no stat pairs)")
+  end
+  -- A secret/withheld READ: the table itself may not be touched — not even
+  -- iterated — so this is the one arm that names the condition and stops.
+  if type(issecretvalue) == "function" then
+    local sok, sec = pcall(issecretvalue, raw)
+    if sok and sec then
+      return SF.Print("stat probe: the client marked the whole read a secret/withheld value — no pairs are reported")
+    end
+  end
+  local keys = {}
+  for k in pairs(raw) do
+    if type(k) == "string" then keys[#keys + 1] = k end
+  end
+  table.sort(keys)
+  if #keys == 0 then
+    -- A read that answers is a read: zero stats is the client's own answer
+    -- for this item, and the owner needs that sentence, not silence.
+    return SF.Print("stat probe: " .. label .. " carries ZERO stats — "
+      .. "the client returned an empty table (say so in the reply)")
+  end
+  for _, k in ipairs(keys) do
+    local v = raw[k]
+    -- The secret check comes FIRST and is the only operation performed on a
+    -- secret value (the describe() discipline, lines 24-35): tostring is
+    -- itself a read, and a secret's metatable raises on it.
+    local secret = false
+    if issecretvalue and type(issecretvalue) == "function" then
+      local vk, vs = pcall(issecretvalue, v)
+      if vk and vs then secret = true end
+    end
+    if secret then
+      SF.Print(k .. " = SECRET (the client withheld this value) [" .. type(v) .. "]")
+    else
+      SF.Print(k .. " = " .. tostring(v) .. " [" .. type(v) .. "]")
+    end
+  end
+  SF.Print("stat probe: " .. #keys .. " stat pair(s) for " .. label
+    .. " — key and value verbatim from C_Item.GetItemStats")
 end
