@@ -129,21 +129,27 @@ check(type(V.WEIGHT_EPSILON) == "number" and V.WEIGHT_EPSILON > 0,
   "epsilon is an explicit named constant (Verdict.WEIGHT_EPSILON)")
 
 -- ---- 1d. A genuine sidegrade still says trade-off --------------------------
--- +1 Str (+4) and -4 Int (-4) under the Ret profile: equal weighted total, one
+-- +1 Str (+4) and -2 Int (-4) under the Ret profile: equal weighted total, one
 -- stat up, one stat down. That is the one shape a trade-off describes.
+-- (Card t_c4911603 moved Intellect 1 -> 2 on the researched Ret table, so this
+-- fixture's Intellect swing is -2, not -4: the arithmetic it pins is "equal
+-- damage on both sides", not the old weight.)
 local SIDE_WORN = { "X", "+11 Strength", "+12 Intellect" }
-local SIDE_CAND = { "Y", "+12 Strength", "+8 Intellect" }
+local SIDE_CAND = { "Y", "+12 Strength", "+10 Intellect" }
 local vs_, rs, ws = judge(SIDE_CAND, SIDE_WORN, RET_SPEC)
 check(vs_ == "TRADE_OFF", "a genuine sidegrade is a trade-off, got " .. tostring(vs_))
 check(type(ws) == "table" and ws.total == 0,
   "the sidegrade's weighted total is 0, got " .. tostring(ws and ws.total))
 
 -- ---- 1e. A zero-weight stat that rises, with nothing else moving ----------
--- +3 Sta is weight 0 on the Retribution damage profile. It must not move the
+-- +3 Spirit is weight 0 on the Retribution damage profile — and, unlike Stamina
+-- since card t_c4911603, it is not a tiebreaker either. It must not move the
 -- verdict: the same pair without it is also NOT_UPGRADE, and this one is not a
--- trade-off either.
+-- trade-off either. (The fixture used Stamina before the tiebreaker tier
+-- existed; Stamina now legitimately decides a damage tie, so Spirit is the stat
+-- that still proves the zero-weight point.)
 local ZERO_BASE = { "X", "+10 Strength" }
-local ZERO_STAM = { "Y", "+10 Strength", "+3 Stamina" }
+local ZERO_STAM = { "Y", "+10 Strength", "+3 Spirit" }
 local vz, rz, wz = judge(ZERO_STAM, ZERO_BASE, RET_SPEC)
 check(vz == "NOT_UPGRADE",
   "a zero-weight stat cannot move the verdict, got " .. tostring(vz))

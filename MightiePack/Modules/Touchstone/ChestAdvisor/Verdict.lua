@@ -1297,8 +1297,18 @@ end
 --
 --     weighted >= +epsilon                         -> UPGRADE
 --     weighted <= -epsilon                         -> NOT_UPGRADE (a downgrade)
---     |weighted| < epsilon, a stat up AND one down  -> TRADE_OFF
---     otherwise (every difference one-directional) -> NOT_UPGRADE (no change)
+--     |weighted| < epsilon                          -> damage is TIED, so a
+--                                                     profile with ranked
+--                                                     tiebreakers answers next
+--     ... tied, no tiebreaker decides, mixed signs  -> TRADE_OFF
+--     ... tied, no tiebreaker decides, one-way      -> NOT_UPGRADE (no change)
+--
+-- The tiebreaker tier (card t_c4911603) is an ORDER, not another number: the
+-- profile's `tiebreak` list is walked in rank order and the first stat whose two
+-- sides differ decides, so no survivability delta can ever outweigh a damage
+-- point. When it decides, the verdict keeps its ordinary token and gains the
+-- word "tiebreaker" plus the signed deltas — a visibly different answer from a
+-- damage upgrade because the gain is not damage.
 --
 -- "No change" and "downgrade" are the same TOKEN — NOT_UPGRADE, the closed token
 -- vocabulary is untouched — and differ only in the player WORD the renderer
@@ -1322,15 +1332,38 @@ end
 -- the verdict — see tests/touchstone_weights_spec.lua.
 --
 -- `w` is points per point of the stat. A word absent from `w` is weight 0.
+--
+-- TWO TIERS, RETRIBUTION ONLY (card t_c4911603). A profile may carry
+-- `tiebreak = { <stat>, ... }`: an ORDERED list consulted ONLY when the damage
+-- total is exactly zero. Damage stats decide first and always; a tiebreaker can
+-- never outweigh one point of Strength or Agility. The entries are ranked, not
+-- weighted — the first ranked stat whose two sides differ decides, so a large
+-- number on a lower-ranked stat cannot outvote a higher-ranked one. This is
+-- Mightie's rule, and it is what keeps the -16 cloak case a downgrade while
+-- letting `+64 Armor / +2 Sta` at equal Strength read as a (flagged) upgrade.
+-- The Ret table's numbers are the ones researched for WoW: Forever in card
+-- t_f758a377 (vault: wiki/addons/touchstone-ret-stat-weights.md §2):
+--   Strength 4, SpellPower 4 (= 1.00 x Str against a sourced 1.04 median),
+--   Agility 2.5 (= 0.625 x Str for a 0.64 median), Intellect 2,
+--   Armor > Stamina as ranked tiebreakers (25 Armor ~= 1 Sta of effective HP).
+-- Holy and Protection keep their own rows: the same research card says their
+-- numbers need separate evidence, and none of it is used here.
 Verdict.WEIGHTS = {
 	WARRIOR = {
 		melee = { name = "Arms/Fury", w = { Strength = 4, Stamina = 1 } },
 		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Strength = 1, Block = 1 } },
 	},
 	PALADIN = {
-		-- DAMAGER -> melee (str>int>sta). Stamina is the order's third term and the
-		-- survivability stat: weight 0, so it cannot decide a damage verdict.
-		melee = { name = "Retribution", w = { Strength = 4, Intellect = 1 } },
+		-- DAMAGER -> melee. Card t_c4911603 (research t_f758a377): the damage
+		-- tier is Strength + SpellPower (the Forever sim's top Ret stat, 1.04 x
+		-- Strength) + Agility (0.64 x Strength, carried as 2.5) + Intellect; the
+		-- ranked tiebreakers are Armor then Stamina. Stamina and Armor appear
+		-- ONLY in `tiebreak`, never in `w` — see the block above.
+		melee = {
+			name = "Retribution",
+			w = { Strength = 4, SpellPower = 4, Agility = 2.5, Intellect = 2 },
+			tiebreak = { "Armor", "Stamina" },
+		},
 		spell = { name = "Holy", w = { Intellect = 4, Stamina = 1 } },
 		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Intellect = 1, Strength = 1, Block = 1 } },
 	},
@@ -1362,11 +1395,18 @@ Verdict.WEIGHTS = {
 	},
 }
 
--- The noise floor. Weights are whole points per point of stat, so with the
--- tables above the only total inside the band is 0 — the constant exists so the
--- band has ONE definition that a future fractional weight cannot silently
--- collapse back into a strict `> 0` test.
-Verdict.WEIGHT_EPSILON = 1
+-- The noise floor. Weights are points per point of stat; the Ret table
+-- (t_c4911603) carries the fractional 2.5, so the band must be smaller than the
+-- smallest NON-zero total that table can produce. Every weight is a multiple of
+-- 0.5 (4, 2.5, 2), so 0.25 sits strictly between a true zero and the smallest
+-- real difference and no genuine 0.5 gain is swallowed — the reason
+-- t_f758a377 pinned epsilon <= 0.25. With the old whole-point `1` a pair such as
+-- +1 Agility / -1 Intellect would net 0.5 and read "no change".
+-- The constant exists so the band has ONE definition that only the totals table
+-- can move. The tiebreaker tier below is gated on this same band, which is safe
+-- for exactly the reason above: no total these tables can produce lands inside
+-- it, so "inside the band" IS a true tie.
+Verdict.WEIGHT_EPSILON = 0.25
 
 -- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a weights
 -- role key. This is NOT ROLE_ALIAS (the stat-order alias, whose conservative
@@ -1475,16 +1515,71 @@ function Verdict.weightedTotal(candStats, eqStats, profile)
 	return { total = total, parts = parts, scored = scored, up = up, down = down }
 end
 
+-- The ranked tiebreakers a profile declares, or nil.
+--
+-- The list is ORDER, not arithmetic: entries are consulted in the order the
+-- profile wrote them, and the first one whose two sides differ decides. This is
+-- why a big Armor number cannot outvote a higher-ranked stat, and why the
+-- profile is the only place the ranking lives (the research card ranks Armor
+-- above Stamina for Ret; swapping them is a one-line change here, not a new
+-- weight table).
+function Verdict.tiebreakStats(profile)
+	local ranked = (type(profile) == "table") and profile.tiebreak or nil
+	if type(ranked) ~= "table" or #ranked == 0 then return nil end
+	return ranked
+end
+
+-- The tiebreaker comparison for one pair under one profile.
+--
+--   returns nil when the profile declares no tiebreakers, when the parse is not
+--   two tables, or when every ranked stat is equal on both sides (nothing to
+--   break — the caller keeps the ordinary words);
+--   otherwise { stat = <deciding word>, dir = 1|-1,
+--               parts = { { word, delta }, ... },   -- NON-ZERO deltas, ranked
+--               text = "+64 Armor, +2 Stamina" }    -- candidate - equipped
+--
+-- A stat absent on one side is a KNOWN absence and weighs in at its full delta,
+-- exactly as weightedTotal treats it. The deltas are signed from the candidate's
+-- side, so the printed text says which way the tie broke without a second word.
+function Verdict.tiebreakTotal(candStats, eqStats, profile)
+	local ranked = Verdict.tiebreakStats(profile)
+	if ranked == nil then return nil end
+	local cand = (type(candStats) == "table") and candStats or {}
+	local eq   = (type(eqStats)   == "table") and eqStats   or {}
+	local parts, deciding, dir = {}, nil, nil
+	for _, word in ipairs(ranked) do
+		local delta = (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
+		if delta ~= 0 then
+			parts[#parts + 1] = { word = word, delta = delta }
+			if deciding == nil then
+				deciding = word
+				dir = (delta > 0) and 1 or -1
+			end
+		end
+	end
+	if deciding == nil then return nil end
+	local bits = {}
+	for _, p in ipairs(parts) do
+		bits[#bits + 1] = Verdict.numText(p.delta) .. " " .. p.word
+	end
+	return { stat = deciding, dir = dir, parts = parts, text = table.concat(bits, ", ") }
+end
+
 -- The stored reason: the number the verdict came from, and the profile it came
 -- from, so a wrong profile is visible in the Upgrades tab and in /up diag
 -- instead of silent. `kind` adds the words for the two non-obvious outcomes.
-function Verdict.weightedReason(w, profile, kind)
+function Verdict.weightedReason(w, profile, kind, tiebreakText)
 	local head = "weighted " .. Verdict.numText(w.total)
 		.. " [" .. tostring(type(profile) == "table" and profile.name or "no profile") .. "]"
 	if kind == "trade-off" then
 		return head .. " — better on some stats, worse on others"
 	elseif kind == "no change" then
 		return head .. " — no change"
+	elseif (kind == "tiebreaker upgrade" or kind == "tiebreaker downgrade")
+		and type(tiebreakText) == "string" then
+		-- Damage was tied; the flag and the ranked deltas ARE the reason. The
+		-- sign of each delta says which side the tie broke for.
+		return head .. " — tiebreaker (" .. tiebreakText .. ")"
 	end
 	return head
 end
@@ -1494,6 +1589,9 @@ end
 -- that wants to render the number, or nil when the outcome did not come from
 -- the weights (an unavailable profile, or the armour-material veto below, which
 -- is a different reason entirely and must not be dressed as a weighted line).
+-- When the ranked tiebreaker decided, that third value also carries
+-- { tiebreak = "<signed deltas>", tiebreakDir = 1|-1 } so the renderer can flag
+-- the answer without re-deriving it from the reason text.
 --
 -- `allow` is evaluate's own armour-material veto (a cloth item on a plate wearer
 -- is never an upgrade, however the weights add up); a caller outside evaluate
@@ -1526,6 +1624,28 @@ function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
 	end
 	if w.total <= -eps then
 		return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade"), detail
+	end
+	-- DAMAGE IS TIED. Only now may the profile's ranked tiebreakers speak (card
+	-- t_c4911603): a profile without a `tiebreak` list — every profile but Ret —
+	-- falls straight through to the words below, byte-identically to before.
+	-- The tier is a flag on the answer, not a second number: the verdict is the
+	-- ordinary UPGRADE / NOT_UPGRADE token and the reason says "tiebreaker", so
+	-- a survivability gain can never be mistaken for damage.
+	local tb = Verdict.tiebreakTotal(candStats, eqStats, profile)
+	if tb ~= nil then
+		local kind = (tb.dir > 0) and "tiebreaker upgrade" or "tiebreaker downgrade"
+		local reason = Verdict.weightedReason(w, profile, kind, tb.text)
+		detail.tiebreak = tb.text
+		detail.tiebreakDir = tb.dir
+		if tb.dir > 0 then
+			-- The armour-material veto still applies to a tiebreaker upgrade: a
+			-- cloth piece on a mail wearer is never an upgrade, however the tie
+			-- broke (the same call the damage tier makes).
+			local verdict, why = allow("UPGRADE", reason)
+			if verdict ~= "UPGRADE" then return verdict, why end
+			return verdict, why, detail
+		end
+		return "NOT_UPGRADE", reason, detail
 	end
 	if w.up > 0 and w.down > 0 then
 		local verdict, reason = allow(TRADE_OFF, Verdict.weightedReason(w, profile, "trade-off"))
