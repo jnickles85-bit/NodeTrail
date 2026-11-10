@@ -5713,6 +5713,10 @@ ChestAdvisor.scan = function()
 					itemsWalked = itemsWalked + 1
 					local v, reason
 					local canUseV
+					-- Fold: the weighted result is read by the diag row far below, so
+					-- it is declared here. Upstream declares it inside the else that
+					-- assigns it, and that row therefore read an undefined global.
+					local w2
 					local ulevel = (UnitLevel and UnitLevel("player")) or nil
 					-- Card t_119d120c: every judged row's lines come from the
 					-- ONE item reader. A third-party annotation on the rendered
@@ -5941,7 +5945,8 @@ ChestAdvisor.scan = function()
 						-- equipped; …" at the SOURCE. The frozen gate-6 sentinel
 						-- and its rewrite are gone: one vocabulary (SLOT_WORD),
 						-- one place the sentence is built.
-						local v2, r2, w2 = Verdict.evaluate(
+						local v2, r2
+						v2, r2, w2 = Verdict.evaluate(
 							{ canUse = canUseV, line = lines },
 							{ line = wornLines },
 							spec,

@@ -2,9 +2,12 @@
 """Vendor Touchstone from StatForge into MightiePack/Modules/Touchstone.
 
 Copies the twelve upstream files (eleven .lua + the marker.tga asset) from a
-StatForge `main` checkout, applies the fold's edits from
-``TOUCHSTONE-FOLD-DESIGN.md`` (plus the cards layered on it) by anchored text
-replacement, and then audits the MightiePack TOC.
+StatForge checkout, applies the fold's edits by anchored text replacement, and then
+audits the MightiePack TOC.
+
+The fold's design record is the per-edit comment block in this file: what each edit
+is for, why the anchor is the text it is, and what breaks if it is removed. There is
+no separate design document.
 
 The source is StatForge ``main``, cloned at run time, and the resolved commit is
 printed so every sync names the upstream it was generated from::
@@ -45,9 +48,12 @@ TOC_PATH = REPO_ROOT / "MightiePack" / "MightiePack.toc"
 # resolved commit is printed with the result so a vendored tree can always be
 # traced back to the upstream it came from.
 SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
-SOURCE_REF = "main"
+# Pinned, not "main": a sync must reproduce the tree it was reviewed against, and
+# `git clone --branch main` would silently move with upstream. `--ref main` still
+# resolves to whatever main is at run time, for a deliberate catch-up.
+SOURCE_REF = "80accdd47b4db127d929ae1010f5b34a96a74e83"
 
-# Order is load-bearing; see the design doc section 5. Verdict.lua must load
+# Order is load-bearing. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).
 LUA_FILES = [
     "Constants.lua",
@@ -1421,6 +1427,7 @@ end
     )
 
     text = edit_chestadvisor_tiebreak(text)
+    text = edit_chestadvisor_weighted_local(text)
 
     # ---- the test toast, and the timing the module ships (card t_4bae0617) ----
     # These two features have no home in StatForge: they were added to the local
@@ -1595,6 +1602,54 @@ end
 # (and "Not an upgrade — tiebreaker (...)" the other way), so a survivability
 # gain is never read as a damage gain. The signed deltas ride on the row as
 # `tiebreak` beside `weighted`/`profile`.
+def edit_chestadvisor_weighted_local(text: str) -> str:
+    """Hoist `w2` out of the else branch that assigns it.
+
+    Upstream declares the weighted result inside one branch:
+
+        else
+          canUseV = canUse(id)
+          local v2, r2, w2 = Verdict.evaluate(...)
+          v, reason = v2, r2
+        end
+
+    ...and then reads `w2` further down, when it builds the persisted diag row
+    (`weighted = w2 and w2.total`, `profile = w2 and w2.profile`,
+    `tiebreak = w2 and w2.tiebreak`). Those three reads are outside the branch, so
+    upstream is reading an undefined global: the diag has never recorded the
+    weighted total, the profile or the tiebreak, and `luacheck` catches it as
+    "accessing undefined variable 'w2'" six times.
+
+    The fix is a declaration in the enclosing scope and a plain assignment inside
+    the branch. No behaviour changes: the three fields were nil before and now
+    carry the values they were always meant to carry.
+    """
+    text = replace_once(
+        text,
+        "ChestAdvisor/ChestAdvisor.lua",
+        "ca.weighted-scope-declaration",
+        "\t\t\t\t\titemsWalked = itemsWalked + 1\n"
+        "\t\t\t\t\tlocal v, reason\n"
+        "\t\t\t\t\tlocal canUseV\n",
+        "\t\t\t\t\titemsWalked = itemsWalked + 1\n"
+        "\t\t\t\t\tlocal v, reason\n"
+        "\t\t\t\t\tlocal canUseV\n"
+        "\t\t\t\t\t-- Fold: the weighted result is read by the diag row far below, so\n"
+        "\t\t\t\t\t-- it is declared here. Upstream declares it inside the else that\n"
+        "\t\t\t\t\t-- assigns it, and that row therefore read an undefined global.\n"
+        "\t\t\t\t\tlocal w2\n",
+    )
+    text = replace_once(
+        text,
+        "ChestAdvisor/ChestAdvisor.lua",
+        "ca.weighted-scope-assignment",
+        "\t\t\t\t\t\tlocal v2, r2, w2 = Verdict.evaluate(\n",
+        "\t\t\t\t\t\tlocal v2, r2\n"
+        "\t\t\t\t\t\tv2, r2, w2 = Verdict.evaluate(\n",
+    )
+    return text
+
+
 def edit_chestadvisor_tiebreak(text: str) -> str:
     """Card t_c4911603: render, and persist, the tiebreaker flag."""
     name = "ChestAdvisor/ChestAdvisor.lua"
@@ -2420,11 +2475,15 @@ def load_guarded(src_root: Path, name: str) -> str:
 # the next upstream sync would otherwise put them straight back.
 _SAVED_VARS = re.compile(r"\b\d+/[A-Za-z0-9]+-[A-Za-z0-9]+/SavedVariables/([A-Za-z0-9_]+\.lua)")
 _WIN_USER = re.compile(r"[A-Za-z]:[\\/]Users[\\/][^`'\"\s)]*")
+# The same leak on this side of the fence: WSL mounts, home directories, macOS
+# user folders. A capture comment pasted from any of them must not ship.
+_POSIX_USER = re.compile(r"(?:/mnt/[a-z]/|/home/|/Users/)[^`'\"\s)]*")
 
 
 def scrub_personal(text: str) -> str:
     text = _SAVED_VARS.sub(lambda m: "SavedVariables/" + m.group(1), text)
     text = _WIN_USER.sub("<local client path>", text)
+    text = _POSIX_USER.sub("<local client path>", text)
     return text
 
 
@@ -2514,7 +2573,7 @@ def audit_toc() -> list:
 def audit_outputs(outputs: dict) -> list:
     problems = []
     for name, text in outputs.items():
-        if _SAVED_VARS.search(text) or _WIN_USER.search(text):
+        if _SAVED_VARS.search(text) or _WIN_USER.search(text) or _POSIX_USER.search(text):
             problems.append("{} still carries a client path after the scrub".format(name))
     for name, text in outputs.items():
         if not text.startswith(SKIP_GUARD):
@@ -2533,6 +2592,13 @@ def audit_outputs(outputs: dict) -> list:
     # t_c2e67619: the addon's own name is not rendered into the tooltip, and the
     # duplicate guard must not still key on the prefix it used to carry.
     advisor = outputs.get("ChestAdvisor/ChestAdvisor.lua", "")
+    if "local v2, r2, w2 = Verdict.evaluate" in advisor:
+        problems.append(
+            "ChestAdvisor.lua still declares w2 inside the branch that assigns it; "
+            "the diag row below cannot see it"
+        )
+    if "\t\t\t\t\tlocal w2\n" not in advisor:
+        problems.append("ChestAdvisor.lua has no hoisted w2 declaration")
     if 'TOOLTIP_PREFIX = "Touchstone: "' in advisor:
         problems.append(
             "ChestAdvisor.lua still renders the addon's name into the tooltip line"
@@ -2579,18 +2645,23 @@ def resolve_source(src: str | None, ref: str) -> tuple:
         return root, "{}@{}".format(root, sha or "unknown"), None
 
     clone = Path(tempfile.mkdtemp(prefix="touchstone-src-"))
-    done = subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", ref, SOURCE_URL, str(clone)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if done.returncode != 0:
-        shutil.rmtree(clone, ignore_errors=True)
-        raise SyncError(
-            "git clone {} ({}) failed: {}".format(SOURCE_URL, ref, done.stderr.strip())
-        )
+    # Fetch the ref by name, then check out the PINNED commit: `clone --branch`
+    # only understands branch/tag names, so a SOURCE_REF that is a bare commit
+    # cannot be cloned that way. Fetching by SHA is supported by GitHub; when the
+    # caller asked for a branch (--ref main) we take that branch's tip instead.
+    steps = [
+        ["git", "init", "--quiet", str(clone)],
+        ["git", "-C", str(clone), "remote", "add", "origin", SOURCE_URL],
+        ["git", "-C", str(clone), "fetch", "--quiet", "--depth", "1", "origin", ref],
+        ["git", "-C", str(clone), "checkout", "--quiet", "FETCH_HEAD"],
+    ]
+    for step in steps:
+        done = subprocess.run(step, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if done.returncode != 0:
+            shutil.rmtree(clone, ignore_errors=True)
+            raise SyncError(
+                "{} failed: {}".format(" ".join(step), (done.stderr or "").strip())
+            )
     sha = git_commit(clone)
     if not sha:
         shutil.rmtree(clone, ignore_errors=True)
