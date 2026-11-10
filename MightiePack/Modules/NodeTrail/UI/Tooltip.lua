@@ -16,7 +16,7 @@
 -- What remains is read-only: GetOwner, the line font strings' text and font, and
 -- the frame's geometry. No HookScript, no SetScript, no AddLine, no SetWidth, no
 -- Show on the tooltip — the panel is ours from creation to hide.
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -221,7 +221,7 @@ function T.BuildLines(name)
     and NodeTrailDB.profile or nil
   local showUses = prof ~= nil and prof.showAlchemyUses == true
   local uses = showUses and ns.Recipes:Uses(node.item) or nil
-  if not showUses then
+  if not showUses then -- luacheck: ignore 542
     -- parked: no recipe lines and no "open Alchemy once" hint either, so a
     -- parked feature cannot advertise itself in a tooltip.
   elseif uses then
@@ -244,7 +244,7 @@ function T.BuildLines(name)
           left = ("Alchemy: none you can make yet (%d recipe(s) withheld)"):format(uses.excluded),
         })
       end
-    else
+    else -- luacheck: ignore 542
       -- t_4ab7c230: the scan could not learn availability for this recipe
       -- (this client answered no craftable count, no learned flag and no
       -- required skill). The honest answer is NOT an unfiltered list with a

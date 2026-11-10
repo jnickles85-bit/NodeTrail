@@ -51,7 +51,7 @@
 -- The record shape lives in Record.lua, which persists to
 -- NodeTrailDB.skinning only while NodeTrail's sub-toggle is on.
 
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
 local ns = pkg.Skinning
 local P = {}
@@ -418,7 +418,7 @@ function P:ReadLoot()
     if type(GetLootSlotInfo) == "function" then
       -- classic contract: icon, name, count[, quality] (same read the
       -- NodeTrail recorder uses; itemID is recovered from the link)
-      local ok, a, b, c, d = pcall(GetLootSlotInfo, i)
+      local ok, _, b, c, d = pcall(GetLootSlotInfo, i)
       if ok then
         if isClientText(b) then name = b end
         if type(c) == "number" then qty = c end
@@ -893,7 +893,7 @@ function P:OnUnitDied(unit)
   local w = whereAmI()
   local name, guid = nil, nil
   local isPlayerDeath = type(unit) == "string" and not isSecret(unit) and unit == "player"
-  if isPlayerDeath then
+  if isPlayerDeath then -- luacheck: ignore 542
     -- the player's own death: nothing to attribute to a corpse
   elseif looksLikeGuid(unit) then
     -- the live shape: the argument IS the corpse GUID. A GUID is not a unit

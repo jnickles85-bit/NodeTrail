@@ -1,4 +1,4 @@
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -1056,11 +1056,7 @@ function Rc:HiddenHint()
   if db.alchemyFilterable == true then
     return nil
   end
-  local has = false
-  for _ in pairs(db.alchemy or {}) do
-    has = true
-    break
-  end
+  local has = next(db.alchemy or {}) ~= nil
   if not has then
     return nil
   end
@@ -1613,19 +1609,19 @@ function Rc:RecipeDiag(arg)
     return "unknown"
   end
 
-  local function callLine(name, arg)
+  local function callLine(name, argValue)
     local f = type(mod) == "table" and mod[name] or nil
-    local shown = name .. "(" .. tostring(arg) .. ")"
+    local shownText = name .. "(" .. tostring(argValue) .. ")"
     if type(f) ~= "function" then
-      say(shown .. " -> absent")
+      say(shownText .. " -> absent")
       return
     end
-    local ok, a = pcall(f, arg)
+    local ok, a = pcall(f, argValue)
     if not ok then
-      say(shown .. " raised: " .. tostring(a))
+      say(shownText .. " raised: " .. tostring(a))
       return
     end
-    say(shown .. " -> " .. fmtValue(a, 2))
+    say(shownText .. " -> " .. fmtValue(a, 2))
   end
 
   local function dumpTarget(label, id)

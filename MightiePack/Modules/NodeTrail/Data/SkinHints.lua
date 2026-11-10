@@ -52,7 +52,7 @@
 -- and is never put into a string here; an item name is only used when
 -- `issecretvalue` says it is not secret, and `item <id>` (our own literal) is
 -- the last resort.
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 

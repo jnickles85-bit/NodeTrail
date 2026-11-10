@@ -1,4 +1,4 @@
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -125,7 +125,7 @@ function R:ReadLoot()
     local slotName = nil
     local qty = 1
     if type(GetLootSlotInfo) == "function" then
-      local icon, nm, q = GetLootSlotInfo(i)
+      local _, nm, q = GetLootSlotInfo(i)
       slotName = storable(nm)
       if type(q) == "number" then qty = q end
     end

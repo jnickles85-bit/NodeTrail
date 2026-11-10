@@ -40,7 +40,7 @@
 -- count of SKINNED corpses, not kills: the circle is for where skinning
 -- happened.
 
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -206,7 +206,7 @@ end
 --- the overlays are never asked to draw a guess.
 --- @return route|nil, reason|nil, status
 function ns.BuildSkinRouteForMap(mapID)
-  local S = ns.SkinRoute
+  local S = ns.SkinRoute -- luacheck: ignore 431
   if type(S) ~= "table" then
     return nil, "NO_GENERATOR"
   end

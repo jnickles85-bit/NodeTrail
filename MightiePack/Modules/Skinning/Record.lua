@@ -29,7 +29,7 @@
 -- records in a session buffer, which is exactly what /mp skindiag dump shows
 -- ("diagnostics run, nothing recorded").
 
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
 local ns = pkg.Skinning
 local R = {}
@@ -269,7 +269,7 @@ function R:SetWindowItems(guid, kind, items, money, t)
   local log = windowLog(rec, kind)
   local win = log[#log]
   if not win then
-    win = pushWindow(rec, kind, items, money, t)
+    pushWindow(rec, kind, items, money, t)
   else
     local fresh = mapItems(items)
     local known, byID = {}, {}

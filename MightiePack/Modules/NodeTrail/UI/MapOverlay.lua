@@ -1105,7 +1105,8 @@ function M:_redraw()
     -- WorldMapFrame is the parent this client composites (see M:_measureMapping).
     parent, label = mapFrame, "WorldMapFrame"
   else
-    parent, label, _, _, isCanvas = selectParent()
+    local picked, pickedLabel, _, _, pickedCanvas = selectParent()
+    parent, label, isCanvas = picked, pickedLabel, pickedCanvas
   end
   if not parent then
     self._why = "no map frame (canvas and legacy frames all absent)"
@@ -1353,26 +1354,26 @@ function M:TryHookMap()
   then
     local ok = pcall(function()
       local provider = CreateFromMixins(MapCanvasDataProviderMixin)
-      function provider:RefreshAllData()
+      function provider:RefreshAllData() -- luacheck: ignore 432
         M:Redraw()
       end
-      function provider:RemoveAllData()
+      function provider:RemoveAllData() -- luacheck: ignore 432
         M:ReleaseVisuals()
       end
-      function provider:OnShow()
+      function provider:OnShow() -- luacheck: ignore 432
         M._retries = 0
         M:Redraw()
       end
-      function provider:OnHide()
+      function provider:OnHide() -- luacheck: ignore 432
       end
-      function provider:OnMapChanged()
+      function provider:OnMapChanged() -- luacheck: ignore 432
         M._retries = 0
         M:Redraw()
       end
-      function provider:OnCanvasSizeChanged()
+      function provider:OnCanvasSizeChanged() -- luacheck: ignore 432
         M:Redraw()
       end
-      function provider:OnCanvasScaleChanged()
+      function provider:OnCanvasScaleChanged() -- luacheck: ignore 432
         M:Redraw()
       end
       mapFrame:AddDataProvider(provider)
@@ -1521,7 +1522,8 @@ function M:_redrawSkin()
   if mapping.mode == "frame" then
     parent, label = mapFrame, "WorldMapFrame"
   else
-    parent, label, _, _, isCanvas = selectParent()
+    local picked, pickedLabel, _, _, pickedCanvas = selectParent()
+    parent, label, isCanvas = picked, pickedLabel, pickedCanvas
   end
   if not parent then
     self._skinWhy = "no map frame (canvas and legacy frames all absent)"
@@ -2265,12 +2267,12 @@ function M:Diag()
     -- child, so ScrollContainer and canvas report different rulers (that is why
     -- the old "inside the visible rect" check read 0/319). The comparison that
     -- counts lives in `route dots on the visible map:` and uses canvas units.
-    local mapFrame = _G.WorldMapFrame
-    local canvas = getCanvas(mapFrame)
-    local scroll = mapFrame and mapFrame.ScrollContainer
-    local window, windowWhy = canvasWindow(mapFrame, canvas)
+    local wmf = _G.WorldMapFrame
+    local canvas = getCanvas(wmf)
+    local scroll = wmf and wmf.ScrollContainer
+    local window, windowWhy = canvasWindow(wmf, canvas)
     local parts = {
-      "WorldMapFrame=" .. rectText(screenRect(mapFrame)),
+      "WorldMapFrame=" .. rectText(screenRect(wmf)),
       "ScrollContainer=" .. rectText(screenRect(scroll)),
       "canvas=" .. rectText(screenRect(canvas)),
       "host=" .. rectText(screenRect(self.host)),
@@ -2813,8 +2815,8 @@ function M:Diag()
         return ("%s: absent (no line object held at pool %d)"):format(tag, i)
       end
       local len = "absent"
-      local startText = "absent"
-      local stopText = "absent"
+      local startText
+      local stopText
       if not self._measured then
         -- The objects keep the endpoints of an EARLIER draw after a redraw that
         -- never reached the measurement stage (wrong map open, no host, ...).
@@ -3606,7 +3608,7 @@ function M:Probe(arg)
     local i = wanted[k]
     local x, y, how = projectPoint(i)
     if x then
-      local tex, left, top, labelled = markerWithLabel(i, x, y, 5)
+      local _, left, top, labelled = markerWithLabel(i, x, y, 5)
       pointParts[#pointParts + 1] = string.format("#%s canvas=(%s,%s) %s region(left=%s,top=%s)%s",
         fmtNum(i), fmtNum(x, 1), fmtNum(y, 1), how, left, top, labelled and " label=yes" or " label=absent")
     else
@@ -3621,14 +3623,14 @@ function M:Probe(arg)
   -- The player's OWN projected position, labelled P: the one point on the
   -- screenshot whose ground truth is the player standing there.
   do
-    local mx, my = nil, nil
+    local pmx, pmy = nil, nil
     if rect and self.mapID then
       if C_Map and isFn(C_Map.GetPlayerMapPosition) then
         local ok, pos = pcall(C_Map.GetPlayerMapPosition, C_Map, self.mapID, "player")
         if ok and type(pos) == "table" and isFn(pos.GetXY) then
           local okXY, fx, fy = pcall(pos.GetXY, pos)
           if okXY and type(fx) == "number" and fx == fx and not (fx == 0 and fy == 0) then
-            mx, my = fx, fy
+            pmx, pmy = fx, fy
           end
         end
       end
@@ -3636,16 +3638,16 @@ function M:Probe(arg)
         local okP, fx, fy = pcall(_G.GetPlayerMapPosition, "player")
         if okP and type(fx) == "number" and type(fy) == "number"
           and not (fx == 0 and fy == 0) then
-          mx, my = fx, fy
+          pmx, pmy = fx, fy
         end
       end
     end
-    if mx then
-      local x, y = ns.PathGeom.FractionToPixel(mx, my, rect)
+    if pmx then
+      local x, y = ns.PathGeom.FractionToPixel(pmx, pmy, rect)
       if x then
-        local tex, left, top, labelled = markerWithLabel("P", x, y, 6)
+        local _, left, top, labelled = markerWithLabel("P", x, y, 6)
         say(("probe player: P frac=(%s,%s) canvas=(%s,%s) region(left=%s,top=%s)%s")
-          :format(fmtNum(mx, 4), fmtNum(my, 4), fmtNum(x, 1), fmtNum(y, 1), left, top,
+          :format(fmtNum(pmx, 4), fmtNum(pmy, 4), fmtNum(x, 1), fmtNum(y, 1), left, top,
             labelled and " label=yes" or " label=absent"))
       else
         say("probe player: P frac measured but did not project")
@@ -3680,9 +3682,9 @@ function M:Probe(arg)
   -- ara's rule: a route that is 100% outside the visible rect must never again
   -- read as a pass.
   do
-    local applied = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
-    local painted = tonumber(applied.paintedDots) or 0
-    local outside = tonumber(applied.dotOutside) or 0
+    local appliedNow = (self.drawer and ns.LineDraw.Applied(self.drawer)) or {}
+    local painted = tonumber(appliedNow.paintedDots) or 0
+    local outside = tonumber(appliedNow.dotOutside) or 0
     say(("probe route dots inside the host rect: %s/%s (outside=%s)%s")
       :format(fmtNum(painted - outside), fmtNum(painted), fmtNum(outside),
         painted > 0 and outside >= painted and " — EVERY dot is outside the host: the dots are not on the visible map" or ""))

@@ -33,7 +33,7 @@
 --     a separate column of the same row and is never split from its item name;
 --   * rows are rebuilt from scratch on every update, so the panel cannot
 --     accumulate a duplicate block, and stale rows are cleared, not reused.
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -592,7 +592,8 @@ function P:Update(lines, tooltip)
   local cap = budgetScreen / scale
   -- Adopt BEFORE wrapping: the meter must measure at the tooltip's font, or the
   -- wrap budget is computed in the wrong units.
-  local fontSig = self:AdoptFont(tooltip)
+  local fontSig
+  self:AdoptFont(tooltip)
 
   local rows = self:Wrap(lines, cap, measure)
 
@@ -812,7 +813,7 @@ function P:Update(lines, tooltip)
 
   -- Position from the tooltip's geometry, read-only (the rect was read before
   -- sizing: a raw row's width floor comes from it).
-  local rect, how = rect, rectHow
+  local how = rectHow
   if not rect then
     info.skip = "panel built but the tooltip rect is unreadable (" .. tostring(how) .. ")"
     info.position = "unreadable"

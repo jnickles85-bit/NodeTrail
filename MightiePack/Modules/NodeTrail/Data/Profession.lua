@@ -38,7 +38,7 @@
 --     a remembered signature — clients answer with 4 values (name, isHeader,
 --     isExpanded, rank) and with shortened lists alike;
 --   * nothing here registers an event, calls C_EventUtils, or touches a frame.
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -228,7 +228,7 @@ function Pr:FromSkillLines(ctx)
   local raiseMsg = nil
   local found, foundRank = false, nil
   for i = 1, n do
-    local ok, a, b, c, d = pcall(GetSkillLineInfo, i)
+    local ok, a, b, _, d = pcall(GetSkillLineInfo, i)
     if not ok then
       -- A row that RAISES is not a row without Herbalism: count it as a read
       -- that FAILED, never as an answer. A definitive "no" needs every row.
@@ -308,7 +308,7 @@ function Pr:Rank(kind)
   end
   local names = wantNames(ctx)
   for i = 1, n do
-    local ok, a, b, c, d = pcall(GetSkillLineInfo, i)
+    local ok, a, b, _, d = pcall(GetSkillLineInfo, i)
     if ok and type(a) == "string" and a ~= "" and not isSecret(a) then
       local rank
       if type(b) == "boolean" then
@@ -461,7 +461,7 @@ function Pr:Probe(ctx)
         id = t.id, answer = "unknown", detail = "raised: " .. tostring(answer),
       }
     else
-      local label = nil
+      local label
       if answer == true then
         label = "yes"
       elseif answer == false then

@@ -40,7 +40,7 @@
 -- Load order: this file loads before Data/HerbData.lua (see MightiePack.toc)
 -- and long before Modules/Skinning (which resolves it at CALL time, because a
 -- tooltip must also work on a client that has no skinning module loaded).
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
