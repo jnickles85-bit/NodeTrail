@@ -199,7 +199,8 @@ local gm2route = ns.BuildRouteForMap(1429)
 check(gm2route.source == "gm2" and gm2route.stops == 2, "source switch gm2")
 ns.GetDB().routeSource = "density"
 
--- 11. Old profile
+-- 11. Old profile — a profile written before a setting existed is UPGRADED, and
+-- keys it already carries are left alone (audit: GetDB merges the defaults in).
 NodeTrailDB = { profile = { maxStops = 40 } }
 local ring7 = ringPoints(30)
 for _, p in ipairs(ring7) do
@@ -207,7 +208,8 @@ for _, p in ipairs(ring7) do
 end
 local oldRoute = ns.BuildDensityRouteForMap(7)
 check(oldRoute ~= nil, "old profile works")
-check(NodeTrailDB.profile.routeSource == nil, "old profile no routeSource")
+check(NodeTrailDB.profile.routeSource == "density", "old profile is given the default routeSource")
+check(NodeTrailDB.profile.maxStops == 40, "old profile keeps the value it already had")
 
 -- 12. frameCreated
 check(frameCreated == false, "frameCreated false")

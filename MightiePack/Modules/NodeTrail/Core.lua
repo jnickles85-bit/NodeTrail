@@ -1,9 +1,9 @@
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
 NodeTrail = ns
-ns.version = "0.2.0"
+ns.version = "0.3.0"
 ns.activeRoute = nil
 
 local L = ns.L

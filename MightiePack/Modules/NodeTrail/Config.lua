@@ -1,4 +1,4 @@
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -84,6 +84,22 @@ ns.defaults = {
   },
 }
 
+-- Fill in keys a saved profile is missing, recursively, without touching a value
+-- the player already has. Adding a setting in a later build used to leave existing
+-- profiles without the key: every read then returned nil and the setting behaved as
+-- "off" for exactly the people who had already used the addon. That is how the
+-- arrow's old default outlived the new one.
+local function fillMissing(target, defaults)
+  for k, v in pairs(defaults) do
+    if type(v) == "table" then
+      if type(target[k]) ~= "table" then target[k] = {} end
+      fillMissing(target[k], v)
+    elseif target[k] == nil then
+      target[k] = v
+    end
+  end
+end
+
 function ns.GetDB()
   if type(NodeTrailDB) ~= "table" then
     NodeTrailDB = CopyTable(ns.defaults)
@@ -91,6 +107,7 @@ function ns.GetDB()
   if type(NodeTrailDB.profile) ~= "table" then
     NodeTrailDB.profile = CopyTable(ns.defaults.profile)
   end
+  fillMissing(NodeTrailDB, ns.defaults)
   -- The waypoint arrow shipped default-ON by mistake before it was parked, so a
   -- profile written by that build stored `showNavArrow = true`. Changing the
   -- default cannot undo a stored value, and that is exactly what happened: the

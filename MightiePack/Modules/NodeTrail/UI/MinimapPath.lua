@@ -1,4 +1,4 @@
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -596,6 +596,20 @@ local function indexRoute(route)
     local ok, w, h = pcall(HBD.GetZoneSize, HBD, route.mapID)
     if ok and type(w) == "number" and type(h) == "number" and w > 0 and h > 0 then
       out.zoneW, out.zoneH = w, h
+      out.zoneWhy = "HereBeDragons:GetZoneSize"
+    end
+  end
+  -- The client's own zone size (the same call Nav/Source.lua uses) is the next
+  -- best source, and it is what makes the yard radius convertible to a fraction
+  -- without guessing. HereBeDragons is optional; without this a player who has
+  -- not installed it fell all the way to FALLBACK_VIEW_FRACTION and drew the
+  -- route ~3x too coarse.
+  if (not out.zoneW or not out.zoneH) and route.mapID
+    and type(C_Map) == "table" and type(C_Map.GetMapWorldSize) == "function" then
+    local ok, w, h = pcall(C_Map.GetMapWorldSize, route.mapID)
+    if ok and type(w) == "number" and type(h) == "number" and w > 0 and h > 0 then
+      out.zoneW, out.zoneH = w, h
+      out.zoneWhy = "C_Map.GetMapWorldSize"
     end
   end
   return out
@@ -842,17 +856,17 @@ function M:_redraw()
   }
   self._stamp = stamp
   if type(self.drawer.lastApplied) == "table" then
-    local a = self.drawer.lastApplied
-    a.time = stamp.time
-    a.mapID = stamp.mapID
-    a.projMode = stamp.projMode
-    a.radius = stamp.radius
-    a.radiusUnit = stamp.radiusUnit
-    a.halfW, a.halfH = stamp.halfW, stamp.halfH
-    a.playerFrac = stamp.playerFrac
-    a.playerWorld = stamp.playerWorld
-    a.plannedPoints = stamp.plannedPoints
-    a.sampleTime = stamp.time
+    local applied = self.drawer.lastApplied
+    applied.time = stamp.time
+    applied.mapID = stamp.mapID
+    applied.projMode = stamp.projMode
+    applied.radius = stamp.radius
+    applied.radiusUnit = stamp.radiusUnit
+    applied.halfW, applied.halfH = stamp.halfW, stamp.halfH
+    applied.playerFrac = stamp.playerFrac
+    applied.playerWorld = stamp.playerWorld
+    applied.plannedPoints = stamp.plannedPoints
+    applied.sampleTime = stamp.time
   end
   -- The anchors are read LAZILY (`M:DrawnAudit`), from these same objects and
   -- this same sample: reading them on every redraw would cost ~1200 GetPoint
@@ -936,8 +950,8 @@ function M:_auditDrawn(proj, sample)
           -- (which is ~0 by construction of the dot chain).
           local a, b = proj.points[rec.seg], proj.points[rec.seg + 1]
           if a and b then
-            local d, qx, qy = segmentDistance(0, 0, a.x, a.y, b.x, b.y)
-            rec.playerSegPx = d
+            local dist, qx, qy = segmentDistance(0, 0, a.x, a.y, b.x, b.y)
+            rec.playerSegPx = dist
             rec.playerSegX, rec.playerSegY = qx, qy
             rec.playerSegUnit, rec.playerSegFrac = pxToUnits(sample, qx, qy)
           end

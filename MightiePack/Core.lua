@@ -21,6 +21,9 @@ function pkg.GetAddOnMeta(addon, field)
   if type(C_AddOns) == "table" and type(C_AddOns.GetAddOnMetadata) == "function" then
     local ok, val = pcall(C_AddOns.GetAddOnMetadata, addon, field)
     if ok and type(val) == "string" and val ~= "" then
+      -- @project-version@ is substituted by the packager; a source checkout has
+      -- not been through it, and printing the raw token in /mp help reads as a bug.
+      if val:find("^@.*@$") then return "dev" end
       return val
     end
   end

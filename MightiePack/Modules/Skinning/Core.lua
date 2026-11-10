@@ -18,11 +18,10 @@
 -- file owns the probe — so /mp skindiag can run the diagnostic while the
 -- toggle is off.
 
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
 local ns = pkg.Skinning
-Skinning = ns
-ns.version = "0.2.0"
+ns.version = "0.3.0"
 
 function ns.Enable()
   if ns.enabled then return end
