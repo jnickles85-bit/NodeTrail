@@ -102,8 +102,8 @@ def replace_once(text: str, name: str, anchor_id: str, old: str, new: str) -> st
     count = text.count(old)
     if count == 0:
         raise SyncError(
-            "{}: anchor not found ({}). Upstream text changed; re-read the "
-            "design doc and update sync_touchstone.py before syncing.".format(name, anchor_id)
+            "{}: anchor not found ({}). Upstream text changed; read the edit's own "
+            "comment block in sync_touchstone.py and re-cut the anchor.".format(name, anchor_id)
         )
     if count > 1:
         raise SyncError(
@@ -224,7 +224,7 @@ def edit_chestadvisor(text: str) -> str:
         ),
     )
 
-    # The design doc's inventory listed only the getFrame() tail. Loading the
+    # The fold's inventory listed only the getFrame() tail. Loading the
     # vendored file showed four more file-scope installers, one of which
     # (initQuestSurface) creates ChestAdvisor_QuestFrame. They are all deferred
     # here so a disabled module creates no frame and hooks nothing. Each one is
@@ -1603,26 +1603,20 @@ end
 # gain is never read as a damage gain. The signed deltas ride on the row as
 # `tiebreak` beside `weighted`/`profile`.
 def edit_chestadvisor_weighted_local(text: str) -> str:
-    """Hoist `w2` out of the else branch that assigns it.
+    """Keep `w2` visible to the diag row this fold builds.
 
-    Upstream declares the weighted result inside one branch:
+    The scope bug is OURS, not StatForge's. Two edits in this file act on the same
+    function: `ca.quest-evaluate-weighted` rewrote one branch to
+    `local v2, r2, w2 = Verdict.evaluate(...)`, and a later edit injects three
+    fields into the persisted diag row (`weighted = w2 and w2.total`,
+    `profile = w2 and w2.profile`, `tiebreak = w2 and w2.tiebreak`). The injected
+    reads sit OUTSIDE that branch, so they were reading an undefined global: the
+    row has never carried the weighted total, the profile or the tiebreak, and
+    `luacheck` reports six undefined-global reads.
 
-        else
-          canUseV = canUse(id)
-          local v2, r2, w2 = Verdict.evaluate(...)
-          v, reason = v2, r2
-        end
-
-    ...and then reads `w2` further down, when it builds the persisted diag row
-    (`weighted = w2 and w2.total`, `profile = w2 and w2.profile`,
-    `tiebreak = w2 and w2.tiebreak`). Those three reads are outside the branch, so
-    upstream is reading an undefined global: the diag has never recorded the
-    weighted total, the profile or the tiebreak, and `luacheck` catches it as
-    "accessing undefined variable 'w2'" six times.
-
-    The fix is a declaration in the enclosing scope and a plain assignment inside
-    the branch. No behaviour changes: the three fields were nil before and now
-    carry the values they were always meant to carry.
+    So this does change behaviour, in the direction the fold always intended: those
+    three row fields are now populated instead of nil. The declaration is hoisted
+    to the candidate-walk scope and the assignment keeps the three-value tuple.
     """
     text = replace_once(
         text,
@@ -1634,9 +1628,9 @@ def edit_chestadvisor_weighted_local(text: str) -> str:
         "\t\t\t\t\titemsWalked = itemsWalked + 1\n"
         "\t\t\t\t\tlocal v, reason\n"
         "\t\t\t\t\tlocal canUseV\n"
-        "\t\t\t\t\t-- Fold: the weighted result is read by the diag row far below, so\n"
-        "\t\t\t\t\t-- it is declared here. Upstream declares it inside the else that\n"
-        "\t\t\t\t\t-- assigns it, and that row therefore read an undefined global.\n"
+        "\t\t\t\t\t-- Fold: the diag row this fold builds below reads the weighted\n"
+        "\t\t\t\t\t-- result, and the fold's own edit declares it inside the else\n"
+        "\t\t\t\t\t-- branch that assigns it — out of the row's scope. Declared here.\n"
         "\t\t\t\t\tlocal w2\n",
     )
     text = replace_once(

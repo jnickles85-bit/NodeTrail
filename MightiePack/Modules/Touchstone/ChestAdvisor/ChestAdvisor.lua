@@ -5713,9 +5713,9 @@ ChestAdvisor.scan = function()
 					itemsWalked = itemsWalked + 1
 					local v, reason
 					local canUseV
-					-- Fold: the weighted result is read by the diag row far below, so
-					-- it is declared here. Upstream declares it inside the else that
-					-- assigns it, and that row therefore read an undefined global.
+					-- Fold: the diag row this fold builds below reads the weighted
+					-- result, and the fold's own edit declares it inside the else
+					-- branch that assigns it — out of the row's scope. Declared here.
 					local w2
 					local ulevel = (UnitLevel and UnitLevel("player")) or nil
 					-- Card t_119d120c: every judged row's lines come from the
