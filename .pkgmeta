@@ -1,0 +1,28 @@
+package-as: MightiePack
+
+# The packager copies the repo ROOT into <package-as>/ and then looks for a TOC
+# at its top level. This repo keeps the addon one folder down, so without this
+# line the packager finds no TOC and exits 1. The shape after a release build is
+# MightiePack/MightiePack.toc.
+move-folders:
+  MightiePack/MightiePack: MightiePack
+
+# Without this the packager generates a changelog from git history, which is the
+# commit log: it carries the author's local paths and co-author trailers. Ship the
+# hand-written one instead.
+manual-changelog: CHANGELOG.md
+
+# CurseForge packs this directory only. Everything the addon does not need at
+# runtime stays out of the zip: the spec suite, captured evidence, the sync and
+# build tooling, CI, and the repo-level docs.
+ignore:
+  - .github
+  - .gitignore
+  - .luacheckrc
+  - .pkgmeta
+  - HANDOFF.md
+  - README.md
+  - evidence
+  - spec
+  - tests
+  - tools

@@ -1,0 +1,32 @@
+t_86583cf2 fourth pass — evidence
+generated: 2026-11-08T19:55:48Z  host: Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+commit: 9441e46 (wt/t_86583cf2, parent d855247)
+
+== 1. full suite at this commit ==
+   specs=46 passing=46 failing=0
+
+== 2. the two specs red on the parent, behaviourally (my own git archive tree) ==
+   parent tree: /tmp/parent_check (git archive d855247) + the HEAD spec files
+   mapdiag_visible_spec: behavioural FAILs on d855247 = 10 (traceback lines = 0)
+   minimap_units_spec: behavioural FAILs on d855247 = 16 (traceback lines = 0)
+   (first failure of each, on the parent:)
+     FAIL: 1: one unconvertible point turns the world projection OFF (got NodeTrail mapdiag: minimap projection: points=2 useWorld=true zone=1000x800 radius=233.33)
+     FAIL: 1: and the header says how many points converted (got NodeTrail mapdiag: minimap projection: points=2 useWorld=true zone=1000x800 radius=233.33)
+     FAIL: 1: naming the reason instead of dropping the point silently (got NodeTrail mapdiag: minimap projection: points=2 useWorld=true zone=1000x800 radius=233.33)
+     FAIL: 3: a healthy draw asserts the host is the canvas (got nil)
+     FAIL: 3: a host placed away from the map reads NO — not a pass (got nil)
+     FAIL: 3: and names why (got nil)
+
+== 3. deployed build vs the commit (sha256, first 16) ==
+   a8b1e02ff52d1b34 commit    MapOverlay.lua
+   a8b1e02ff52d1b34 deployed  MapOverlay.lua
+   543722fc4deec3c1 commit    MinimapPath.lua
+   543722fc4deec3c1 deployed  MinimapPath.lua
+   backup of the replaced files: C:/Users/jnick/touchstone-backups/mightiepack-t86583cf2/run4-1455/
+
+== 4. the live client, measured this run ==
+   SavedVariables mtime: Nov 8 14:38
+   mapProbe count on disk: 0
+   navwalk record on disk: savedAt=773041.6630000001 — the walk ara recorded on the pre-HBD build (d6f2a31); no walk exists for this build
+   i.e. the client has not been /reloaded onto 9441e46 yet
+   computer_use driver: list_windows = 0 windows (no input automation from this host)

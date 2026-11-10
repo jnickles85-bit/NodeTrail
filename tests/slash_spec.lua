@@ -28,7 +28,7 @@ local pkg = { modState = { NodeTrail = true } }
 pkg.IsModuleEnabled = function(n) return pkg.modState[n] end
 pkg.RegisterModule = function(name, def) pkg.registered = def end
 
-local files = { "locale/enUS.lua", "Config.lua", "Data/GM2.lua", "Data/Recorder.lua", "Data/Density.lua", "Data/HerbData.lua", "Data/Recipes.lua", "Core.lua" }
+local files = { "locale/enUS.lua", "Config.lua", "Data/GM2.lua", "Data/ItemNames.lua", "Data/Recorder.lua", "Data/Density.lua", "Data/HerbData.lua", "Data/Recipes.lua", "Core.lua" }
 for _, f in ipairs(files) do
   assert(loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. f))("MightiePack", pkg)
 end
@@ -65,7 +65,11 @@ check(r:find("no active route", 1, true) ~= nil, "reload no route")
 check(r:find("route started", 1, true) == nil, "reload no route started")
 
 local s = run("status")
-for _, needle in ipairs({ "Route source: density", "on this map (1429): 0 (all maps: 0)", "Active route: none", "Herb tooltip: on", "open your Alchemy window once", "Module: on" }) do
+-- This spec's client stubs no trade-skill API at all (neither the legacy
+-- globals nor C_TradeSkillUI), so the alchemy line must not promise the
+-- "open your Alchemy window once" step — it must say the feature is
+-- unavailable (t_0d5badc3).
+for _, needle in ipairs({ "Route source: density", "on this map (1429): 0 (all maps: 0)", "Active route: none", "Herb tooltip: on", "Alchemy recipes: unavailable on this client (no trade skill API found", "Module: on" }) do
   check(s:find(needle, 1, true) ~= nil, "status contains " .. needle)
 end
 
@@ -109,6 +113,148 @@ check(s:find("Module: off", 1, true) ~= nil, "module off")
 
 s = run("  STATUS  ")
 check(s:find("NodeTrail status:", 1, true) ~= nil, "case whitespace status")
+
+-- /nt ttdiag: layout diagnostic. The slash spec's Tooltip stub has no
+-- Diag implementation, so the branch must fall back cleanly (the branch
+-- is only reachable after Enable — module gating already proven above).
+local d = run("ttdiag")
+check(d:find("ttdiag", 1, true) ~= nil, "ttdiag prints")
+check(d:find("unavailable", 1, true) ~= nil, "ttdiag falls back when the tooltip stub has no Diag")
+
+-- ── /mpack status identity header (t_e9996745) ──────────────────────────
+-- The card: `/mpack status` must print, BEFORE the module lines, an addon
+-- version line, an interface/client-build line (build number via
+-- select(4, GetBuildInfo()) plus the full GetBuildInfo() version string),
+-- the current locale, and whether GatherMate2 is loaded — so a paste of
+-- the output is a self-describing bug report. We drive the REAL top-level
+-- Core.lua status branch (SlashCmdList.MIGHTIEPACK from the loaded file)
+-- on a fresh umbrella package built from the real Core.lua + Modules.lua
+-- (real RegisterModule / IsModuleEnabled / module loop), with the client
+-- metadata APIs stubbed.
+MightiePackDB = nil
+local mpkg = {}
+assert(loadfile(root .. "/MightiePack/Core.lua"))("MightiePack", mpkg)
+assert(loadfile(root .. "/MightiePack/Modules.lua"))("MightiePack", mpkg)
+mpkg.RegisterModule("NodeTrail", {
+  title = "NodeTrail",
+  notes = "Herb routes from your own gathers (white path on world map + minimap), herb tooltip. /nt start | stop | reload | status",
+  Enable = function() end, -- not called here (no EnableModules in this spec)
+})
+local mpOpened = false
+mpkg.OpenOptions = function() mpOpened = true end
+
+GetAddOnMetadata = function(name, what)
+  if name ~= "MightiePack" then return nil end
+  if what == "Version" then return "0.3.0" end
+  if what == "Interface" then return "16001" end
+  return nil
+end
+GetBuildInfo = function() return "16", "0", "0", "16001" end
+GetLocale = function() return "enUS" end
+IsAddOnLoaded = function(name) return name == "GatherMate2" and true or false end
+
+check(SlashCmdList.MIGHTIEPACK ~= nil, "MIGHTIEPACK slash registered by real Core.lua")
+local function runMp(cmd)
+  for i = #chat, 1, -1 do chat[i] = nil end
+  SlashCmdList.MIGHTIEPACK(cmd)
+  return table.concat(chat, "\n")
+end
+
+local st = runMp("status")
+check(st:find("version 0.3.0", 1, true) ~= nil, "mpack status: version line from GetAddOnMetadata")
+check(st:find("interface 16001", 1, true) ~= nil, "mpack status: interface from TOC metadata")
+check(st:find("build 16001", 1, true) ~= nil, "mpack status: client build number (select 4)")
+check(st:find("client 16.0.0.16001", 1, true) ~= nil, "mpack status: full GetBuildInfo version string")
+check(st:find("locale enUS", 1, true) ~= nil, "mpack status: current locale")
+check(st:find("GatherMate2: loaded", 1, true) ~= nil, "mpack status: GatherMate2 loaded")
+check(st:find("NodeTrail: on", 1, true) ~= nil, "mpack status: NodeTrail module line still on")
+check(st:find("Touchstone: off", 1, true) ~= nil, "mpack status: Touchstone module line still off")
+local vPos, ntPos = st:find("version 0.3.0", 1, true), st:find("NodeTrail: on", 1, true)
+check(vPos ~= nil and ntPos ~= nil and vPos < ntPos, "mpack status: header lines come before module lines")
+
+IsAddOnLoaded = function() return false end
+local stGm = runMp("status")
+check(stGm:find("GatherMate2: not loaded", 1, true) ~= nil, "mpack status: GatherMate2 not loaded when absent")
+IsAddOnLoaded = function(name) return name == "GatherMate2" and true or false end
+
+mpOpened = false
+runMp("")
+check(mpOpened == true, "mpack: no argument still opens options")
+check(#chat == 0, "mpack: no argument prints nothing")
+mpOpened = false
+runMp("options")
+check(mpOpened == true, "mpack: 'options' still opens options")
+check(runMp("bogus"):find("/mpack [options|status]", 1, true) ~= nil, "mpack: bogus command prints usage")
+
+-- A nil GetAddOnMetadata (function missing AND nil return) must print
+-- "version unknown", not error — both variants the card calls out.
+GetAddOnMetadata = nil
+local okE, stE = pcall(runMp, "status")
+check(okE, "mpack status: nil GetAddOnMetadata does not error (missing function)")
+if okE then
+  check(stE:find("version unknown", 1, true) ~= nil, "mpack status: nil GetAddOnMetadata prints version unknown")
+  check(stE:find("interface unknown", 1, true) ~= nil, "mpack status: nil GetAddOnMetadata prints interface unknown")
+  check(stE:find("NodeTrail: on", 1, true) ~= nil, "mpack status: module lines survive the nil metadata")
+end
+GetAddOnMetadata = function() return nil end
+local okR, stR = pcall(runMp, "status")
+check(okR, "mpack status: GetAddOnMetadata returning nil does not error")
+if okR then
+  check(stR:find("version unknown", 1, true) ~= nil, "mpack status: nil return prints version unknown")
+end
+
+-- The umbrella_spec environment: NONE of the metadata globals exist at all.
+GetAddOnMetadata = nil
+GetBuildInfo = nil
+GetLocale = nil
+IsAddOnLoaded = nil
+local okN, stN = pcall(runMp, "status")
+check(okN, "mpack status: all metadata globals absent does not error (umbrella_spec environment)")
+if okN then
+  check(stN:find("version unknown", 1, true) ~= nil, "all absent: version unknown")
+  check(stN:find("interface unknown", 1, true) ~= nil, "all absent: interface unknown")
+  check(stN:find("build unknown", 1, true) ~= nil, "all absent: build unknown")
+  check(stN:find("locale unknown", 1, true) ~= nil, "all absent: locale unknown")
+  check(stN:find("GatherMate2: unknown", 1, true) ~= nil, "all absent: GatherMate2 unknown")
+  check(stN:find("NodeTrail: on", 1, true) ~= nil, "all absent: module lines still printed")
+end
+
+-- A module that refused to run (Touchstone while the standalone folder exists)
+-- is marked loaded by EnableModules; the status line must not claim it is
+-- running. It has to say it is inert, next to the reason.
+mpkg.RegisterModule("TouchTest", { title = "TouchTest", Enable = function() end })
+mpkg.GetSettings().modules.TouchTest = true
+mpkg.modules.TouchTest.inert = true
+mpkg.modules.TouchTest.loaded = true
+local stI = runMp("status")
+check(stI:find("TouchTest: on (inert", 1, true) ~= nil,
+  "mpack status: an inert module says inert, not loaded")
+check(stI:find("TouchTest: on (loaded)", 1, true) == nil,
+  "mpack status: an inert module never claims to be loaded")
+
+-- ── t_86583cf2: the two new commands are wired, and they never raise ────────
+-- `/nt minimap on|off` is the minimap line's own switch (the world map route is
+-- untouched); `/nt navwalk` records the four-stop walk and must degrade to a
+-- message — not an error — when the minimap module is not loaded.
+do
+  NodeTrailDB.navwalk = nil
+  local before = ns.GetDB().showMinimap
+  local off = run("minimap off")
+  check(ns.GetDB().showMinimap == false, "minimap off: the switch is off (" .. tostring(off) .. ")")
+  check(off:find("minimap route off", 1, true) ~= nil, "minimap off: it says so")
+  check(ns.GetDB().showWorldMap == true, "minimap off: the world map route is untouched")
+  run("minimap on")
+  check(ns.GetDB().showMinimap == true, "minimap on: the switch is on again")
+  check(before == true, "minimap: the default is on, as shipped")
+  local walk = run("navwalk mark start")
+  check(walk:find("navwalk", 1, true) ~= nil, "navwalk: the command is routed (got " .. tostring(walk) .. ")")
+  check(not walk:find("error", 1, true), "navwalk: no error when the minimap module is absent")
+  local walkOut = run("navwalk")
+  check(walkOut:find("navwalk", 1, true) ~= nil, "navwalk: a bare command prints its state")
+  local help2 = run("help")
+  check(help2:find("/nt minimap", 1, true) ~= nil, "help lists /nt minimap")
+  check(help2:find("/nt navwalk", 1, true) ~= nil, "help lists /nt navwalk")
+end
 
 if failed == 0 then
   print("slash_spec: ok")

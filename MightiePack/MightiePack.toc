@@ -1,9 +1,12 @@
 ## Interface: 16001
 ## Title: MightiePack
-## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone coming soon.
+## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone (gear upgrade advice).
 ## Author: Mightie
-## Version: 0.3.0
-## SavedVariables: MightiePackDB, NodeTrailDB
+## Version: @project-version@
+## X-Curse-Project-ID: 000000
+## SavedVariables: MightiePackDB, NodeTrailDB, StatForgeDB
+## SavedVariablesPerCharacter: ChestAdvisorDB
+## Assets: Modules/Touchstone/ChestAdvisor/marker.tga
 ## OptionalDeps: GatherMate2
 ## DefaultState: enabled
 
@@ -12,16 +15,41 @@ Modules.lua
 Modules/NodeTrail/locale/enUS.lua
 Modules/NodeTrail/Config.lua
 Modules/NodeTrail/Data/GM2.lua
+Modules/NodeTrail/Data/ItemNames.lua
 Modules/NodeTrail/Data/Recorder.lua
 Modules/NodeTrail/Data/Density.lua
 Modules/NodeTrail/Data/HerbData.lua
+Modules/NodeTrail/Data/Profession.lua
+Modules/NodeTrail/Data/SkinHints.lua
 Modules/NodeTrail/Data/Recipes.lua
 Modules/NodeTrail/Route/Cluster.lua
 Modules/NodeTrail/Route/Build.lua
+Modules/NodeTrail/Route/SkinRoute.lua
+Modules/NodeTrail/Route/Auto.lua
 Modules/NodeTrail/UI/PathGeom.lua
 Modules/NodeTrail/UI/LineDraw.lua
 Modules/NodeTrail/UI/MapOverlay.lua
 Modules/NodeTrail/UI/MinimapPath.lua
+Modules/NodeTrail/Nav/Target.lua
+Modules/NodeTrail/Nav/Source.lua
+Modules/NodeTrail/Nav/Arrow.lua
+Modules/NodeTrail/UI/TooltipPanel.lua
 Modules/NodeTrail/UI/Tooltip.lua
 Modules/NodeTrail/Core.lua
+Modules/Skinning/Probe.lua
+Modules/Skinning/Record.lua
+Modules/Skinning/Core.lua
+Modules/Touchstone/Bootstrap.lua
+Modules/Touchstone/Constants.lua
+Modules/Touchstone/UI.lua
+Modules/Touchstone/OptionsTab.lua
+Modules/Touchstone/UpgradesTab.lua
+Modules/Touchstone/LogTab.lua
+Modules/Touchstone/Diagnostics.lua
+Modules/Touchstone/Probe.lua
+Modules/Touchstone/ChestAdvisor/Verdict.lua
+Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
+Modules/Touchstone/Integration.lua
+Modules/Touchstone/Core.lua
+BugReport.lua
 Options.lua

@@ -1,4 +1,4 @@
-local addonName, pkg = ...
+local _, pkg = ...
 pkg.NodeTrail = pkg.NodeTrail or {}
 local ns = pkg.NodeTrail
 
@@ -13,6 +13,135 @@ function G.IsMapPoint(p)
   return type(p) == "table"
     and type(p.x) == "number" and type(p.y) == "number"
     and p.x == p.x and p.y == p.y
+end
+
+local function finite(v)
+  return type(v) == "number" and v == v and v > -1e9 and v < 1e9
+end
+
+--- Measured map rectangle inside a host frame.
+--- The host is whatever frame the client pans/zooms with; the client may
+--- inset the map texture inside it (Classic: WorldMapButton sits inside
+--- WorldMapDetailFrame). Both sizes are MEASURED — nothing is assumed; when
+--- the inner frame is unknown or larger, the whole host is the map.
+--- @return { left, top, width, height } or nil when a size is unusable
+function G.MapRect(hostWidth, hostHeight, mapWidth, mapHeight)
+  if not finite(hostWidth) or not finite(hostHeight) then
+    return nil
+  end
+  if hostWidth <= 0 or hostHeight <= 0 then
+    return nil
+  end
+  local w, h = hostWidth, hostHeight
+  if finite(mapWidth) and finite(mapHeight) and mapWidth > 0 and mapHeight > 0
+    and mapWidth <= hostWidth and mapHeight <= hostHeight then
+    w, h = mapWidth, mapHeight
+  end
+  return {
+    left = (hostWidth - w) * 0.5,
+    top = (hostHeight - h) * 0.5,
+    width = w,
+    height = h,
+  }
+end
+
+--- A measured frame box, as every projection below takes it.
+--- `left`/`top` are GetLeft()/GetTop() — the client reports them in the frame's
+--- OWN scaled units, so screen px = left * scale. `scale` is GetEffectiveScale()
+--- when the client answers it, GetScale() otherwise, 1 as the last resort.
+--- @return true when every field is a usable finite number
+local function boxOk(box)
+  if type(box) ~= "table" then
+    return false
+  end
+  if not finite(box.left) or not finite(box.top) then
+    return false
+  end
+  if not finite(box.scale) or box.scale <= 0 then
+    return false
+  end
+  return true
+end
+
+--- The rect of `map` — the frame whose PIXEL space the route's fractions are
+--- measured in — expressed in `host`'s own pixel space, +y down from the host's
+--- TOP. That is the space a child of `host` is anchored in, so a point at
+--- (rect.left + f * rect.width, rect.top + g * rect.height) is drawn exactly on
+--- the map feature the fraction names, whatever the host is.
+---
+--- This is the mapping a host that is NOT the map frame needs: the world map is
+--- drawn by a frame the client composites (WorldMapFrame) while the fractions
+--- live on a different frame (the canvas, which this client does not composite
+--- children of). Both boxes are measured on screen at draw time, so zoom and
+--- scroll are already inside them — a zoomed map is simply a wider box and a
+--- scrolled map a shifted one. Nothing here is scaled by a guessed constant.
+--- @param host table { left, top, scale }
+--- @param map table { left, top, width, height, scale }
+--- @return { left, top, width, height } in host units, or nil + reason
+function G.ProjectRect(host, map)
+  if not boxOk(host) then
+    return nil, "the host frame has no measurable screen rect"
+  end
+  if not boxOk(map) then
+    return nil, "the map frame has no measurable screen rect"
+  end
+  if not finite(map.width) or not finite(map.height) or map.width <= 0 or map.height <= 0 then
+    return nil, "the map frame has no measurable size"
+  end
+  local hs, ms = host.scale, map.scale
+  local rect = {
+    left = (map.left * ms - host.left * hs) / hs,
+    top = (host.top * hs - map.top * ms) / hs,
+    width = map.width * ms / hs,
+    height = map.height * ms / hs,
+  }
+  if not finite(rect.width) or not finite(rect.height) or rect.width <= 0 or rect.height <= 0 then
+    return nil, "the projected map rect is empty"
+  end
+  return rect
+end
+
+--- The part of `a` that `b` covers. nil when they do not overlap at all.
+--- Used to turn the measured ScrollContainer rect into the window the map is
+--- actually visible through, so the route can be cropped instead of painted
+--- over the frame's border.
+function G.IntersectRect(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then
+    return nil
+  end
+  if not finite(a.left) or not finite(a.top) or not finite(a.width) or not finite(a.height) then
+    return nil
+  end
+  if not finite(b.left) or not finite(b.top) or not finite(b.width) or not finite(b.height) then
+    return nil
+  end
+  if a.width <= 0 or a.height <= 0 or b.width <= 0 or b.height <= 0 then
+    return nil
+  end
+  local left = math.max(a.left, b.left)
+  local top = math.max(a.top, b.top)
+  local right = math.min(a.left + a.width, b.left + b.width)
+  local bottom = math.min(a.top + a.height, b.top + b.height)
+  if right <= left or bottom <= top then
+    return nil
+  end
+  return { left = left, top = top, width = right - left, height = bottom - top }
+end
+
+--- Map fraction (0..1) -> pixels from the rectangle's left/top, +y down.
+--- @return x, y or nil when the point or the rectangle is unusable
+function G.FractionToPixel(fx, fy, rect)
+  if type(rect) ~= "table" then
+    return nil
+  end
+  local width, height = rect.width, rect.height
+  if not finite(width) or not finite(height) or width <= 0 or height <= 0 then
+    return nil
+  end
+  if not finite(fx) or not finite(fy) then
+    return nil
+  end
+  return (rect.left or 0) + fx * width, (rect.top or 0) + fy * height
 end
 
 --- Clip a segment to a circle centered at the origin.

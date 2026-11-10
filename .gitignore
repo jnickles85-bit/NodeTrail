@@ -1,0 +1,12 @@
+# Build output: packaged zips are produced by the BigWigs packager (see
+# .pkgmeta) and land in dist/, which is never committed.
+*.zip
+dist/
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

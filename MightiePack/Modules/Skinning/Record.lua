@@ -1,0 +1,884 @@
+-- Record.lua — t_80ffe952 (Skinning 2/3: the recorder).
+--
+-- The probe (Probe.lua) is the evidence channel; this file is the model it
+-- feeds. The shape follows SKINNING-DATA-MODEL.md, with the parts that were
+-- HYPOTHESIS in that document settled by the real in-client dump from build
+-- 5455eea (49 steps, /mp skindiag dump, map 1411):
+--
+--   * UNIT_DIED fires for ordinary mobs and its ARGUMENT is the creature GUID
+--     ("sk 12 UNIT_DIED k=death unit=Creature-0-7072-1-48-3124-F090F29C6F").
+--     It is the kill signal; COMBAT_LOG_EVENT_UNFILTERED is a protected
+--     event on this client and is never registered.
+--   * Skinning is spell 8613, cast by the player (START -> SUCCEEDED -> STOP).
+--   * The skin loot window is a SECOND LOOT_OPENED on the SAME corpse GUID
+--     ("sk 23 LOOT_OPENED ... g=..F29C6F i=2934x1" after "sk 14 ... i=7100x1").
+--     That is the documented hypothesis, now confirmed live.
+--
+-- One record per corpse, keyed by the corpse GUID, with the ordinary corpse
+-- loot and the skinning loot as SEPARATE fields on the same record — never
+-- merged, because comparing them is the whole point.
+--
+-- Personal observations only: counts of what was actually seen. No rate is
+-- computed here and none may be rendered from this sample (see
+-- ns.PersonalRate + ns.MIN_KILLS for the only formatter allowed to produce a
+-- percentage, and its n>=10 floor).
+--
+-- Storage: skinning is NodeTrail's sub-feature, so records live under
+-- NodeTrailDB.skinning (toggle: NodeTrailDB.skinning.enabled). While the
+-- toggle is OFF nothing is persisted — the recorder still builds the same
+-- records in a session buffer, which is exactly what /mp skindiag dump shows
+-- ("diagnostics run, nothing recorded").
+
+local _, pkg = ...
+pkg.Skinning = pkg.Skinning or {}
+local ns = pkg.Skinning
+local R = {}
+ns.Recorder = R
+
+R.SCHEMA = 1
+R.MAX_RECORDS = 100       -- ring: the newest 100 corpses are kept
+R.MAX_UNCLASSIFIED = 20   -- ring: windows we could not honestly classify
+R.SKIN_WINDOW = 60        -- a successful cast attributes a window within this
+R.SKIN_SPELL_ID = 8613    -- live-confirmed on this client (dump sk 20)
+
+-- ── small helpers (self-contained: this file loads without Probe/NodeTrail) ──
+local function nowT()
+  if type(GetTime) == "function" then return GetTime() end
+  return os.clock()
+end
+
+-- ── SECRET strings (live, build c220ec7) ──────────────────────────────
+-- The client hands back SECRET strings for creature names (UnitName and
+-- friends) and can do so for a GUID. A secret may be SHOWN but not measured
+-- (#), sliced (:sub), formatted, searched or converted — so this file never
+-- does any of that to a client value: names travel to the printer in their
+-- own slot (see Describe) and a value that cannot be measured is left whole.
+-- Same rule as Modules/Touchstone/Probe.lua's describe().
+local function isSecret(v)
+  if type(issecretvalue) ~= "function" then return false end
+  local ok, s = pcall(issecretvalue, v)
+  return ok and s == true
+end
+
+local function safeLen(v)
+  if type(v) ~= "string" then return nil end
+  if isSecret(v) then return nil end
+  local ok, n = pcall(function() return #v end)
+  if ok and type(n) == "number" then return n end
+  return nil
+end
+
+-- nil means "not measurable" (a secret): the caller omits the field instead
+-- of folding a value this file would later have to measure.
+local function cut(s, n)
+  if s == nil or isSecret(s) then return nil end
+  if type(s) ~= "string" then s = tostring(s) end
+  local len = safeLen(s)
+  if len == nil then return nil end
+  if len <= n then return s end
+  local ok, out = pcall(function() return s:sub(1, n - 2) .. ".." end)
+  if ok then return out end
+  return nil
+end
+
+local function round2(v)
+  return math.floor(v * 100 + 0.5) / 100
+end
+
+local function round4(v)
+  return math.floor(v * 10000 + 0.5) / 10000
+end
+
+local function pct3(v)
+  local s = string.format("%.3f", v)
+  return (s:gsub("^0", ""))
+end
+
+-- nil for a GUID that cannot be measured: the caller then shows the value
+-- whole through the display channel rather than slicing it.
+local function guidSuffix(g)
+  if type(g) ~= "string" or isSecret(g) then return nil end
+  local ok, out = pcall(function()
+    local len = #g
+    if len == 0 then return nil end
+    if len <= 8 then return g end
+    return ".." .. g:sub(len - 5)
+  end)
+  if ok and type(out) == "string" then return out end
+  return nil
+end
+
+-- The creature (npc) entry is the SECOND-TO-LAST field of a creature GUID:
+--   Creature-0-4384-618-00712-00612-0000411A2B -> 612   (the model's example)
+--   Creature-0-7072-1-48-3124-F090F29C6F       -> 3124  (live, map 1411)
+-- Keying on position rather than a fixed index keeps both shapes right. A
+-- GUID with too few fields (a test stub, or a source the client did not
+-- build) yields nil: no id is better than an invented one. A secret GUID is
+-- never parsed at all.
+function R.CreatureID(guid)
+  if type(guid) ~= "string" or isSecret(guid) then return nil end
+  local ok, id = pcall(function()
+    local body = guid:match("^Creature%-(.+)$")
+    if not body then return nil end
+    local parts = {}
+    for p in body:gmatch("[^%-]+") do parts[#parts + 1] = p end
+    if #parts < 5 then return nil end
+    return tonumber(parts[#parts - 1])
+  end)
+  if ok then return id end
+  return nil
+end
+
+-- The probe's item tuples are { id, name, qty, quality, link }; the model's
+-- are { itemID, name, quantity, quality, itemLink }. Convert once, here, so
+-- nothing downstream has to remember two spellings.
+--
+-- An entry with no itemID is NOT an item: on this client the coin slot
+-- arrives that way and the c220ec7 dump printed it as "?x0". It is dropped
+-- here too, so neither the record nor its rendering can carry it.
+local function mapItems(items)
+  local out = {}
+  if type(items) ~= "table" then return out end
+  for i = 1, #items do
+    local it = items[i]
+    if type(it) == "table" then
+      local itemID = it.id or it.itemID
+      if type(itemID) == "number" and itemID > 0 then
+        out[#out + 1] = {
+          itemID = itemID,
+          name = it.name,
+          quantity = it.qty or it.quantity or 1,
+          quality = it.quality,
+          itemLink = it.link or it.itemLink,
+        }
+      end
+    end
+  end
+  return out
+end
+
+-- ── SECRET-safe NAME field ────────────────────────────────────────────
+-- A name field carries a name or says `unknown`. It never carries a GUID:
+-- live, `record ?` and `last kill: <guid> g=..EF7D0D` both put the GUID where
+-- the name belongs, because this client can answer UnitName with the GUID.
+-- A secret name is returned untouched (it may be shown, never measured), so it
+-- is never compared, matched or sliced here.
+local GUID_PREFIXES = { "Creature", "Player", "Pet", "Vehicle", "GameObject" }
+
+local function usableName(name, guid)
+  if name == nil then return nil end
+  if isSecret(name) then return name end
+  if type(name) ~= "string" or name == "" then return nil end
+  local ok, isGuid = pcall(function()
+    if type(guid) == "string" and not isSecret(guid) and name == guid then
+      return true
+    end
+    for _, p in ipairs(GUID_PREFIXES) do
+      if name:match("^" .. p .. "%-%d") then return true end
+    end
+    return false
+  end)
+  if ok and isGuid == true then return nil end
+  return name
+end
+R.usableName = usableName
+
+-- The name the RECORD may print, or nil when the record has none.
+function R.DisplayName(rec)
+  if type(rec) ~= "table" then return nil end
+  return usableName(rec.name, rec.guid)
+end
+
+local function itemList(items, cap)
+  local bits = {}
+  local n = type(items) == "table" and #items or 0
+  if n == 0 then return "none seen" end
+  local shown = math.min(n, cap or 3)
+  for i = 1, shown do
+    local it = items[i]
+    local id = it and it.itemID
+    if type(id) == "number" and id > 0 then
+      bits[#bits + 1] = tostring(id) .. "x" .. tostring(it.quantity or 1)
+    end
+  end
+  if #bits == 0 then return "none seen" end
+  return table.concat(bits, ",") .. (n > shown and ("+" .. (n - shown)) or "")
+end
+
+-- ── per-window item snapshots ──────────────────────────────────────────
+-- Items are stored per OPEN of the loot window, then merged, because the
+-- client can report an empty window and fill the slots a moment later
+-- (live: "LOOT_OPENED i=-" followed by LOOT_SLOT_CLEARED). A re-read of the
+-- SAME window REPLACES that window's snapshot, so a late read can never
+-- double a quantity; a genuinely re-opened corpse is a new window and adds.
+R.MAX_WINDOWS = 10
+
+local function mergeWindows(log)
+  local out, byID = {}, {}
+  local n = type(log) == "table" and #log or 0
+  for i = 1, n do
+    local w = log[i]
+    local items = type(w) == "table" and w.items or nil
+    for _, it in ipairs(type(items) == "table" and items or {}) do
+      local have = byID[it.itemID]
+      if have then
+        have.quantity = (have.quantity or 1) + (it.quantity or 1)
+      else
+        local copy = {
+          itemID = it.itemID, name = it.name, quantity = it.quantity or 1,
+          quality = it.quality, itemLink = it.itemLink,
+        }
+        byID[it.itemID] = copy
+        out[#out + 1] = copy
+      end
+    end
+  end
+  return out
+end
+
+local function windowLog(rec, kind)
+  local key = (kind == "skin") and "skinWindowLog" or "corpseWindowLog"
+  local log = rec[key]
+  if type(log) ~= "table" then
+    log = {}
+    rec[key] = log
+  end
+  return log
+end
+
+local function pushWindow(rec, kind, items, money, t)
+  local log = windowLog(rec, kind)
+  log[#log + 1] = {
+    at = t, items = mapItems(items), money = money, rereads = 0,
+  }
+  while #log > R.MAX_WINDOWS do table.remove(log, 1) end
+  return log[#log]
+end
+
+-- The window that is currently open produced a fresh read (LOOT_SLOT_CLEARED,
+-- or the read just before LOOT_CLOSED). MERGE it into ITS snapshot — never
+-- replace it: a live loot window can only shrink as the player takes the items
+-- out, so a later read is a subset of the earlier one. Replacing is what made
+-- a corpse whose window carried 5466x1,4867x1 store "none seen" once the window
+-- emptied (live, ..10B81C). An item once seen in this window stays, and its
+-- quantity only grows; only OUR numbers are compared (itemID, quantity).
+-- With no window on the log (the recorder joined late) the read is appended.
+function R:SetWindowItems(guid, kind, items, money, t)
+  local rec = self:Find(guid)
+  if not rec then return nil end
+  local log = windowLog(rec, kind)
+  local win = log[#log]
+  if not win then
+    pushWindow(rec, kind, items, money, t)
+  else
+    local fresh = mapItems(items)
+    local known, byID = {}, {}
+    for _, it in ipairs(type(win.items) == "table" and win.items or {}) do
+      local copy = {
+        itemID = it.itemID, name = it.name, quantity = it.quantity or 1,
+        quality = it.quality, itemLink = it.itemLink,
+      }
+      known[#known + 1] = copy
+      byID[copy.itemID] = copy
+    end
+    for _, it in ipairs(fresh) do
+      local have = byID[it.itemID]
+      if have then
+        if (it.quantity or 1) > (have.quantity or 1) then
+          have.quantity = it.quantity or 1
+        end
+      else
+        known[#known + 1] = it
+        byID[it.itemID] = it
+      end
+    end
+    win.items = known
+    if type(money) == "number" and money > (tonumber(win.money) or 0) then
+      win.money = money
+    end
+    win.rereads = (win.rereads or 0) + 1
+    win.readAt = t
+  end
+  local field = (kind == "skin") and "skinItems" or "corpseItems"
+  -- re-rendered from the window log on EVERY write, so the record always shows
+  -- what the window has been seen to hold (this is what LOOT_CLOSED triggers
+  -- one last time before the window goes away)
+  rec[field] = mergeWindows(log)
+  return rec
+end
+
+-- ── stores ───────────────────────────────────────────────────────────
+-- Both stores share one shape: { schema, records, order, unclassified,
+-- counts }. The session store is what /mp skindiag dump reads; the DB store
+-- is where a real run lands when NodeTrailDB.skinning.enabled is on.
+function R:NewStore()
+  return {
+    schema = R.SCHEMA,
+    records = {},
+    order = {},          -- creation order, newest last
+    unclassified = {},
+    counts = {
+      kills = 0, corpseWindows = 0, skinWindows = 0, skinCasts = 0,
+      unattributedWindows = 0,
+    },
+  }
+end
+
+function R:Reset()
+  self.session = self:NewStore()
+  self._open = nil
+  self._error = nil
+  return self.session
+end
+
+-- The persist target. Records are scoped PER CHARACTER, exactly as the data
+-- model's section 6 requires: mixing an alt's three kills into this
+-- character's sample would silently change every count. The bucket key is
+-- Name-Realm inside NodeTrailDB.skinning (WoW saved variables are account
+-- wide, so "per character" means a bucket, not a new variable).
+--
+-- Bootstrap is lazy and additive: a NodeTrailDB written before this file
+-- existed keeps every key it already has, and `.enabled` (NodeTrail's
+-- sub-toggle) is never written here — NodeTrail owns it.
+function R.CharKey()
+  local name, realm = nil, nil
+  if type(GetUnitName) == "function" then
+    local ok, n = pcall(GetUnitName, "player", true)
+    -- the secret check comes FIRST: comparing or measuring a secret raises
+    if ok and type(n) == "string" and not isSecret(n) and n ~= "" then name = n end
+  end
+  if type(GetRealmName) == "function" then
+    local ok, r = pcall(GetRealmName)
+    if ok and type(r) == "string" and not isSecret(r) and r ~= "" then realm = r end
+  end
+  if name and realm then return name .. "-" .. realm end
+  return name or "player"
+end
+
+local function shapeBucket(b)
+  if type(b.schema) ~= "number" then b.schema = R.SCHEMA end
+  if type(b.records) ~= "table" then b.records = {} end
+  if type(b.order) ~= "table" then b.order = {} end
+  if type(b.unclassified) ~= "table" then b.unclassified = {} end
+  if type(b.counts) ~= "table" then
+    b.counts = {
+      kills = 0, corpseWindows = 0, skinWindows = 0, skinCasts = 0,
+      unattributedWindows = 0,
+    }
+  end
+  for _, k in ipairs({ "kills", "corpseWindows", "skinWindows", "skinCasts",
+    "unattributedWindows" }) do
+    if type(b.counts[k]) ~= "number" then b.counts[k] = 0 end
+  end
+  return b
+end
+
+function R:GetDB()
+  if type(NodeTrailDB) ~= "table" then NodeTrailDB = {} end
+  local s = NodeTrailDB.skinning
+  if type(s) ~= "table" then
+    s = {}
+    NodeTrailDB.skinning = s
+  end
+  if type(s.schema) ~= "number" then s.schema = R.SCHEMA end
+  if type(s.chars) ~= "table" then s.chars = {} end
+  local key = R.CharKey()
+  if type(s.chars[key]) ~= "table" then s.chars[key] = {} end
+  return shapeBucket(s.chars[key])
+end
+
+function R:IsEnabled()
+  if type(NodeTrailDB) ~= "table" then return false end
+  local s = NodeTrailDB.skinning
+  return type(s) == "table" and s.enabled == true
+end
+
+-- Returns store, persisting. Callers use both values: the record goes to the
+-- store that is active RIGHT NOW, and the dump always reads the session
+-- buffer so it can show what a real run would have stored.
+function R:Store()
+  if self:IsEnabled() then
+    return self:GetDB(), true
+  end
+  if type(self.session) ~= "table" then self:Reset() end
+  return self.session, false
+end
+
+function R:Enable()
+  self:Reset()
+  return true
+end
+
+function R:Disable()
+  self:Reset()
+  return true
+end
+
+-- ── the record ───────────────────────────────────────────────────────
+local function place(rec, ev)
+  -- position at DEATH is what the model wants; a record created from a loot
+  -- window (no UNIT_DIED seen) records where the window was instead, and says
+  -- so through killObserved=false.
+  if ev.map then rec.map = ev.map end
+  if ev.zone then rec.zone = ev.zone end
+  if ev.sub then rec.sub = ev.sub end
+  if type(ev.x) == "number" then rec.x = round4(ev.x) end
+  if type(ev.y) == "number" then rec.y = round4(ev.y) end
+end
+
+function R:RecordFor(guid, t)
+  if type(guid) ~= "string" or guid == "" then return nil end
+  local store = self:Store()
+  local rec = store.records[guid]
+  if rec then return rec end
+  rec = {
+    guid = guid,
+    creatureID = R.CreatureID(guid),
+    firstSeenAt = t or nowT(),
+    killObserved = false,
+    corpseItems = {},
+    skinItems = {},
+    corpseLootOpens = 0,
+  }
+  store.records[guid] = rec
+  store.order[#store.order + 1] = guid
+  while #store.order > R.MAX_RECORDS do
+    local old = table.remove(store.order, 1)
+    if old and old ~= guid then store.records[old] = nil end
+  end
+  return rec
+end
+
+function R:Find(guid)
+  if type(guid) ~= "string" then return nil end
+  local store = self:Store()
+  return store.records[guid]
+end
+
+-- A kill: UNIT_DIED with the creature GUID as its argument, or (only as a
+-- fallback for a death UNIT_DIED never reported) a dead target whose GUID is
+-- not on the recorder yet. The probe suppresses the duplicate, so one GUID
+-- is counted once.
+function R:OnKill(ev)
+  ev = ev or {}
+  local rec = self:RecordFor(ev.guid, ev.t)
+  if not rec then return nil end
+  local store = self:Store()
+  if not rec.killObserved then
+    store.counts.kills = store.counts.kills + 1
+    rec.killObserved = true
+  end
+  rec.diedAt = ev.t
+  if ev.name and rec.name == nil then rec.name = usableName(ev.name, ev.guid) end
+  if rec.map == nil then place(rec, ev) end
+  return rec
+end
+
+-- The target-changed fallback fires again for a corpse UNIT_DIED already
+-- reported ("sk 13 TARGET_DEAD target n=Scorpid Worker g=..F29C6F" after
+-- "sk 12 UNIT_DIED ... F090F29C6F"). It must not create a second death — but
+-- it IS the only place this client gives the mob's NAME, so the name is
+-- filled in and nothing else happens.
+function R:EnrichName(guid, name)
+  if name == nil then return nil end
+  if not isSecret(name) and (type(name) ~= "string" or name == "") then return nil end
+  local rec = self:Find(guid)
+  if not rec then return nil end
+  local clean = usableName(name, guid)
+  if clean ~= nil and rec.name == nil then rec.name = clean end
+  return rec
+end
+
+-- Ordinary corpse loot. Each OPEN is its own snapshot (see R.MAX_WINDOWS):
+-- a re-opened corpse (close, re-open to take the slot you left) adds a new
+-- window, while a LATE read of the same window replaces that window's list —
+-- so no observed item is lost and no duplicate row or doubled quantity is
+-- invented.
+function R:OnCorpseLoot(ev)
+  ev = ev or {}
+  local rec = self:RecordFor(ev.guid, ev.t)
+  if not rec then return nil end
+  local store = self:Store()
+  pushWindow(rec, "corpse", ev.items, ev.money, ev.t)
+  rec.corpseLootOpens = (rec.corpseLootOpens or 0) + 1
+  rec.corpseItems = mergeWindows(windowLog(rec, "corpse"))
+  rec.corpseLootAt = ev.t
+  if ev.name and rec.name == nil then rec.name = usableName(ev.name, ev.guid) end
+  if rec.map == nil then place(rec, ev) end
+  store.counts.corpseWindows = store.counts.corpseWindows + 1
+  self._open = { guid = ev.guid, kind = "corpse", at = ev.t }
+  return rec
+end
+
+-- A successful Skinning cast. The cast event carries no GUID, so the probe
+-- pins it to the corpse the player just looted (lastSkin.guid) and passes that
+-- in. With no pin (a cast before any window was seen) it falls back to the
+-- newest corpse record whose death is still inside SKIN_WINDOW — and to
+-- nothing at all when there is none. Never guessed.
+function R:OnSkinCast(ev)
+  ev = ev or {}
+  local store = self:Store()
+  local at = ev.t or nowT()
+  local rec = nil
+  if type(ev.guid) == "string" and ev.guid ~= "" then
+    rec = self:RecordFor(ev.guid, at)
+  else
+    for i = #store.order, 1, -1 do
+      local cand = store.records[store.order[i]]
+      if cand and cand.diedAt and (at - cand.diedAt) <= R.SKIN_WINDOW then
+        rec = cand
+        break
+      end
+    end
+  end
+  store.counts.skinCasts = store.counts.skinCasts + 1
+  if not rec then return nil end
+  rec.skinned = true
+  rec.skinSpellID = ev.spellID or R.SKIN_SPELL_ID
+  rec.skinCastAt = at
+  return rec
+end
+
+-- The skin loot window: a window the probe classified as SKIN (a successful
+-- 8613 cast inside the window, and no other corpse it could belong to). Each
+-- open is its own snapshot for the same reason as the corpse side: the client
+-- may fill the slots after LOOT_OPENED and the late read must replace, not add.
+function R:OnSkinLoot(ev)
+  ev = ev or {}
+  local rec = self:RecordFor(ev.guid, ev.t)
+  if not rec then return nil end
+  local store = self:Store()
+  pushWindow(rec, "skin", ev.items, ev.money, ev.t)
+  rec.skinItems = mergeWindows(windowLog(rec, "skin"))
+  rec.skinWindowAt = ev.t
+  rec.skinLootOpens = (rec.skinLootOpens or 0) + 1
+  if rec.corpseClosedAt then
+    rec.corpseToSkinGap = round2(ev.t - rec.corpseClosedAt)
+  end
+  if ev.name and rec.name == nil then rec.name = usableName(ev.name, ev.guid) end
+  store.counts.skinWindows = store.counts.skinWindows + 1
+  self._open = { guid = ev.guid, kind = "skin", at = ev.t }
+  return rec
+end
+
+-- A window the probe could not honestly attribute: no loot-source GUID and no
+-- death inside the fallback window, or a cast pending with nothing at all to
+-- hang the window on. It is kept as unclassified and never filed into either
+-- item list — and it is COUNTED, so the accounting line can say how many
+-- windows went unattributed instead of losing them.
+function R:OnUnclassified(ev)
+  ev = ev or {}
+  local store = self:Store()
+  store.unclassified[#store.unclassified + 1] = {
+    guid = ev.guid,
+    t = ev.t,
+    items = mapItems(ev.items),
+    reason = ev.reason or "a cast was pending but this corpse was never seen",
+  }
+  store.counts.unattributedWindows = (store.counts.unattributedWindows or 0) + 1
+  while #store.unclassified > R.MAX_UNCLASSIFIED do
+    table.remove(store.unclassified, 1)
+  end
+  return store.unclassified[#store.unclassified]
+end
+
+-- A LOOT_CLOSED that survived the probe's de-duplication. Only the window it
+-- actually closes is touched, which is why the duplicate close ("sk 16/sk 17")
+-- can never move the gap's start point.
+function R:OnLootClosed(t)
+  t = t or nowT()
+  local open = self._open
+  self._open = nil
+  if type(open) ~= "table" then return nil end
+  local rec = self:Find(open.guid)
+  if not rec then return nil end
+  if open.kind == "corpse" then
+    rec.corpseClosedAt = t
+  elseif open.kind == "skin" then
+    rec.skinClosedAt = t
+  end
+  return rec
+end
+
+-- ── rendering for /mp skindiag dump ──────────────────────────────────
+function R:Last(store)
+  store = store or self:Store()
+  local order = store.order
+  if type(order) ~= "table" then return nil end
+  for i = #order, 1, -1 do
+    local rec = store.records[order[i]]
+    if rec then return rec end
+  end
+  return nil
+end
+
+-- ── which records the dump shows (t_11fc0755) ────────────────────────
+-- The dump used to render R:Last(store) — ONE record — and the newest record
+-- is by definition the corpse that died most recently. The live run showed
+-- exactly the cost of that:
+--
+--   record unknown g=..BF2A02 cid=3125 kill=UNIT_DIED
+--     corpse items: none seen
+--     skinning cast: none
+--     skin items: none seen
+--     gap corpse-close->skin-open: n/a (no skin window)
+--
+-- on a mob that died at the LAST step of the buffer. `none seen` was true and
+-- useless: the dump always showcased the one record that cannot be complete
+-- yet. It now renders a small SET: the newest complete cycles first, and the
+-- corpse still in flight last, where it can be seen to be in flight.
+R.DUMP_RECORDS = 3
+-- The horizon. A record can only still gain a window while it is the newest
+-- one, and a corpse left this long without its skin window is never skinned
+-- (the probe attributes a skin window to a cast; the player loots and skins
+-- the mob within seconds of the kill). Past it the record is SETTLED: it is
+-- shown, and it is not called `in progress`.
+R.DUMP_HORIZON = 120
+
+-- A complete cycle: the ordinary corpse window AND the skin window that
+-- follows it, on this record's own GUID (the probe files a window under the
+-- GUID it opened on, so one record carrying both windows IS the same corpse
+-- on both). Counted from the windows actually filed, never inferred.
+function R:IsComplete(rec)
+  if type(rec) ~= "table" then return false end
+  return (rec.corpseLootOpens or 0) > 0 and (rec.skinLootOpens or 0) > 0
+end
+
+-- The last moment this record was touched, for the horizon.
+local ACTIVITY = { "firstSeenAt", "diedAt", "corpseLootAt", "corpseClosedAt",
+  "skinCastAt", "skinWindowAt", "skinClosedAt" }
+
+local function lastActivity(rec)
+  local last = nil
+  for _, k in ipairs(ACTIVITY) do
+    local v = rec[k]
+    if type(v) == "number" and (last == nil or v > last) then last = v end
+  end
+  return last
+end
+
+-- The set the dump renders, newest first, as { rec = <record>, state = ... }.
+-- States:
+--   complete        corpse window + skin window — the cycle this file records
+--   in progress     the newest record, still inside the horizon: its loot
+--                   windows are ahead of it, so `none seen` means `not yet`
+--   no skin window  the newest record, past the horizon, never skinned: the
+--                   cycle is over and no window is coming. Deliberately NOT
+--                   `complete` — calling a skinless record complete would be
+--                   the same false claim the newest-record dump made.
+--
+-- Selection: the newest incomplete record is always kept (printed last); the
+-- remaining slots go to the newest complete records, scanning past incomplete
+-- older ones so a run of unlooted kills cannot hide a finished cycle.
+function R:DumpSet(store, limit, t)
+  store = store or self:Store()
+  limit = limit or R.DUMP_RECORDS
+  if type(limit) ~= "number" or limit < 1 then limit = 1 end
+  local order = type(store.order) == "table" and store.order or {}
+  local recs = {}
+  for i = #order, 1, -1 do                       -- newest first
+    local rec = store.records[order[i]]
+    if type(rec) == "table" then recs[#recs + 1] = rec end
+  end
+  if #recs == 0 then return {} end
+  local at = t or nowT()
+  local pending = nil
+  local newest = recs[1]
+  if not self:IsComplete(newest) then
+    local last = lastActivity(newest)
+    local state = "in progress"
+    if last ~= nil and (at - last) > R.DUMP_HORIZON then
+      state = "no skin window"
+    end
+    pending = { rec = newest, state = state }
+  end
+  local out = {}
+  local room = limit - (pending and 1 or 0)
+  for i = 1, #recs do
+    local rec = recs[i]
+    if rec ~= (pending and pending.rec) and self:IsComplete(rec) then
+      if #out < room then out[#out + 1] = { rec = rec, state = "complete" } end
+    end
+  end
+  if pending then out[#out + 1] = pending end
+  return out
+end
+
+-- ── accounting ───────────────────────────────────────────────────────
+-- A run must be able to say where its kills went. The old counts line said
+-- "kills=15 corpse-windows=4" and nothing else, so 11 corpses were simply
+-- missing with no statement that they were (live, Razor Hill). This is the
+-- arithmetic behind that line, in one place, so the dump and any future
+-- renderer cannot disagree about it.
+--
+--   kills         deaths observed (UNIT_DIED, or a dead target UNIT_DIED missed)
+--   corpseWindows windows filed as ordinary corpse loot
+--   skinWindows   windows filed as skinning loot
+--   casts         successful Skinning casts
+--   unattributed  windows that produced neither a corpse nor a skin record
+--   killsNoWindow kills with no corpse window at all   = kills - (records with one)
+--   castsNoWindow casts that never produced a skin window = casts - skinWindows
+function R:Accounting(store)
+  store = store or self:Store()
+  local c = store.counts or {}
+  local kills = c.kills or 0
+  local skinWindows = c.skinWindows or 0
+  local casts = c.skinCasts or 0
+  local withWindow = 0
+  local records = type(store.records) == "table" and store.records or {}
+  for _, rec in pairs(records) do
+    if type(rec) == "table" and rec.killObserved == true
+      and (rec.corpseLootOpens or 0) > 0 then
+      withWindow = withWindow + 1
+    end
+  end
+  local killsNoWindow = kills - withWindow
+  if killsNoWindow < 0 then killsNoWindow = 0 end
+  local castsNoWindow = casts - skinWindows
+  if castsNoWindow < 0 then castsNoWindow = 0 end
+  return {
+    kills = kills,
+    corpseWindows = c.corpseWindows or 0,
+    skinWindows = skinWindows,
+    casts = casts,
+    unattributedWindows = c.unattributedWindows or 0,
+    killsNoWindow = killsNoWindow,
+    castsNoWindow = castsNoWindow,
+  }
+end
+
+-- The accounting LINE. It has to survive the probe's print site, which
+-- prefixes "Skinning skindiag: " (19 chars) before applying the 120-char cap,
+-- so the line itself must stay under 101 — hence "lost" rather than a second
+-- full sentence. It still reconciles: every kill is either a corpse window or
+-- counted as one without, and every cast is either a skin window or counted as
+-- one that produced none.
+function R:AccountingLine(store)
+  local a = self:Accounting(store)
+  return "accounting: kills=" .. tostring(a.kills)
+    .. " corpse-windows=" .. tostring(a.corpseWindows)
+    .. " skin-windows=" .. tostring(a.skinWindows)
+    .. " casts=" .. tostring(a.casts)
+    .. " | lost kills=" .. tostring(a.killsNoWindow)
+    .. " windows=" .. tostring(a.unattributedWindows)
+    .. " casts=" .. tostring(a.castsNoWindow)
+end
+
+-- The lines the dump prints for the last corpse: what the RECORDER would
+-- store, so the next in-game run verifies the model without a second probe.
+-- Every line is kept short enough for the probe's 120-char chat cap.
+--
+-- CONTRACT (t_1ed3b421): a line that carries client text — the creature's
+-- name, a GUID — is returned as
+--     { pre = <text this file built>, name = <client text>, post = <text> }
+-- and NOT as one string. The client may mark a creature name SECRET, and a
+-- secret may be shown but never measured, sliced or formatted; joining it
+-- into a string here is what killed the c220ec7 dump at Probe.lua:908. The
+-- printer appends `name` and never measures the result. Lines with no client
+-- text are plain strings.
+-- One record's block. Every line is kept short enough for the probe's
+-- 120-char chat cap, and the header reads its position in the set:
+--   record 1 of 3 (complete) Scorpid Worker g=..B4A5F9 cid=3125 kill=UNIT_DIED
+-- Lines carrying client text come back as { pre, name, post } (see Describe).
+function R:RenderRecord(out, rec, i, n, state)
+  -- The NAME slot says `unknown` when there is no name, and never shows the
+  -- GUID: live, a GUID that arrived where a name belongs printed the corpse as
+  -- "record ? g=..30C716" and, once, as the GUID twice.
+  local label = "record " .. tostring(i) .. " of " .. tostring(n)
+    .. " (" .. tostring(state) .. ") "
+  local headPre, headName = label .. "unknown", nil
+  local shownName = R.DisplayName(rec)
+  if shownName ~= nil then headPre, headName = label, shownName end
+  local post = ""
+  local gs = guidSuffix(rec.guid)
+  -- A GUID this client marks secret cannot be sliced, so it is not shortened
+  -- here and not invented either: "g=unknown" says the value could not be read
+  -- as text (a SECRET GUID). The name keeps the client slot (it is what a reader
+  -- needs most).
+  if gs then post = post .. " g=" .. gs
+  elseif rec.guid ~= nil then post = post .. " g=unknown" end
+  if rec.creatureID then post = post .. " cid=" .. tostring(rec.creatureID) end
+  post = post .. " kill=" .. (rec.killObserved and "UNIT_DIED" or "loot-only")
+  if headName ~= nil then
+    out[#out + 1] = { pre = headPre, name = headName, post = post }
+  else
+    out[#out + 1] = headPre .. post
+  end
+  -- Where: on its own line. The header has to hold the position label, the
+  -- creature's name (client text, never measured) and the identity fields, and
+  -- all four on one line pushes a long name past the probe's 120-char cap —
+  -- which truncated the label itself (live spec run: "record 2 of 3 (complete"
+  -- with no closing paren). The position is not dropped, it moves one line down.
+  local z = cut(rec.zone, 14)
+  local where = ""
+  if z then where = "z=" .. z end
+  if rec.map and type(rec.x) == "number" and type(rec.y) == "number" then
+    if where ~= "" then where = where .. " " end
+    where = where .. tostring(rec.map) .. "@" .. pct3(rec.x) .. "," .. pct3(rec.y)
+  end
+  if where ~= "" then out[#out + 1] = "  where: " .. where end
+
+  local lateRead = 0
+  for _, w in ipairs(type(rec.corpseWindowLog) == "table" and rec.corpseWindowLog or {}) do
+    if type(w) == "table" and (w.rereads or 0) > 0 then lateRead = lateRead + 1 end
+  end
+  out[#out + 1] = "  corpse items: " .. itemList(rec.corpseItems)
+    .. (rec.corpseLootOpens and rec.corpseLootOpens > 1
+      and (" (" .. rec.corpseLootOpens .. " windows)") or "")
+    .. (lateRead > 0 and " (late read)" or "")
+  local cast = "  skinning cast: "
+  if rec.skinned then
+    cast = cast .. "8613 ok"
+  else
+    cast = cast .. "none"
+  end
+  out[#out + 1] = cast
+  out[#out + 1] = "  skin items: " .. itemList(rec.skinItems)
+  if rec.corpseToSkinGap then
+    out[#out + 1] = "  gap corpse-close->skin-open: "
+      .. string.format("%.2fs", rec.corpseToSkinGap)
+  elseif rec.skinWindowAt then
+    out[#out + 1] = "  gap corpse-close->skin-open: n/a (close not seen)"
+  else
+    out[#out + 1] = "  gap corpse-close->skin-open: n/a (no skin window)"
+  end
+  return out
+end
+
+function R:Describe(store)
+  store = store or self:Store()
+  local out = {}
+  local set = self:DumpSet(store)
+  local n = #set
+  if n == 0 then
+    out[#out + 1] = "record: none yet (kill a skinnable, loot it, cast Skinning, loot again)"
+    return out
+  end
+  -- "none seen" is only useful next to a record that CAN be complete. When no
+  -- cycle has closed yet the dump says which one is still open, instead of
+  -- letting the reader decode four `none seen` lines.
+  local complete = 0
+  for i = 1, n do
+    if set[i].state == "complete" then complete = complete + 1 end
+  end
+  if complete == 0 then
+    out[#out + 1] = "no complete corpse->skin cycle captured yet — kill, loot, skin one more mob"
+  end
+  for i = 1, n do
+    R:RenderRecord(out, set[i].rec, i, n, set[i].state)
+  end
+  -- The counts belong to the STORE, not to a record: they print once, under
+  -- the records, however many records the dump shows.
+  local c = store.counts or {}
+  out[#out + 1] = "counts kills=" .. tostring(c.kills or 0)
+    .. " corpse-windows=" .. tostring(c.corpseWindows or 0)
+    .. " skin-windows=" .. tostring(c.skinWindows or 0)
+    .. " skin-casts=" .. tostring(c.skinCasts or 0)
+  -- the line that makes a broken run visible: 15 kills with 4 windows is
+  -- stated as 11 kills that produced none, not silently dropped.
+  local acct = nil
+  if type(R.AccountingLine) == "function" then acct = R.AccountingLine(self, store) end
+  out[#out + 1] = acct or "accounting: unavailable"
+  out[#out + 1] = "  (your own observations only - no rate is computed)"
+  return out
+end

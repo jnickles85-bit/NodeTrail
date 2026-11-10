@@ -67,6 +67,7 @@ local function loadFile(path)
 end
 loadFile("locale/enUS.lua")
 loadFile("Config.lua")
+loadFile("Data/ItemNames.lua")
 loadFile("Data/Recorder.lua")
 local ns = pkg.NodeTrail
 

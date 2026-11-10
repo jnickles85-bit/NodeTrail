@@ -1,0 +1,6 @@
+map 1411: route=yes points=5 stops=4
+NodeTrail mapdiag: skinning circle layer: parent=WorldMapFrame host=<unnamed> host_size=697x465 colour=0.10,0.85,0.35,0.95 queued=4
+NodeTrail mapdiag: skinning circle dots on the visible map: 177/177 inside (measured 177 of 177 painted; window=the whole measured map rect (no clip window); map=1411)
+NodeTrail mapdiag: skinning circle on the minimap: segs queued=0 painted=0 planned=0 colour=0.10,0.85,0.35,0.95 map=1411 mode=frac why=none of the circle's segments landed inside the minimap view
+map 1415: route=nil why=NO_SKINNING overlay_skinPath=nil minimap_skinPath=nil
+NodeTrail skinning circle: 0 of 8 skinned corpses on map 1415 — 8 more needed (kill, loot and skin a mob to start)
