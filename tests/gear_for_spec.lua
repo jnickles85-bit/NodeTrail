@@ -897,6 +897,36 @@ expectParse("PALADIN", "protection defensive", "prot_defensive")
 expectParse("WARRIOR", "prot offensive", "prot_offensive")
 expectParse("DRUID", "bear offensive", "feral_bear_offensive")
 
+
+-- Enhancement keeps the published Wowhead order, but verdicts carry a
+-- one-line caveat (profile.caveat) about the Nov 10 Mental Dexterity
+-- hotfix. Other specs have no caveat field, so their reasons stay exact.
+local enhPack = Verdict.WEIGHTS.SHAMAN.enhancement
+check(enhPack and enhPack.kind == "order" and type(enhPack.caveat) == "string"
+    and enhPack.caveat == "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated.",
+  "Enhancement has the Mental Dexterity caveat as a profile data field")
+local enhNames = {}
+if type(enhPack) == "table" and type(enhPack.tiers) == "table" then
+  for _, tier in ipairs(enhPack.tiers) do enhNames[#enhNames + 1] = tier.name end
+end
+check(enhNames[1] == "Hit" and enhNames[2] == "Expertise" and enhNames[3] == "Intellect"
+    and enhNames[4] == "Spell Damage" and enhNames[5] == "Strength",
+  "Enhancement keeps the Wowhead order (Intellect still ranks above Strength)")
+local enhSpec = { class = "SHAMAN", weightsKey = "enhancement", clientRole = "DAMAGER" }
+local vEnh, rEnh, dEnh = Verdict.weightedVerdict({ Intellect = 10 }, { Intellect = 0 }, enhSpec)
+check(vEnh == "UPGRADE", "Enhancement still scores Intellect (got " .. tostring(vEnh) .. ")")
+check(type(rEnh) == "string" and rEnh:find("decided by Intellect", 1, true)
+    and rEnh:find(enhPack.caveat, 1, true),
+  "Enhancement verdicts include the caveat (got " .. tostring(rEnh) .. ")")
+check(dEnh and dEnh.caveat == enhPack.caveat, "the verdict detail carries profile.caveat")
+local retPack = Verdict.WEIGHTS.PALADIN.ret
+check(retPack and retPack.caveat == nil, "Retribution has no caveat field")
+local vRetC, rRetC = Verdict.weightedVerdict({ Strength = 10 }, { Strength = 0 },
+  { class = "PALADIN", weightsKey = "ret", clientRole = "DAMAGER" })
+check(vRetC == "UPGRADE" and type(rRetC) == "string"
+    and rRetC:find("Mental Dexterity", 1, true) == nil,
+  "other specs do not get the Enhancement caveat (got " .. tostring(rRetC) .. ")")
+
 -- Direct options-style set still rescans (scan is a function after Enable).
 local scans = 0
 local realScan = ChestAdvisor.scan

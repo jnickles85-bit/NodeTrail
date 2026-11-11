@@ -1,0 +1,6 @@
+{
+  "note": "Optional one-line caveats appended to that spec's verdicts. The published Wowhead order is never reordered. Delete an entry and re-run tools/gen_wowhead_priorities.py when the Wowhead page catches up.",
+  "caveats": {
+    "SHAMAN.enhancement": "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated."
+  }
+}
