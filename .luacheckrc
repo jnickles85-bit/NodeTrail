@@ -17,7 +17,7 @@ max_line_length = false     -- long lines are formatting, not behaviour
 unused_args = false         -- WoW callbacks and slash handlers get fixed signatures
 
 globals = {
-    AddonCompartmentFrame = { other_fields = true }, CANCEL = { other_fields = true }, C_AddOns = { other_fields = true },
+    AddonCompartmentFrame = { other_fields = true }, BugGrabber = { other_fields = true }, CANCEL = { other_fields = true }, C_AddOns = { other_fields = true },
     C_Container = { other_fields = true }, C_Item = { other_fields = true }, C_Map = { other_fields = true },
     C_Minimap = { other_fields = true }, C_PlayerInfo = { other_fields = true }, C_SpecializationInfo = { other_fields = true },
     C_Timer = { other_fields = true }, C_TooltipInfo = { other_fields = true }, C_TradeSkillUI = { other_fields = true },
@@ -32,7 +32,7 @@ globals = {
     GetNumSkillLines = { other_fields = true }, GetNumTradeSkills = { other_fields = true }, GetPlayerFacing = { other_fields = true },
     GetPlayerInfoByGUID = { other_fields = true }, GetPlayerMapPosition = { other_fields = true }, GetProfessionInfo = { other_fields = true },
     GetProfessions = { other_fields = true }, GetQuestItemLink = { other_fields = true }, GetQuestLogItemLink = { other_fields = true },
-    GetRealmName = { other_fields = true }, GetSkillLineInfo = { other_fields = true }, GetSpellInfo = { other_fields = true },
+    GetRealmName = { other_fields = true }, GetRealZoneText = { other_fields = true }, GetSkillLineInfo = { other_fields = true }, GetSpellInfo = { other_fields = true },
     GetSubzone = { other_fields = true }, GetTime = { other_fields = true }, GetTradeSkillInfo = { other_fields = true },
     GetTradeSkillLine = { other_fields = true }, GetTradeSkillNumAvailable = { other_fields = true }, GetTradeSkillNumReagents = { other_fields = true },
     GetTradeSkillReagentInfo = { other_fields = true }, GetTradeSkillReagentItemLink = { other_fields = true }, GetUnitGUID = { other_fields = true },
@@ -54,7 +54,7 @@ globals = {
     UnitCreatureType = { other_fields = true }, UnitExists = { other_fields = true }, UnitGUID = { other_fields = true },
     UnitIsDead = { other_fields = true }, UnitLevel = { other_fields = true }, UnitName = { other_fields = true },
     UnitPosition = { other_fields = true }, WOW_PROJECT_ID = { other_fields = true }, WorldFrame = { other_fields = true },
-    date = { other_fields = true }, hooksecurefunc = { other_fields = true }, issecretvalue = { other_fields = true },
+    date = { other_fields = true }, debugstack = { other_fields = true }, geterrorhandler = { other_fields = true }, hooksecurefunc = { other_fields = true }, issecretvalue = { other_fields = true }, seterrorhandler = { other_fields = true },
     time = { other_fields = true }, tinsert = { other_fields = true },
 }
 
