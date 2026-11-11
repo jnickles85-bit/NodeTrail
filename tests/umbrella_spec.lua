@@ -30,8 +30,9 @@ end
 
 local tocLines = readToc()
 check(#tocLines > 0, "TOC has lines")
-check(tocLines[1] == "Core.lua", "TOC first is Core.lua, got " .. tostring(tocLines[1]))
-check(tocLines[2] == "Modules.lua", "TOC second is Modules.lua, got " .. tostring(tocLines[2]))
+check(tocLines[1] == "ErrorHandler.lua", "TOC first is ErrorHandler.lua, got " .. tostring(tocLines[1]))
+check(tocLines[2] == "Core.lua", "TOC second is Core.lua, got " .. tostring(tocLines[2]))
+check(tocLines[3] == "Modules.lua", "TOC third is Modules.lua, got " .. tostring(tocLines[3]))
 check(tocLines[#tocLines] == "Options.lua", "TOC last is Options.lua, got " .. tostring(tocLines[#tocLines]))
 local hasNodeCore = false
 for _, l in ipairs(tocLines) do

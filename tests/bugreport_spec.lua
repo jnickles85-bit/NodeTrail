@@ -34,13 +34,18 @@ GameTooltip = {
 }
 
 local currentHandler
+local prevCalls = {}
+local function originalPrev(...)
+  prevCalls[#prevCalls + 1] = { n = select("#", ...), ... }
+  return "prev-ok", 42
+end
+currentHandler = originalPrev
 function geterrorhandler()
   return currentHandler
 end
 function seterrorhandler(fn)
-  local prev = currentHandler
   currentHandler = fn
-  return prev
+  return currentHandler
 end
 
 -- Privacy canaries: the builder must never read these into the report.
@@ -48,7 +53,7 @@ GetUnitName = function() return "SecretPlayer" end
 UnitName = function() return "SecretPlayer" end
 GetRealmName = function() return "SecretRealm" end
 GetPlayerInfoByGUID = function() return "SecretPlayer", "SecretRealm", "Priest" end
-GetUnitGUID = function() return "Player-00-SECRET" end
+GetUnitGUID = function() return "Player-1234-ABCDEF" end
 
 GetAddOnMetadata = function(name, what)
   if name == "MightiePack" and what == "Version" then return "0.3.0-beta" end
@@ -74,7 +79,7 @@ C_Map = { GetBestMapForUnit = function(unit)
 end }
 
 local frames, editboxes, buttons = {}, {}, {}
-local callLog = { focus = 0, highlight = 0 }
+local callLog = { focus = 0, highlight = 0, clearFocus = 0 }
 
 local function mkBase(kind)
   local o = {
@@ -89,7 +94,10 @@ local function mkBase(kind)
   o.SetText = function(self, t) self.text = tostring(t) end
   o.GetText = function(self) return self.text end
   o.Show = function(self) self.shown = true end
-  o.Hide = function(self) self.shown = false end
+  o.Hide = function(self)
+    self.shown = false
+    if self.scripts.OnHide then self.scripts.OnHide(self) end
+  end
   o.RegisterEvent = function(self, n) self.events[n] = true end
   o.UnregisterEvent = function(self, n) self.events[n] = nil end
   o.CreateFontString = function()
@@ -111,6 +119,10 @@ local function mkBase(kind)
     callLog.highlight = callLog.highlight + 1
     self.highlighted = true
   end
+  o.ClearFocus = function(self)
+    callLog.clearFocus = callLog.clearFocus + 1
+    self.hasFocus = false
+  end
   return o
 end
 
@@ -130,16 +142,111 @@ local function loadfile_into(path, addon, pkg)
   check(ok, "load " .. path .. ": " .. tostring(err))
 end
 
+-- ── Isolated handler-install cases (fresh pkg each time) ───────────
+do
+  local setCount = 0
+  local savedGet, savedSet = geterrorhandler, seterrorhandler
+
+  geterrorhandler = function() return nil end
+  seterrorhandler = function()
+    setCount = setCount + 1
+  end
+  local pkgNil = {}
+  loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkgNil)
+  check(setCount == 0, "nil prev: handler not installed")
+  if type(pkgNil.InstallErrorHandler) == "function" then
+    pkgNil.InstallErrorHandler()
+  end
+  check(setCount == 0, "nil prev: retry still not installed")
+
+  geterrorhandler = nil
+  setCount = 0
+  local pkgMissing = {}
+  loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkgMissing)
+  check(setCount == 0, "missing geterrorhandler: not installed")
+
+  local isolated
+  geterrorhandler = function()
+    return function() return "p" end
+  end
+  seterrorhandler = function(fn)
+    setCount = setCount + 1
+    isolated = fn
+  end
+  setCount = 0
+  local pkgOnce = {}
+  loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkgOnce)
+  check(setCount == 1, "valid prev: installed once")
+  pkgOnce.InstallErrorHandler()
+  check(setCount == 1, "double install: still a single wrap")
+  check(type(isolated) == "function", "wrapper installed")
+
+  geterrorhandler, seterrorhandler = savedGet, savedSet
+end
+
+-- TOC: ErrorHandler first, OptionalDeps lists BugGrabber, project ID unchanged
+do
+  local f = assert(io.open(root .. "/MightiePack/MightiePack.toc", "r"))
+  local toc = f:read("*a")
+  f:close()
+  check(toc:find("X%-Curse%-Project%-ID: 1788533", 1) ~= nil, "TOC project ID unchanged")
+  check(toc:find("OptionalDeps: GatherMate2, BugGrabber", 1, true) ~= nil,
+    "TOC OptionalDeps includes BugGrabber")
+  local files = {}
+  for line in toc:gmatch("[^\r\n]+") do
+    local tline = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if tline ~= "" and not tline:match("^#") then
+      files[#files + 1] = tline
+    end
+  end
+  check(files[1] == "ErrorHandler.lua", "TOC loads ErrorHandler.lua first (got " .. tostring(files[1]) .. ")")
+end
+
 MightiePackDB = nil
 local pkg = {}
+loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkg)
 loadfile_into(root .. "/MightiePack/Core.lua", "MightiePack", pkg)
 loadfile_into(root .. "/MightiePack/Modules.lua", "MightiePack", pkg)
 loadfile_into(root .. "/MightiePack/BugReport.lua", "MightiePack", pkg)
 
 check(type(pkg.BuildBugReport) == "function", "BuildBugReport exported")
 check(type(pkg.OpenBugReport) == "function", "OpenBugReport exported")
+check(type(pkg.Sanitize) == "function", "Sanitize exported")
+check(type(pkg.InstallErrorHandler) == "function", "InstallErrorHandler exported")
 check(pkg.BUG_DISCORD_INVITE == nil, "BUG_DISCORD_INVITE starts nil")
-check(type(currentHandler) == "function", "seterrorhandler chained at load")
+check(type(currentHandler) == "function" and currentHandler ~= originalPrev,
+  "seterrorhandler chained at load")
+
+-- prev called + return values passed through; extra args forwarded
+prevCalls = {}
+local r1, r2 = currentHandler("plain from handler", "extra-arg")
+check(r1 == "prev-ok" and r2 == 42, "prev return values passed through")
+check(#prevCalls == 1, "prev called once for a single invoke")
+check(prevCalls[1][1] == "plain from handler" and prevCalls[1][2] == "extra-arg",
+  "all handler args forwarded to prev")
+
+-- re-entrancy: ObserveLuaError must not run nested
+do
+  local observeCount = 0
+  local real = pkg.ObserveLuaError
+  pkg.ObserveLuaError = function(...)
+    observeCount = observeCount + 1
+    currentHandler("nested invoke")
+    return real(...)
+  end
+  prevCalls = {}
+  currentHandler("outer invoke")
+  check(observeCount == 1, "re-entrancy: ObserveLuaError ran once")
+  check(#prevCalls == 2, "re-entrancy: prev still called for the nested invoke")
+  pkg.ObserveLuaError = real
+end
+
+-- double install on the live pkg does not wrap again
+do
+  local wrapped = currentHandler
+  pkg.InstallErrorHandler()
+  check(currentHandler == wrapped, "live double install: wrapper unchanged")
+end
 
 pkg.RegisterModule("NodeTrail", {
   title = "NodeTrail",
@@ -162,6 +269,60 @@ local function lacks(text, needle, label)
     label .. " (should not contain '" .. needle .. "')")
 end
 
+-- ── sanitize: paths, GUIDs, BattleTags, Name-Realm, own identity ──
+do
+  local unix = pkg.Sanitize("boom /home/foo/bar.lua:1")
+  has(unix, "<path>", "unix path replaced")
+  lacks(unix, "/home/foo", "unix path stripped")
+
+  local fslash = pkg.Sanitize("boom C:/Users/sam/addon.lua:2")
+  has(fslash, "<path>", "forward-slash drive path replaced")
+  lacks(fslash, "C:/Users", "forward-slash drive stripped")
+
+  local bslash = pkg.Sanitize("boom C:\\Users\\sam\\addon.lua:3")
+  has(bslash, "<path>", "backslash drive path replaced")
+  lacks(bslash, "C:\\Users", "backslash drive stripped")
+
+  local unc = pkg.Sanitize("boom \\\\server\\share\\file.lua:4")
+  has(unc, "<path>", "UNC path replaced")
+  lacks(unc, "\\\\server\\share", "UNC path stripped")
+
+  local kept = pkg.Sanitize("/home/x/Interface/AddOns/MightiePack/Core.lua:42: broke")
+  has(kept, "Interface\\AddOns\\MightiePack\\Core.lua:42: broke",
+    "Interface\\AddOns rewrite kept after unix prefix")
+  lacks(kept, "/home/x", "prefix before Interface\\AddOns stripped")
+
+  local guid = pkg.Sanitize("unit Player-1234-ABCDEF01 and Creature-0-1-2-3-AABBCC")
+  has(guid, "<guid>", "GUID replaced")
+  lacks(guid, "Player-1234-ABCDEF01", "Player GUID stripped")
+  lacks(guid, "Creature-0-1-2-3-AABBCC", "Creature GUID stripped")
+
+  local bt = pkg.Sanitize("from SomeName#1234 said hi")
+  has(bt, "<battletag>", "BattleTag replaced")
+  lacks(bt, "SomeName#1234", "BattleTag stripped")
+
+  local nr = pkg.Sanitize("near Bobmage-EmeraldDream during the pull")
+  has(nr, "<name-realm>", "Name-Realm token replaced")
+  lacks(nr, "Bobmage-EmeraldDream", "Name-Realm stripped")
+  local ver = pkg.Sanitize("version 0.3.0-from-caddons")
+  has(ver, "0.3.0-from-caddons", "version string not treated as Name-Realm")
+
+  local savedName, savedRealm = UnitName, GetRealmName
+  UnitName = function() return "Migh.tie+test" end
+  GetRealmName = function() return "For[ever]" end
+  local ident = pkg.Sanitize("Migh.tie+test on For[ever] plus MighXtie+test")
+  has(ident, "<name>", "own name scrubbed")
+  has(ident, "<realm>", "own realm scrubbed")
+  lacks(ident, "Migh.tie+test", "literal name removed")
+  lacks(ident, "For[ever]", "literal realm removed")
+  has(ident, "MighXtie+test", "name pattern-escaped so '.' does not match any char")
+  UnitName, GetRealmName = savedName, savedRealm
+
+  print("── sample sanitized error line ──")
+  print(kept)
+  print("────────────────────────────────")
+end
+
 -- ── sample report (C_AddOns metadata wins over the legacy global) ──
 local report = pkg.BuildBugReport()
 check(type(report) == "string", "BuildBugReport returns a string")
@@ -177,7 +338,7 @@ has(report, "Lua error: none", "no captured error yet")
 has(report, "Screenshot: (attach in Discord)", "screenshot reminder")
 lacks(report, "SecretPlayer", "no character name")
 lacks(report, "SecretRealm", "no realm name")
-lacks(report, "Player-00-SECRET", "no GUID")
+lacks(report, "Player-1234-ABCDEF", "no GUID")
 
 print("── sample report ─────────────────────────")
 print(report)
@@ -208,10 +369,37 @@ if noMap then
 end
 C_Map = savedMap
 
+-- ── missing GetBuildInfo / Forever 4-value shape ──
+do
+  local saved = GetBuildInfo
+  GetBuildInfo = nil
+  local missing = pkg.BuildBugReport()
+  has(missing, "Client version: unknown (build unknown, interface 16001)",
+    "missing GetBuildInfo: unknown version/build, TOC interface")
+  GetBuildInfo = function() return "16", "0", "0", "16001" end
+  local forever = pkg.BuildBugReport()
+  has(forever, "Client version: 16.0.0 (build 16001, interface 16001)",
+    "Forever 4-value GetBuildInfo shape")
+  GetBuildInfo = saved
+end
+
 -- ── error not mentioning MightiePack is ignored ──
 pkg.ObserveLuaError("Interface\\AddOns\\SomeOtherAddon\\Foo.lua:12: boom")
 local stillNone = pkg.BuildBugReport()
 has(stillNone, "Lua error: none", "unrelated error ignored")
+
+-- ── stack-only mention is enough ──
+do
+  local savedDS = debugstack
+  debugstack = function()
+    return "Interface\\AddOns\\MightiePack\\Core.lua:1: in function `foo'"
+  end
+  pkg.ObserveLuaError("plain oops with no addon name in the message")
+  local stackHit = pkg.BuildBugReport()
+  has(stackHit, "plain oops with no addon name in the message",
+    "mentionsPack checks the stack, not just the message")
+  debugstack = savedDS
+end
 
 -- ── captured MightiePack error, paths sanitized ──
 pkg.ObserveLuaError("/home/someone/Interface/AddOns/MightiePack/Core.lua:42: something broke")
@@ -222,15 +410,31 @@ lacks(withErr, "/home/someone", "user path stripped")
 lacks(withErr, "/workspace", "no box/workspace paths")
 lacks(withErr, "Lua error: none", "error replaces 'none'")
 
+-- ── appended stack is sanitized ──
+do
+  local savedDS = debugstack
+  debugstack = function()
+    return "/home/runner/work/addon.lua:1: in main\nC:\\Users\\sam\\x.lua:2: in function\n\\\\server\\share\\y.lua:3"
+  end
+  pkg.ObserveLuaError("MightiePack stack-test")
+  local stacked = pkg.BuildBugReport()
+  has(stacked, "MightiePack stack-test", "message kept")
+  has(stacked, "<path>", "stack paths sanitized")
+  lacks(stacked, "/home/runner", "unix stack path stripped")
+  lacks(stacked, "C:\\Users\\sam", "drive stack path stripped")
+  lacks(stacked, "\\\\server\\share", "UNC stack path stripped")
+  debugstack = savedDS
+end
+
 -- ── handler itself filters the same way ──
 currentHandler("Interface\\AddOns\\Other\\x.lua:1: nope")
 local afterOther = pkg.BuildBugReport()
-has(afterOther, "something broke", "unrelated handler error does not replace ours")
+has(afterOther, "stack-test", "unrelated handler error does not replace ours")
 
 currentHandler("Interface\\AddOns\\MightiePack\\Options.lua:9: newer boom")
 local afterOurs = pkg.BuildBugReport()
 has(afterOurs, "Options.lua:9: newer boom", "handler stores a newer pack error")
-lacks(afterOurs, "something broke", "only the most recent error is kept")
+lacks(afterOurs, "stack-test", "only the most recent error is kept")
 
 -- ── BugGrabber, when present, wins ──
 BugGrabber = {
@@ -262,6 +466,24 @@ check(edit ~= nil and type(edit.text) == "string" and edit.text:find("MightiePac
   "popup EditBox is pre-filled")
 check(edit and edit.hasFocus == true, "EditBox SetFocus on open")
 check(edit and edit.highlighted == true, "EditBox HighlightText on open")
+
+-- keyboard trap: Escape clears focus and hides; OnHide also clears focus
+check(edit and type(edit.scripts.OnEscapePressed) == "function", "EditBox has OnEscapePressed")
+check(form and type(form.scripts.OnHide) == "function", "frame has OnHide")
+callLog.clearFocus = 0
+if edit and edit.scripts.OnEscapePressed then
+  edit.scripts.OnEscapePressed(edit)
+end
+check(edit and edit.hasFocus == false, "Escape clears EditBox focus")
+check(form and form.shown == false, "Escape hides the popup")
+check(callLog.clearFocus >= 1, "Escape/OnHide called ClearFocus")
+
+pkg.OpenBugReport()
+check(form.shown == true and edit.hasFocus == true, "reopen focuses the EditBox")
+callLog.clearFocus = 0
+form.scripts.OnHide(form)
+check(edit.hasFocus == false, "OnHide clears EditBox focus")
+check(callLog.clearFocus >= 1, "OnHide called ClearFocus")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")

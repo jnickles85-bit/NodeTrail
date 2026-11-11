@@ -618,8 +618,7 @@ bugButton:SetSize(128, 24)
 bugButton:SetText("Report a bug")
 bugButton:SetScript("OnClick", function()
   if type(pkg.OpenBugReport) == "function" then
-    -- opened from the options panel: no module argument, so the form
-    -- preselects NodeTrail (its default target)
+    -- Same popup as /mp bug.
     pkg.OpenBugReport()
   else
     DEFAULT_CHAT_FRAME:AddMessage("MightiePack: bug report form unavailable (BugReport module did not load)")

@@ -9,7 +9,6 @@ local addonName, pkg = ...
 -- hint then just names #mightiepack-bugs.
 pkg.BUG_DISCORD_INVITE = nil
 
-local lastError = nil
 local frame, editBox, hintFS
 
 local function safeStr(v)
@@ -18,83 +17,13 @@ local function safeStr(v)
   return v
 end
 
--- Drop user filesystem prefixes. Interface\AddOns\... is kept; a Windows
--- or Unix absolute path is reduced to its trailing file name.
 local function sanitize(text)
-  local s = tostring(text or ""):gsub("\r\n", "\n")
-  s = s:gsub("[^\n]*[Ii]nterface[/\\][Aa]dd[Oo]ns[/\\]([^\n]*)", function(rest)
-    rest = rest:gsub("/", "\\")
-    return "Interface\\AddOns\\" .. rest
-  end)
-  s = s:gsub("[A-Za-z]:\\[%w%._%-%s\\]+", function(p)
-    return p:match("([^\\]+)$") or p
-  end)
-  s = s:gsub("(/[%w%._%-]+)+", function(full)
-    return full:match("([^/]+)$") or full
-  end)
-  return s
-end
-
-local function firstLines(text, n)
-  local out = {}
-  for line in tostring(text or ""):gmatch("[^\r\n]+") do
-    if not line:match("^stack traceback") then
-      out[#out + 1] = line
-      if #out >= n then break end
-    end
+  if type(pkg.Sanitize) == "function" then
+    local ok, s = pcall(pkg.Sanitize, text)
+    if ok then return s end
   end
-  return table.concat(out, "\n")
+  return tostring(text or "")
 end
-
-local function mentionsPack(text)
-  return tostring(text or ""):find("MightiePack", 1, true) ~= nil
-end
-
-local function stackSnippet()
-  if type(debugstack) == "function" then
-    local ok, s = pcall(debugstack, 3, 8)
-    if ok and type(s) == "string" then return s end
-  end
-  if type(debug) == "table" and type(debug.traceback) == "function" then
-    local ok, s = pcall(debug.traceback, "", 3)
-    if ok and type(s) == "string" then return s end
-  end
-  return ""
-end
-
--- Store only the most recent MightiePack error (message + first ~6 stack lines).
-function pkg.ObserveLuaError(msg)
-  -- Filter on the original message only: a stack we generate from inside
-  -- this file always mentions MightiePack and would capture unrelated errors.
-  local raw = tostring(msg or "")
-  if not mentionsPack(raw) then
-    return
-  end
-  local message = sanitize(raw)
-  local stack = sanitize(stackSnippet())
-  local body = firstLines(message, 8)
-  local extra = firstLines(stack, 6)
-  if extra ~= "" then
-    body = body .. "\n" .. extra
-  end
-  lastError = body
-end
-
-local function installErrorHandler()
-  if type(seterrorhandler) ~= "function" then return end
-  local prev
-  if type(geterrorhandler) == "function" then
-    local ok, h = pcall(geterrorhandler)
-    if ok then prev = h end
-  end
-  seterrorhandler(function(err)
-    pcall(pkg.ObserveLuaError, err)
-    if type(prev) == "function" then
-      return prev(err)
-    end
-  end)
-end
-pcall(installErrorHandler)
 
 local function addonVersion()
   if type(pkg.GetAddOnMeta) == "function" then
@@ -166,7 +95,7 @@ local function enabledModules()
   return table.concat(names, ", ")
 end
 
--- Class and level only. Never call UnitName / GetUnitName / GetRealmName.
+-- Class and level only. Names and realms are never written here.
 local function characterLine()
   local class = "unknown"
   if type(UnitClass) == "function" then
@@ -213,8 +142,19 @@ local function zoneLine()
   return zone
 end
 
+local function firstLines(text, n)
+  local out = {}
+  for line in tostring(text or ""):gmatch("[^\r\n]+") do
+    if not line:match("^stack traceback") then
+      out[#out + 1] = line
+      if #out >= n then break end
+    end
+  end
+  return table.concat(out, "\n")
+end
+
 local function looksLikeOurError(text)
-  return mentionsPack(text)
+  return tostring(text or ""):find("MightiePack", 1, true) ~= nil
 end
 
 local function fromBugGrabber()
@@ -255,7 +195,12 @@ local function luaErrorText()
   local ok, r = pcall(fromBugGrabber)
   if ok then grabbed = r end
   if safeStr(grabbed) then return grabbed end
-  if safeStr(lastError) then return lastError end
+  local captured
+  if type(pkg.GetCapturedLuaError) == "function" then
+    local okC, e = pcall(pkg.GetCapturedLuaError)
+    if okC then captured = e end
+  end
+  if safeStr(captured) then return captured end
   return "none"
 end
 
@@ -355,6 +300,23 @@ local function makeUI()
   if type(edit.SetAutoFocus) == "function" then pcall(edit.SetAutoFocus, edit, false) end
   if type(edit.SetTextInsets) == "function" then pcall(edit.SetTextInsets, edit, 6, 6, 6, 6) end
   editBox = edit
+  if type(edit.SetScript) == "function" then
+    edit:SetScript("OnEscapePressed", function(self)
+      if type(self.ClearFocus) == "function" then
+        self:ClearFocus()
+      end
+      if frame and type(frame.Hide) == "function" then
+        frame:Hide()
+      end
+    end)
+  end
+  if type(frame.SetScript) == "function" then
+    frame:SetScript("OnHide", function()
+      if edit and type(edit.ClearFocus) == "function" then
+        edit:ClearFocus()
+      end
+    end)
+  end
 
   local closeBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   closeBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 16)
