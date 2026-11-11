@@ -2487,6 +2487,13 @@ local parseSide = function(lines, side, apiWords)
 		stats.WandDps = (stats.WandDps or 0) + stats.WeaponDps
 		stats.WeaponDps = nil
 	end
+	-- A percent Expertise reading is the sourced unit. When the same item
+	-- also carries ITEM_MOD_EXPERTISE_RATING (or a short "+N Expertise"
+	-- rating line), keep the percent only so the two units are not mixed
+	-- on one side.
+	if type(stats.Expertise) == "number" then
+		stats.ExpertiseRating = nil
+	end
 	return stats, procWord, unknown, ignored, foreign
 end
 
@@ -4504,25 +4511,52 @@ function Verdict.playerDefenseSkill()
 	return nil
 end
 
+-- True when the player has an off-hand weapon equipped. Classic
+-- UnitAttackBothHands returns the UNARMED skill in the off-hand slots
+-- when the character is not dual-wielding (a 2H or a shield), so a
+-- positive off-hand total is not enough to decide. Prefer
+-- OffhandHasWeapon when the client exposes it; otherwise inspect slot
+-- 17 with GetInventoryItemLink and C_Item.GetItemInfoInstant (or
+-- GetItemInfoInstant) and accept only INVTYPE_WEAPON /
+-- INVTYPE_WEAPONOFFHAND. A shield, held-in-off-hand, or empty slot is
+-- not a weapon, and the main-hand total is used.
+local function offhandWeaponEquipped()
+	if type(OffhandHasWeapon) == "function" then
+		local ok, has = pcall(OffhandHasWeapon)
+		if ok then return has and true or false end
+	end
+	if type(GetInventoryItemLink) ~= "function" then return false end
+	local okLink, link = pcall(GetInventoryItemLink, "player", 17)
+	if not okLink or type(link) ~= "string" or link == "" then return false end
+	local loc
+	if type(C_Item) == "table" and type(C_Item.GetItemInfoInstant) == "function" then
+		local ok, _, _, _, equipLoc = pcall(C_Item.GetItemInfoInstant, link)
+		if ok then loc = equipLoc end
+	end
+	if loc == nil and type(GetItemInfoInstant) == "function" then
+		local ok, _, _, _, equipLoc = pcall(GetItemInfoInstant, link)
+		if ok then loc = equipLoc end
+	end
+	return loc == "INVTYPE_WEAPON" or loc == "INVTYPE_WEAPONOFFHAND"
+end
+
 -- Weapon skill total, or nil when unreadable. UnitAttackBothHands
 -- returns main-hand base, main-hand modifier, off-hand base, off-hand
 -- modifier — skill totals, not a combat rating. GetCombatRating
 -- (CR_WEAPON_SKILL) is a rating and must not be compared to the 305 /
--- 308 skill caps. When both hands have a skill (dual-wield), the
--- lower total is used, because a cap of 305/308 is only met when the
--- weaker hand reaches it. A missing or zero off-hand (two-hand or
--- empty) is ignored and the main-hand total is returned. Tests inject
+-- 308 skill caps. When an off-hand weapon is equipped, the lower of
+-- the two totals is used, because a cap of 305/308 is only met when
+-- the weaker hand reaches it. The unarmed skill Classic reports in
+-- the off-hand slots for a 2H or a shield is ignored. Tests inject
 -- spec.playerWeaponSkill.
 function Verdict.playerWeaponSkill()
 	if type(UnitAttackBothHands) == "function" then
 		local ok, mainBase, mainMod, offBase, offMod = pcall(UnitAttackBothHands, "player")
 		if ok and type(mainBase) == "number" then
 			local main = mainBase + (tonumber(mainMod) or 0)
-			if type(offBase) == "number" then
+			if offhandWeaponEquipped() and type(offBase) == "number" then
 				local off = offBase + (tonumber(offMod) or 0)
-				if off > 0 then
-					if off < main then return off end
-				end
+				if off < main then return off end
 			end
 			return main
 		end

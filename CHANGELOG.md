@@ -22,7 +22,8 @@ one CurseForge shows, and the bundled modules report the same number.
 - Arcane and Fire Mage Hit caps are scored as spell hit. `hitKind` is taken from the spec profile family (every Hit tier on a spell profile is spell), not from caps-map keywords, so a 17% cap that mentions Arcane Focus or Precision uses `GetSpellHitModifier`.
 - Combat-rating reads no longer invent a `CR_*` index when the client does not expose one (`CR_EXPERTISE`, `CR_HIT_MELEE`, and any other guessed `CR_*` fallback).
 - Mixed percent-vs-rating Expertise is a trade-off with cap status unknown, not a comparison that treats the missing percent as 0.
-- Dual-wield weapon skill uses the lower of the two hands from `UnitAttackBothHands`, not only the main hand.
+- Dual-wield weapon skill uses the lower of the two hands from `UnitAttackBothHands` only when an off-hand weapon is equipped (`OffhandHasWeapon`, or slot 17 as `INVTYPE_WEAPON` / `INVTYPE_WEAPONOFFHAND`). The unarmed skill Classic reports in the off-hand slots for a two-hander or a shield is ignored.
+- An item that has both percent Expertise text and `ITEM_MOD_EXPERTISE_RATING` uses the percent only.
 - Expertise percent text matches Forever item wording (`Reduces the chance for your attacks to be dodged or parried by N%`).
 
 ## [0.3.2-beta] - 2026-11-11

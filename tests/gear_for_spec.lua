@@ -1007,6 +1007,25 @@ check(type(parsedShortRating) == "table" and parsedShortRating.ExpertiseRating =
   "+N Expertise short line is ExpertiseRating (got "
     .. tostring(parsedShortRating and parsedShortRating.ExpertiseRating) .. "/"
     .. tostring(parsedShortRating and parsedShortRating.Expertise) .. ")")
+-- Percent text wins over ITEM_MOD_EXPERTISE_RATING on the same item.
+do
+  local lines = { "Signet", "+18 Stamina",
+    "Equip: Reduces the chance for your attacks to be dodged or parried by 1.0%." }
+  local apiWords = Verdict.apiStats({ ITEM_MOD_EXPERTISE_RATING = 10 })
+  local parsedBoth = Verdict.statTable(lines, "candidate", apiWords)
+  check(type(parsedBoth) == "table" and parsedBoth.Expertise == 1
+      and parsedBoth.ExpertiseRating == nil,
+    "percent Expertise wins over ITEM_MOD_EXPERTISE_RATING (got "
+      .. tostring(parsedBoth and parsedBoth.Expertise) .. "/"
+      .. tostring(parsedBoth and parsedBoth.ExpertiseRating) .. ")")
+  local namedLines = { "Charm", "Equip: Increases your expertise by 1%." }
+  local parsedNamed = Verdict.statTable(namedLines, "candidate", apiWords)
+  check(type(parsedNamed) == "table" and parsedNamed.Expertise == 1
+      and parsedNamed.ExpertiseRating == nil,
+    "percent Expertise sentence wins over ITEM_MOD_EXPERTISE_RATING (got "
+      .. tostring(parsedNamed and parsedNamed.Expertise) .. "/"
+      .. tostring(parsedNamed and parsedNamed.ExpertiseRating) .. ")")
+end
 end
 local armsExp = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER",
   playerExpertisePercent = 5 }
@@ -1106,30 +1125,107 @@ check(Verdict.playerExpertisePercent() == nil,
     .. tostring(Verdict.playerExpertisePercent()) .. ")")
 GetExpertise, GetExpertisePercent, GetCombatRatingBonus = savedExp, savedExpPct, savedCRB
 
+-- Clearing every CR_HIT* / CR_EXPERTISE global, with no modifier API,
+-- must leave current hit/expertise nil and cap status unknown. If the
+-- guessed `or 6` / `or 24` fallbacks were restored, GetCombatRatingBonus
+-- would return 99 and these checks would fail.
+do
+  local savedBonus, savedHit, savedSpell, savedExpPct =
+    GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier, GetExpertisePercent
+  local savedCRHit, savedCRSpell, savedCRMelee, savedCRExp =
+    CR_HIT, CR_HIT_SPELL, CR_HIT_MELEE, CR_EXPERTISE
+  GetCombatRatingBonus = function(cr)
+    if cr == 6 or cr == 24 then return 99 end
+    return nil
+  end
+  GetHitModifier, GetSpellHitModifier, GetExpertisePercent = nil, nil, nil
+  CR_HIT, CR_HIT_SPELL, CR_HIT_MELEE, CR_EXPERTISE = nil, nil, nil, nil
+  check(Verdict.playerHitPercent() == nil,
+    "cleared CR_HIT* is nil, not guessed as 6 (got "
+      .. tostring(Verdict.playerHitPercent()) .. ")")
+  check(Verdict.playerHitPercent("spell") == nil,
+    "cleared CR_HIT* spell hit is nil, not guessed as 6 (got "
+      .. tostring(Verdict.playerHitPercent("spell")) .. ")")
+  check(Verdict.playerExpertisePercent() == nil,
+    "cleared CR_EXPERTISE is nil, not guessed as 24 (got "
+      .. tostring(Verdict.playerExpertisePercent()) .. ")")
+  local vUnk, rUnk = Verdict.weightedVerdict(
+    { Hit = 10 }, { Hit = 0 },
+    { class = "MAGE", weightsKey = "arcane", clientRole = "DAMAGER" })
+  check(type(rUnk) == "string" and rUnk:find("unknown", 1, true),
+    "cleared CR_HIT* reports cap status unknown (got " .. tostring(vUnk)
+      .. " " .. tostring(rUnk) .. ")")
+  GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier, GetExpertisePercent =
+    savedBonus, savedHit, savedSpell, savedExpPct
+  CR_HIT, CR_HIT_SPELL, CR_HIT_MELEE, CR_EXPERTISE =
+    savedCRHit, savedCRSpell, savedCRMelee, savedCRExp
+end
+
 -- Weapon skill is a skill total, not GetCombatRating(CR_WEAPON_SKILL).
-local savedUABH, savedGCR = UnitAttackBothHands, GetCombatRating
-GetCombatRating = function(cr) return 999 end
-CR_WEAPON_SKILL = CR_WEAPON_SKILL or 1
-UnitAttackBothHands = function(unit)
-  check(unit == "player", "UnitAttackBothHands is called with 'player'")
-  return 300, 8, 0, 0
+-- Off-hand is used only when an off-hand weapon is equipped: Classic
+-- reports the unarmed skill in the off-hand slots for a 2H or a shield.
+do
+  local savedUABH, savedGCR = UnitAttackBothHands, GetCombatRating
+  local savedOHW, savedInv, savedCItem, savedInstant =
+    OffhandHasWeapon, GetInventoryItemLink, C_Item, GetItemInfoInstant
+  GetCombatRating = function(cr) return 999 end
+  CR_WEAPON_SKILL = CR_WEAPON_SKILL or 1
+  OffhandHasWeapon, GetInventoryItemLink, C_Item, GetItemInfoInstant = nil, nil, nil, nil
+  UnitAttackBothHands = function(unit)
+    check(unit == "player", "UnitAttackBothHands is called with 'player'")
+    return 300, 8, 0, 0
+  end
+  check(Verdict.playerWeaponSkill() == 308,
+    "UnitAttackBothHands(300, 8) is the 308 skill total, not a combat rating (got "
+      .. tostring(Verdict.playerWeaponSkill()) .. ")")
+
+  -- Review repro: unarmed off-hand skill on a 2H or shield must not
+  -- replace the main-hand total.
+  OffhandHasWeapon = function() return false end
+  UnitAttackBothHands = function() return 300, 8, 150, 0 end
+  check(Verdict.playerWeaponSkill() == 308,
+    "2H/shield unarmed off-hand (300,8,150,0) is main-hand 308 (got "
+      .. tostring(Verdict.playerWeaponSkill()) .. ")")
+
+  -- Dual-wield: the lower total is used when an off-hand weapon is on.
+  OffhandHasWeapon = function() return true end
+  UnitAttackBothHands = function() return 300, 8, 300, 2 end
+  check(Verdict.playerWeaponSkill() == 302,
+    "dual-wield (300,8,300,2) uses the lower hand 302 (got "
+      .. tostring(Verdict.playerWeaponSkill()) .. ")")
+  UnitAttackBothHands = function() return 300, 8, 200, 0 end
+  check(Verdict.playerWeaponSkill() == 200,
+    "dual-wield uses the lower hand (got " .. tostring(Verdict.playerWeaponSkill()) .. ")")
+  UnitAttackBothHands = function() return 300, 8, 305, 5 end
+  check(Verdict.playerWeaponSkill() == 308,
+    "dual-wield uses main when it is the lower total (got "
+      .. tostring(Verdict.playerWeaponSkill()) .. ")")
+
+  -- Fallback: no OffhandHasWeapon; slot 17 + GetItemInfoInstant.
+  OffhandHasWeapon = nil
+  GetInventoryItemLink = function(unit, slot)
+    check(unit == "player" and slot == 17, "off-hand inspect is slot 17")
+    return "item:1"
+  end
+  GetItemInfoInstant = function(link)
+    return 1, "Weapon", "Dagger", "INVTYPE_WEAPON", "icon", 2, 15
+  end
+  UnitAttackBothHands = function() return 300, 8, 300, 2 end
+  check(Verdict.playerWeaponSkill() == 302,
+    "slot-17 INVTYPE_WEAPON uses the lower hand (got "
+      .. tostring(Verdict.playerWeaponSkill()) .. ")")
+  GetItemInfoInstant = function(link)
+    return 1, "Armor", "Shield", "INVTYPE_SHIELD", "icon", 4, 6
+  end
+  UnitAttackBothHands = function() return 300, 8, 150, 0 end
+  check(Verdict.playerWeaponSkill() == 308,
+    "slot-17 INVTYPE_SHIELD ignores unarmed off-hand (got "
+      .. tostring(Verdict.playerWeaponSkill()) .. ")")
+
+  UnitAttackBothHands, GetCombatRating = savedUABH, savedGCR
+  OffhandHasWeapon, GetInventoryItemLink, C_Item, GetItemInfoInstant =
+    savedOHW, savedInv, savedCItem, savedInstant
 end
-check(Verdict.playerWeaponSkill() == 308,
-  "UnitAttackBothHands(300, 8) is the 308 skill total, not a combat rating (got "
-    .. tostring(Verdict.playerWeaponSkill()) .. ")")
--- Dual-wield: the off-hand is considered; the lower total is used.
-UnitAttackBothHands = function(unit)
-  return 300, 8, 200, 0
-end
-check(Verdict.playerWeaponSkill() == 200,
-  "dual-wield uses the lower hand (got " .. tostring(Verdict.playerWeaponSkill()) .. ")")
-UnitAttackBothHands = function(unit)
-  return 300, 8, 305, 5
-end
-check(Verdict.playerWeaponSkill() == 308,
-  "dual-wield uses main when it is the lower total (got "
-    .. tostring(Verdict.playerWeaponSkill()) .. ")")
-UnitAttackBothHands, GetCombatRating = savedUABH, savedGCR
 
 -- Enhancement follows the Wowhead numbered list exactly: one Hit tier
 -- (the 8% melee minimum) and no appended 17% window. Hit past 8% is
