@@ -6,6 +6,9 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+### Fixed
+- The skinning tooltip no longer hides known skin/leather details when the unit is not a Beast (for example Cursed Darkhound, a Demon). Known records are shown regardless of creature type; the empty "no observations" hint stays Beast-only when we have no data for that NPC.
+
 ## [0.3.1] - 2026-11-11
 
 ### Added

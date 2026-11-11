@@ -242,6 +242,33 @@ function H.Aggregate(cid)
   return agg
 end
 
+-- True when we have recorded observations (kills, skins, or leather drops)
+-- for this NPC id. Used by the tooltip so known data is shown regardless of
+-- creature type. A static skinnable list would also count if we shipped one;
+-- none is shipped today.
+function H.HasSkinData(cid)
+  if type(cid) ~= "number" then
+    return false
+  end
+  local ok, agg = pcall(H.Aggregate, cid)
+  if not ok or type(agg) ~= "table" then
+    return false
+  end
+  if (tonumber(agg.records) or 0) > 0 then
+    return true
+  end
+  if (tonumber(agg.skinned) or 0) > 0 then
+    return true
+  end
+  if (tonumber(agg.skinWindows) or 0) > 0 then
+    return true
+  end
+  if type(agg.skin) == "table" and #agg.skin > 0 then
+    return true
+  end
+  return false
+end
+
 -- ── the client's own answer, if this client has one ───────────────────────
 -- The card asks for "skinnable / not skinnable" from the client's creature
 -- data IF it exposes one, MEASURED first and never assumed. This is that

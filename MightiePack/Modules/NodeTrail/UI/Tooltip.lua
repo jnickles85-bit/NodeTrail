@@ -147,16 +147,36 @@ local function unitName(unit, guid)
   return name
 end
 
--- The creature types the beast block may speak about. A humanoid, mechanical,
--- undead or elemental hover gets nothing at all — this block is about what a
--- SKINNABLE BEAST's corpse and skinning gave (t_c0221fd7).
+-- UnitCreatureType returns a LOCALIZED string (the exe carries no "Beast"
+-- literal). These names are used ONLY as a no-data fallback: when we have
+-- no records for an NPC, the empty "no observations here yet" hint is shown
+-- for Beasts and hidden for every other type. Known skin/leather data is
+-- never gated on this table — a Demon or Dragonkin with records must show.
 --
--- `UnitCreatureType` answers a LOCALIZED string this client keeps in its DBC
--- (the exe carries no "Beast" literal), and this client's `textLocale` is
--- enUS. A translated client needs its own entry here, exactly like
--- Profession.NAMES; an entry this table does not know is not a beast, so the
--- failure direction stays "draw nothing".
-local BEAST_TYPES = { beast = true, beasts = true }
+-- Lua 5.1's string.lower only folds ASCII, so non-Latin names are stored
+-- in their canonical form as well as a lowered ASCII form where it helps.
+local BEAST_TYPES = {
+  beast = true, beasts = true, -- enUS / enGB
+  ["wildtier"] = true, -- deDE
+  ["bête"] = true, ["bete"] = true, -- frFR
+  bestia = true, -- esES / esMX / itIT
+  fera = true, -- ptBR
+  ["животное"] = true, -- ruRU
+  ["야수"] = true, -- koKR
+  ["野兽"] = true, -- zhCN
+  ["野獸"] = true, -- zhTW
+}
+
+local function isBeastType(creatureType)
+  if type(creatureType) ~= "string" or creatureType == "" then
+    return false
+  end
+  if BEAST_TYPES[creatureType] then
+    return true
+  end
+  local ok, lower = pcall(string.lower, creatureType)
+  return ok and type(lower) == "string" and BEAST_TYPES[lower] == true
+end
 
 --- Where the picks count comes from: NodeTrailDB.herbs.maps is ONE saved table
 --- for every character on the account (Recorder.lua keys nothing by character),
@@ -280,9 +300,12 @@ end
 ---   * a mouseover unit must exist                (no unit → not ours, no reason)
 ---   * its GUID must be a Creature GUID           (a player/pet/object → not ours)
 ---   * its NPC id must parse                      (the records are keyed by it)
----   * the client must call it a BEAST             (humanoids/mechanicals → nothing)
 ---   * the character must have Skinning            (same gate as the herb block)
 ---   * the client must not say "not skinnable"     (only when it actually answers)
+---   * known skin/leather data for this NPC id is shown regardless of
+---     creature type (Beast, Demon, Dragonkin, Humanoid, ...). Type is a
+---     localized string and must not hide known data. If we have no data,
+---     only a Beast still gets the empty "no observations" fallback hint.
 --- Then every number comes from our own recorded corpses (Data/SkinHints.lua).
 --- The creature is matched by NPC ID, NOT by the displayed name: names repeat
 --- across zones and the client can hand a name back as a secret value.
@@ -316,15 +339,6 @@ function T.BuildBeastLines(unit)
   if type(cid) ~= "number" then
     return nil, "the creature's GUID carries no readable NPC id", nil
   end
-  local creatureType, typeWhy = creatureTypeOf(unit)
-  if creatureType == nil then
-    -- Cannot confirm it is a beast → say nothing (a hidden block is the safe
-    -- direction: appearing on a humanoid would be the worse mistake).
-    return nil, "not a beast: " .. tostring(typeWhy), cid
-  end
-  if not BEAST_TYPES[creatureType] then
-    return nil, "not a beast (" .. tostring(creatureType) .. ")", cid
-  end
   local answer = professionAnswer("skinning")
   if answer ~= true then
     -- t_5ba9b43c: only a CONFIRMED skinner sees this block. The herb block hides
@@ -352,6 +366,25 @@ function T.BuildBeastLines(unit)
   local skinnable = H.SkinFlag(unit)
   if skinnable == false then
     return nil, "the client reports this creature as not skinnable", cid
+  end
+  -- Never hide known skin/leather data because of creature type.
+  -- UnitCreatureType is localized; comparing it to English "Beast" was
+  -- dropping Demons such as Cursed Darkhound (npc 1548) even when we
+  -- already had records for that id. Type is consulted only when we have
+  -- no data, as a Beast-only fallback hint.
+  local hasData = false
+  if type(H.HasSkinData) == "function" then
+    local okD, known = pcall(H.HasSkinData, cid)
+    hasData = okD and known == true
+  end
+  if not hasData then
+    local creatureType, typeWhy = creatureTypeOf(unit)
+    if creatureType == nil or not isBeastType(creatureType) then
+      if creatureType == nil then
+        return nil, "no skin data for this NPC, and not a beast: " .. tostring(typeWhy), cid
+      end
+      return nil, "no skin data for this NPC, and not a beast (" .. tostring(creatureType) .. ")", cid
+    end
   end
   local name = unitName(unit, guid)
   local lines = H.Rows(cid, name)

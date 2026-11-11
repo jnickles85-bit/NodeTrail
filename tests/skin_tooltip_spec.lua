@@ -21,9 +21,12 @@
 --      rendered, and /nt ttdiag is where an item id is resolved to a name;
 --   4. "kills seen: N · skinned: M" says how thin the evidence is;
 --   5. a creature we have never seen says "no observations here yet" — never
---      zeros dressed as data;
---   6. a non-beast, a creature the client calls unskinnable, and a character
---      without Skinning all draw NOTHING;
+--      zeros dressed as data — but only as a Beast fallback; an unknown
+--      non-beast with no data draws nothing;
+--   6. a creature the client calls unskinnable, and a character without
+--      Skinning, draw NOTHING. Known skin/leather data is shown regardless
+--      of creature type (Demon, Dragonkin, Humanoid, ...); type must not
+--      hide records, and UnitCreatureType is a localized string;
 --   7. the creature is matched by the NPC id from UnitGUID, not by its name
 --      (names repeat across zones);
 --   8. the store is read, never written: hovering must not create a bucket.
@@ -375,19 +378,82 @@ check(findRow("no observations here yet"),
 check(findRow("Medium Leather x108 | 100% (yours)") == false,
   "4: the impostor's 108 hides never appear under the wrong NPC id")
 
--- ═══ 5. NON-BEASTS DRAW NOTHING ══════════════════════════════════════════
-for _, ctype in ipairs({ "Humanoid", "Mechanical", "Undead", "Elemental", "Dragonkin" }) do
+-- ═══ 5. CREATURE TYPE IS NOT A GATE FOR KNOWN DATA ═══════════════════════
+-- Known records/leather drops show for any type. UnitCreatureType is a
+-- localized string; comparing it to English "Beast" used to hide Demons
+-- such as Cursed Darkhound (npc 1548) even when we already had skins.
+for _, ctype in ipairs({ "Humanoid", "Mechanical", "Undead", "Elemental", "Dragonkin", "Demon" }) do
   reset()
   hoverBeast({ guid = guidOf(CID, 1), ctype = ctype })
-  check(P:IsShown() == false, "5: a " .. ctype .. " hover draws no beast block")
+  check(P:IsShown() == true, "5: a " .. ctype .. " hover with skin data still shows the block")
+  check(findPrefix("kills seen:") or findPrefix("Medium Leather") or findRow("skinned"),
+    "5: a " .. ctype .. " hover with skin data shows skin lines (got:\n" .. joined() .. ")")
 end
--- ...and an unreadable creature type is not a licence to guess.
+-- An unreadable type must not hide known data either.
 reset()
 local savedType = UnitCreatureType
 UnitCreatureType = nil
 hoverBeast({ guid = guidOf(CID, 1) })
-check(P:IsShown() == false, "5: an unreadable creature type hides the block (never guess a beast)")
+check(P:IsShown() == true, "5: an unreadable creature type still shows known skin data")
 UnitCreatureType = savedType
+-- A non-English type string also must not hide known data.
+reset()
+hoverBeast({ guid = guidOf(CID, 1), ctype = "Wildtier" })
+check(P:IsShown() == true, "5: a localized type string does not hide known data")
+
+-- Demon NPC with its own skin data (Cursed Darkhound, Tirisfal, npc 1548).
+local DARKHOUND = 1548
+local LIGHT = { { id = 2318, name = "Light Leather", qty = 1 } }
+for _ = 1, 3 do
+  observe(DARKHOUND, nil, LIGHT)
+end
+reset()
+hoverBeast({
+  guid = guidOf(DARKHOUND, seq),
+  ctype = "Demon",
+  name = "Cursed Darkhound",
+})
+check(P:IsShown() == true, "5: a Demon with skin data shows the block")
+check(findPrefix("Light Leather"),
+  "5: Cursed Darkhound (Demon, npc 1548) shows leather details (got:\n" .. joined() .. ")")
+check(joined():find("Cursed Darkhound", 1, true) ~= nil,
+  "5: the Demon tooltip still opens with the creature name")
+
+-- A Beast with data still works (regression).
+reset()
+hoverBeast({ guid = guidOf(CID, 1), ctype = "Beast" })
+check(P:IsShown() == true, "5: a Beast with skin data still shows the block")
+check(findPrefix("Medium Leather") or findPrefix("kills seen:"),
+  "5: a Beast with skin data still shows skin lines (got:\n" .. joined() .. ")")
+
+-- Non-skinner: nothing, even on a Demon or Beast that has data.
+skillLines = { { name = "Herbalism", rank = 300 } }
+reset()
+hoverBeast({ guid = guidOf(DARKHOUND, seq), ctype = "Demon", name = "Cursed Darkhound" })
+check(P:IsShown() == false, "5: a non-skinner sees nothing on a Demon with skin data")
+reset()
+hoverBeast({ guid = guidOf(CID, 1), ctype = "Beast" })
+check(P:IsShown() == false, "5: a non-skinner sees nothing on a Beast with skin data")
+skillLines = { { name = "Skinning", rank = 300 } }
+
+-- Unknown non-beast (no records for this NPC): nothing.
+local UNKNOWN_DEMON = 15480
+for _, ctype in ipairs({ "Demon", "Humanoid", "Dragonkin" }) do
+  reset()
+  hoverBeast({ guid = guidOf(UNKNOWN_DEMON, 900), ctype = ctype, name = "Cursed Darkhound" })
+  check(P:IsShown() == false, "5: an unknown " .. ctype .. " with no data draws nothing")
+end
+
+-- Unknown Beast still gets the empty fallback hint.
+reset()
+hoverBeast({ guid = guidOf(UNKNOWN, 801), ctype = "Beast", name = "Young Stranglethorn Tiger" })
+check(findRow("no observations here yet"),
+  "5: an unknown Beast still shows the empty hint (got:\n" .. joined() .. ")")
+-- Localized Beast name (deDE) also gets the fallback, not an English-only compare.
+reset()
+hoverBeast({ guid = guidOf(UNKNOWN, 802), ctype = "Wildtier", name = "Junger Tiger" })
+check(findRow("no observations here yet"),
+  "5: a deDE Beast without data still gets the fallback hint (got:\n" .. joined() .. ")")
 
 -- A player or a pet has a GUID that is not a Creature GUID: nothing.
 reset()
