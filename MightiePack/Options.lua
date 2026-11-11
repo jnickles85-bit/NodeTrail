@@ -29,30 +29,19 @@ local relayoutLowerSections
 -- reserved for hidden error/note lines).
 -- moduleOrder is complete by the time this file loads (the TOC lists every
 -- module before Options.lua).
-local ROW_H = 32
-local SUB_ROW_H = 22
 local SUB_INDENT = 36
-local FIRST_ROW_Y = -48
 local ROW_GAP = 8
 local SUB_GAP = 4
 local SECTION_GAP = 16
 local STATUS_WIDTH = 400
 
-local moduleY, skinY, autoY, skinRouteY, lastRowY = {}, nil, nil, nil, FIRST_ROW_Y
-do
-  local y = FIRST_ROW_Y
-  for _, name in ipairs(pkg.moduleOrder or {}) do
-    moduleY[name] = y
-    lastRowY = y
-    y = y - ROW_H
-    if name == "NodeTrail" then
-      skinY = y + (ROW_H - SUB_ROW_H)
-      autoY = skinY - SUB_ROW_H
-      -- t_b46e5e87: the skinning farming circle's switch, third sub-row.
-      skinRouteY = autoY - SUB_ROW_H
-      lastRowY = skinRouteY
-      y = skinRouteY - ROW_H
-    end
+-- NodeTrail's indented sub-options (skinning, auto-refresh, farming
+-- circle) only appear when that module is in moduleOrder.
+local nodeTrailListed = false
+for _, name in ipairs(pkg.moduleOrder or {}) do
+  if name == "NodeTrail" then
+    nodeTrailListed = true
+    break
   end
 end
 
@@ -309,7 +298,7 @@ local function syncCheckboxes()
   -- and inert while NodeTrail is off (the probe is NodeTrail's), persisted
   -- in NodeTrailDB.skinning.enabled, applied immediately in both
   -- directions — no reload, so no MIGHTIEPACK_DISABLE_MODULE popup here.
-  if skinY then
+  if nodeTrailListed then
     local sb = boxes.Skinning
     if not sb then
       sb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
@@ -371,7 +360,7 @@ local function syncCheckboxes()
   -- switch — that always happens. It applies immediately in both directions:
   -- switching it off keeps the line that is drawn and stops pick-triggered
   -- rebuilds; switching it on rebuilds now and lets the next pick schedule one.
-  if autoY then
+  if nodeTrailListed then
     local ab = boxes.AutoRefresh
     if not ab then
       ab = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
@@ -445,7 +434,7 @@ local function syncCheckboxes()
   -- the herb route. The status line under it is shown ONLY to a confirmed
   -- skinner and says how many more skinned corpses this map needs — the maps
   -- themselves stay clean until there is real skinning data.
-  if skinRouteY then
+  if nodeTrailListed then
     local rb = boxes.SkinRoute
     if not rb then
       rb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
