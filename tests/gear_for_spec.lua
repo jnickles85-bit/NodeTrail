@@ -909,15 +909,17 @@ expectParse("DRUID", "bear offensive", "feral_bear_offensive")
 -- hotfix. Other specs have no caveat field, so their reasons stay exact.
 local enhPack = Verdict.WEIGHTS.SHAMAN.enhancement
 check(enhPack and enhPack.kind == "order" and type(enhPack.caveat) == "string"
-    and enhPack.caveat == "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated.",
+    and enhPack.caveat == "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated. Hit past the listed 8% melee minimum is not scored.",
   "Enhancement has the Mental Dexterity caveat as a profile data field")
 local enhNames = {}
 if type(enhPack) == "table" and type(enhPack.tiers) == "table" then
   for _, tier in ipairs(enhPack.tiers) do enhNames[#enhNames + 1] = tier.name end
 end
-check(enhNames[1] == "Hit" and enhNames[2] == "Expertise" and enhNames[3] == "Intellect"
-    and enhNames[4] == "Spell Damage" and enhNames[5] == "Strength",
-  "Enhancement keeps the Wowhead order (Intellect still ranks above Strength)")
+check(#enhNames == 11
+    and enhNames[1] == "Hit" and enhNames[2] == "Expertise" and enhNames[3] == "Intellect"
+    and enhNames[4] == "Spell Damage" and enhNames[5] == "Strength"
+    and enhNames[11] == "Stamina",
+  "Enhancement keeps the Wowhead numbered list exactly (11 tiers, no extra Hit window)")
 local enhSpec = { class = "SHAMAN", weightsKey = "enhancement", clientRole = "DAMAGER" }
 local vEnh, rEnh, dEnh = Verdict.weightedVerdict({ Intellect = 10 }, { Intellect = 0 }, enhSpec)
 check(vEnh == "UPGRADE", "Enhancement still scores Intellect (got " .. tostring(vEnh) .. ")")
@@ -1037,22 +1039,28 @@ check(Verdict.playerWeaponSkill() == 308,
     .. tostring(Verdict.playerWeaponSkill()) .. ")")
 UnitAttackBothHands, GetCombatRating = savedUABH, savedGCR
 
--- Enhancement: hit after the 8% melee floor still counts toward 17% spell hit.
+-- Enhancement follows the Wowhead numbered list exactly: one Hit tier
+-- (the 8% melee minimum) and no appended 17% window. Hit past 8% is
+-- zeroed by that cap and does not decide the verdict.
 local enhHitPack = Verdict.WEIGHTS.SHAMAN.enhancement
-local lastHit
+local hitTiers = 0
+local has17 = false
 if type(enhHitPack) == "table" and type(enhHitPack.tiers) == "table" then
   for _, tier in ipairs(enhHitPack.tiers) do
-    if tier.name == "Hit" and tier.capPercent == 17 then lastHit = tier end
+    if tier.name == "Hit" then
+      hitTiers = hitTiers + 1
+      if tier.capPercent == 17 then has17 = true end
+    end
   end
 end
-check(lastHit and lastHit.afterPercent == 8 and lastHit.hitKind == "spell",
-  "Enhancement keeps a last-priority 8–17% spell-hit window")
+check(hitTiers == 1 and not has17,
+  "Enhancement has only the listed 8% Hit tier (got " .. tostring(hitTiers)
+    .. " Hit tiers, 17% window=" .. tostring(has17) .. ")")
 local enhHitSpec = { class = "SHAMAN", weightsKey = "enhancement", clientRole = "DAMAGER",
-  playerHitPercent = 8, playerSpellHitPercent = 8 }
+  playerHitPercent = 8 }
 local vEnhHit, rEnhHit = Verdict.weightedVerdict({ Hit = 10 }, { Hit = 0 }, enhHitSpec)
--- 10 rating = 1%; melee window [0,8] delta 0; spell window [8,17] delta 1
-check(vEnhHit == "UPGRADE" and type(rEnhHit) == "string" and rEnhHit:find("17%", 1, true),
-  "Enhancement hit past 8% is still an upgrade toward 17% (got " .. tostring(rEnhHit) .. ")")
+check(vEnhHit == "NOT_UPGRADE" and type(rEnhHit) == "string" and rEnhHit:find("no change", 1, true),
+  "Enhancement hit past 8% does not score (got " .. tostring(vEnhHit) .. " " .. tostring(rEnhHit) .. ")")
 
 -- /up spec Auto text names a recorded /up role.
 asClass("PALADIN", "Paladin", "Retribution", "DAMAGER")

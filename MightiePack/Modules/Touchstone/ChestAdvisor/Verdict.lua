@@ -3970,7 +3970,7 @@ Verdict.WEIGHTS = {
 			url = "https://www.wowhead.com/forever/guide/classes/shaman/enhancement/stat-priority-pve-dps",
 			updated = "2026-11-03",
 			fetched = "2026-11-11",
-			caveat = "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated.",
+			caveat = "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated. Hit past the listed 8% melee minimum is not scored.",
 			-- caveat source: https://news.blizzard.com/en-us/article/24315281/wow-forever-hotfixes-november-10-2026
 			tiers = {
 				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
@@ -3984,7 +3984,6 @@ Verdict.WEIGHTS = {
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Spirit", stats = { "Spirit" } },
 				{ name = "Stamina", stats = { "Stamina" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 }, -- the numbered list stops at the 8% melee minimum; the same page says going above is useful for spell damage and mentions a 17% spell cap, so hit after 8% is kept as a last-priority window rather than zeroed
 			},
 			source = "https://www.wowhead.com/forever/guide/classes/shaman/enhancement/stat-priority-pve-dps (updated 2026-11-03, fetched 2026-11-11). Wowhead Enhancement Shaman Stat Priority in WoW Forever, by Yebb. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
 		},

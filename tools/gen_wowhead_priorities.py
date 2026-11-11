@@ -717,56 +717,6 @@ HEADER = '''-- THE WEIGHTS. One order-only profile per class AND talent spec, ke
 '''
 
 
-def maybe_append_enhancement_spell_hit(spec_name: str, rec: dict, tiers: list[dict]) -> None:
-    """Keep Wowhead's 8% melee-hit rank, but do not zero later hit.
-
-    The Enhancement page says going above the 8% melee minimum is useful
-    because of spell damage, and the caps field records a 17% spell-hit
-    mention in the body. Append a last-priority 8–N% window so that hit
-    is not dropped after 8%. The numbered list is not reordered.
-    """
-    if spec_name != "Enhancement":
-        return
-    has_melee_8 = any(
-        (t.get("stats") or [None])[0] == "Hit" and t.get("capPercent") == 8
-        for t in tiers
-    )
-    if not has_melee_8:
-        return
-    caps = rec.get("caps") or {}
-    caps_text = " ".join(f"{k}: {v}" for k, v in caps.items())
-    total = None
-    # "Hit Chance (spells): 17% mentioned in the body"
-    m = re.search(r"hit chance\s*\(spells\)\s*:\s*(\d+(?:\.\d+)?)\s*%", caps_text, re.I)
-    if m:
-        total = _num(m.group(1))
-    if total is None:
-        total = parse_total_spell_hit_percent("", caps_text)
-    if total is None:
-        return
-    if any(
-        (t.get("stats") or [None])[0] == "Hit" and t.get("capPercent") == total
-        for t in tiers
-    ):
-        return
-    tiers.append(
-        {
-            "name": "Hit",
-            "stats": ["Hit"],
-            "afterPercent": 8,
-            "capPercent": total,
-            "ratingPerPercent": 10,
-            "hitKind": "spell",
-            "comment": (
-                "the numbered list stops at the 8% melee minimum; the same page says "
-                "going above is useful for spell damage and mentions a "
-                f"{total}% spell cap, so hit after 8% is kept as a last-priority "
-                "window rather than zeroed"
-            ),
-        }
-    )
-
-
 def generate_lua(data: dict) -> str:
     grouped: dict[str, list[str]] = {c: [] for c in CLASS_ORDER}
     comments_for: dict[tuple, list[str]] = {}
@@ -811,7 +761,6 @@ def generate_lua(data: dict) -> str:
                 raise SystemExit(f"empty tier for {ident}: {raw}")
             tiers.append(t)
         apply_second_caps(tiers)
-        maybe_append_enhancement_spell_hit(spec_name, rec, tiers)
         caveat = caveats.get(f"{token}.{key}")
         caveat_source = caveat_sources.get(f"{token}.{key}")
         block = emit_profile(key, display, rec, tiers, extra, caveat, caveat_source)
