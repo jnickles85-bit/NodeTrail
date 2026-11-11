@@ -684,6 +684,160 @@ local function playerRole(token)
 	return r
 end
 
+
+-- ---- Gear-for-spec registry -------------------------------------------------
+-- Per-class list of specs the player can ask Touchstone to score and gate
+-- for. A registry entry always exists for the picker / slash / options /
+-- shield and off-hand gates, even when that spec has no sourced WEIGHTS
+-- table yet. Missing weights are silence ("no sourced weights for <spec>
+-- yet"), never a guessed pack.
+--
+-- Each entry: key (saved in ChestAdvisorDB.gearFor), name (display),
+-- role (TANK|HEALER|DAMAGER — the client literal the gates use),
+-- weightsKey (Verdict.WEIGHTS[class][weightsKey]; nil table => unsourced),
+-- orderWord (melee|spell — the documented stat-order word).
+ChestAdvisor.GEAR_SPECS = {
+	WARRIOR = {
+		{ key = "arms_fury", name = "Arms / Fury",  role = "DAMAGER", weightsKey = "melee", orderWord = "melee" },
+		{ key = "prot",      name = "Protection",   role = "TANK",    weightsKey = "tank",  orderWord = "melee" },
+	},
+	PALADIN = {
+		{ key = "holy", name = "Holy",        role = "HEALER",  weightsKey = "spell", orderWord = "spell" },
+		{ key = "prot", name = "Protection",  role = "TANK",    weightsKey = "tank",  orderWord = "spell" },
+		{ key = "ret",  name = "Retribution", role = "DAMAGER", weightsKey = "melee", orderWord = "melee" },
+	},
+	DRUID = {
+		{ key = "balance",    name = "Balance",     role = "DAMAGER", weightsKey = "spell",     orderWord = "spell" },
+		{ key = "feral_cat",  name = "Feral (Cat)", role = "DAMAGER", weightsKey = "feral_cat", orderWord = "melee" },
+		{ key = "feral_bear", name = "Feral (Bear)",role = "TANK",    weightsKey = "feral_bear",orderWord = "melee" },
+		{ key = "resto",      name = "Restoration", role = "HEALER",  weightsKey = "resto",     orderWord = "spell" },
+	},
+	SHAMAN = {
+		{ key = "elemental",   name = "Elemental",   role = "DAMAGER", weightsKey = "spell", orderWord = "spell" },
+		{ key = "enhancement", name = "Enhancement", role = "DAMAGER", weightsKey = "melee", orderWord = "melee" },
+		{ key = "resto",       name = "Restoration", role = "HEALER",  weightsKey = "resto", orderWord = "spell" },
+	},
+	PRIEST = {
+		{ key = "holy",   name = "Holy",   role = "HEALER",  weightsKey = "spell",  orderWord = "spell" },
+		{ key = "shadow", name = "Shadow", role = "DAMAGER", weightsKey = "shadow", orderWord = "spell" },
+	},
+	MAGE    = { { key = "mage",    name = "Mage",    role = "DAMAGER", weightsKey = "spell", orderWord = "spell" } },
+	WARLOCK = { { key = "warlock", name = "Warlock", role = "DAMAGER", weightsKey = "spell", orderWord = "spell" } },
+	ROGUE   = { { key = "rogue",   name = "Rogue",   role = "DAMAGER", weightsKey = "melee", orderWord = "melee" } },
+	HUNTER  = { { key = "hunter",  name = "Hunter",  role = "DAMAGER", weightsKey = "melee", orderWord = "melee" } },
+}
+
+local GEAR_ALIASES = {
+	prot        = { "protection", "tank" },
+	holy        = { "heal", "healer" },
+	ret         = { "retribution" },
+	resto       = { "restoration", "heal", "healer" },
+	feral_cat   = { "cat", "feral cat", "cat form", "kitty" },
+	feral_bear  = { "bear", "feral bear", "bear form" },
+	arms_fury   = { "arms", "fury", "arms fury" },
+	elemental   = { "ele" },
+	enhancement = { "enh", "enhance" },
+	balance     = { "boomkin", "moonkin", "boomy" },
+	shadow      = { "shadow priest" },
+}
+
+local function foldSpecArg(s)
+	if type(s) ~= "string" then return "" end
+	s = s:lower()
+	s = s:gsub("[^%w%s]", " ")
+	s = s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+	return s
+end
+
+function ChestAdvisor.specsFor(class)
+	if type(class) ~= "string" then return {} end
+	local list = ChestAdvisor.GEAR_SPECS[class]
+	if type(list) ~= "table" then return {} end
+	return list
+end
+
+function ChestAdvisor.lookupSpec(class, key)
+	if type(key) ~= "string" then return nil end
+	for _, e in ipairs(ChestAdvisor.specsFor(class)) do
+		if e.key == key then return e end
+	end
+	return nil
+end
+
+function ChestAdvisor.parseSpecArg(class, arg)
+	local folded = foldSpecArg(arg)
+	if folded == "" then return nil end
+	if folded == "auto" or folded == "talents" or folded == "default"
+		or folded == "clear" or folded == "none" then
+		return "auto"
+	end
+	local list = ChestAdvisor.specsFor(class)
+	local function aliases(e)
+		local out = { foldSpecArg(e.key), foldSpecArg(e.key:gsub("_", " ")), foldSpecArg(e.name) }
+		local extra = GEAR_ALIASES[e.key]
+		if type(extra) == "table" then
+			for _, a in ipairs(extra) do
+				out[#out + 1] = foldSpecArg(a)
+			end
+		end
+		return out
+	end
+	local hits, n = {}, 0
+	for _, e in ipairs(list) do
+		for _, a in ipairs(aliases(e)) do
+			if a == folded then
+				if not hits[e.key] then hits[e.key] = true; n = n + 1 end
+			end
+		end
+	end
+	if n == 1 then
+		for k in pairs(hits) do return k end
+	end
+	if n > 1 then return nil end
+	-- Unique prefix among keys, names, and aliases.
+	hits, n = {}, 0
+	for _, e in ipairs(list) do
+		for _, a in ipairs(aliases(e)) do
+			if #folded > 0 and a:sub(1, #folded) == folded then
+				if not hits[e.key] then hits[e.key] = true; n = n + 1 end
+			end
+		end
+	end
+	if n == 1 then
+		for k in pairs(hits) do return k end
+	end
+	return nil
+end
+
+-- gearFor is defaulted at the read site: SavedVariables replace the load-time
+-- default table, so a key added later must not live only on that default.
+function ChestAdvisor.gearForKey()
+	local key = ChestAdvisorDB and ChestAdvisorDB.gearFor or nil
+	if type(key) ~= "string" or key == "" or key == "auto" then return nil end
+	if not ChestAdvisor.lookupSpec(classToken(), key) then return nil end
+	return key
+end
+
+function ChestAdvisor.setGearFor(key)
+	if key == nil or key == "auto" then
+		if type(ChestAdvisorDB) == "table" then ChestAdvisorDB.gearFor = nil end
+		if type(ChestAdvisor.scan) == "function" then pcall(ChestAdvisor.scan) end
+		return true
+	end
+	if type(key) ~= "string" or not ChestAdvisor.lookupSpec(classToken(), key) then
+		return false, "not a spec for this class"
+	end
+	ChestAdvisorDB = ChestAdvisorDB or {}
+	ChestAdvisorDB.gearFor = key
+	if type(ChestAdvisor.scan) == "function" then pcall(ChestAdvisor.scan) end
+	return true
+end
+
+function ChestAdvisor._clearClassCache()
+	cachedClassToken = nil
+	cachedClassDisplay = nil
+end
+
 -- ---- Tier B (t_73e20edb): the client spec read -------------------------------
 --
 -- A shield is a spec commitment, so the off-hand gate needs the character's
@@ -721,8 +875,18 @@ end
 -- against, so a class-as-spec read ("name=Paladin" on a paladin) is recognisable
 -- as unsubstantiated and does not resolve a spec-specific policy.
 local function readOffHandSpec()
+	-- A valid gearFor override wins here too: shield / off-hand gates must
+	-- follow the chosen spec (Prot paladin => shield required) even when
+	-- the client still reports a different talent spec.
+	local token = classToken()
+	local chosen = ChestAdvisor.gearForKey()
+	local entry = chosen and ChestAdvisor.lookupSpec(token, chosen) or nil
+	if entry then
+		return { class = token, role = entry.role, name = entry.name,
+		         classDisplay = classDisplayName() }
+	end
 	local si = readSpecIdentity()
-	return { class = classToken(), role = si and si.role or nil,
+	return { class = token, role = si and si.role or nil,
 	         name = si and si.name or nil,
 	         classDisplay = classDisplayName() }
 end
@@ -777,9 +941,39 @@ local function resolvedRole(token, si)
 	return nil, nil
 end
 
+local function playerLevel()
+	if type(UnitLevel) == "function" then
+		local ok, lv = pcall(UnitLevel, "player")
+		if ok and type(lv) == "number" then return lv end
+	end
+	return nil
+end
+
 local function buildSpec()
 	local token = classToken()
 	local si    = readSpecIdentity()
+	local level = playerLevel()
+	-- A valid per-character gearFor override wins over talents and over
+	-- /up role: it sets the weight profile, the folded order word, and the
+	-- client-role literal the gates use, consistently.
+	local chosen = ChestAdvisor.gearForKey()
+	local entry = chosen and ChestAdvisor.lookupSpec(token, chosen) or nil
+	if entry then
+		local order = (Verdict and Verdict.classRoleOrder)
+			and Verdict.classRoleOrder(token, entry.orderWord) or nil
+		return {
+			order = order,
+			role = entry.orderWord,
+			class = token,
+			level = level,
+			clientRole = entry.role,
+			name = entry.name,
+			classDisplay = classDisplayName(),
+			weightsKey = entry.weightsKey,
+			profileSource = "chosen",
+			profileLabel = entry.name,
+		}
+	end
 	local role  = resolvedRole(token, si)
 	local order = (Verdict and Verdict.classRoleOrder) and Verdict.classRoleOrder(token, role) or nil
 	-- A hybrid without a resolved role is not "acting as its class token":
@@ -788,20 +982,25 @@ local function buildSpec()
 	if label == nil and token and not isHybridWithoutRole(token) then
 		label = token
 	end
-	local level = nil
-	if type(UnitLevel) == "function" then
-		local ok, lv = pcall(UnitLevel, "player")
-		if ok and type(lv) == "number" then level = lv end
-	end
 	-- clientRole is the client's own literal, passed through for the WEIGHT
 	-- lookup only (Verdict.weightsFor): it is what lets a Protection paladin
 	-- reach a Prot weight table at all, since `role` above is the FOLDED word
 	-- ("spell") that the order needs. Nothing else reads this field, and it is
 	-- nil wherever the client does not offer the read — which the weights layer
 	-- treats as "no literal", never as a default.
+	--
+	-- profileSource is "talents" on the Auto path so the tooltip / Upgrades
+	-- tab can say so; callers that build a spec table by hand leave it unset
+	-- and keep the existing "[Retribution]" wording.
 	return { order = order, role = label, class = token, level = level,
-	         clientRole = (si and si.role) or nil }
+	         clientRole = (si and si.role) or nil,
+	         name = si and si.name or nil,
+	         classDisplay = classDisplayName(),
+	         profileSource = "talents" }
 end
+
+ChestAdvisor.buildSpec = buildSpec
+ChestAdvisor.readOffHandSpec = readOffHandSpec
 
 -- ---- Tooltip surface (card t_ed71a583) ---------------------------------------
 --
@@ -6528,6 +6727,7 @@ local function helpText()
 		.. "  A green arrow marks an upgrade. An amber square marks a trade-off (better on some stats, worse on others). On the character sheet the arrow means a bag item is an upgrade for that slot.\n"
 		.. "  /up role <r>   record the focus role for a hybrid class (melee|spell; the client spec read is used automatically when unset)\n"
 		.. "  /up role clear clear the recorded role for this class\n"
+		.. "  /up spec [key|name|auto]  which spec Touchstone scores gear for (overrides talents and /up role; auto follows talents)\n"
 		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
 		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
 		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real path\n"
@@ -6584,6 +6784,45 @@ local function cmdRole(msg)
 			.. (token or "a pure class has a single documented order") .. ")"
 	end
 	return false, "usage: /up role <melee|spell|clear>"
+end
+
+local function cmdSpec(msg)
+	local rest = msg:match("^spec%s*(.*)$") or ""
+	rest = rest:gsub("^%s+", ""):gsub("%s+$", "")
+	local token = classToken()
+	local function listText()
+		local parts = { "auto (follow talents)" }
+		for _, e in ipairs(ChestAdvisor.specsFor(token)) do
+			parts[#parts + 1] = e.key .. " (" .. e.name .. ")"
+		end
+		return table.concat(parts, ", ")
+	end
+	local function currentText()
+		local key = ChestAdvisor.gearForKey()
+		if key then
+			local e = ChestAdvisor.lookupSpec(token, key)
+			return (e and e.name or key) .. " (chosen)"
+		end
+		local si = readSpecIdentity()
+		local name = (si and type(si.name) == "string" and si.name ~= "") and si.name or "current talents"
+		return "Auto (talents: " .. name .. ")"
+	end
+	if rest == "" then
+		return true, "gearing for " .. currentText()
+			.. " — options: " .. listText()
+			.. " — usage: /up spec <key|name|auto>"
+	end
+	local parsed = ChestAdvisor.parseSpecArg(token, rest)
+	if parsed == "auto" then
+		ChestAdvisor.setGearFor(nil)
+		return true, "gearing for Auto (follow talents)"
+	end
+	if parsed then
+		ChestAdvisor.setGearFor(parsed)
+		local e = ChestAdvisor.lookupSpec(token, parsed)
+		return true, "gearing for " .. ((e and e.name) or parsed) .. " (chosen)"
+	end
+	return false, "rejected: '" .. rest .. "' is not a spec for this class — options: " .. listText()
 end
 
 -- /up toast <on|off> — persist the notification setting on the EXISTING
@@ -7408,6 +7647,8 @@ local function dispatch(msg)
 	local ok, out
 	if subword == "role" then
 		ok, out = cmdRole(trimmed)
+	elseif subword == "spec" then
+		ok, out = cmdSpec(trimmed)
 	elseif subword == "probe" then
 		ok, out = cmdProbe()
 	elseif subword == "toast" then

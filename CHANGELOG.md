@@ -6,6 +6,9 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+### Added
+- Touchstone can score and gate gear for a chosen spec (`/up spec`, and a Gear for picker under Touchstone in settings) even when you are talented into a different one. Auto still follows your current talents. A spec without sourced weight numbers is silent (`no sourced weights for <spec> yet`) rather than guessing another pack.
+
 ## [0.3.2-beta] - 2026-11-11
 
 ### Added

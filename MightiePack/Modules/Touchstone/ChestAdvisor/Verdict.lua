@@ -620,6 +620,20 @@ local KNOWN = {
 	["Hit"]            = true,
 	["Crit"]           = true,
 	["FeralAttackPower"] = true,
+	-- Upcoming sourced packs will price these keys (Hit/Crit rating,
+	-- Defense, weapon DPS, and the usual companion combat stats). They
+	-- are KNOWN so a tooltip line that names them is accumulated rather
+	-- than suppressed. Whether a profile PRICES a word is still the
+	-- weight table's answer; an unpriced known word is a zero, not a
+	-- guess.
+	["Defense"]          = true,
+	["Dodge"]            = true,
+	["Parry"]            = true,
+	["AttackPower"]      = true,
+	["RangedAttackPower"] = true,
+	["WeaponDps"]        = true,
+	["MP5"]              = true,
+	["HP5"]              = true,
 }
 
 -- ---- Defect 2 (card t_548f0341): the client's own stat read -----------------
@@ -1369,7 +1383,42 @@ local parseLine_ = function(line)
 	if num and word then
 		return tonumber(num), word
 	end
-	-- proc line:  "Equip: +X Foo"
+	-- Multi-word rating and weapon-DPS lines the single-word "+N Word"
+	-- matcher cannot see. A number already printed in RATING units is
+	-- returned as-is — ratingFromPercent is only for the percent
+	-- sentences below (14 crit rating = 1%, 10 hit rating = 1%).
+	local function ratingWordOf(rest)
+		if type(rest) ~= "string" then return nil end
+		rest = rest:lower():gsub("%s+$", ""):gsub("%.$", "")
+		if rest == "hit rating" or rest == "hit" then return "Hit" end
+		if rest == "crit rating" or rest == "critical strike rating"
+			or rest == "critical rating" or rest == "crit" then
+			return "Crit"
+		end
+		if rest == "defense rating" or rest == "defence rating"
+			or rest == "defense" or rest == "defence" then
+			return "Defense"
+		end
+		if rest == "dodge rating" or rest == "dodge" then return "Dodge" end
+		if rest == "parry rating" or rest == "parry" then return "Parry" end
+		if rest == "attack power" then return "AttackPower" end
+		if rest == "ranged attack power" then return "RangedAttackPower" end
+		return nil
+	end
+	local rnum, rrest = trimmed:match("^%s*[%+%-%s]*(%d+%.?%d*)%s+(.+)$")
+	if rnum and rrest then
+		local rw = ratingWordOf(rrest)
+		if rw then return tonumber(rnum), rw end
+	end
+	-- Multi-word "Equip: +N Hit Rating" first (a trailing word would
+	-- otherwise be captured as the proc form "Equip:Hit").
+	local epnum, eprest = trimmed:match("^%s*Equip:%s*%+%s*(%d+%.?%d*)%s+(.+)$")
+	if epnum and eprest then
+		local ew = ratingWordOf(eprest)
+		if ew then return tonumber(epnum), ew end
+	end
+	-- proc line:  "Equip: +X Foo" (original shape, no end-anchor — a
+	-- trailing period is still a Strength/etc. proc, not a suppression).
 	local pnum, pword = trimmed:match("^%s*Equip:%s*%+%s*(%d+)%s+(%a+)")
 	if pnum and pword then
 		return nil, "Equip:" .. pword
@@ -1377,6 +1426,10 @@ local parseLine_ = function(line)
 	-- "Adds X" style lines, if the client ever uses them here.
 	local an, aw = trimmed:match("^%s*Adds%s*(%d+)%s+(%a+)")
 	if an and aw then return tonumber(an), aw end
+	-- Weapon DPS: "(12.5 damage per second)" or "12.5 Damage Per Second".
+	local dps = plain:match("%((%d+%.?%d*)%s+damage per second%)")
+		or plain:match("^(%d+%.?%d*)%s+damage per second%.?$")
+	if dps then return tonumber(dps), "WeaponDps" end
 	-- ── card t_3cdbb70a (DD-1): the HIT and CRIT sentences ────────────────
 	-- The client prints these four phrasings, and until this card NOT ONE of
 	-- them was placeable: they carry a number, so they suppressed the item
@@ -1459,6 +1512,17 @@ local parseLine_ = function(line)
 	if meleehitp then return Verdict.ratingFromPercent("Hit", tonumber(meleehitp)), "Hit" end
 	local meleecritp = stat_sentence:match("^improves your chance to get a critical strike by (%d+%.?%d*)%%$")
 	if meleecritp then return Verdict.ratingFromPercent("Crit", tonumber(meleecritp)), "Crit" end
+	-- Rating-unit sentences (already a rating, not a percent — do not lift).
+	local defn = stat_sentence:match("^increases your defense rating by (%d+%.?%d*)$")
+		or stat_sentence:match("^increases defense rating by (%d+%.?%d*)$")
+	if defn then return tonumber(defn), "Defense" end
+	local hitr = stat_sentence:match("^increases your hit rating by (%d+%.?%d*)$")
+		or stat_sentence:match("^improves your hit rating by (%d+%.?%d*)$")
+	if hitr then return tonumber(hitr), "Hit" end
+	-- Lua 5.1 has no alternation groups of unequal length; spell both forms out.
+	local critr = stat_sentence:match("^increases your critical strike rating by (%d+%.?%d*)$")
+		or stat_sentence:match("^increases your crit rating by (%d+%.?%d*)$")
+	if critr then return tonumber(critr), "Crit" end
 	-- Structural tooltip chrome (gate C1). Case-insensitive, anchored.
 	-- Matched against `plain` (color/|r stripped) so a colored stat line
 	-- (e.g. "|cff9d9d9d+12 agility|r") still classifies as a stat below,
@@ -3370,10 +3434,17 @@ end
 --   Armor > Stamina as ranked tiebreakers (25 Armor ~= 1 Sta of effective HP).
 -- Holy and Protection keep their own rows: the same research card says their
 -- numbers need separate evidence, and none of it is used here.
+-- Every shipped profile carries a `source` field: a citation (URL or card
+-- / vault path) plus a date when the numbers are researched, or `source = nil`
+-- when the table is the unsourced 4/1/0 stand-in derived from the documented
+-- stat-order rule. Unsourced tables stay until a sourced replacement arrives;
+-- they still score. A spec with no table at all (Feral, Resto, Shadow, …)
+-- must not invent numbers — profileFor returns nil and the verdict is
+-- "no sourced weights for <spec> yet".
 Verdict.WEIGHTS = {
 	WARRIOR = {
-		melee = { name = "Arms/Fury", w = { Strength = 4, Stamina = 1 } },
-		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Strength = 1, Block = 1 } },
+		melee = { name = "Arms/Fury", w = { Strength = 4, Stamina = 1 }, source = nil },
+		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Strength = 1, Block = 1 }, source = nil },
 	},
 	PALADIN = {
 		-- DAMAGER -> melee. Card t_c4911603 (research t_f758a377): the damage
@@ -3385,35 +3456,37 @@ Verdict.WEIGHTS = {
 			name = "Retribution",
 			w = { Strength = 4, SpellPower = 4, Agility = 2.5, Intellect = 2 },
 			tiebreak = { "Armor", "Stamina" },
+			source = "vault: wiki/addons/touchstone-ret-stat-weights.md, card t_f758a377 (2026)",
 		},
-		spell = { name = "Holy", w = { Intellect = 4, Stamina = 1 } },
-		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Intellect = 1, Strength = 1, Block = 1 } },
+		spell = { name = "Holy", w = { Intellect = 4, Stamina = 1 }, source = nil },
+		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Intellect = 1, Strength = 1, Block = 1 }, source = nil },
 	},
 	ROGUE = {
-		melee = { name = "Combat", w = { Agility = 4, Strength = 1 } },
+		melee = { name = "Combat", w = { Agility = 4, Strength = 1 }, source = nil },
 	},
 	HUNTER = {
-		melee = { name = "Hunter", w = { Agility = 4, Stamina = 1 } },
+		melee = { name = "Hunter", w = { Agility = 4, Stamina = 1 }, source = nil },
 	},
 	MAGE = {
-		spell = { name = "Mage", w = { Intellect = 4, Spirit = 1 } },
+		spell = { name = "Mage", w = { Intellect = 4, Spirit = 1 }, source = nil },
 	},
 	PRIEST = {
-		spell = { name = "Priest", w = { Intellect = 4, Spirit = 1 } },
+		spell = { name = "Priest", w = { Intellect = 4, Spirit = 1 }, source = nil },
 	},
 	WARLOCK = {
-		spell = { name = "Warlock", w = { Intellect = 4, Spirit = 1 } },
+		spell = { name = "Warlock", w = { Intellect = 4, Spirit = 1 }, source = nil },
 	},
 	-- C1b (t_03a1196c): a feral Druid has no documented order, so it also has no
 	-- weights. Its rows already stop at "no stat order resolved" before the
 	-- comparator, and a caller that reaches the comparator gets the unavailable
-	-- verdict below — never a guessed feral model.
+	-- verdict below — never a guessed feral model. (Feral / Resto packs will
+	-- land here only with a sourced table; they are not invented below.)
 	DRUID = {
-		spell = { name = "Balance", w = { Intellect = 4, Agility = 1 } },
+		spell = { name = "Balance", w = { Intellect = 4, Agility = 1 }, source = nil },
 	},
 	SHAMAN = {
-		melee = { name = "Enhancement", w = { Strength = 4, Intellect = 1 } },
-		spell = { name = "Elemental", w = { Intellect = 4, Strength = 1 } },
+		melee = { name = "Enhancement", w = { Strength = 4, Intellect = 1 }, source = nil },
+		spell = { name = "Elemental", w = { Intellect = 4, Strength = 1 }, source = nil },
 	},
 }
 
@@ -3454,6 +3527,16 @@ function Verdict.profileFor(spec)
 	local class = spec.class
 	local byRole = (type(class) == "string") and Verdict.WEIGHTS[class] or nil
 	if type(byRole) ~= "table" then return nil end
+	-- A chosen (or otherwise named) weights key wins when a table exists.
+	-- A key with no table is silence — never a fallback into another pack
+	-- (Resto must not score as Balance; Feral must not score as a guessed
+	-- melee model). An existing unsourced 4/1/0 table (source = nil) is
+	-- still used until a sourced replacement arrives.
+	if type(spec.weightsKey) == "string" then
+		local pack = byRole[spec.weightsKey]
+		if type(pack) == "table" then return pack end
+		return nil
+	end
 	local alias = (type(class) == "string") and Verdict.PROFILE_ROLE[class] or nil
 	local client = type(spec.clientRole) == "string" and spec.clientRole or nil
 	if client ~= nil and type(alias) == "table" then
@@ -3590,9 +3673,15 @@ end
 -- The stored reason: the number the verdict came from, and the profile it came
 -- from, so a wrong profile is visible in the Upgrades tab and in /up diag
 -- instead of silent. `kind` adds the words for the two non-obvious outcomes.
-function Verdict.weightedReason(w, profile, kind, tiebreakText)
+function Verdict.weightedReason(w, profile, kind, tiebreakText, profileSource)
+	local pname = type(profile) == "table" and profile.name or "no profile"
+	-- Existing "[Retribution]" tests stay byte-identical when the source
+	-- is absent. "(chosen)" / "(talents)" are appended only when set.
+	if profileSource == "chosen" or profileSource == "talents" then
+		pname = tostring(pname) .. " (" .. profileSource .. ")"
+	end
 	local head = "weighted " .. Verdict.numText(w.total)
-		.. " [" .. tostring(type(profile) == "table" and profile.name or "no profile") .. "]"
+		.. " [" .. tostring(pname) .. "]"
 	if kind == "trade-off" then
 		return head .. " — better on some stats, worse on others"
 	elseif kind == "no change" then
@@ -3624,6 +3713,12 @@ function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
 	end
 	local profile = Verdict.profileFor(spec)
 	if profile == nil then
+		-- A named spec with no sourced table must not be guessed as another
+		-- pack. The verdict names the spec and stays silent (UNKNOWN).
+		local label = type(spec) == "table" and (spec.profileLabel or spec.weightsKey) or nil
+		if type(label) == "string" and label ~= "" then
+			return "UNKNOWN", "no sourced weights for " .. label .. " yet"
+		end
 		-- Requirement 5: NO WEIGHTS IS NOT A TRADE-OFF. Fall through to direction
 		-- counting and the player gets an amber "your call" for a pair nothing
 		-- weighed — the exact silence-with-an-answer this card removes.
@@ -3637,15 +3732,20 @@ function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
 		return "UNKNOWN", "verdict unavailable: the " .. tostring(profile.name)
 			.. " profile carries no weights"
 	end
-	local detail = { total = w.total, profile = profile.name }
+	local src = type(spec) == "table" and spec.profileSource or nil
+	local pname = profile.name
+	if src == "chosen" or src == "talents" then
+		pname = tostring(pname) .. " (" .. src .. ")"
+	end
+	local detail = { total = w.total, profile = pname }
 	local eps = Verdict.WEIGHT_EPSILON
 	if w.total >= eps then
-		local verdict, reason = allow("UPGRADE", Verdict.weightedReason(w, profile, "upgrade"))
+		local verdict, reason = allow("UPGRADE", Verdict.weightedReason(w, profile, "upgrade", nil, src))
 		if verdict ~= "UPGRADE" then return verdict, reason end
 		return verdict, reason, detail
 	end
 	if w.total <= -eps then
-		return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade"), detail
+		return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade", nil, src), detail
 	end
 	-- DAMAGE IS TIED. Only now may the profile's ranked tiebreakers speak (card
 	-- t_c4911603): a profile without a `tiebreak` list — every profile but Ret —
@@ -3656,7 +3756,7 @@ function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
 	local tb = Verdict.tiebreakTotal(candStats, eqStats, profile)
 	if tb ~= nil then
 		local kind = (tb.dir > 0) and "tiebreaker upgrade" or "tiebreaker downgrade"
-		local reason = Verdict.weightedReason(w, profile, kind, tb.text)
+		local reason = Verdict.weightedReason(w, profile, kind, tb.text, src)
 		detail.tiebreak = tb.text
 		detail.tiebreakDir = tb.dir
 		if tb.dir > 0 then
@@ -3670,11 +3770,11 @@ function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
 		return "NOT_UPGRADE", reason, detail
 	end
 	if w.up > 0 and w.down > 0 then
-		local verdict, reason = allow(TRADE_OFF, Verdict.weightedReason(w, profile, "trade-off"))
+		local verdict, reason = allow(TRADE_OFF, Verdict.weightedReason(w, profile, "trade-off", nil, src))
 		if verdict ~= TRADE_OFF then return verdict, reason end
 		return verdict, reason, detail
 	end
-	return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "no change"), detail
+	return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "no change", nil, src), detail
 end
 
 -- ⚠ TEST INSTRUMENTATION ONLY, exactly like Verdict.LEGACY_ORDER_DECIDES above.
