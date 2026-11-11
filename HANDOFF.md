@@ -278,7 +278,9 @@ On top of that branch:
 - **Skinning probe** (`Modules/Skinning/`) — **nested under NodeTrail** (t_5507a0ba): there is no
   `Skinning` module row. The options panel shows an indented "Skinning (experimental)" sub-option
   under the NodeTrail checkbox, greyed out while NodeTrail is off, persisted at
-  `NodeTrailDB.skinning.enabled` (default false; the old `MightiePackDB.modules.Skinning` key is
+  `NodeTrailDB.skinning.enabled` (default true since t_ba64b076; or `/nt skin on|off|status` — an
+  explicit off writes `skinUserSet` and survives `/reload` and every later update. The old
+  `MightiePackDB.modules.Skinning` key is
   inert, never read). Turning it off is immediate — no UI reload, no popup. `/mp skindiag` /
   `/mp skindiag dump` capture the kill → loot → skin → skin-loot chain and still run while the
   sub-option is off (the line says so; nothing is recorded then).

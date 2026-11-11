@@ -52,6 +52,9 @@ local function printHelp()
   -- t_b46e5e87: the skinning farming circle.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt skinroute [on|off|status] - the green closed loop through where you have skinned on THIS zone's map; off clears it, the herb route is unaffected")
+  -- t_ba64b076: the recorder itself, now on by default.
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt skin [on|off|status] - the corpse-skinning recorder (on by default); off stops recording now and the choice survives /reload")
   printL("HELP_NOTES")
 end
 
@@ -266,6 +269,11 @@ local function handleSlash(msg)
     -- is gated on Skinning and on this map's own skinned sample, so the command
     -- can honestly say how many more are needed when it draws nothing.
     ns.SkinRouteCommand(msg:match("^skinroute%s+(.*)$"))
+  elseif msg == "skin" or msg:match("^skin%s") then
+    -- t_ba64b076: the recorder's own switch. It writes through the same
+    -- setter the Options checkbox uses, so an off here is a player choice the
+    -- migration will never override.
+    ns.SkinCommand(msg:match("^skin%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
@@ -745,6 +753,41 @@ function ns.DisableSkinning()
     return false, tostring(err)
   end
   return true
+end
+
+-- /nt skin [on|off|status] — t_ba64b076. The recorder is on by default now, so
+-- the player needs a switch in chat as well as in the options panel. Both
+-- write through ns.SetSkinningEnabled (which records the choice), and both
+-- apply immediately: switching off unregisters the probe, so no /reload.
+function ns.SkinCommand(arg)
+  arg = tostring(arg or ""):lower():match("^%s*(.-)%s*$") or ""
+  local function say(text)
+    DEFAULT_CHAT_FRAME:AddMessage(text)
+  end
+  if arg == "" or arg == "status" then
+    say("NodeTrail skinning: " .. (ns.IsSkinningEnabled() and "on" or "off")
+      .. " (recording corpses into NodeTrailDB; /nt skin on|off)")
+    return
+  end
+  if arg ~= "on" and arg ~= "off" then
+    say("NodeTrail: /nt skin [on|off|status]")
+    return
+  end
+  local on = (arg == "on")
+  -- The persisted choice first: even if the probe cannot start, the player's
+  -- answer must not be lost and must not be re-flipped by the migration.
+  ns.SetSkinningEnabled(on)
+  if on then
+    local ok, err = ns.EnableSkinning()
+    if ok == false then
+      say("NodeTrail skinning on, but the probe did not start: " .. tostring(err))
+      return
+    end
+    say("NodeTrail skinning on — recording corpses into NodeTrailDB; /mp skindiag dump shows what was stored.")
+  else
+    ns.DisableSkinning()
+    say("NodeTrail skinning off — recording stopped now; the choice is saved and survives /reload.")
+  end
 end
 
 function ns.Enable()

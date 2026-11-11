@@ -13,7 +13,8 @@
 --   * pkg.Skinning.Probe  the in-client event capture (/mp skindiag)
 --
 -- The sub-toggle is persisted by NodeTrail in NodeTrailDB.skinning.enabled
--- (default false: the event surface is still unverified on this client).
+-- (default true since t_ba64b076; an explicit off is recorded as
+-- skinUserSet and is never overridden by the one-time migration).
 -- Nothing in this file reads that toggle — NodeTrail owns the policy, this
 -- file owns the probe — so /mp skindiag can run the diagnostic while the
 -- toggle is off.

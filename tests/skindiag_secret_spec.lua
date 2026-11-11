@@ -225,7 +225,12 @@ local function boot(pkg, addonName)
 end
 
 MightiePackDB = nil
-NodeTrailDB = nil
+-- t_ba64b076: the sub-option is ON by default now, so the "records go to the
+-- session buffer only" half of this spec has to be OFF the way a player turns
+-- it off — an explicit opt-out (skinUserSet). A saved false with no user-set
+-- flag would be switched on by the one-time migration, and these dump
+-- assertions would then be reading the DB path instead of the buffer.
+NodeTrailDB = { skinning = { enabled = false, skinUserSet = true } }
 local pkg = {}
 loadPackage(pkg, "MightiePack")
 boot(pkg, "MightiePack")

@@ -176,6 +176,9 @@ local function applySkinRoute(on)
 end
 
 -- Apply the sub-toggle: persist it, then start/stop the probe immediately.
+-- The setter (NodeTrail's ns.SetSkinningEnabled) also records this as the
+-- player's own choice (t_ba64b076 skinUserSet), which is what keeps an "off"
+-- from being overridden by a later default or migration.
 -- No reload is needed — switching off unregisters the probe's events and
 -- drops its session buffer (P:Disable) — so this deliberately does NOT
 -- raise MIGHTIEPACK_DISABLE_MODULE. That popup exists to warn about a
@@ -487,8 +490,9 @@ local function syncCheckboxes()
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Skinning (experimental)")
         GameTooltip:AddLine("NodeTrail's skinning probe: kill -> loot -> skin -> skin-loot capture for "
-          .. "/mp skindiag and /mp skindiag dump. Off by default while this client's event surface "
-          .. "is still unverified. Turn it off at any time — no UI reload needed.", 1, 1, 1, true)
+          .. "/mp skindiag and /mp skindiag dump. On by default: a fresh install records from the "
+          .. "first corpse with no setup. Turn it off at any time — the choice is kept across "
+          .. "/reload and every update, and no UI reload is needed now.", 1, 1, 1, true)
         GameTooltip:Show()
       end)
       sb:SetScript("OnLeave", function()
