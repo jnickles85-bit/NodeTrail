@@ -294,8 +294,11 @@ check(Verdict.ratingFromPercent("Hit", 1) == 10,
   "10 hit rating = 1% (got " .. tostring(Verdict.ratingFromPercent("Hit", 1)) .. ")")
 check(Verdict.ratingFromPercent("Haste", 1) == 10,
   "10 haste rating = 1%")
-check(Verdict.ratingFromPercent("Expertise", 1) == 10,
-  "10 expertise rating = 1%")
+check(Verdict.ratingFromPercent("Expertise", 1) == 1,
+  "expertise has no sourced rating-per-percent and is not lifted (got "
+    .. tostring(Verdict.ratingFromPercent("Expertise", 1)) .. ")")
+check(Verdict.EXPERTISE_RATING_PER_PERCENT == nil,
+  "EXPERTISE_RATING_PER_PERCENT is not invented")
 check(Verdict.ratingFromPercent("Dodge", 1) == 12,
   "12 dodge rating = 1%")
 check(Verdict.ratingFromPercent("Parry", 1) == 15,
@@ -353,6 +356,9 @@ mustClassify("haste rating",
   { "Eq",   "+10 Strength" })
 mustClassify("expertise rating",
   { "Cand", "+10 Strength", "+10 Expertise Rating" },
+  { "Eq",   "+10 Strength" })
+mustClassify("expertise percent text",
+  { "Cand", "+10 Strength", "Equip: Increases your expertise by 1%." },
   { "Eq",   "+10 Strength" })
 mustClassify("healing-only sentence",
   { "Cand", "+10 Intellect", "Equip: Increases healing done by spells and effects by up to 20." },
@@ -926,6 +932,143 @@ local vRetC, rRetC = Verdict.weightedVerdict({ Strength = 10 }, { Strength = 0 }
 check(vRetC == "UPGRADE" and type(rRetC) == "string"
     and rRetC:find("Mental Dexterity", 1, true) == nil,
   "other specs do not get the Enhancement caveat (got " .. tostring(rRetC) .. ")")
+
+
+-- ── Review NO-GO: Defense total, expertise percent, client APIs ────
+
+-- Classic UnitDefense returns base, armorBonus; both are required.
+local savedUnitDefense = UnitDefense
+UnitDefense = function(unit)
+  check(unit == "player", "UnitDefense is called with 'player'")
+  return 300, 140
+end
+local defTotal = Verdict.playerDefenseSkill()
+check(defTotal == 440, "UnitDefense(300, 140) is the 440 skill total (got "
+  .. tostring(defTotal) .. ")")
+UnitDefense = function(unit) return 300 end -- one return only (armorBonus nil)
+check(Verdict.playerDefenseSkill() == 300,
+  "UnitDefense with a missing modifier still uses the base (got "
+    .. tostring(Verdict.playerDefenseSkill()) .. ")")
+UnitDefense = savedUnitDefense
+
+-- Prot Balanced: at the 440 Defense cap, +10 Defense is zero in the
+-- "Defense until 440" window, so Armor decides. Candidate {Def 30,
+-- Armor 0} vs worn {Def 20, Armor 50} is NOT_UPGRADE via Armor.
+local protBal = { class = "PALADIN", weightsKey = "prot", clientRole = "TANK",
+  playerDefense = 440 }
+local vDef, rDef, dDef = Verdict.weightedVerdict(
+  { Defense = 30, Armor = 0 }, { Defense = 20, Armor = 50 }, protBal)
+check(vDef == "NOT_UPGRADE",
+  "Prot Balanced at Defense 440: {Def30,Armor0} vs {Def20,Armor50} is NOT_UPGRADE (got "
+    .. tostring(vDef) .. " " .. tostring(rDef) .. ")")
+check(dDef and dDef.decidedBy == "Armor",
+  "the deciding tier is Armor (got " .. tostring(dDef and dDef.decidedBy) .. ")")
+
+-- Forever Expertise percent text is stored as a percent and compared
+-- to Wowhead's 6.5% cap with no invented rating conversion.
+local expLine = { "Exp Charm", "+1 Stamina", "Equip: Increases your expertise by 1%." }
+local parsedExp = Verdict.statTable(expLine, "candidate")
+check(type(parsedExp) == "table" and parsedExp.Expertise == 1,
+  "expertise percent text is stored as 1 (percent), not lifted to a rating (got "
+    .. tostring(parsedExp and parsedExp.Expertise) .. ")")
+local armsExp = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER",
+  playerExpertisePercent = 5 }
+local vExp, rExp, dExp = Verdict.weightedVerdict(
+  { Expertise = 2 }, { Expertise = 0 }, armsExp)
+-- current 5%, cand 7%, cap 6.5% -> effective +1.5, UPGRADE below cap
+check(vExp == "UPGRADE" and type(rExp) == "string" and rExp:find("6.5%", 1, true),
+  "expertise percent text is clamped at 6.5% (got " .. tostring(rExp) .. ")")
+
+-- A rating-only Expertise line cannot be converted; cap status unknown.
+local ratingLine = { "Exp Rating Charm", "+1 Stamina", "+20 Expertise Rating" }
+local parsedRat = Verdict.statTable(ratingLine, "candidate")
+check(type(parsedRat) == "table" and parsedRat.ExpertiseRating == 20
+    and parsedRat.Expertise == nil,
+  "expertise rating is stored as ExpertiseRating, not converted (got "
+    .. tostring(parsedRat and parsedRat.ExpertiseRating) .. "/"
+    .. tostring(parsedRat and parsedRat.Expertise) .. ")")
+local armsUnk = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER",
+  playerExpertisePercent = 5 }
+local vRat, rRat, dRat = Verdict.weightedVerdict(
+  { ExpertiseRating = 20 }, { ExpertiseRating = 0 }, armsUnk)
+check(vRat == "UPGRADE", "rating-only expertise still ranks the raw values (got "
+  .. tostring(vRat) .. " " .. tostring(rRat) .. ")")
+check(type(rRat) == "string" and rRat:find("unknown", 1, true),
+  "rating-only expertise reports cap status unknown (got " .. tostring(rRat) .. ")")
+
+-- Caster 17% caps use GetSpellHitModifier, not GetHitModifier.
+local savedBonus, savedHitMod, savedSpellMod = GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier
+GetCombatRatingBonus = function(cr) return 5 end
+GetHitModifier = function() return 3 end
+GetSpellHitModifier = function() return 8 end
+CR_HIT_MELEE = CR_HIT_MELEE or 6
+check(Verdict.playerHitPercent() == 8,
+  "melee hit is rating + GetHitModifier (got " .. tostring(Verdict.playerHitPercent()) .. ")")
+check(Verdict.playerHitPercent("spell") == 13,
+  "spell hit is rating + GetSpellHitModifier, not GetHitModifier (got "
+    .. tostring(Verdict.playerHitPercent("spell")) .. ")")
+GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier = savedBonus, savedHitMod, savedSpellMod
+
+-- GetExpertise is not assumed to be a percent.
+local savedExp, savedExpPct, savedCRB = GetExpertise, GetExpertisePercent, GetCombatRatingBonus
+GetExpertise = function() return 65 end
+GetExpertisePercent = nil
+GetCombatRatingBonus = nil
+check(Verdict.playerExpertisePercent() == nil,
+  "GetExpertise alone is not treated as a percent (got "
+    .. tostring(Verdict.playerExpertisePercent()) .. ")")
+GetCombatRatingBonus = function(cr) if cr == 24 then return 6.5 end end
+CR_EXPERTISE = 24
+check(Verdict.playerExpertisePercent() == 6.5,
+  "GetCombatRatingBonus(CR_EXPERTISE) is the client's own percent (got "
+    .. tostring(Verdict.playerExpertisePercent()) .. ")")
+GetExpertise, GetExpertisePercent, GetCombatRatingBonus = savedExp, savedExpPct, savedCRB
+
+-- Weapon skill is a skill total, not GetCombatRating(CR_WEAPON_SKILL).
+local savedUABH, savedGCR = UnitAttackBothHands, GetCombatRating
+GetCombatRating = function(cr) return 999 end
+CR_WEAPON_SKILL = CR_WEAPON_SKILL or 1
+UnitAttackBothHands = function(unit)
+  check(unit == "player", "UnitAttackBothHands is called with 'player'")
+  return 300, 8, 200, 0
+end
+check(Verdict.playerWeaponSkill() == 308,
+  "UnitAttackBothHands(300, 8) is the 308 skill total, not a combat rating (got "
+    .. tostring(Verdict.playerWeaponSkill()) .. ")")
+UnitAttackBothHands, GetCombatRating = savedUABH, savedGCR
+
+-- Enhancement: hit after the 8% melee floor still counts toward 17% spell hit.
+local enhHitPack = Verdict.WEIGHTS.SHAMAN.enhancement
+local lastHit
+if type(enhHitPack) == "table" and type(enhHitPack.tiers) == "table" then
+  for _, tier in ipairs(enhHitPack.tiers) do
+    if tier.name == "Hit" and tier.capPercent == 17 then lastHit = tier end
+  end
+end
+check(lastHit and lastHit.afterPercent == 8 and lastHit.hitKind == "spell",
+  "Enhancement keeps a last-priority 8–17% spell-hit window")
+local enhHitSpec = { class = "SHAMAN", weightsKey = "enhancement", clientRole = "DAMAGER",
+  playerHitPercent = 8, playerSpellHitPercent = 8 }
+local vEnhHit, rEnhHit = Verdict.weightedVerdict({ Hit = 10 }, { Hit = 0 }, enhHitSpec)
+-- 10 rating = 1%; melee window [0,8] delta 0; spell window [8,17] delta 1
+check(vEnhHit == "UPGRADE" and type(rEnhHit) == "string" and rEnhHit:find("17%", 1, true),
+  "Enhancement hit past 8% is still an upgrade toward 17% (got " .. tostring(rEnhHit) .. ")")
+
+-- /up spec Auto text names a recorded /up role.
+asClass("PALADIN", "Paladin", "Retribution", "DAMAGER")
+ChestAdvisor.setGearFor(nil)
+ChestAdvisorDB.role = { PALADIN = "melee" }
+local outRole = slash("spec")
+check(outRole:find("/up role melee", 1, true),
+  "/up spec Auto names the recorded /up role: " .. outRole)
+ChestAdvisor.setGearFor("ret")
+local outChosen = slash("reset")
+check(ChestAdvisor.gearForKey() == nil, "/up reset clears the chosen Gear-for spec")
+check(ChestAdvisorDB.role and ChestAdvisorDB.role.PALADIN == "melee",
+  "/up reset does not clear /up role")
+check(outChosen:lower():find("auto", 1, true) or outChosen:lower():find("cleared", 1, true),
+  "/up reset mentions the Gear-for clear: " .. outChosen)
+ChestAdvisorDB.role = {}
 
 -- Direct options-style set still rescans (scan is a function after Enable).
 local scans = 0

@@ -641,6 +641,7 @@ local KNOWN = {
 	-- zero, not a guess.
 	["Haste"]            = true,
 	["Expertise"]        = true,
+	["ExpertiseRating"]  = true,
 	["BlockChance"]      = true,
 	["BonusArmor"]       = true,
 	["HealingPower"]     = true,
@@ -773,7 +774,7 @@ Verdict.ITEM_STAT_KEYS = {
 	ITEM_MOD_HASTE_MELEE_RATING  = "Haste",
 	ITEM_MOD_HASTE_RANGED_RATING = "Haste",
 	ITEM_MOD_HASTE_SPELL_RATING  = "Haste",
-	ITEM_MOD_EXPERTISE_RATING    = "Expertise",
+	ITEM_MOD_EXPERTISE_RATING    = "ExpertiseRating",
 	ITEM_MOD_BLOCK_RATING        = "BlockChance",
 	ITEM_MOD_SPELL_PENETRATION   = "SpellPenetration",
 	ITEM_MOD_SPELL_HEALING_DONE  = "HealingPower",
@@ -1190,7 +1191,10 @@ Verdict.HIT_RATING_PER_PERCENT  = 10
 Verdict.CRIT_RATING_PER_PERCENT = 14
 -- Forever 1.60.1 build 70862 combatratings.txt (same scale ForeverDB uses):
 Verdict.HASTE_RATING_PER_PERCENT      = 10
-Verdict.EXPERTISE_RATING_PER_PERCENT  = 10
+-- Expertise has no sourced rating-per-percent on Forever (combatratings.txt
+-- has no expertise entry). Percent tooltip text is stored as a percent and
+-- compared directly to Wowhead's 6.5% / 14% caps. A rating-only line is
+-- accumulated as ExpertiseRating and cannot be clamped.
 Verdict.DODGE_RATING_PER_PERCENT      = 12
 Verdict.PARRY_RATING_PER_PERCENT      = 15
 Verdict.BLOCK_CHANCE_RATING_PER_PERCENT = 5
@@ -1198,14 +1202,14 @@ Verdict.BLOCK_CHANCE_RATING_PER_PERCENT = 5
 -- WORD -> rating points per 1% of that word. A tooltip PERCENT times its entry
 -- is the RATING count the client's own read returns for the same stat. The
 -- whole table: a word absent from it carries no factor. Hit, crit, haste,
--- expertise, dodge, parry and block chance all lift here so a "by 1%" sentence
--- and a "+N Rating" line land on the same raw-rating unit the packs price.
--- Read by ratingFromPercent ONLY.
+-- dodge, parry and block chance all lift here so a "by 1%" sentence and a
+-- "+N Rating" line land on the same raw-rating unit the packs price.
+-- Expertise is absent: there is no sourced factor, so a percent sentence
+-- stays a percent. Read by ratingFromPercent ONLY.
 Verdict.PERCENT_TO_RATING = {
 	Hit         = Verdict.HIT_RATING_PER_PERCENT,
 	Crit        = Verdict.CRIT_RATING_PER_PERCENT,
 	Haste       = Verdict.HASTE_RATING_PER_PERCENT,
-	Expertise   = Verdict.EXPERTISE_RATING_PER_PERCENT,
 	Dodge       = Verdict.DODGE_RATING_PER_PERCENT,
 	Parry       = Verdict.PARRY_RATING_PER_PERCENT,
 	BlockChance = Verdict.BLOCK_CHANCE_RATING_PER_PERCENT,
@@ -1464,7 +1468,8 @@ local parseLine_ = function(line)
 		if rest == "attack power" then return "AttackPower" end
 		if rest == "ranged attack power" then return "RangedAttackPower" end
 		if rest == "haste rating" or rest == "haste" then return "Haste" end
-		if rest == "expertise rating" or rest == "expertise" then return "Expertise" end
+		if rest == "expertise rating" then return "ExpertiseRating" end
+		if rest == "expertise" then return "ExpertiseRating" end
 		if rest == "block rating" or rest == "block chance rating"
 			or rest == "block chance" then
 			return "BlockChance"
@@ -1522,6 +1527,9 @@ local parseLine_ = function(line)
 		or plain:match("^(%d+%.?%d*)%s+speed$")
 	if spd then
 		local v = tonumber(spd)
+		-- Parse disambiguator, not a scoring weight: Classic weapon
+		-- tooltips print speeds in about 1.00–4.00. Values outside
+		-- 0.5–10 are not weapon speeds (a level, a sell price, etc.).
 		if v and v >= 0.5 and v <= 10 then return v, "WeaponSpeed" end
 	end
 	local skillPlain = plain:gsub("^equip:%s*", ""):gsub("%s*%.$", "")
@@ -1625,7 +1633,14 @@ local parseLine_ = function(line)
 	if haster then return tonumber(haster), "Haste" end
 	local expr = stat_sentence:match("^increases your expertise rating by (%d+%.?%d*)$")
 		or stat_sentence:match("^improves your expertise rating by (%d+%.?%d*)$")
-	if expr then return tonumber(expr), "Expertise" end
+	if expr then return tonumber(expr), "ExpertiseRating" end
+	-- Forever prints expertise as a percent, not a rating. Store the
+	-- percent directly (no invented rating factor) so it can be compared
+	-- to Wowhead's 6.5% / 14% caps.
+	local expp = stat_sentence:match("^increases your expertise by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^improves your expertise by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^increases expertise by (%d+%.?%d*)%%$")
+	if expp then return tonumber(expp), "Expertise" end
 	local dodger = stat_sentence:match("^increases your dodge rating by (%d+%.?%d*)$")
 	if dodger then return tonumber(dodger), "Dodge" end
 	local parryr = stat_sentence:match("^increases your parry rating by (%d+%.?%d*)$")
@@ -1634,7 +1649,8 @@ local parseLine_ = function(line)
 		or stat_sentence:match("^increases your block rating by (%d+%.?%d*)$")
 	if blockr then return tonumber(blockr), "BlockChance" end
 	-- Percent sentences for the remaining combat ratings, lifted through
-	-- ratingFromPercent (dodge 12, parry 15, block chance 5, haste / expertise 10).
+	-- ratingFromPercent (dodge 12, parry 15, block chance 5, haste 10).
+	-- Expertise percent is handled above and is NOT lifted.
 	local dodgep = stat_sentence:match("^increases your chance to dodge by (%d+%.?%d*)%%$")
 		or stat_sentence:match("^improves your chance to dodge by (%d+%.?%d*)%%$")
 	if dodgep then return Verdict.ratingFromPercent("Dodge", tonumber(dodgep)), "Dodge" end
@@ -2007,7 +2023,7 @@ local API_WORD_TEXT = {
 	ArcaneDamage = { "arcane spells", "arcane damage" },
 	SpellPenetration = { "spell penetration" },
 	Haste = { "haste" },
-	Expertise = { "expertise" },
+	ExpertiseRating = { "expertise rating", "expertise" },
 	BlockChance = { "block rating", "chance to block", "block chance" },
 	BonusArmor = { "bonus armor" },
 	WandDps = { "wand dps" },
@@ -3612,13 +3628,13 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-04",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Strength", stats = { "Strength" } },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Haste", stats = { "Haste" } },
-				{ name = "Hit", stats = { "Hit" }, afterPercent = 8, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, afterPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
 			},
 			source = "https://www.wowhead.com/forever/guide/classes/warrior/arms/stat-priority-pve-dps (updated 2026-11-04, fetched 2026-11-11). Wowhead Arms Warrior Stat Priority in WoW Forever, by shoop. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
 		},
@@ -3630,7 +3646,7 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			tiers = {
 				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 305, capUnit = "raw" },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 9, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Strength", stats = { "Strength" } },
 				{ name = "Agility", stats = { "Agility" } },
@@ -3653,12 +3669,12 @@ Verdict.WEIGHTS = {
 				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
 				{ name = "Parry", stats = { "Parry" } },
 				{ name = "Dodge", stats = { "Dodge" } },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Block Chance", stats = { "BlockChance" } },
 				{ name = "Strength & Attack Power", stats = { "AttackPower", "Strength" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
 				{ name = "Haste", stats = { "Haste" } },
 			},
 			source = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank (updated 2026-11-03, fetched 2026-11-11). Wowhead Protection Warrior Stat Priority in WoW Forever — Defensive Priority, by Riyani. Order-only; no invented numeric weights.",
@@ -3672,10 +3688,10 @@ Verdict.WEIGHTS = {
 			variant = "Balanced",
 			tiers = {
 				{ name = "Stamina", stats = { "Stamina" } },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
 				{ name = "Armor", stats = { "Armor" } },
 				{ name = "Strength & Attack Power", stats = { "AttackPower", "Strength" } },
 				{ name = "Agility", stats = { "Agility" } },
@@ -3696,9 +3712,9 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			variant = "Offensive",
 			tiers = {
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Strength & Attack Power", stats = { "AttackPower", "Strength" } },
 				{ name = "Stamina", stats = { "Stamina" } },
@@ -3747,11 +3763,11 @@ Verdict.WEIGHTS = {
 				{ name = "Parry", stats = { "Parry" } },
 				{ name = "Dodge", stats = { "Dodge" } },
 				{ name = "Strength", stats = { "Strength" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 			},
@@ -3767,18 +3783,18 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Stamina", stats = { "Stamina" } },
 				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
 				{ name = "Armor", stats = { "Armor" } },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Block Chance", stats = { "BlockChance" } },
 				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
 				{ name = "Parry", stats = { "Parry" } },
 				{ name = "Dodge", stats = { "Dodge" } },
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Strength", stats = { "Strength" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -3794,12 +3810,12 @@ Verdict.WEIGHTS = {
 			variant = "Offensive",
 			tiers = {
 				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Stamina", stats = { "Stamina" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Strength", stats = { "Strength" } },
 				{ name = "Agility", stats = { "Agility" } },
@@ -3822,8 +3838,8 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Weapon Skill", stats = { "WeaponSkill" } },
 				{ name = "Weapon DPS & Speed", stats = { "WeaponDps", "WeaponSpeed" }, special = "dps_then_speed" },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 9, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower", "HolyDamage" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Strength & Attack Power", stats = { "Strength", "AttackPower" } },
@@ -3841,7 +3857,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-30",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
 				{ name = "Crit", stats = { "Crit" } },
@@ -3860,8 +3876,8 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			tiers = {
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Weapon DPS", stats = { "WeaponDps" } },
 				{ name = "Agility & Strength", stats = { "Agility", "Strength" } },
@@ -3899,8 +3915,8 @@ Verdict.WEIGHTS = {
 			variant = "Offensive",
 			-- Wowhead typo: the Offensive list prints Strength as both item 6 and item 8. The second occurrence is dropped; the first is kept.
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 }, -- numbered list omits the cap wording; the same page states this cap (8%)
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 }, -- numbered list omits the cap wording; the same page states this cap (8%)
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Weapon DPS", stats = { "WeaponDps" } },
@@ -3937,7 +3953,7 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
 				{ name = "Haste", stats = { "Haste" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Nature Damage & Fire Damage", stats = { "NatureDamage", "FireDamage" } },
@@ -3955,9 +3971,10 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-03",
 			fetched = "2026-11-11",
 			caveat = "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated.",
+			-- caveat source: https://news.blizzard.com/en-us/article/24315281/wow-forever-hotfixes-november-10-2026
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
 				{ name = "Strength", stats = { "Strength" } },
@@ -3967,6 +3984,7 @@ Verdict.WEIGHTS = {
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Spirit", stats = { "Spirit" } },
 				{ name = "Stamina", stats = { "Stamina" } },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 }, -- the numbered list stops at the 8% melee minimum; the same page says going above is useful for spell damage and mentions a 17% spell cap, so hit after 8% is kept as a last-priority window rather than zeroed
 			},
 			source = "https://www.wowhead.com/forever/guide/classes/shaman/enhancement/stat-priority-pve-dps (updated 2026-11-03, fetched 2026-11-11). Wowhead Enhancement Shaman Stat Priority in WoW Forever, by Yebb. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
 		},
@@ -4028,7 +4046,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-30",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Damage & Shadow Damage", stats = { "SpellDamage", "SpellPower", "ShadowDamage" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4046,7 +4064,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-28",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Spell Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "ArcaneDamage" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
@@ -4064,7 +4082,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-03",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Spell Damage & Fire Damage", stats = { "SpellDamage", "SpellPower", "FireDamage" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
@@ -4082,7 +4100,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-29",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Damage, Frost Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "FrostDamage", "ArcaneDamage" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4102,7 +4120,7 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Spell Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "ShadowDamage" } },
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4118,7 +4136,7 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			tiers = {
 				{ name = "Spell Damage, Fire Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "FireDamage", "ShadowDamage" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
@@ -4136,7 +4154,7 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Spell Damage & Fire Damage", stats = { "SpellPower", "SpellDamage", "FireDamage" } },
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4153,10 +4171,10 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-09",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 308, capUnit = "raw" },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
@@ -4173,10 +4191,10 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-30",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 308, capUnit = "raw" },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
@@ -4193,10 +4211,10 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-30",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 8, ratingPerPercent = 10 },
-				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 308, capUnit = "raw" },
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
@@ -4215,7 +4233,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-04",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 9, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4232,7 +4250,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-04",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 9, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4250,7 +4268,7 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			-- The numbered list is '% Hit Chance' with no 'until 9%'; the same page states the 9% yellow-hit cap in the body, and that cap is applied.
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 9, ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Strength", stats = { "Strength" } },
@@ -4413,11 +4431,26 @@ local function pcallNumber(fn, ...)
 end
 
 -- The player's current Hit chance, in percent, or nil when unreadable.
--- 1.60.1 exposes GetCombatRatingBonus (forever + 1.60.1) and, when
--- present, GetHitModifier (talent / buff hit that is not from rating).
--- CR_HIT_MELEE is 6 in PaperDollFrame.lua; Forever unified melee/spell
--- /ranged hit, so this one bonus is the rating half of the paperdoll.
-function Verdict.playerHitPercent()
+-- `kind` is "spell" for a spell (or poison) 17% cap, or "melee" (default)
+-- for an 8% / 9% ability cap. Spell caps use GetSpellHitModifier, never
+-- GetHitModifier. The rating half prefers CR_HIT_SPELL, then the unified
+-- CR_HIT, then (on clients that only expose one hit rating) CR_HIT_MELEE.
+function Verdict.playerHitPercent(kind)
+	if kind == "spell" then
+		local bonus
+		if rawget(_G, "CR_HIT_SPELL") ~= nil then
+			bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_SPELL"))
+		end
+		if bonus == nil and rawget(_G, "CR_HIT") ~= nil then
+			bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT"))
+		end
+		if bonus == nil then
+			bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_MELEE") or 6)
+		end
+		local mod = pcallNumber(GetSpellHitModifier)
+		if bonus == nil and mod == nil then return nil end
+		return (bonus or 0) + (mod or 0)
+	end
 	local bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_MELEE") or 6)
 	if bonus == nil and rawget(_G, "CR_HIT") ~= nil then
 		bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT"))
@@ -4428,29 +4461,41 @@ function Verdict.playerHitPercent()
 end
 
 -- The player's current Expertise, in percent, or nil when unreadable.
--- GetExpertise() on forever + 1.60.1 returns main-hand / off-hand /
--- ranged PERCENTAGES (warcraft.wiki.gg). GetCombatRatingBonus(CR_EXPERTISE)
--- (index 24) is the fallback when GetExpertise is missing.
+-- Only APIs that are documented to return a percent are trusted:
+-- GetExpertisePercent, then GetCombatRatingBonus(CR_EXPERTISE) (the
+-- client's own percent bonus). GetExpertise is not used: its unit is
+-- not verified on Forever, and assuming it is a percent would invent
+-- a conversion.
 function Verdict.playerExpertisePercent()
-	local mh = pcallNumber(GetExpertise)
-	if type(mh) == "number" then return mh end
+	if type(GetExpertisePercent) == "function" then
+		local ok, mh = pcall(GetExpertisePercent)
+		if ok and type(mh) == "number" then return mh end
+	end
 	return pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_EXPERTISE") or 24)
 end
 
--- Defense skill total, or nil when unreadable. UnitDefense("player") is
--- the Classic skill number (the Wowhead cap is 440 skill, not a rating).
+-- Defense skill total, or nil when unreadable. Classic UnitDefense
+-- returns base, armorBonus; both are required (Wowhead's cap is 440
+-- skill, not a rating). pcallNumber would keep only the first return.
 function Verdict.playerDefenseSkill()
-	return pcallNumber(UnitDefense, "player")
+	local ok, base, mod = pcall(UnitDefense, "player")
+	if ok and type(base) == "number" then
+		return base + (tonumber(mod) or 0)
+	end
+	return nil
 end
 
--- Weapon skill total, or nil when unreadable. Tried APIs are pcall'd;
--- none is assumed present. Tests inject spec.playerWeaponSkill.
+-- Weapon skill total, or nil when unreadable. UnitAttackBothHands
+-- returns main-hand base, main-hand modifier, off-hand base, off-hand
+-- modifier — skill totals, not a combat rating. GetCombatRating
+-- (CR_WEAPON_SKILL) is a rating and must not be compared to the 305 /
+-- 308 skill caps. Tests inject spec.playerWeaponSkill.
 function Verdict.playerWeaponSkill()
-	local v = pcallNumber(UnitWeaponSkill, "player")
-	if type(v) == "number" then return v end
-	if type(GetCombatRating) == "function" and rawget(_G, "CR_WEAPON_SKILL") ~= nil then
-		v = pcallNumber(GetCombatRating, rawget(_G, "CR_WEAPON_SKILL"))
-		if type(v) == "number" then return v end
+	if type(UnitAttackBothHands) == "function" then
+		local ok, mainBase, mainMod = pcall(UnitAttackBothHands, "player")
+		if ok and type(mainBase) == "number" then
+			return mainBase + (tonumber(mainMod) or 0)
+		end
 	end
 	return nil
 end
@@ -4465,17 +4510,28 @@ end
 -- Resolve the current percent for a capped stat. `spec.playerHitPercent`
 -- / `spec.playerExpertisePercent` override the client read so a test can
 -- inject a value; the value `false` forces "cap status unknown".
-function Verdict.currentCapPercent(word, spec)
+function Verdict.currentCapPercent(word, spec, hitKind)
 	if type(spec) == "table" then
 		if word == "Hit" then
-			if spec.playerHitPercent == false then return nil end
-			if type(spec.playerHitPercent) == "number" then return spec.playerHitPercent end
+			if hitKind == "spell" then
+				if spec.playerSpellHitPercent == false then return nil end
+				if type(spec.playerSpellHitPercent) == "number" then
+					return spec.playerSpellHitPercent
+				end
+				-- Fall back to a generic injected hit percent when the
+				-- test (or a unified-rating client) supplies only one.
+				if spec.playerHitPercent == false then return nil end
+				if type(spec.playerHitPercent) == "number" then return spec.playerHitPercent end
+			else
+				if spec.playerHitPercent == false then return nil end
+				if type(spec.playerHitPercent) == "number" then return spec.playerHitPercent end
+			end
 		elseif word == "Expertise" then
 			if spec.playerExpertisePercent == false then return nil end
 			if type(spec.playerExpertisePercent) == "number" then return spec.playerExpertisePercent end
 		end
 	end
-	if word == "Hit" then return Verdict.playerHitPercent() end
+	if word == "Hit" then return Verdict.playerHitPercent(hitKind) end
 	if word == "Expertise" then return Verdict.playerExpertisePercent() end
 	return nil
 end
@@ -4503,21 +4559,33 @@ end
 -- optional). `current` is the player's total INCLUDING the worn item,
 -- in the same unit as cap/after (percent, or raw skill/rating).
 -- When unit is "percent", cand/worn values are ratings and are divided
--- by ratingPerPercent. When unit is "raw", cand/worn are used as-is.
+-- by ratingPerPercent. When ratingPerPercent is 1 (or valueUnit is
+-- "percent"), the stored values are already percent and are used as-is.
+-- When unit is "raw", cand/worn are used as-is. A missing or zero
+-- ratingPerPercent is not invented: the raw values are ranked and cap
+-- status is "unknown".
 -- Returns (effective_delta, capStatus) where capStatus is "unknown",
 -- "below", or "at".
 function Verdict.clampedWindowDelta(candRating, wornRating, current, cap, after, ratingPerPercent, unit)
 	local candVal, wornVal
+	local scaleUnknown = false
 	if unit == "raw" then
 		candVal = tonumber(candRating) or 0
 		wornVal = tonumber(wornRating) or 0
 	else
-		local scale = tonumber(ratingPerPercent) or 10
-		if scale == 0 then scale = 10 end
-		candVal = (tonumber(candRating) or 0) / scale
-		wornVal = (tonumber(wornRating) or 0) / scale
+		local scale = tonumber(ratingPerPercent)
+		if type(scale) ~= "number" or scale == 0 then
+			-- No sourced conversion. Rank the raw values and report
+			-- cap status unknown; do not invent a factor.
+			candVal = tonumber(candRating) or 0
+			wornVal = tonumber(wornRating) or 0
+			scaleUnknown = true
+		else
+			candVal = (tonumber(candRating) or 0) / scale
+			wornVal = (tonumber(wornRating) or 0) / scale
+		end
 	end
-	if type(current) ~= "number" then
+	if scaleUnknown or type(current) ~= "number" then
 		return candVal - wornVal, "unknown"
 	end
 	local wornTotal = current
@@ -4704,10 +4772,40 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 				local unit = (tier.capUnit == "raw") and "raw" or "percent"
 				local cap = (unit == "raw") and tier.capValue or tier.capPercent
 				local after = (unit == "raw") and tier.afterValue or tier.afterPercent
-				local current = Verdict.currentCapValue(word, spec, unit)
+				local candStat, wornStat = cand[word], eq[word]
+				local scale = tonumber(tier.ratingPerPercent)
+				if type(scale) ~= "number" or scale == 0 then
+					if tier.valueUnit == "percent" then
+						scale = 1
+					else
+						scale = nil
+					end
+				end
+				-- Expertise percent text is stored on Expertise and
+				-- compared directly (scale 1). A rating-only line lives
+				-- on ExpertiseRating and cannot be converted, so cap
+				-- status is unknown and the raw rating is ranked.
+				if word == "Expertise" then
+					if cand.Expertise == nil and eq.Expertise == nil
+						and (cand.ExpertiseRating ~= nil or eq.ExpertiseRating ~= nil) then
+						candStat = cand.ExpertiseRating
+						wornStat = eq.ExpertiseRating
+						scale = nil
+					else
+						if type(scale) ~= "number" or scale == 0 then
+							scale = 1
+						end
+					end
+				end
+				local current
+				if word == "Hit" and unit ~= "raw" then
+					current = Verdict.currentCapPercent("Hit", spec, tier.hitKind)
+				else
+					current = Verdict.currentCapValue(word, spec, unit)
+				end
 				local delta, status = Verdict.clampedWindowDelta(
-					cand[word], eq[word], current, cap, after,
-					tier.ratingPerPercent or 10, unit)
+					candStat, wornStat, current, cap, after,
+					scale, unit)
 				if delta ~= 0 then
 					local kind = (delta > 0) and "upgrade" or "downgrade"
 					local v = (delta > 0) and "UPGRADE" or "NOT_UPGRADE"
@@ -5986,10 +6084,12 @@ local function parseWeaponLine(line)
 		end
 	end
 
-	-- SPEED: "Speed 1.90" — a decimal in 0.5..10 (the reference's own window,
-	-- Weapon.lua:161). Read the number after the word "speed"; if the line is
-	-- the "Speed" word on the left column with the value on the right (the
-	-- reader joins columns), the search still finds it.
+	-- SPEED: "Speed 1.90". The 0.5–10 window is a parse disambiguator,
+	-- not a scoring weight: Classic weapon tooltips print 1.00–4.00, and
+	-- a number outside that window is not a weapon speed. Read the number
+	-- after the word "speed"; if the line is the "Speed" word on the left
+	-- column with the value on the right (the reader joins columns), the
+	-- search still finds it.
 	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
 	if sp then
 		local v = tonumber((sp:gsub(",", ".")))

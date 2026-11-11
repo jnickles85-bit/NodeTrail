@@ -28,13 +28,17 @@ END = "-- <wowhead-priorities-end>"
 # Parser words and default rating-per-percent (percent caps only).
 PERCENT_SCALE = {
     "Hit": 10,
-    "Expertise": 10,
     "Haste": 10,
     "Crit": 14,
     "Dodge": 12,
     "Parry": 15,
     "BlockChance": 5,
 }
+
+# Expertise is a percent cap (6.5% / 14%) but has no sourced
+# rating-per-percent on Forever, so it is not in PERCENT_SCALE.
+PERCENT_UNIT_WORDS = set(PERCENT_SCALE) | {"Expertise"}
+RAW_UNIT_WORDS = {"Defense", "WeaponSkill", "Armor"}
 
 # Wowhead list words -> one or more parser keys. Intra-tier bundles are
 # preserved as given; Haste / Cast Speed both map to Haste and are
@@ -234,15 +238,50 @@ def first_number_pair(text: str) -> tuple[float | None, float | None]:
     return a, b
 
 
+def _num(s: str):
+    n = float(s)
+    return int(n) if n == int(n) else n
+
+
+def parse_total_spell_hit_percent(line: str, caps_text: str):
+    """Read a total / boss spell-hit cap from the page text. Do not invent 17."""
+    blob = f"{line} {caps_text}"
+    lower = blob.lower()
+    # Bare "suppression" is not enough: Retribution's caps mention
+    # "Classic hit suppression was removed" without stating a 17% total.
+    if not any(
+        s in lower
+        for s in (
+            "from gear",
+            "from talent",
+            "% total",
+            "total;",
+            "boss cap",
+            "in suppression",
+            "minus suppression",
+        )
+    ):
+        return None
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*total", blob, re.I)
+    if m:
+        return _num(m.group(1))
+    m = re.search(r"(?:usual\s+)?(\d+(?:\.\d+)?)\s*%\s*boss(?:\s+cap)?", blob, re.I)
+    if m:
+        return _num(m.group(1))
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*from gear(?:\s*,)?\s*minus", blob, re.I)
+    if m:
+        return _num(m.group(1))
+    m = re.search(r"until\s+(\d+(?:\.\d+)?)\s*%", line, re.I)
+    if m:
+        return _num(m.group(1))
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*\(", caps_text)
+    if m:
+        return _num(m.group(1))
+    return None
+
+
 def is_total_spell_hit(line: str, caps_text: str) -> bool:
-    blob = (line + " " + caps_text).lower()
-    if "from gear" in blob or "from talents" in blob or "from talent" in blob:
-        return True
-    if "suppression" in blob and "17%" in blob:
-        return True
-    if "17% total" in blob:
-        return True
-    return False
+    return parse_total_spell_hit_percent(line, caps_text) is not None
 
 
 def parse_cap(line: str, caps: dict, words: list[str]) -> dict:
@@ -269,28 +308,25 @@ def parse_cap(line: str, caps: dict, words: list[str]) -> dict:
     if after_m and "after" in lower:
         # "Hit Chance after 8%" / "Defense after 440"
         n = float(after_m.group(1))
-        if "%" in line[after_m.start(): after_m.end() + 2] or "hit" in lower or "expertise" in lower:
+        span_has_pct = "%" in line[after_m.start(): after_m.end() + 2]
+        word = words[0] if words else None
+        if span_has_pct or word in PERCENT_UNIT_WORDS:
             info["afterPercent"] = n
-        elif n >= 50:
-            # Defense 440, Weapon Skill 305/308, etc.
+        elif word in RAW_UNIT_WORDS:
             info["afterValue"] = int(n) if n == int(n) else n
             info["capUnit"] = "raw"
-        else:
-            # Ambiguous small number without %: treat as percent if the word is a percent stat.
-            if words and words[0] in PERCENT_SCALE:
-                info["afterPercent"] = n
-            else:
-                info["afterValue"] = int(n) if n == int(n) else n
-                info["capUnit"] = "raw"
+        # else: unit cannot be read from the page; leave unmarked.
         return info
 
     # "until 11-12%" from gear + talents -> total 17% spell hit cap.
     if until_m or paren_m or capword_m:
-        if is_total_spell_hit(line, caps_blob) and "hit" in lower:
-            info["capPercent"] = 17
+        total = parse_total_spell_hit_percent(line, caps_blob)
+        if total is not None and "hit" in lower:
+            info["capPercent"] = total
             info["comment"] = (
                 "page states a from-gear hit target (talents cover the rest); "
-                "clamp the player's total hit, which already includes talents, at the 17% cap"
+                "clamp the player's total hit, which already includes talents, at the "
+                f"{total}% cap stated on the page"
             )
             return info
 
@@ -298,7 +334,7 @@ def parse_cap(line: str, caps: dict, words: list[str]) -> dict:
         a = float(until_m.group(1))
         b = float(until_m.group(2)) if until_m.group(2) else None
         span = line[until_m.start(): until_m.end() + 3]
-        is_pct = "%" in span or (words and words[0] in PERCENT_SCALE and a <= 30)
+        is_pct = "%" in span or (words and words[0] in PERCENT_UNIT_WORDS)
         if b is not None:
             # A listed range like 11-12%: if we didn't already promote to 17%,
             # use the upper end of the listed range.
@@ -318,11 +354,13 @@ def parse_cap(line: str, caps: dict, words: list[str]) -> dict:
     if paren_m:
         a = float(paren_m.group(1))
         b = float(paren_m.group(2)) if paren_m.group(2) else None
-        if is_total_spell_hit(line, caps_blob) and "hit" in lower:
-            info["capPercent"] = 17
+        total = parse_total_spell_hit_percent(line, caps_blob)
+        if total is not None and "hit" in lower:
+            info["capPercent"] = total
             info["comment"] = (
                 "page states a from-gear hit target (talents cover the rest); "
-                "clamp the player's total hit, which already includes talents, at the 17% cap"
+                "clamp the player's total hit, which already includes talents, at the "
+                f"{total}% cap stated on the page"
             )
             return info
         if b is not None:
@@ -383,12 +421,14 @@ def cap_from_map(words: list[str], caps: dict, line: str) -> dict:
             if pref:
                 filtered = pref
     label, text, lab = filtered[0]
-    if is_total_spell_hit(line, text) and word == "Hit":
+    total = parse_total_spell_hit_percent(line, text)
+    if total is not None and word == "Hit":
         return {
-            "capPercent": 17,
+            "capPercent": total,
             "comment": (
                 "page states a from-gear hit target (talents cover the rest); "
-                "clamp the player's total hit, which already includes talents, at the 17% cap"
+                "clamp the player's total hit, which already includes talents, at the "
+                f"{total}% cap stated on the page"
             ),
         }
     # First number in the caps text.
@@ -402,7 +442,7 @@ def cap_from_map(words: list[str], caps: dict, line: str) -> dict:
             "numbered list omits the cap wording; the same page states this cap "
             f"({text.split('(')[0].strip()})"
         )
-    if word in PERCENT_SCALE or "%" in text:
+    if word in PERCENT_UNIT_WORDS or "%" in text:
         info = {"capPercent": int(a) if a == int(a) else a}
         if comment:
             info["comment"] = comment
@@ -419,6 +459,19 @@ def tier_display_name(words: list[str], raw_names: list[str]) -> str:
     if len(words) == 1:
         return WORD_NAME.get(words[0], words[0])
     return " & ".join(WORD_NAME.get(w, w) for w in words)
+
+
+def hit_kind_for(line: str, caps: dict, cap: dict) -> str | None:
+    """'spell' for a 17% spell/poison cap; 'melee' for an 8%/9% ability cap."""
+    lower = (line or "").lower()
+    caps_blob = " ".join(str(v) for v in (caps or {}).values())
+    if "poison" in lower or "spell cap" in lower or "spell" in lower:
+        return "spell"
+    if parse_total_spell_hit_percent(line, caps_blob) is not None:
+        return "spell"
+    if cap.get("comment") and "total hit" in cap["comment"]:
+        return "spell"
+    return "melee"
 
 
 def build_tier(raw_stats: list[str], verbatim: str, caps: dict, class_name: str) -> dict | None:
@@ -450,11 +503,20 @@ def build_tier(raw_stats: list[str], verbatim: str, caps: dict, class_name: str)
     if leveling:
         tier["levelingOnly"] = True
     tier.update(cap)
-    # Percent caps get a rating scale for the first percent-stat word.
+    # Percent caps get a rating scale for the first percent-stat word
+    # that has a sourced factor. Expertise has no sourced factor: store
+    # the tooltip percent and compare it directly (valueUnit = percent).
     if "capPercent" in tier or "afterPercent" in tier:
-        scale_word = next((w for w in words if w in PERCENT_SCALE), words[0])
-        if scale_word in PERCENT_SCALE:
-            tier["ratingPerPercent"] = PERCENT_SCALE[scale_word]
+        if "Expertise" in words:
+            tier["valueUnit"] = "percent"
+        else:
+            scale_word = next((w for w in words if w in PERCENT_SCALE), words[0])
+            if scale_word in PERCENT_SCALE:
+                tier["ratingPerPercent"] = PERCENT_SCALE[scale_word]
+        if "Hit" in words:
+            kind = hit_kind_for(verbatim or "", caps or {}, cap)
+            if kind:
+                tier["hitKind"] = kind
     return tier
 
 
@@ -535,6 +597,10 @@ def emit_tier(t: dict, indent: str) -> str:
         parts.append(f"afterValue = {lua_num(t['afterValue'])}")
     if t.get("capUnit") == "raw" or "capValue" in t or "afterValue" in t:
         parts.append('capUnit = "raw"')
+    if t.get("valueUnit"):
+        parts.append(f"valueUnit = {lua_str(t['valueUnit'])}")
+    if t.get("hitKind"):
+        parts.append(f"hitKind = {lua_str(t['hitKind'])}")
     if "ratingPerPercent" in t:
         parts.append(f"ratingPerPercent = {lua_num(t['ratingPerPercent'])}")
     line = indent + "{ " + ", ".join(parts) + " },"
@@ -566,21 +632,36 @@ def source_string(rec: dict) -> str:
     return "".join(bits)
 
 
-def load_caveats() -> dict[str, str]:
-    """Per-profile one-line caveats, keyed CLASS.weightsKey (e.g. SHAMAN.enhancement)."""
+def load_caveats() -> tuple[dict[str, str], dict[str, str]]:
+    """Per-profile one-line caveats, keyed CLASS.weightsKey (e.g. SHAMAN.enhancement).
+
+    Each value may be a string, or an object with `text` and an optional
+    `source` URL (the official citation for the claim). Only `text` is
+    appended to verdicts; `source` is recorded as a Lua comment.
+    """
     if not CAVEATS_PATH.is_file():
-        return {}
+        return {}, {}
     data = json.loads(CAVEATS_PATH.read_text())
     raw = data.get("caveats") if isinstance(data, dict) else None
-    out = {}
+    out: dict[str, str] = {}
+    sources: dict[str, str] = {}
     if isinstance(raw, dict):
         for k, v in raw.items():
-            if isinstance(k, str) and isinstance(v, str) and k and v.strip():
+            if not isinstance(k, str) or not k:
+                continue
+            if isinstance(v, str) and v.strip():
                 out[k] = v.strip()
-    return out
+            elif isinstance(v, dict):
+                text = v.get("text") or v.get("caveat")
+                src = v.get("source") or v.get("url")
+                if isinstance(text, str) and text.strip():
+                    out[k] = text.strip()
+                if isinstance(src, str) and src.strip():
+                    sources[k] = src.strip()
+    return out, sources
 
 
-def emit_profile(key: str, display: str, rec: dict, tiers: list[dict], extra_comments: list[str], caveat: str | None = None) -> str:
+def emit_profile(key: str, display: str, rec: dict, tiers: list[dict], extra_comments: list[str], caveat: str | None = None, caveat_source: str | None = None) -> str:
     lines = []
     lines.append(f"\t\t{key} = {{")
     lines.append(f"\t\t\tname = {lua_str(display)},")
@@ -592,6 +673,8 @@ def emit_profile(key: str, display: str, rec: dict, tiers: list[dict], extra_com
         lines.append(f"\t\t\tvariant = {lua_str(rec['profile'])},")
     if caveat:
         lines.append(f"\t\t\tcaveat = {lua_str(caveat)},")
+        if caveat_source:
+            lines.append(f"\t\t\t-- caveat source: {caveat_source}")
     for c in extra_comments:
         lines.append(f"\t\t\t-- {c}")
     lines.append("\t\t\ttiers = {")
@@ -634,11 +717,61 @@ HEADER = '''-- THE WEIGHTS. One order-only profile per class AND talent spec, ke
 '''
 
 
+def maybe_append_enhancement_spell_hit(spec_name: str, rec: dict, tiers: list[dict]) -> None:
+    """Keep Wowhead's 8% melee-hit rank, but do not zero later hit.
+
+    The Enhancement page says going above the 8% melee minimum is useful
+    because of spell damage, and the caps field records a 17% spell-hit
+    mention in the body. Append a last-priority 8–N% window so that hit
+    is not dropped after 8%. The numbered list is not reordered.
+    """
+    if spec_name != "Enhancement":
+        return
+    has_melee_8 = any(
+        (t.get("stats") or [None])[0] == "Hit" and t.get("capPercent") == 8
+        for t in tiers
+    )
+    if not has_melee_8:
+        return
+    caps = rec.get("caps") or {}
+    caps_text = " ".join(f"{k}: {v}" for k, v in caps.items())
+    total = None
+    # "Hit Chance (spells): 17% mentioned in the body"
+    m = re.search(r"hit chance\s*\(spells\)\s*:\s*(\d+(?:\.\d+)?)\s*%", caps_text, re.I)
+    if m:
+        total = _num(m.group(1))
+    if total is None:
+        total = parse_total_spell_hit_percent("", caps_text)
+    if total is None:
+        return
+    if any(
+        (t.get("stats") or [None])[0] == "Hit" and t.get("capPercent") == total
+        for t in tiers
+    ):
+        return
+    tiers.append(
+        {
+            "name": "Hit",
+            "stats": ["Hit"],
+            "afterPercent": 8,
+            "capPercent": total,
+            "ratingPerPercent": 10,
+            "hitKind": "spell",
+            "comment": (
+                "the numbered list stops at the 8% melee minimum; the same page says "
+                "going above is useful for spell damage and mentions a "
+                f"{total}% spell cap, so hit after 8% is kept as a last-priority "
+                "window rather than zeroed"
+            ),
+        }
+    )
+
+
 def generate_lua(data: dict) -> str:
     grouped: dict[str, list[str]] = {c: [] for c in CLASS_ORDER}
     comments_for: dict[tuple, list[str]] = {}
     seen_keys = set()
-    caveats = load_caveats()
+    caveats, caveat_sources = load_caveats()
 
     for rec in data["specs"]:
         class_name = rec["class"]
@@ -678,8 +811,10 @@ def generate_lua(data: dict) -> str:
                 raise SystemExit(f"empty tier for {ident}: {raw}")
             tiers.append(t)
         apply_second_caps(tiers)
+        maybe_append_enhancement_spell_hit(spec_name, rec, tiers)
         caveat = caveats.get(f"{token}.{key}")
-        block = emit_profile(key, display, rec, tiers, extra, caveat)
+        caveat_source = caveat_sources.get(f"{token}.{key}")
+        block = emit_profile(key, display, rec, tiers, extra, caveat, caveat_source)
         grouped[token].append(block)
         k = (token, key)
         if k in seen_keys:

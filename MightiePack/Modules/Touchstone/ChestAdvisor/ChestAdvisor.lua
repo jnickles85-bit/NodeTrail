@@ -6876,7 +6876,7 @@ local function helpText()
 		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
 		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
 		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
-		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) in one pass\n"
+		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) and clear a chosen Gear-for spec (back to Auto); does not clear /up role or the log\n"
 		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
 		.. "  /up log clear  empty the disagreement log\n"
 		.. "  /up rescan     re-scan your bags now — the marks are drawn from a fresh read (an upgrade, a trade-off, or no mark)\n"
@@ -6942,8 +6942,15 @@ local function cmdSpec(msg)
 			local e = ChestAdvisor.lookupSpec(token, key)
 			return (e and e.name or key) .. " (chosen)"
 		end
+		-- Precedence is chosen spec > /up role > talents. Auto names a
+		-- recorded role when one is set, so the line is not read as
+		-- "talents only".
+		local role = playerRole(token)
 		local si = readSpecIdentity()
 		local name = (si and type(si.name) == "string" and si.name ~= "") and si.name or "current talents"
+		if type(role) == "string" and role ~= "" then
+			return "Auto (/up role " .. role .. "; talents: " .. name .. ")"
+		end
 		return "Auto (talents: " .. name .. ")"
 	end
 	if rest == "" then
@@ -6954,6 +6961,10 @@ local function cmdSpec(msg)
 	local parsed = ChestAdvisor.parseSpecArg(token, rest)
 	if parsed == "auto" then
 		ChestAdvisor.setGearFor(nil)
+		local role = playerRole(token)
+		if type(role) == "string" and role ~= "" then
+			return true, "gearing for Auto (/up role " .. role .. "; follow talents)"
+		end
 		return true, "gearing for Auto (follow talents)"
 	end
 	if parsed then
@@ -7136,13 +7147,18 @@ end
 -- has exactly one place its values are spelled, and it returns one summary. The
 -- four writers' own confirmations are discarded on purpose: their writes are the
 -- point, the line below is what the player sees.
+--
+-- It also clears a chosen Gear-for spec (back to Auto). It does not clear
+-- /up role or the disagreement log. Precedence stays chosen > /up role >
+-- talents, so clearing the chosen spec lets a recorded role apply again.
 local function cmdReset()
 	cmdDetail("detail full")
 	cmdTooltip("tooltip on")
 	cmdToast("toast on")
 	cmdGlyphs("glyphs off")
+	ChestAdvisor.setGearFor(nil)
 	return true, "settings reset to defaults: tooltip detail full, tooltip line on,"
-		.. " toast on, marker glyphs off"
+		.. " toast on, marker glyphs off; chosen Gear-for spec cleared (back to Auto)"
 end
 
 -- /ts scale <0.5-1.5> — the window scale the Settings slider also writes.
