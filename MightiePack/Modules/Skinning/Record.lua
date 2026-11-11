@@ -28,6 +28,22 @@
 -- toggle is OFF nothing is persisted — the recorder still builds the same
 -- records in a session buffer, which is exactly what /mp skindiag dump shows
 -- ("diagnostics run, nothing recorded").
+--
+-- TWO KINDS OF MEMORY (schema 2, t_e3ea3698):
+--
+--   * the RING — `records`/`order`, the newest R.MAX_RECORDS corpses. It is
+--     ROUTE DATA: Route/SkinRoute draws the farming circle from the map
+--     positions it holds. It evicts, by design, and its positions are what the
+--     player's own kills on this map look like.
+--   * the TOTALS — `creatures[creatureID]`, every number a player is shown.
+--     They accumulate for as long as the character exists and are NEVER
+--     evicted. Before them every aggregate was a ring-walk, so a beast skinned
+--     dozens of times printed "no observations here yet" once 100 corpses had
+--     landed behind it (live desktop bucket: kills 1125, corpse windows 641,
+--     records 100 — 541 corpses of history gone).
+--
+-- A schema 1 bucket (ring only, no totals) is upgraded IN PLACE by R:Upgrade,
+-- once, guarded by the schema marker; its records are kept untouched.
 
 local _, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
@@ -35,8 +51,13 @@ local ns = pkg.Skinning
 local R = {}
 ns.Recorder = R
 
-R.SCHEMA = 1
-R.MAX_RECORDS = 100       -- ring: the newest 100 corpses are kept
+-- Store schema. 1 = a ring of records and nothing else (every user-facing
+-- number was aggregated from it, so a creature's history evaporated once
+-- MAX_RECORDS corpses landed behind it). 2 = the same ring PLUS the
+-- per-creature totals that never evict (see the totals section below); a
+-- schema 1 bucket is upgraded in place, exactly once, by R:Upgrade.
+R.SCHEMA = 2
+R.MAX_RECORDS = 100       -- ring: the newest 100 corpses are kept (route data)
 R.MAX_UNCLASSIFIED = 20   -- ring: windows we could not honestly classify
 R.SKIN_WINDOW = 60        -- a successful cast attributes a window within this
 R.SKIN_SPELL_ID = 8613    -- live-confirmed on this client (dump sk 20)
@@ -255,6 +276,161 @@ local function pushWindow(rec, kind, items, money, t)
   return log[#log]
 end
 
+-- ── per-creature totals: the numbers a player is shown (schema 2) ──────
+-- THE RING IS ROUTE DATA (see the header). Nothing that answers "what does
+-- this beast give ME" may be read from it any more: R.MAX_RECORDS is a window,
+-- not a history. Every per-creature number accumulates HERE, keyed by
+-- creatureID, and is never evicted:
+--
+--   store.creatures[cid] = {
+--     corpses     = records this id ever produced (any evidence),
+--     kills       = records whose death we observed (killObserved),
+--     skinned     = records a successful 8613 cast was pinned to,
+--     skinWindows = skin loot windows filed for this id,
+--     skin        = { [itemID] = { itemID, count, seen, name } },
+--   }
+--
+-- `count` is a total QUANTITY and `seen` is the number of CORPSES that carried
+-- the item — the only denominator a percentage may use, because two hides from
+-- one corpse must not read as two kills.
+--
+-- The ring and the totals are written by the SAME events, so they cannot
+-- disagree about an observation the player made; they differ only in how far
+-- back they reach.
+local CREATURE_NUMBERS = { "corpses", "kills", "skinned", "skinWindows" }
+
+local function newCreature()
+  return { corpses = 0, kills = 0, skinned = 0, skinWindows = 0, skin = {} }
+end
+
+--- The totals row for one creature id, created on first use.
+--- A schema 1 store has no `creatures` table at all until R:Upgrade has run.
+--- @param store table  the session buffer or the character bucket
+--- @param cid number   the creature entry (R.CreatureID)
+--- @param create boolean|nil  create the table/row when absent
+function R:CreatureRow(store, cid, create)
+  if type(store) ~= "table" or type(cid) ~= "number" then return nil end
+  if type(store.creatures) ~= "table" then
+    if not create then return nil end
+    store.creatures = {}
+  end
+  local row = store.creatures[cid]
+  if type(row) ~= "table" then
+    if not create then return nil end
+    row = newCreature()
+    store.creatures[cid] = row
+  end
+  for i = 1, #CREATURE_NUMBERS do
+    local k = CREATURE_NUMBERS[i]
+    if type(row[k]) ~= "number" then row[k] = 0 end
+  end
+  if type(row.skin) ~= "table" then row.skin = {} end
+  return row
+end
+
+-- Fold ONE record's current skin item list into its creature's totals.
+--
+-- The list is RE-RENDERED from the window log on every read (a loot window can
+-- be reported empty and be filled a moment later, and a late read REPLACES that
+-- window's snapshot), so a record is not added once — its CONTRIBUTION is
+-- diffed. `rec.skinContribution` is what this record has already added to the
+-- totals; only the delta goes in. That keeps one corpse carrying a 3-hide
+-- stack at count=3, seen=1 however many times the window is read, and it
+-- survives a /reload because the snapshot travels with the record.
+local function applySkinItems(row, rec)
+  if type(row) ~= "table" or type(rec) ~= "table" then return end
+  local list = type(rec.skinItems) == "table" and rec.skinItems or {}
+  local before = type(rec.skinContribution) == "table" and rec.skinContribution or {}
+  local now = {}
+  for i = 1, #list do
+    local it = list[i]
+    local id = type(it) == "table" and it.itemID or nil
+    if type(id) == "number" and id > 0 then
+      local e = now[id]
+      if not e then e = { count = 0, seen = 0, name = nil }; now[id] = e end
+      local qty = tonumber(it.quantity) or 1
+      if qty < 1 then qty = 1 end
+      e.count = e.count + qty
+      e.seen = e.seen + 1
+      -- a SECRET name may be shown but never stored-and-measured here: the
+      -- panel would have to format it (see addItems in Data/SkinHints.lua)
+      if e.name == nil and type(it.name) == "string" and it.name ~= ""
+        and not isSecret(it.name) then
+        e.name = it.name
+      end
+    end
+  end
+  local function cell(id)
+    local c = row.skin[id]
+    if type(c) ~= "table" then
+      c = { itemID = id, count = 0, seen = 0, name = nil }
+      row.skin[id] = c
+    end
+    return c
+  end
+  local function apply(id, oldCell, newCell)
+    local c = cell(id)
+    local oldCount = (oldCell and oldCell.count) or 0
+    local newCount = (newCell and newCell.count) or 0
+    local oldSeen = (oldCell and oldCell.seen) or 0
+    local newSeen = (newCell and newCell.seen) or 0
+    c.count = math.max(0, (c.count or 0) + newCount - oldCount)
+    c.seen = math.max(0, (c.seen or 0) + newSeen - oldSeen)
+    if c.name == nil then
+      c.name = (newCell and newCell.name) or (oldCell and oldCell.name)
+    end
+  end
+  for id, e in pairs(now) do
+    local was = before[id]
+    if not was or was.count ~= e.count or was.seen ~= e.seen then
+      apply(id, was, e)
+    end
+  end
+  -- An id the record no longer carries is subtracted. mergeWindows only ever
+  -- grows a list, so this cannot happen for a live window; it can for a
+  -- hand-written or future store, and a delta is a delta.
+  for id, was in pairs(before) do
+    if not now[id] then apply(id, was, nil) end
+  end
+  rec.skinContribution = now
+end
+
+-- ── schema 1 → 2: seed the totals from the records a bucket already holds ──
+-- Runs ONCE per bucket, guarded by the schema marker (R:Upgrade). The records
+-- are kept EXACTLY as they are — they are the ring, and the ring is route data
+-- now — and a bucket with no records gets no rows at all: no phantom totals.
+-- The store-wide `counts` are deliberately NOT a source here: they cover
+-- corpses the ring already dropped (kills = 1125 beside 6 records is the live
+-- shape), so seeding from them would invent history for creatures we cannot
+-- name. What the records prove is what the totals get.
+local function seedTotals(b)
+  b.creatures = {}
+  for guid, rec in pairs(b.records) do
+    if type(rec) == "table" then
+      if type(rec.guid) ~= "string" then rec.guid = guid end
+      local cid = rec.creatureID
+      if type(cid) == "number" then
+        local row = R:CreatureRow(b, cid, true)
+        row.corpses = row.corpses + 1
+        if rec.killObserved == true then row.kills = row.kills + 1 end
+        if rec.skinned == true then row.skinned = row.skinned + 1 end
+        local opens = tonumber(rec.skinLootOpens) or 0
+        if opens < 0 then opens = 0 end
+        if opens > 0 then
+          row.skinWindows = row.skinWindows + opens
+        elseif type(rec.skinItems) == "table" and #rec.skinItems > 0 then
+          -- items with no window counter (an older record): the window existed
+          row.skinWindows = row.skinWindows + 1
+        end
+        -- also stamps rec.skinContribution, so a corpse still in the ring that
+        -- gains a late skin read after the upgrade is never counted twice
+        applySkinItems(row, rec)
+      end
+    end
+  end
+  return b
+end
+
 -- The window that is currently open produced a fresh read (LOOT_SLOT_CLEARED,
 -- or the read just before LOOT_CLOSED). MERGE it into ITS snapshot — never
 -- replace it: a live loot window can only shrink as the player takes the items
@@ -304,19 +480,26 @@ function R:SetWindowItems(guid, kind, items, money, t)
   -- what the window has been seen to hold (this is what LOOT_CLOSED triggers
   -- one last time before the window goes away)
   rec[field] = mergeWindows(log)
+  -- the SKIN totals follow the list the record now shows; the corpse side never
+  -- enters them (the panel's subject is what skinning yields). A re-read only
+  -- ever adds, and applySkinItems diffs, so a late read cannot double a count.
+  if kind == "skin" then
+    applySkinItems(R:CreatureRow(self:Store(), rec.creatureID, true), rec)
+  end
   return rec
 end
 
 -- ── stores ───────────────────────────────────────────────────────────
 -- Both stores share one shape: { schema, records, order, unclassified,
--- counts }. The session store is what /mp skindiag dump reads; the DB store
--- is where a real run lands when NodeTrailDB.skinning.enabled is on.
+-- creatures, counts }. The session store is what /mp skindiag dump reads; the
+-- DB store is where a real run lands when NodeTrailDB.skinning.enabled is on.
 function R:NewStore()
   return {
     schema = R.SCHEMA,
     records = {},
     order = {},          -- creation order, newest last
     unclassified = {},
+    creatures = {},      -- per creatureID totals: never evicted
     counts = {
       kills = 0, corpseWindows = 0, skinWindows = 0, skinCasts = 0,
       unattributedWindows = 0,
@@ -355,21 +538,49 @@ function R.CharKey()
   return name or "player"
 end
 
-local function shapeBucket(b)
-  if type(b.schema) ~= "number" then b.schema = R.SCHEMA end
+-- The bucket's basic shape, filled in key by key: a NodeTrailDB written before
+-- this file existed keeps every key it already has, and a key of the wrong type
+-- is repaired rather than trusted.
+local STORE_COUNTS = { "kills", "corpseWindows", "skinWindows", "skinCasts",
+  "unattributedWindows" }
+
+local function shapeStore(b)
   if type(b.records) ~= "table" then b.records = {} end
   if type(b.order) ~= "table" then b.order = {} end
   if type(b.unclassified) ~= "table" then b.unclassified = {} end
-  if type(b.counts) ~= "table" then
-    b.counts = {
-      kills = 0, corpseWindows = 0, skinWindows = 0, skinCasts = 0,
-      unattributedWindows = 0,
-    }
+  if type(b.counts) ~= "table" then b.counts = {} end
+  for i = 1, #STORE_COUNTS do
+    if type(b.counts[STORE_COUNTS[i]]) ~= "number" then b.counts[STORE_COUNTS[i]] = 0 end
   end
-  for _, k in ipairs({ "kills", "corpseWindows", "skinWindows", "skinCasts",
-    "unattributedWindows" }) do
-    if type(b.counts[k]) ~= "number" then b.counts[k] = 0 end
+  return b
+end
+
+--- Bring a character bucket up to R.SCHEMA, IN PLACE.
+---
+--- Schema 1 stored a ring and nothing else, so a schema 1 bucket's per-creature
+--- totals are seeded from the records it still holds (seedTotals) — and only
+--- from those. The marker is stamped LAST: if seeding ever raised, the bucket
+--- would still be schema 1 and be seeded again on the next load, instead of
+--- looking upgraded while holding nothing.
+---
+--- Seeding runs exactly ONCE per bucket; the marker is the guard. A second load
+--- (a /reload, or the panel and the recorder both reaching the store) can never
+--- double-count. A bucket stamped by a NEWER build is never rewritten and never
+--- discarded: this file cannot know how to read it.
+--- @param b table  a character bucket as it came out of SavedVariables
+--- @return table the same bucket, upgraded
+function R:Upgrade(b)
+  if type(b) ~= "table" then return nil end
+  local prior = b.schema
+  shapeStore(b)
+  if type(prior) == "number" and prior > R.SCHEMA then
+    return b
   end
+  if prior ~= R.SCHEMA then
+    seedTotals(b)
+    b.schema = R.SCHEMA
+  end
+  if type(b.creatures) ~= "table" then b.creatures = {} end
   return b
 end
 
@@ -380,11 +591,12 @@ function R:GetDB()
     s = {}
     NodeTrailDB.skinning = s
   end
-  if type(s.schema) ~= "number" then s.schema = R.SCHEMA end
   if type(s.chars) ~= "table" then s.chars = {} end
+  -- the store-wide marker follows the newest bucket shape this build knows
+  if type(s.schema) ~= "number" or s.schema < R.SCHEMA then s.schema = R.SCHEMA end
   local key = R.CharKey()
   if type(s.chars[key]) ~= "table" then s.chars[key] = {} end
-  return shapeBucket(s.chars[key])
+  return self:Upgrade(s.chars[key])
 end
 
 function R:IsEnabled()
@@ -442,7 +654,12 @@ function R:RecordFor(guid, t)
   }
   store.records[guid] = rec
   store.order[#store.order + 1] = guid
+  -- one more corpse of this creature, counted where it can never be evicted
+  local row = R:CreatureRow(store, rec.creatureID, true)
+  if row then row.corpses = row.corpses + 1 end
   while #store.order > R.MAX_RECORDS do
+    -- Eviction drops the RECORD only. What the corpse contributed to the
+    -- creature's totals stays: that is the whole point of the totals table.
     local old = table.remove(store.order, 1)
     if old and old ~= guid then store.records[old] = nil end
   end
@@ -467,6 +684,8 @@ function R:OnKill(ev)
   if not rec.killObserved then
     store.counts.kills = store.counts.kills + 1
     rec.killObserved = true
+    local row = R:CreatureRow(store, rec.creatureID, true)
+    if row then row.kills = row.kills + 1 end
   end
   rec.diedAt = ev.t
   if ev.name and rec.name == nil then rec.name = usableName(ev.name, ev.guid) end
@@ -532,6 +751,10 @@ function R:OnSkinCast(ev)
   end
   local rec = self:RecordFor(ev.guid, at)
   if not rec then return nil end
+  if not rec.skinned then
+    local row = R:CreatureRow(store, rec.creatureID, true)
+    if row then row.skinned = row.skinned + 1 end
+  end
   rec.skinned = true
   rec.skinSpellID = ev.spellID or R.SKIN_SPELL_ID
   rec.skinCastAt = at
@@ -569,6 +792,11 @@ function R:OnSkinLoot(ev)
   end
   if ev.name and rec.name == nil then rec.name = usableName(ev.name, ev.guid) end
   store.counts.skinWindows = store.counts.skinWindows + 1
+  local row = R:CreatureRow(store, rec.creatureID, true)
+  if row then
+    row.skinWindows = row.skinWindows + 1
+    applySkinItems(row, rec)
+  end
   self._open = { guid = ev.guid, kind = "skin", at = ev.t }
   return rec
 end
@@ -730,6 +958,12 @@ end
 --   unattributed  windows that produced neither a corpse nor a skin record
 --   killsNoWindow kills with no corpse window at all   = kills - (records with one)
 --   castsNoWindow casts that never produced a skin window = casts - skinWindows
+--
+-- t_e3ea3698 note: this reconciliation is STORE-WIDE and deliberately still
+-- ring-derived — it is a diagnostic for one run ("where did my kills go?"), not
+-- a player-facing number, and it is unchanged by the schema 2 totals. What the
+-- beast panel prints comes from store.creatures (see the totals section above),
+-- so a corpse the ring has evicted can never move a number the player is shown.
 function R:Accounting(store)
   store = store or self:Store()
   local c = store.counts or {}

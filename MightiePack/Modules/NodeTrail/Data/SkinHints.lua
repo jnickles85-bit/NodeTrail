@@ -22,25 +22,35 @@
 --
 -- The herb block can lean on a researched drop table (HerbData.NODES); a beast
 -- has nothing of the sort, and this file never invents one. Every number it
--- prints is an aggregate of OUR OWN recorded corpses:
+-- prints is an aggregate of OUR OWN observations:
 --
---   NodeTrailDB.skinning.chars[<Name-Realm>].records[<corpse GUID>]
+--   NodeTrailDB.skinning.chars[<Name-Realm>].creatures[<creatureID>]
 --
--- which Modules/Skinning/Record.lua already writes (creatureID, corpseItems,
--- skinItems, killObserved, skinned, skinLootOpens). This file only READS that
--- store: it never creates a bucket, never writes a key, and never changes the
--- format — a tooltip must be able to run on a character that has no records
--- yet without leaving an empty bucket in the saved variables.
+-- — the per-CREATURE totals Modules/Skinning/Record.lua accumulates (schema 2:
+-- corpses, kills, skinned, skinWindows, and the skin item counts). The store's
+-- `records` ring is NOT read here any more: it keeps only the newest 100
+-- corpses and it exists so Route/SkinRoute can draw farming circles from their
+-- positions. Aggregating a player-facing number from that ring is what made a
+-- beast skinned dozens of times print "no observations here yet" once 100
+-- corpses had landed behind it (live: kills 1125, corpse windows 641, records
+-- 100 — 541 corpses of history gone).
 --
--- Aggregation is per CREATURE (creatureID), not per corpse: the store is one
--- record per corpse, and the question "what does a Clattering Scorpid give" is
--- answered across every corpse of that creature we have seen. Two consequences
--- the renderer keeps honest:
+-- This file still only READS: it never creates a bucket, never creates a totals
+-- row, and never writes a count — a tooltip must be able to run on a character
+-- with no records yet without leaving an empty bucket behind. The one thing it
+-- may change is the SCHEMA of a bucket that already exists: an untouched
+-- schema 1 bucket is upgraded in place by the recorder (R:Upgrade, idempotent
+-- and guarded by its marker), so a player who only ever hovers a beast still
+-- gets the history his own records prove instead of an empty panel.
 --
---   * `kills seen` counts the records whose death we actually observed
---     (rec.killObserved), and `skinned` counts the records a successful 8613
---     cast was pinned to (rec.skinned). They are different numbers, which is
---     the whole point of the totals line.
+-- Aggregation is per CREATURE (creatureID), not per corpse: the question "what
+-- does a Clattering Scorpid give" is answered across every corpse of that
+-- creature we have seen, however long ago. The renderer keeps two things
+-- honest:
+--
+--   * `kills seen` counts the corpses whose death we actually observed, and
+--     `skinned` counts the corpses a successful 8613 cast was pinned to. They
+--     are different numbers, which is the whole point of the totals line.
 --   * a percentage is only printed once the sample is big enough to mean
 --     something — the same PERSONAL_MIN floor the herb block uses. Below it the
 --     row carries the COUNT only. No baseline, no "known drop rate", no rate is
@@ -99,6 +109,12 @@ end
 -- `.chars[key] = {}` into the saved variables the first time a beast is
 -- hovered); a tooltip reading data must not do that, so the shape is checked
 -- here and nothing is created.
+--
+-- The one write this path may perform is the IN-PLACE schema upgrade of a
+-- bucket that already exists: a save written before schema 2 carries records
+-- and no totals, and a player who only hovers must still see his history. That
+-- upgrade never creates a bucket, never touches a record, and is idempotent
+-- (the schema marker is the guard), so calling it from here is safe.
 function H.Bucket()
   local R = H.Recorder()
   if type(R) ~= "table" or type(R.CharKey) ~= "function" then
@@ -129,6 +145,11 @@ function H.Bucket()
     H._diag.bucket = "no skinning bucket for " .. key .. " yet"
     return nil
   end
+  -- schema 1 → 2 in place (no-op once stamped); the recorder owns the shape
+  if type(R.Upgrade) == "function" then
+    local okU, upgraded = pcall(R.Upgrade, R, b)
+    if okU and type(upgraded) == "table" then b = upgraded end
+  end
   if type(b.records) ~= "table" then
     H._diag.bucket = "the bucket for " .. key .. " carries no records table"
     return nil
@@ -154,36 +175,12 @@ function H.CreatureID(guid)
 end
 
 -- ── aggregation over our own observations ────────────────────────────────
-local function addItems(byID, order, items)
-  if type(items) ~= "table" then
-    return
-  end
-  for i = 1, #items do
-    local it = items[i]
-    if type(it) == "table" and type(it.itemID) == "number" and it.itemID > 0 then
-      local row = byID[it.itemID]
-      if not row then
-        row = { itemID = it.itemID, count = 0, seen = 0, name = nil }
-        byID[it.itemID] = row
-        order[#order + 1] = row
-      end
-      local qty = tonumber(it.quantity) or 1
-      if qty < 1 then qty = 1 end
-      row.count = row.count + qty
-      -- `seen` is the number of RECORDS that carried this item, which is the
-      -- only denominator a percentage may use: `count` is a quantity and two
-      -- hides from one corpse must not read as two kills.
-      row.seen = row.seen + 1
-      if row.name == nil and type(it.name) == "string" and it.name ~= ""
-        and not isSecret(it.name) then
-        row.name = it.name
-      end
-    end
-  end
-end
-
+-- The totals are kept by the recorder, per creature id, and are never evicted
+-- (schema 2). This file does not walk the record ring: that ring holds the
+-- newest 100 corpses and is route data now (see the header).
+--
 -- Biggest yield first; ties broken by item id so the block reads the same on
--- every hover (pairs() over the record map is unordered).
+-- every hover (the totals table is an unordered map).
 local function sorted(order)
   table.sort(order, function(a, b)
     if a.count ~= b.count then return a.count > b.count end
@@ -199,7 +196,11 @@ end
 -- totals line prints, so the block can never divide by a sample it does not
 -- show. The corpse side is deliberately NOT aggregated (t_2c573dbf): the panel
 -- reports what skinning yields, so there is nothing to divide there. The
--- records keep `corpseItems` untouched.
+-- records keep `corpseItems` untouched, and the totals never take them in.
+--
+-- A creature with no totals row yields the zero aggregate, which is what makes
+-- `no observations here yet` a fact rather than an empty table: it says we have
+-- never seen this id, not that we saw nothing on it.
 function H.Aggregate(cid)
   if type(cid) ~= "number" then
     return nil
@@ -212,32 +213,33 @@ function H.Aggregate(cid)
     records = 0, kills = 0, skinned = 0, skinWindows = 0,
     skin = {},
   }
-  local bySkin = {}
-  for _, rec in pairs(bucket.records) do
-    -- `creatureID` is the recorder's own field; a record whose id this client
-    -- could not derive (R.CreatureID returned nil) matches nothing.
-    if type(rec) == "table" and type(rec.creatureID) == "number"
-      and rec.creatureID == cid then
-      agg.records = agg.records + 1
-      if rec.killObserved == true then
-        agg.kills = agg.kills + 1
+  local row = type(bucket.creatures) == "table" and bucket.creatures[cid] or nil
+  if type(row) == "table" then
+    agg.records = tonumber(row.corpses) or 0
+    agg.kills = tonumber(row.kills) or 0
+    agg.skinned = tonumber(row.skinned) or 0
+    agg.skinWindows = tonumber(row.skinWindows) or 0
+    for id, cell in pairs(type(row.skin) == "table" and row.skin or {}) do
+      if type(cell) == "table" and type(cell.itemID) == "number" then
+        agg.skin[#agg.skin + 1] = {
+          itemID = cell.itemID,
+          count = tonumber(cell.count) or 0,
+          seen = tonumber(cell.seen) or 0,
+          name = cell.name,
+        }
+      elseif type(cell) == "table" and type(id) == "number" then
+        -- a row written before this field existed still names its item
+        agg.skin[#agg.skin + 1] = {
+          itemID = id,
+          count = tonumber(cell.count) or 0,
+          seen = tonumber(cell.seen) or 0,
+          name = cell.name,
+        }
       end
-      if rec.skinned == true then
-        agg.skinned = agg.skinned + 1
-      end
-      local opens = tonumber(rec.skinLootOpens) or 0
-      if opens < 0 then opens = 0 end
-      if opens > 0 then
-        agg.skinWindows = agg.skinWindows + opens
-      elseif type(rec.skinItems) == "table" and #rec.skinItems > 0 then
-        -- Items with no window counter (an older record): the window existed.
-        agg.skinWindows = agg.skinWindows + 1
-      end
-      addItems(bySkin, agg.skin, rec.skinItems)
     end
+    sorted(agg.skin)
   end
-  sorted(agg.skin)
-  H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d")
+  H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d (totals)")
     :format(cid, agg.records, agg.kills, agg.skinned, agg.skinWindows)
   return agg
 end
@@ -598,6 +600,14 @@ function H.Diag()
     for _ in pairs(bucket.records) do n = n + 1 end
     out[#out + 1] = ("store: %d corpse record(s) for %s"):format(
       n, tostring(H._diag.key or "this character"))
+    -- What the panel actually reads, stated separately from the ring: the ring
+    -- is capped at MAX_RECORDS and is route data, the totals are the history.
+    local creatures = 0
+    for _ in pairs(type(bucket.creatures) == "table" and bucket.creatures or {}) do
+      creatures = creatures + 1
+    end
+    out[#out + 1] = ("totals: %d creature(s) with a full history (schema %s)"):format(
+      creatures, tostring(bucket.schema))
   end
   if H._diag.agg then
     out[#out + 1] = "last hover: " .. H._diag.agg
