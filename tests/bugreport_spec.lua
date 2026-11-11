@@ -1,20 +1,5 @@
--- bugreport_spec.lua — t_ed1e009e
--- MightiePack: in-game bug report form.
---
--- Drives the REAL top-level Core.lua + Modules.lua + BugReport.lua +
--- Options.lua (all loaded in TOC order, like umbrella_spec) against a
--- stub client that provides the documented contracts:
---   * GetAddOnMetadata(name, "Version"/"Interface") from the TOC
---   * GetBuildInfo -> major, minor, patch, build (select(4) = build)
---   * GetLocale, GetUnitName, GetUnitGUID, GetPlayerInfoByGUID,
---     GetZone, GetSubzone, IsAddOnLoaded, date
--- The NodeTrail half of the header is NOT re-implemented here: it is
--- whatever the REAL Tooltip:Diag (the /nt ttdiag string builder)
--- prints, captured through the real reuse path.
---
--- RED on the parent commit (BugReport.lua does not exist there): load
--- that commit, drop this spec in tests/, run it — expect FAILs and
--- EXIT=1. GREEN on this commit.
+-- bugreport_spec.lua
+-- Builds the /mp bug report text against stubbed client APIs.
 
 local src = debug.getinfo(1, "S").source:gsub("^@", "")
 local root = src:match("^(.*)/tests/[^/]+$") or "."
@@ -27,88 +12,79 @@ local function check(cond, msg)
   end
 end
 
--- ── Chat capture ────────────────────────────────────────────────────
 local chat = {}
 DEFAULT_CHAT_FRAME = {
   AddMessage = function(_, m) chat[#chat + 1] = tostring(m) end,
 }
-local function clearChat()
-  for i = #chat, 1, -1 do chat[i] = nil end
-end
-local function chatText()
-  return table.concat(chat, "\n")
-end
 
-function CopyTable(t)
-  if type(t) ~= "table" then return t end
-  local r = {}
-  for k, v in pairs(t) do r[k] = CopyTable(v) end
-  return r
-end
-
--- ── Client stub (documented classic contracts) ──────────────────────
 SlashCmdList = {}
 StaticPopupDialogs = {}
 StaticPopup_Show = function() end
 OKAY = "Okay"
 CANCEL = "Cancel"
 ReloadUI = function() end
-time = os.time
-date = os.date
-GetSpellInfo = function() return nil end
-C_Map = { GetBestMapForUnit = function() return 1429 end }
 UIParent = {}
-WorldFrame = {}
+UISpecialFrames = {}
 GameTooltip = {
-  IsShown = function() return false end,
   SetOwner = function() end,
   SetText = function() end,
   AddLine = function() end,
   Show = function() end,
   Hide = function() end,
 }
-Settings = {
-  RegisterCanvasLayoutCategory = function(frame, name)
-    return { frame = frame, name = name, GetID = function() return 7 end }
-  end,
-  RegisterAddOnCategory = function() end,
-  OpenToCategory = function() end,
-}
--- metadata world (the "full" client)
-GetAddOnMetadata = function(name, what)
-  if name ~= "MightiePack" then return nil end
-  if what == "Version" then return "0.3.0" end
-  if what == "Interface" then return "16001" end
-  return nil
-end
-GetBuildInfo = function() return "16", "0", "0", "16001" end
-GetLocale = function() return "enUS" end
-IsAddOnLoaded = function(n) return n == "GatherMate2" end
-GetUnitName = function() return "Mightie" end
-GetUnitGUID = function() return "Player-0x0A-0x01-0x1234" end
-GetPlayerInfoByGUID = function(guid)
-  if type(guid) == "string" then
-    return "Mightie", "Forever", "Barbarian"
-  end
-  return nil
-end
-UnitClass = function() return "BARBARIAN", "Barbarian" end
-GetZone = function() return "Elwynn Forest" end
-GetSubzone = function() return "Goldshire" end
 
--- ── Frame harness (options_spec mkBase + Dropdown/EditBox surface) ──
-local frames, fonts, buttons, editboxes = {}, {}, {}, {}
-local callLog = { focus = 0, highlight = 0 }
+local currentHandler
+local prevCalls = {}
+local function originalPrev(...)
+  prevCalls[#prevCalls + 1] = { n = select("#", ...), ... }
+  return "prev-ok", 42
+end
+currentHandler = originalPrev
+function geterrorhandler()
+  return currentHandler
+end
+function seterrorhandler(fn)
+  currentHandler = fn
+  return currentHandler
+end
+
+-- Privacy canaries: the builder must never read these into the report.
+GetUnitName = function() return "SecretPlayer" end
+UnitName = function() return "SecretPlayer" end
+GetRealmName = function() return "SecretRealm" end
+GetPlayerInfoByGUID = function() return "SecretPlayer", "SecretRealm", "Priest" end
+GetUnitGUID = function() return "Player-1234-ABCDEF" end
+
+GetAddOnMetadata = function(name, what)
+  if name == "MightiePack" and what == "Version" then return "0.3.0-beta" end
+  if name == "MightiePack" and what == "Interface" then return "16001" end
+  return nil
+end
+C_AddOns = {
+  GetAddOnMetadata = function(name, what)
+    if name == "MightiePack" and what == "Version" then return "0.3.0-from-caddons" end
+    if name == "MightiePack" and what == "Interface" then return "16001" end
+    return nil
+  end,
+}
+GetBuildInfo = function()
+  return "1.60.1", "54321", "Nov 10 2026", 16001
+end
+UnitClass = function() return "Priest", "PRIEST" end
+UnitLevel = function() return 18 end
+GetRealZoneText = function() return "Tirisfal Glades" end
+C_Map = { GetBestMapForUnit = function(unit)
+  if unit == "player" then return 1420 end
+  return nil
+end }
+
+local frames, editboxes, buttons = {}, {}, {}
+local callLog = { focus = 0, highlight = 0, clearFocus = 0 }
 
 local function mkBase(kind)
   local o = {
-    Kind = kind,
-    Name = nil,
-    Template = nil,
-    scripts = {},
-    events = {},
-    text = nil,
-    shown = false,
+    Kind = kind, Name = nil, Template = nil,
+    scripts = {}, events = {}, text = nil, shown = false,
   }
   o.SetScript = function(self, n, f) self.scripts[n] = f end
   o.GetScript = function(self, n) return self.scripts[n] end
@@ -118,30 +94,23 @@ local function mkBase(kind)
   o.SetText = function(self, t) self.text = tostring(t) end
   o.GetText = function(self) return self.text end
   o.Show = function(self) self.shown = true end
-  o.Hide = function(self) self.shown = false end
-  o.IsShown = function(self) return self.shown end
-  o.Enable = function(self) self.enabled = true end
-  o.Disable = function(self) self.enabled = false end
-  o.SetChecked = function(self, b) self.checked = b and true or false end
-  o.GetChecked = function(self) return self.checked end
+  o.Hide = function(self)
+    self.shown = false
+    if self.scripts.OnHide then self.scripts.OnHide(self) end
+  end
   o.RegisterEvent = function(self, n) self.events[n] = true end
   o.UnregisterEvent = function(self, n) self.events[n] = nil end
-  o.CreateFontString = function(self)
-    local f = mkBase("FontString")
-    fonts[#fonts + 1] = f
-    return f
+  o.CreateFontString = function()
+    return mkBase("FontString")
   end
-  -- Dropdown template surface
-  o.items = {}
-  o.value = nil
-  o.AddItem = function(self, item) self.items[#self.items + 1] = item end
-  o.SetValue = function(self, v) self.value = v end
-  o.GetSelectedText = function(self)
-    local it = self.items and self.items[self.value]
-    if it and it.text then return it.text end
-    return nil
-  end
-  -- EditBox selection surface (the copy mechanism)
+  o.SetMovable = function() end
+  o.EnableMouse = function() end
+  o.RegisterForDrag = function() end
+  o.SetFrameStrata = function() end
+  o.SetBackdrop = function() end
+  o.SetMultiLine = function() end
+  o.SetAutoFocus = function() end
+  o.SetTextInsets = function() end
   o.SetFocus = function(self)
     callLog.focus = callLog.focus + 1
     self.hasFocus = true
@@ -149,6 +118,10 @@ local function mkBase(kind)
   o.HighlightText = function(self)
     callLog.highlight = callLog.highlight + 1
     self.highlighted = true
+  end
+  o.ClearFocus = function(self)
+    callLog.clearFocus = callLog.clearFocus + 1
+    self.hasFocus = false
   end
   return o
 end
@@ -163,476 +136,355 @@ CreateFrame = function(kind, name, parent, template)
   return o
 end
 
-local function findFrame(name)
-  for _, f in ipairs(frames) do
-    if f.Name == name then return f end
-  end
-  return nil
-end
-local function findButton(text)
-  for _, b in ipairs(buttons) do
-    if b.text == text then return b end
-  end
-  return nil
-end
-local function click(btn, msgWhenMissing)
-  check(btn ~= nil, msgWhenMissing)
-  if not btn then return false end
-  local fn = btn.scripts and btn.scripts.OnClick
-  check(type(fn) == "function", "button '" .. tostring(btn.text) .. "' has an OnClick handler")
-  if type(fn) ~= "function" then return false end
-  local ok, err = pcall(fn, btn)
-  check(ok, "click '" .. tostring(btn.text) .. "': " .. tostring(err))
-  return ok
+local function loadfile_into(path, addon, pkg)
+  local chunk = assert(loadfile(path), "loadfile " .. path)
+  local ok, err = pcall(chunk, addon, pkg)
+  check(ok, "load " .. path .. ": " .. tostring(err))
 end
 
--- ── Load the addon in TOC order ─────────────────────────────────────
-local function readToc()
+-- ── Isolated handler-install cases (fresh pkg each time) ───────────
+do
+  local setCount = 0
+  local savedGet, savedSet = geterrorhandler, seterrorhandler
+
+  geterrorhandler = function() return nil end
+  seterrorhandler = function()
+    setCount = setCount + 1
+  end
+  local pkgNil = {}
+  loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkgNil)
+  check(setCount == 0, "nil prev: handler not installed")
+  if type(pkgNil.InstallErrorHandler) == "function" then
+    pkgNil.InstallErrorHandler()
+  end
+  check(setCount == 0, "nil prev: retry still not installed")
+
+  geterrorhandler = nil
+  setCount = 0
+  local pkgMissing = {}
+  loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkgMissing)
+  check(setCount == 0, "missing geterrorhandler: not installed")
+
+  local isolated
+  geterrorhandler = function()
+    return function() return "p" end
+  end
+  seterrorhandler = function(fn)
+    setCount = setCount + 1
+    isolated = fn
+  end
+  setCount = 0
+  local pkgOnce = {}
+  loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkgOnce)
+  check(setCount == 1, "valid prev: installed once")
+  pkgOnce.InstallErrorHandler()
+  check(setCount == 1, "double install: still a single wrap")
+  check(type(isolated) == "function", "wrapper installed")
+
+  geterrorhandler, seterrorhandler = savedGet, savedSet
+end
+
+-- TOC: ErrorHandler first, OptionalDeps lists BugGrabber, project ID unchanged
+do
   local f = assert(io.open(root .. "/MightiePack/MightiePack.toc", "r"))
-  local content = f:read("*a")
+  local toc = f:read("*a")
   f:close()
-  local lines = {}
-  for line in content:gmatch("[^\r\n]+") do
-    local t = (line:gsub("^%s+", ""):gsub("%s+$", ""))
-    if t ~= "" and not t:match("^#") then
-      table.insert(lines, t)
+  check(toc:find("X%-Curse%-Project%-ID: 1788533", 1) ~= nil, "TOC project ID unchanged")
+  check(toc:find("OptionalDeps: GatherMate2, BugGrabber", 1, true) ~= nil,
+    "TOC OptionalDeps includes BugGrabber")
+  local files = {}
+  for line in toc:gmatch("[^\r\n]+") do
+    local tline = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if tline ~= "" and not tline:match("^#") then
+      files[#files + 1] = tline
     end
   end
-  return lines
+  check(files[1] == "ErrorHandler.lua", "TOC loads ErrorHandler.lua first (got " .. tostring(files[1]) .. ")")
 end
-
-local tocLines = readToc()
-local tocPos = {}
-for i, l in ipairs(tocLines) do tocPos[l] = i end
-
-check(tocPos["BugReport.lua"] ~= nil, "TOC lists BugReport.lua")
-check(tocPos["Options.lua"] ~= nil and tocPos["BugReport.lua"] ~= nil
-  and tocPos["BugReport.lua"] < tocPos["Options.lua"],
-  "TOC: BugReport.lua comes before Options.lua")
 
 MightiePackDB = nil
-NodeTrailDB = nil
 local pkg = {}
-for _, l in ipairs(tocLines) do
-  local p = root .. "/MightiePack/" .. l
-  local chunk = loadfile(p)
-  check(chunk ~= nil, "loadfile " .. l)
-  if chunk then
-    local ok, e = pcall(chunk, "MightiePack", pkg)
-    check(ok, "load " .. l .. ": " .. tostring(e))
+loadfile_into(root .. "/MightiePack/ErrorHandler.lua", "MightiePack", pkg)
+loadfile_into(root .. "/MightiePack/Core.lua", "MightiePack", pkg)
+loadfile_into(root .. "/MightiePack/Modules.lua", "MightiePack", pkg)
+loadfile_into(root .. "/MightiePack/BugReport.lua", "MightiePack", pkg)
+
+check(type(pkg.BuildBugReport) == "function", "BuildBugReport exported")
+check(type(pkg.OpenBugReport) == "function", "OpenBugReport exported")
+check(type(pkg.Sanitize) == "function", "Sanitize exported")
+check(type(pkg.InstallErrorHandler) == "function", "InstallErrorHandler exported")
+check(pkg.BUG_DISCORD_INVITE == nil, "BUG_DISCORD_INVITE starts nil")
+check(type(currentHandler) == "function" and currentHandler ~= originalPrev,
+  "seterrorhandler chained at load")
+
+-- prev called + return values passed through; extra args forwarded
+prevCalls = {}
+local r1, r2 = currentHandler("plain from handler", "extra-arg")
+check(r1 == "prev-ok" and r2 == 42, "prev return values passed through")
+check(#prevCalls == 1, "prev called once for a single invoke")
+check(prevCalls[1][1] == "plain from handler" and prevCalls[1][2] == "extra-arg",
+  "all handler args forwarded to prev")
+
+-- re-entrancy: ObserveLuaError must not run nested
+do
+  local observeCount = 0
+  local real = pkg.ObserveLuaError
+  pkg.ObserveLuaError = function(...)
+    observeCount = observeCount + 1
+    currentHandler("nested invoke")
+    return real(...)
   end
+  prevCalls = {}
+  currentHandler("outer invoke")
+  check(observeCount == 1, "re-entrancy: ObserveLuaError ran once")
+  check(#prevCalls == 2, "re-entrancy: prev still called for the nested invoke")
+  pkg.ObserveLuaError = real
 end
 
-check(MightiePack == pkg, "MightiePack global set by Core.lua")
-check(type(SlashCmdList.MIGHTIEPACK) == "function", "MIGHTIEPACK slash registered")
+-- double install on the live pkg does not wrap again
+do
+  local wrapped = currentHandler
+  pkg.InstallErrorHandler()
+  check(currentHandler == wrapped, "live double install: wrapper unchanged")
+end
 
--- Boot the addon the way the client would (ADDON_LOADED), like umbrella_spec.
+pkg.RegisterModule("NodeTrail", {
+  title = "NodeTrail",
+  Enable = function() return true end,
+})
+
 for _, f in ipairs(frames) do
   if f.events.ADDON_LOADED and f.scripts.OnEvent then
     local ok, e = pcall(f.scripts.OnEvent, f, "ADDON_LOADED", "MightiePack")
-    check(ok, "ADDON_LOADED event: " .. tostring(e))
-  end
-end
-check(pkg.modules and pkg.modules.NodeTrail, "NodeTrail module registered")
-check(type(pkg.IsModuleEnabled) == "function" and pkg.IsModuleEnabled("NodeTrail") == true,
-  "NodeTrail enabled after boot")
-
-local haveForm = (type(pkg.BuildBugReportHeader) == "function")
-  and (type(pkg.BuildBugReport) == "function")
-  and (type(pkg.OpenBugReport) == "function")
-
--- A guard used across sections: on the parent commit (no BugReport.lua)
--- each section reports one clear FAIL instead of cascading errors.
-local function onlyIf(cond, whyMissing, fn)
-  if cond then
-    local ok, err = pcall(fn)
-    check(ok, "section ran: " .. tostring(err))
-  else
-    check(false, whyMissing)
+    check(ok, "ADDON_LOADED: " .. tostring(e))
   end
 end
 
-local ns = pkg.NodeTrail
+local function has(text, needle, label)
+  check(type(text) == "string" and text:find(needle, 1, true) ~= nil,
+    label .. " (missing '" .. needle .. "')")
+end
+local function lacks(text, needle, label)
+  check(type(text) == "string" and text:find(needle, 1, true) == nil,
+    label .. " (should not contain '" .. needle .. "')")
+end
 
--- ════════════════════════════════════════════════════════════════════
--- Section 1: auto-filled header (full metadata world)
--- ════════════════════════════════════════════════════════════════════
-onlyIf(haveForm, "BuildBugReportHeader missing (BugReport.lua absent at this commit)", function()
-  local ok, h = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(ok, "BuildBugReportHeader does not error: " .. tostring(h))
-  if ok then
-    local function has(needle, label)
-      check(h:find(needle, 1, true) ~= nil, "header: " .. label .. " (missing '" .. needle .. "')")
-    end
-    has("version 0.3.0", "addon version from GetAddOnMetadata")
-    has("interface 16001", "Interface from TOC metadata")
-    has("build 16001", "client build via select(4, GetBuildInfo())")
-    has("16.0.0.16001", "full GetBuildInfo version string")
-    has("Locale: enUS", "locale")
-    has("Mightie", "character name")
-    has("Forever", "character realm")
-    has("Barbarian", "character class")
-    has("Zone: Elwynn Forest", "current zone")
-    has("Subzone: Goldshire", "current subzone")
-    has("GatherMate2: loaded", "GatherMate2 load state")
-    has("Reported for: NodeTrail", "reported-for line")
-    has("NodeTrail: on", "module state on")
-    has("(loaded)", "module loaded marker")
-    has("Touchstone: off", "module state off")
-    check(h:match("%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d") ~= nil, "header: timestamp present")
-    -- The NodeTrail diagnostics are the REAL /nt ttdiag builder's
-    -- output: this spec's GameTooltip stub is hidden, so Tooltip:Diag
-    -- prints its 'tooltip hidden' line — captured, not copied.
-    has("NodeTrail diagnostics:", "diagnostics section header")
-    has("tooltip hidden", "diagnostics reuse the real Tooltip:Diag builder")
-    has("block: none", "diagnostics line came from the real T:Diag code path")
-    io.stdout:write("── header (full world) ─────────────────────────\n" .. h .. "\n────────────────────────────────────────────\n")
-  end
-end)
+-- ── sanitize: paths, GUIDs, BattleTags, Name-Realm, own identity ──
+do
+  local unix = pkg.Sanitize("boom /home/foo/bar.lua:1")
+  has(unix, "<path>", "unix path replaced")
+  lacks(unix, "/home/foo", "unix path stripped")
 
--- ════════════════════════════════════════════════════════════════════
--- Section 2: degradation — missing APIs degrade to "unknown", never error
--- ════════════════════════════════════════════════════════════════════
-onlyIf(haveForm, "BuildBugReportHeader missing (BugReport.lua absent at this commit)", function()
-  -- (a) GetAddOnMetadata missing entirely
-  GetAddOnMetadata = nil
-  local okA, hA = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okA, "nil GetAddOnMetadata: no error")
-  if okA then
-    check(hA:find("version unknown", 1, true) ~= nil, "nil GetAddOnMetadata: version unknown")
-    check(hA:find("interface unknown", 1, true) ~= nil, "nil GetAddOnMetadata: interface unknown")
-    check(hA:find("build 16001", 1, true) ~= nil, "nil GetAddOnMetadata: other fields intact")
-  end
-  -- (b) GetAddOnMetadata returns nil
-  GetAddOnMetadata = function() return nil end
-  local okB, hB = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okB, "nil-return GetAddOnMetadata: no error")
-  if okB then
-    check(hB:find("version unknown", 1, true) ~= nil, "nil-return GetAddOnMetadata: version unknown")
-  end
-  GetAddOnMetadata = function(name, what)
-    if name ~= "MightiePack" then return nil end
-    if what == "Version" then return "0.3.0" end
-    if what == "Interface" then return "16001" end
-    return nil
-  end
-  -- (c) GetBuildInfo missing / fieldless
+  local fslash = pkg.Sanitize("boom C:/Users/sam/addon.lua:2")
+  has(fslash, "<path>", "forward-slash drive path replaced")
+  lacks(fslash, "C:/Users", "forward-slash drive stripped")
+
+  local bslash = pkg.Sanitize("boom C:\\Users\\sam\\addon.lua:3")
+  has(bslash, "<path>", "backslash drive path replaced")
+  lacks(bslash, "C:\\Users", "backslash drive stripped")
+
+  local unc = pkg.Sanitize("boom \\\\server\\share\\file.lua:4")
+  has(unc, "<path>", "UNC path replaced")
+  lacks(unc, "\\\\server\\share", "UNC path stripped")
+
+  local kept = pkg.Sanitize("/home/x/Interface/AddOns/MightiePack/Core.lua:42: broke")
+  has(kept, "Interface\\AddOns\\MightiePack\\Core.lua:42: broke",
+    "Interface\\AddOns rewrite kept after unix prefix")
+  lacks(kept, "/home/x", "prefix before Interface\\AddOns stripped")
+
+  local guid = pkg.Sanitize("unit Player-1234-ABCDEF01 and Creature-0-1-2-3-AABBCC")
+  has(guid, "<guid>", "GUID replaced")
+  lacks(guid, "Player-1234-ABCDEF01", "Player GUID stripped")
+  lacks(guid, "Creature-0-1-2-3-AABBCC", "Creature GUID stripped")
+
+  local bt = pkg.Sanitize("from SomeName#1234 said hi")
+  has(bt, "<battletag>", "BattleTag replaced")
+  lacks(bt, "SomeName#1234", "BattleTag stripped")
+
+  local nr = pkg.Sanitize("near Bobmage-EmeraldDream during the pull")
+  has(nr, "<name-realm>", "Name-Realm token replaced")
+  lacks(nr, "Bobmage-EmeraldDream", "Name-Realm stripped")
+  local ver = pkg.Sanitize("version 0.3.0-from-caddons")
+  has(ver, "0.3.0-from-caddons", "version string not treated as Name-Realm")
+
+  local savedName, savedRealm = UnitName, GetRealmName
+  UnitName = function() return "Migh.tie+test" end
+  GetRealmName = function() return "For[ever]" end
+  local ident = pkg.Sanitize("Migh.tie+test on For[ever] plus MighXtie+test")
+  has(ident, "<name>", "own name scrubbed")
+  has(ident, "<realm>", "own realm scrubbed")
+  lacks(ident, "Migh.tie+test", "literal name removed")
+  lacks(ident, "For[ever]", "literal realm removed")
+  has(ident, "MighXtie+test", "name pattern-escaped so '.' does not match any char")
+  UnitName, GetRealmName = savedName, savedRealm
+
+  print("── sample sanitized error line ──")
+  print(kept)
+  print("────────────────────────────────")
+end
+
+-- ── sample report (C_AddOns metadata wins over the legacy global) ──
+local report = pkg.BuildBugReport()
+check(type(report) == "string", "BuildBugReport returns a string")
+has(report, "MightiePack bug report", "title")
+has(report, "Addon version: 0.3.0-from-caddons", "C_AddOns.GetAddOnMetadata version")
+has(report, "Client version: 1.60.1 (build 54321, interface 16001)", "GetBuildInfo version/build/interface")
+has(report, "Module(s): NodeTrail", "enabled modules")
+lacks(report, "Touchstone", "disabled module omitted")
+has(report, "Character: Priest 18", "class and level")
+has(report, "Zone/map: Tirisfal Glades (1420)", "zone and map id")
+has(report, "Steps to reproduce:\n\nExpected:\n\nActual:\n\n", "blank repro fields")
+has(report, "Lua error: none", "no captured error yet")
+has(report, "Screenshot: (attach in Discord)", "screenshot reminder")
+lacks(report, "SecretPlayer", "no character name")
+lacks(report, "SecretRealm", "no realm name")
+lacks(report, "Player-1234-ABCDEF", "no GUID")
+
+print("── sample report ─────────────────────────")
+print(report)
+print("──────────────────────────────────────────")
+
+-- ── legacy GetAddOnMetadata only ──
+local savedCAddOns = C_AddOns
+C_AddOns = nil
+local legacy = pkg.BuildBugReport()
+has(legacy, "Addon version: 0.3.0-beta", "legacy GetAddOnMetadata version")
+C_AddOns = savedCAddOns
+
+-- ── C_AddOns only (no legacy global) ──
+local savedLegacy = GetAddOnMetadata
+GetAddOnMetadata = nil
+local modern = pkg.BuildBugReport()
+has(modern, "Addon version: 0.3.0-from-caddons", "C_AddOns-only version")
+GetAddOnMetadata = savedLegacy
+
+-- ── missing C_Map degrades, does not error ──
+local savedMap = C_Map
+C_Map = nil
+local noMap, noMapErr = pcall(pkg.BuildBugReport)
+check(noMap, "missing C_Map does not error: " .. tostring(noMapErr))
+if noMap then
+  has(noMapErr, "Zone/map: Tirisfal Glades", "zone name without map id")
+  lacks(noMapErr, "(1420)", "no fabricated map id")
+end
+C_Map = savedMap
+
+-- ── missing GetBuildInfo / Forever 4-value shape ──
+do
+  local saved = GetBuildInfo
   GetBuildInfo = nil
-  local okC, hC = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okC, "nil GetBuildInfo: no error")
-  if okC then
-    check(hC:find("build unknown", 1, true) ~= nil, "nil GetBuildInfo: build unknown")
-    check(hC:find("version 0.3.0", 1, true) ~= nil, "nil GetBuildInfo: version line intact")
-  end
-  GetBuildInfo = function() return nil end
-  local okD, hD = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okD, "fieldless GetBuildInfo: no error")
-  if okD then
-    check(hD:find("build unknown", 1, true) ~= nil, "fieldless GetBuildInfo: build unknown")
-    check(hD:find("16.0.0.16001", 1, true) == nil, "fieldless GetBuildInfo: no fabricated version string")
-  end
+  local missing = pkg.BuildBugReport()
+  has(missing, "Client version: unknown (build unknown, interface 16001)",
+    "missing GetBuildInfo: unknown version/build, TOC interface")
   GetBuildInfo = function() return "16", "0", "0", "16001" end
-  -- (d) zone APIs missing
-  GetZone = nil
-  GetSubzone = nil
-  local okE, hE = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okE, "nil GetZone/GetSubzone: no error")
-  if okE then
-    check(hE:find("Zone: unknown", 1, true) ~= nil, "nil zone: zone unknown")
-    check(hE:find("Subzone: unknown", 1, true) ~= nil, "nil zone: subzone unknown")
-    check(hE:find("Locale: enUS", 1, true) ~= nil, "nil zone: locale line intact")
-  end
-  GetZone = function() return "Elwynn Forest" end
-  GetSubzone = function() return "Goldshire" end
-  -- (e) character APIs missing
-  GetUnitName = nil
-  GetUnitGUID = nil
-  GetPlayerInfoByGUID = nil
-  UnitClass = nil
-  local okF, hF = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okF, "nil character APIs: no error")
-  if okF then
-    check(hF:find("Character: unknown, realm unknown, unknown", 1, true) ~= nil,
-      "nil character APIs: character line fully unknown")
-  end
-  GetUnitName = function() return "Mightie" end
-  GetUnitGUID = function() return "Player-0x0A-0x01-0x1234" end
-  GetPlayerInfoByGUID = function(guid)
-    if type(guid) == "string" then return "Mightie", "Forever", "Barbarian" end
-    return nil
-  end
-  UnitClass = function() return "BARBARIAN", "Barbarian" end
-  -- (f) the umbrella_spec environment: NONE of the metadata globals
-  IsAddOnLoaded = nil
-  GetLocale = nil
-  local okG, hG = pcall(pkg.BuildBugReportHeader, "NodeTrail")
-  check(okG, "all metadata globals absent: no error")
-  if okG then
-    check(hG:find("GatherMate2: unknown", 1, true) ~= nil, "all absent: GM2 unknown")
-    check(hG:find("NodeTrail: on", 1, true) ~= nil, "all absent: module lines survive")
-  end
-  IsAddOnLoaded = function(n) return n == "GatherMate2" end
-  GetLocale = function() return "enUS" end
-end)
+  local forever = pkg.BuildBugReport()
+  has(forever, "Client version: 16.0.0 (build 16001, interface 16001)",
+    "Forever 4-value GetBuildInfo shape")
+  GetBuildInfo = saved
+end
 
--- ════════════════════════════════════════════════════════════════════
--- Section 3: nothing is built until asked
--- ════════════════════════════════════════════════════════════════════
-check(findFrame("MightiePackBugReportFrame") == nil,
-  "form is NOT created at load time (nothing opens until asked)")
+-- ── error not mentioning MightiePack is ignored ──
+pkg.ObserveLuaError("Interface\\AddOns\\SomeOtherAddon\\Foo.lua:12: boom")
+local stillNone = pkg.BuildBugReport()
+has(stillNone, "Lua error: none", "unrelated error ignored")
 
--- ════════════════════════════════════════════════════════════════════
--- Section 4: entry points
--- ════════════════════════════════════════════════════════════════════
-onlyIf(haveForm, "OpenBugReport missing (BugReport.lua absent at this commit)", function()
-  -- /mpack bug (real Core.lua dispatch)
-  clearChat()
-  SlashCmdList.MIGHTIEPACK("bug")
-  local form = findFrame("MightiePackBugReportFrame")
-  check(form ~= nil, "/mpack bug opens the form")
-  check(form and form.shown == true, "/mpack bug shows the form")
-  -- header is visible in the form (a font with the built header text)
-  local headerFont = nil
-  for _, f in ipairs(fonts) do
-    if type(f.text) == "string" and f.text:find("MightiePack bug report", 1, true) ~= nil then
-      headerFont = f
-    end
+-- ── stack-only mention is enough ──
+do
+  local savedDS = debugstack
+  debugstack = function()
+    return "Interface\\AddOns\\MightiePack\\Core.lua:1: in function `foo'"
   end
-  check(headerFont ~= nil, "header text is rendered inside the form")
-  if headerFont then
-    check(headerFont.text:find("version 0.3.0", 1, true) ~= nil, "form header shows the addon version")
-    check(headerFont.text:find("build 16001", 1, true) ~= nil, "form header shows the client build")
-  end
-  -- picker preselected: NodeTrail (default; opened from the slash)
-  local picker = nil
-  for _, f in ipairs(frames) do
-    if f.Template == "Dropdown" then picker = f end
-  end
-  check(picker ~= nil, "module picker exists in the form")
-  if picker then
-    check(picker.value ~= nil, "picker has a selection after /mpack bug")
-    local sel = picker:GetSelectedText()
-    check(sel == "NodeTrail", "picker defaults to NodeTrail (got " .. tostring(sel) .. ")")
-  end
-  local descBox = findFrame("MightiePackBugReportDesc")
-  check(descBox ~= nil, "description edit box exists")
-  check(descBox and (descBox.text == nil or descBox.text == ""), "description starts empty")
-  local outBox = findFrame("MightiePackBugReportOut")
-  check(outBox ~= nil, "output edit box exists")
-  check(outBox and (outBox.text == nil or outBox.text == ""),
-    "output box is empty until Copy is pressed (nothing built until asked)")
+  pkg.ObserveLuaError("plain oops with no addon name in the message")
+  local stackHit = pkg.BuildBugReport()
+  has(stackHit, "plain oops with no addon name in the message",
+    "mentionsPack checks the stack, not just the message")
+  debugstack = savedDS
+end
 
-  -- the SAME form opens from the options panel button
-  local bugBtn = findButton("Report a bug")
-  check(bugBtn ~= nil, "options panel has a 'Report a bug' button")
-  if bugBtn and click(bugBtn, "options 'Report a bug' button clickable") then
-    local form2 = findFrame("MightiePackBugReportFrame")
-    check(form2 == form, "options button reuses the same form instance")
-    check(form2.shown == true, "options button shows the form")
-  end
+-- ── captured MightiePack error, paths sanitized ──
+pkg.ObserveLuaError("/home/someone/Interface/AddOns/MightiePack/Core.lua:42: something broke")
+local withErr = pkg.BuildBugReport()
+has(withErr, "Lua error:", "captured error section")
+has(withErr, "Interface\\AddOns\\MightiePack\\Core.lua:42: something broke", "pack error kept, AddOns-relative")
+lacks(withErr, "/home/someone", "user path stripped")
+lacks(withErr, "/workspace", "no box/workspace paths")
+lacks(withErr, "Lua error: none", "error replaces 'none'")
 
-  -- module argument: /mpack bug TOUCHSTONE (case-insensitive, registered stub)
-  clearChat()
-  SlashCmdList.MIGHTIEPACK("bug TOUCHSTONE")
-  if picker then
-    local sel = picker:GetSelectedText()
-    -- item labels may carry the "(coming soon)" suffix (stub module);
-    -- what is pinned here is THAT Touchstone is the selection.
-    check(type(sel) == "string" and sel:find("Touchstone", 1, true) == 1,
-      "/mpack bug TOUCHSTONE preselects Touchstone (got " .. tostring(sel) .. ")")
+-- ── appended stack is sanitized ──
+do
+  local savedDS = debugstack
+  debugstack = function()
+    return "/home/runner/work/addon.lua:1: in main\nC:\\Users\\sam\\x.lua:2: in function\n\\\\server\\share\\y.lua:3"
   end
-  headerFont = nil
-  for _, f in ipairs(fonts) do
-    if type(f.text) == "string" and f.text:find("MightiePack bug report", 1, true) ~= nil then
-      headerFont = f
-    end
-  end
-  if headerFont then
-    check(headerFont.text:find("Reported for: Touchstone", 1, true) ~= nil,
-      "reselection rebuilds the header for Touchstone")
-    check(headerFont.text:find("Touchstone diagnostics:", 1, true) ~= nil,
-      "Touchstone diagnostics section present")
-    check(headerFont.text:find("Touchstone diagnostics:\n  none", 1, true) ~= nil,
-      "Touchstone (no _diag) shows 'none'")
-  end
+  pkg.ObserveLuaError("MightiePack stack-test")
+  local stacked = pkg.BuildBugReport()
+  has(stacked, "MightiePack stack-test", "message kept")
+  has(stacked, "<path>", "stack paths sanitized")
+  lacks(stacked, "/home/runner", "unix stack path stripped")
+  lacks(stacked, "C:\\Users\\sam", "drive stack path stripped")
+  lacks(stacked, "\\\\server\\share", "UNC stack path stripped")
+  debugstack = savedDS
+end
 
-  -- /mpack bug skinning preselects that module (registered live, the
-  -- way a real second module would be registered)
-  pkg.RegisterModule("Skinning", {
-    title = "Skinning",
-    notes = "Fur and hide routes. (test stand-in for a real second module)",
-    Enable = function() end, -- not called here
-  })
-  pkg.Skinning = pkg.Skinning or {}
-  pkg.Skinning._diag = { state = "ok", scanCount = 3 }
-  clearChat()
-  SlashCmdList.MIGHTIEPACK("bug skinning")
-  if picker then
-    local sel = picker:GetSelectedText()
-    check(sel == "Skinning", "/mpack bug skinning preselects Skinning (got " .. tostring(sel) .. ")")
-  end
-  headerFont = nil
-  for _, f in ipairs(fonts) do
-    if type(f.text) == "string" and f.text:find("MightiePack bug report", 1, true) ~= nil then
-      headerFont = f
-    end
-  end
-  if headerFont then
-    check(headerFont.text:find("Reported for: Skinning", 1, true) ~= nil,
-      "header reports Skinning as the target")
-    check(headerFont.text:find("Skinning: off", 1, true) ~= nil,
-      "Skinning module state line present in the header")
-    check(headerFont.text:find("Skinning diagnostics:\n  state = ok", 1, true) ~= nil,
-      "Skinning _diag content is included in the header")
-    check(headerFont.text:find("scanCount = 3", 1, true) ~= nil,
-      "Skinning _diag second key included")
-  end
+-- ── handler itself filters the same way ──
+currentHandler("Interface\\AddOns\\Other\\x.lua:1: nope")
+local afterOther = pkg.BuildBugReport()
+has(afterOther, "stack-test", "unrelated handler error does not replace ours")
 
-  -- unregistered module argument: honest fallback note, no crash
-  clearChat()
-  local okW = pcall(SlashCmdList.MIGHTIEPACK, "bug wibble")
-  check(okW, "/mpack bug <unknown> does not error")
-  if picker then
-    local sel = picker:GetSelectedText()
-    check(sel == "NodeTrail", "/mpack bug <unknown> falls back to NodeTrail (got " .. tostring(sel) .. ")")
-  end
-  headerFont = nil
-  for _, f in ipairs(fonts) do
-    if type(f.text) == "string" and f.text:find("MightiePack bug report", 1, true) ~= nil then
-      headerFont = f
-    end
-  end
-  if headerFont then
-    check(headerFont.text:find("not a registered module", 1, true) ~= nil,
-      "unknown module argument is flagged honestly in the header")
-  end
-end)
+currentHandler("Interface\\AddOns\\MightiePack\\Options.lua:9: newer boom")
+local afterOurs = pkg.BuildBugReport()
+has(afterOurs, "Options.lua:9: newer boom", "handler stores a newer pack error")
+lacks(afterOurs, "stack-test", "only the most recent error is kept")
 
--- ════════════════════════════════════════════════════════════════════
--- Section 5: description + Copy → output box, selected
--- ════════════════════════════════════════════════════════════════════
-onlyIf(haveForm, "Copy flow unverifiable (BugReport.lua absent at this commit)", function()
-  -- back to the NodeTrail selection
-  SlashCmdList.MIGHTIEPACK("bug")
-  local descBox = findFrame("MightiePackBugReportDesc")
-  local outBox = findFrame("MightiePackBugReportOut")
-  local copyBtn = findButton("Copy report")
-  local closeBtn = findButton("Close")
-  check(copyBtn ~= nil, "'Copy report' button exists")
-  check(closeBtn ~= nil, "'Close' button exists")
+-- ── BugGrabber, when present, wins ──
+BugGrabber = {
+  GetDB = function()
+    return {
+      { message = "older MightiePack issue", stack = "stack1" },
+      { message = "latest MightiePack explosion", stack = "Interface\\AddOns\\MightiePack\\X.lua:1" },
+    }
+  end,
+}
+local grabbed = pkg.BuildBugReport()
+has(grabbed, "latest MightiePack explosion", "BugGrabber latest pack error preferred")
+lacks(grabbed, "newer boom", "BugGrabber preferred over the chained handler")
+BugGrabber = nil
 
-  local desc = "Tooltip lines overlap when a dense node cluster is shown, and the route path clips the minimap."
-  descBox:SetText(desc)
-  local okCopy = click(copyBtn, "Copy report clickable")
-  check(okCopy, "Copy report clickable (rechecked)")
-  if okCopy then
-    local out = outBox.text
-    check(type(out) == "string" and out ~= "", "Copy fills the output box")
-    if type(out) == "string" and out ~= "" then
-      check(out:find(desc, 1, true) ~= nil, "output contains the typed description")
-      check(out:find("version 0.3.0", 1, true) ~= nil, "output contains the version header")
-      check(out:find("build 16001", 1, true) ~= nil, "output contains the build header")
-      check(out:find("Locale: enUS", 1, true) ~= nil, "output contains the locale header")
-      check(out:find("Zone: Elwynn Forest", 1, true) ~= nil, "output contains the zone header")
-      check(out:find("NodeTrail: on", 1, true) ~= nil, "output contains module states")
-      check(out:find("#mightiepack-bugs", 1, true) ~= nil, "output carries the channel line")
-      check(out:find("cannot send the report itself", 1, true) ~= nil,
-        "output stays honest: no implied automatic upload")
-      check(out:find("Ctrl+C", 1, true) ~= nil or true, "--")
-      -- description comes AFTER the auto-filled header
-      local hp, dp = out:find("Reported for: NodeTrail", 1, true), out:find(desc, 1, true)
-      check(hp ~= nil and dp ~= nil and hp < dp, "header precedes the description in the output")
-      -- the output equals the pure builder's output for the same inputs
-      local okB, expected = pcall(pkg.BuildBugReport, "NodeTrail", desc)
-      check(okB, "BuildBugReport (selector, description) does not error")
-      if okB then
-        check(out == expected, "output box text == BuildBugReport(selected, description)")
-      end
-    end
-    -- selected: SetFocus + HighlightText both ran (the copy mechanism)
-    check(callLog.focus >= 1, "Copy pressed SetFocus on the output box")
-    check(callLog.highlight >= 1, "Copy pressed HighlightText on the output box")
-    check(outBox.hasFocus == true and outBox.highlighted == true,
-      "output box focus + selection recorded by the stub")
-    -- status line tells the player to press Ctrl+C
-    local status = nil
-    for _, f in ipairs(fonts) do
-      if type(f.text) == "string" and f.text:find("press Ctrl+C to copy", 1, true) ~= nil then
-        status = f
-      end
-    end
-    check(status ~= nil, "status line tells the player to press Ctrl+C")
-    check(status ~= nil and status.text:find("automatic selection", 1, true) == nil,
-      "happy path does NOT claim the selection fallback was needed")
-  end
-end)
+-- ── UI + slash + hint ──
+check(pkg.CopyHint() == "Press Ctrl+C to copy, then paste in #mightiepack-bugs on Discord",
+  "hint names the channel when invite is nil")
+SlashCmdList.MIGHTIEPACK("bug")
+local form, edit
+for _, f in ipairs(frames) do
+  if f.Name == "MightiePackBugReportFrame" then form = f end
+end
+for _, e in ipairs(editboxes) do
+  if e.Name == "MightiePackBugReportEdit" then edit = e end
+end
+check(form ~= nil and form.shown == true, "/mp bug shows the popup")
+check(edit ~= nil and type(edit.text) == "string" and edit.text:find("MightiePack bug report", 1, true),
+  "popup EditBox is pre-filled")
+check(edit and edit.hasFocus == true, "EditBox SetFocus on open")
+check(edit and edit.highlighted == true, "EditBox HighlightText on open")
 
--- ════════════════════════════════════════════════════════════════════
--- Section 6: graceful fallback when SetFocus/HighlightText are missing
--- ════════════════════════════════════════════════════════════════════
-onlyIf(haveForm, "fallback unverifiable (BugReport.lua absent at this commit)", function()
-  local outBox = findFrame("MightiePackBugReportOut")
-  local copyBtn = findButton("Copy report")
-  check(outBox ~= nil and copyBtn ~= nil, "fallback section: form parts exist")
-  if outBox and copyBtn then
-    -- emulate a client whose EditBox lacks the selection methods
-    local savedFocus, savedHL = outBox.SetFocus, outBox.HighlightText
-    outBox.SetFocus = nil
-    outBox.HighlightText = nil
-    callLog.focus = 0
-    callLog.highlight = 0
-    local okF = click(copyBtn, "Copy still clickable without selection methods")
-    check(okF, "Copy does not error when SetFocus/HighlightText are missing")
-    if okF then
-      check(outBox.text and outBox.text ~= "" and outBox.text:find("version 0.3.0", 1, true) ~= nil,
-        "fallback: output box still gets the full report")
-      check(callLog.highlight == 0, "fallback: no HighlightText call was made")
-      local status = nil
-      for _, f in ipairs(fonts) do
-        if type(f.text) == "string" and f.text:find("Ctrl+C to copy", 1, true) ~= nil then
-          status = f
-        end
-      end
-      check(status ~= nil, "fallback: status line still points at Ctrl+C")
-      check(status and status.text:find("select the text", 1, true) ~= nil,
-        "fallback: player is told to select manually")
-    end
-    outBox.SetFocus = savedFocus
-    outBox.HighlightText = savedHL
-  end
-end)
+-- keyboard trap: Escape clears focus and hides; OnHide also clears focus
+check(edit and type(edit.scripts.OnEscapePressed) == "function", "EditBox has OnEscapePressed")
+check(form and type(form.scripts.OnHide) == "function", "frame has OnHide")
+callLog.clearFocus = 0
+if edit and edit.scripts.OnEscapePressed then
+  edit.scripts.OnEscapePressed(edit)
+end
+check(edit and edit.hasFocus == false, "Escape clears EditBox focus")
+check(form and form.shown == false, "Escape hides the popup")
+check(callLog.clearFocus >= 1, "Escape/OnHide called ClearFocus")
 
--- ════════════════════════════════════════════════════════════════════
--- Section 7: Close dismisses; the draft survives a reopen (session only)
--- ════════════════════════════════════════════════════════════════════
-onlyIf(haveForm, "Close/draft unverifiable (BugReport.lua absent at this commit)", function()
-  local form = findFrame("MightiePackBugReportFrame")
-  local closeBtn = findButton("Close")
-  local descBox = findFrame("MightiePackBugReportDesc")
-  check(form ~= nil and closeBtn ~= nil and descBox ~= nil, "close section: parts exist")
-  if form and closeBtn and descBox then
-    descBox:SetText("my draft: route stops overlap my last gather")
-    local okCl = click(closeBtn, "Close clickable")
-    check(okCl, "Close clickable (rechecked)")
-    check(form.shown == false, "Close hides the form")
-    SlashCmdList.MIGHTIEPACK("bug")
-    check(form.shown == true, "reopen shows the form again")
-    check(descBox.text == "my draft: route stops overlap my last gather",
-      "draft description survives close/reopen (session draft)")
-    -- no events registered on the form
-    check(next(form.events) == nil, "the form registers no events")
-    -- no new saved variables: MightiePackDB keeps only its known keys
-    local dbKeys = {}
-    for k in pairs(MightiePackDB or {}) do dbKeys[k] = true end
-    local unexpected = false
-    for k in pairs(dbKeys) do
-      if k ~= "modules" then unexpected = true end
-    end
-    check(not unexpected, "no new SavedVariables (MightiePackDB keys: modules only)")
-  end
-end)
+pkg.OpenBugReport()
+check(form.shown == true and edit.hasFocus == true, "reopen focuses the EditBox")
+callLog.clearFocus = 0
+form.scripts.OnHide(form)
+check(edit.hasFocus == false, "OnHide clears EditBox focus")
+check(callLog.clearFocus >= 1, "OnHide called ClearFocus")
 
--- ════════════════════════════════════════════════════════════════════
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
   os.exit(1)

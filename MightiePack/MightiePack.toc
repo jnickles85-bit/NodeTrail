@@ -7,9 +7,10 @@
 ## SavedVariables: MightiePackDB, NodeTrailDB, StatForgeDB
 ## SavedVariablesPerCharacter: ChestAdvisorDB
 ## Assets: Modules/Touchstone/ChestAdvisor/marker.tga
-## OptionalDeps: GatherMate2
+## OptionalDeps: GatherMate2, BugGrabber
 ## DefaultState: enabled
 
+ErrorHandler.lua
 Core.lua
 Modules.lua
 Modules/NodeTrail/locale/enUS.lua

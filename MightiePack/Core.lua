@@ -205,11 +205,9 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       end
     end
   elseif first == "bug" then
-    -- t_ed1e009e: the in-game bug report form — the same one the
-    -- options panel button opens. Optional module argument preselects
-    -- that module (/mpack bug skinning); case-insensitive.
+    -- Same popup as the options-panel "Report a bug" button.
     if type(pkg.OpenBugReport) == "function" then
-      pkg.OpenBugReport(rest ~= "" and rest or nil)
+      pkg.OpenBugReport()
     else
       pkg.Print("bug report form unavailable (BugReport module did not load)")
     end
@@ -282,7 +280,7 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     -- keep the historical usage line verbatim (existing callers/tests
     -- rely on it); the new subcommand gets its own line.
     pkg.Print("/mpack [options|status]")
-    pkg.Print("/mpack bug [module] — open the bug report form (no upload — copy and paste into Discord)")
+    pkg.Print("/mpack bug — open the bug report form (no upload — copy and paste into Discord)")
     pkg.Print("/mp skindiag (toggle) | /mp skindiag dump (skinning event probe)")
     if pkg.IsModuleEnabled("NodeTrail") then
       pkg.Print("NodeTrail: /nt help")
