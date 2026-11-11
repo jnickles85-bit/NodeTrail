@@ -402,27 +402,255 @@ function T.BuildBeastLines(unit)
   return lines, nil, cid
 end
 
---- Is the hovered object one of our herb nodes? Reads only: the owner test and
---- the client's first line of text. A client whose tooltip object lacks
---- GetOwner (or a caller passing no tooltip at all) is not a herb hover —
---- answer "no" instead of raising.
-function T:GetHoveredNodeName(tooltip)
-  if type(tooltip) ~= "table" or type(tooltip.GetOwner) ~= "function" then
-    return nil
+-- ── the hover probe: every input is measured, every refusal names one ──────
+-- t_e9eeb448. The predicate below used to answer nil for FOUR different
+-- reasons, and on client build 70888 every herb hover was refused with no way
+-- to tell which one refused it: "not a herb tooltip" was the only string, and
+-- the profession gate (which answered correctly) was blamed for a whole round
+-- trip. The probe answers the same question, but it also returns the inputs the
+-- answer used, and the decision ring prints them per evaluation.
+--
+-- The rules, in order — the first one that answers does, and the answer is
+-- recorded even when it is a refusal:
+--
+--   1. the tooltip object            not a frame → refused, shape named
+--   2. a mouseover UNIT              a unit hover is never a node hover
+--   3. the FIRST LINE text           must be a name HerbData knows
+--   4. an ITEM on the tooltip        a herb in a bag / on a merchant is not a node
+--   5. a UNIT on the tooltip         any unit-bound tooltip is refused
+--   6. the tooltip's OWNER           only where 4 and 5 could not be measured
+--
+-- Why the owner test is LAST now. It was never the thing that made a tooltip
+-- ours: it was a PROXY for "this tooltip was not raised by an item", and it
+-- only holds on a client that reports the owner exactly as this code assumed
+-- (nil, UIParent or WorldFrame). On the reporting client it refused every world
+-- node while the profession gate said herbalism=yes — the false negative this
+-- card is about. Items and units are measured DIRECTLY at 4 and 5, which is
+-- stricter, not looser: a bag herb still never shows the block. Where a client
+-- exposes neither GetItem nor GetUnit, the owner test is kept as the fallback,
+-- so nothing is loosened where the direct answer is unavailable.
+
+--- What a value IS, in one word — the shape a refusal has to name. A secret is
+--- not text: reading or comparing one raises on this client, so it is named
+--- (isSecretValue, above) and never handed to a name lookup.
+local function shapeOf(v)
+  if v == nil then
+    return "absent"
   end
-  if UnitExists and UnitExists("mouseover") then
-    return nil
+  if isSecretValue(v) then
+    return "secret"
   end
-  local owner = tooltip:GetOwner()
-  if owner ~= UIParent and owner ~= WorldFrame and owner ~= nil then
-    return nil
+  return type(v)
+end
+
+--- The tooltip's owner as one readable token: nil, frame:<name>, frame:<unnamed>.
+local function ownerToken(v)
+  if v == nil then
+    return "nil"
   end
+  if type(v) ~= "table" then
+    return shapeOf(v)
+  end
+  if v == UIParent then
+    return "frame:UIParent (world/ui root)"
+  end
+  if v == WorldFrame then
+    return "frame:WorldFrame (the world)"
+  end
+  if type(v.GetName) == "function" then
+    local ok, name = pcall(v.GetName, v)
+    if ok and type(name) == "string" and name ~= "" then
+      return "frame:" .. name
+    end
+  end
+  return "frame:<unnamed>"
+end
+
+--- The mouseover unit as a token: none, unit:<guid>, or unprobeable.
+local function mouseoverToken()
+  if type(UnitExists) ~= "function" then
+    return "unprobeable"
+  end
+  local ok, exists = pcall(UnitExists, "mouseover")
+  if not ok then
+    return "unprobeable"
+  end
+  if exists ~= true then
+    return "none"
+  end
+  local guid
+  if type(UnitGUID) == "function" then
+    local okG, g = pcall(UnitGUID, "mouseover")
+    guid = okG and g or nil
+  end
+  return "unit:" .. (type(guid) == "string" and guid or "?")
+end
+
+--- The client's FIRST line of text and the shape it came in. The font string
+--- the tooltip grew for line 1 is the client's own text; GetLine(1) is the
+--- documented fallback, and its answer is accepted only when it is a string —
+--- GetLine can hand back a colour wrapper (tooltip contract rule 3), and a
+--- table or a secret must never be read as a node name.
+local function firstLineOf(tooltip)
+  local shapes = {}
   local fs = _G["GameTooltipTextLeft1"]
-  local text = fs and fs.GetText and fs:GetText()
-  if text and ns.HerbData.GetNode(text) then
-    return text
+  if type(fs) == "table" and type(fs.GetText) == "function" then
+    local ok, text = pcall(fs.GetText, fs)
+    if not ok then
+      shapes[#shapes + 1] = "font string raised"
+    else
+      local shape = shapeOf(text)
+      if shape == "string" then
+        return text, "font string"
+      end
+      shapes[#shapes + 1] = "font string is " .. shape
+    end
+  else
+    shapes[#shapes + 1] = "no font string"
   end
-  return nil
+  if type(tooltip.GetLine) == "function" then
+    local ok, text = pcall(tooltip.GetLine, tooltip, 1)
+    if not ok then
+      shapes[#shapes + 1] = "GetLine raised"
+    else
+      local shape = shapeOf(text)
+      if shape == "string" then
+        return text, "GetLine(1)"
+      end
+      shapes[#shapes + 1] = "GetLine is " .. shape
+    end
+  else
+    shapes[#shapes + 1] = "no GetLine"
+  end
+  return nil, table.concat(shapes, ", ")
+end
+
+--- The item the tooltip was raised from: none, item:<id|name>, unprobeable.
+local function itemToken(tooltip)
+  if type(tooltip.GetItem) ~= "function" then
+    return "unprobeable"
+  end
+  local ok, name, link = pcall(tooltip.GetItem, tooltip)
+  if not ok then
+    return "unprobeable"
+  end
+  local id
+  if type(link) == "string" then
+    id = link:match("item:(%d+)")
+  end
+  if type(name) ~= "string" and type(link) ~= "string" then
+    return "none"
+  end
+  return "item:" .. tostring(id or (type(name) == "string" and name or "?"))
+end
+
+--- The unit the tooltip was raised from: none, unit:<token>, unprobeable.
+local function unitToken(tooltip)
+  if type(tooltip.GetUnit) ~= "function" then
+    return "unprobeable"
+  end
+  local ok, unit = pcall(tooltip.GetUnit, tooltip)
+  if not ok then
+    return "unprobeable"
+  end
+  if unit == nil then
+    return "none"
+  end
+  return "unit:" .. tostring(unit)
+end
+
+--- Is the hovered object one of our herb nodes? Returns the node name and the
+--- VERDICT: the inputs the answer used (owner/api, mouseover, first line, item,
+--- unit) and, on a refusal, the one input that refused. Reads only.
+function T:ProbeHover(tooltip)
+  local verdict = {}
+
+  -- 1. the tooltip object itself
+  if type(tooltip) ~= "table" then
+    verdict.objectBroken = true
+    verdict.ownerApi = "unread (no tooltip object)"
+    verdict.refused = "the tooltip object is a " .. shapeOf(tooltip) .. ", not a frame"
+    return nil, verdict
+  end
+
+  -- Measured up front so the ring always carries them — the next report of
+  -- "the block does not show" is one line of output, not a round trip.
+  verdict.ownerApi = type(tooltip.GetOwner) == "function" and "function" or "absent"
+  local ownerRaw
+  if verdict.ownerApi == "function" then
+    local ok, owner = pcall(tooltip.GetOwner, tooltip)
+    if not ok then
+      verdict.ownerApi = "raised"
+      verdict.owner = "unreadable (GetOwner raised)"
+    else
+      ownerRaw = owner
+      verdict.owner = ownerToken(owner)
+    end
+  else
+    verdict.owner = "absent (no GetOwner on this client)"
+  end
+  verdict.mouseover = mouseoverToken()
+  -- The first line is READ before the decision, not after it: on a unit hover it
+  -- is the input that says whether the tooltip really was a unit's (a stale
+  -- mouseover beside a node's name is a different defect from a real unit hover).
+  local text, shape = firstLineOf(tooltip)
+  verdict.line1 = text or ("absent: " .. tostring(shape))
+  verdict.line1Shape = text and ("text from the " .. tostring(shape)) or tostring(shape)
+
+  -- 2. a UNIT hover is never a node hover, whatever the text says
+  if verdict.mouseover:find("^unit") then
+    verdict.refused = "mouseover holds a unit (" .. verdict.mouseover .. ")"
+    return nil, verdict
+  end
+
+  -- 3. the first line must be a name HerbData knows
+  if not text then
+    verdict.refused = "the first line is not text (" .. tostring(shape) .. ")"
+    return nil, verdict
+  end
+  local HerbData = ns.HerbData
+  local node
+  if type(HerbData) == "table" and type(HerbData.GetNode) == "function" then
+    local ok, found = pcall(HerbData.GetNode, text)
+    if ok and found then
+      node = found
+    end
+  end
+  if not node then
+    verdict.refused = ("the first line %q is not a node name"):format(text)
+    return nil, verdict
+  end
+
+  -- 4. an ITEM tooltip: the same herb in a bag, on a merchant, in the chat window
+  verdict.item = itemToken(tooltip)
+  if verdict.item:find("^item") then
+    verdict.refused = "the tooltip carries an item (" .. verdict.item .. ")"
+    return nil, verdict
+  end
+
+  -- 5. a UNIT-bound tooltip
+  verdict.unit = unitToken(tooltip)
+  if verdict.unit:find("^unit") then
+    verdict.refused = "the tooltip carries a unit (" .. verdict.unit .. ")"
+    return nil, verdict
+  end
+
+  -- 6. the owner — a fallback, only where 4 and 5 could not be measured
+  if verdict.item == "unprobeable" and verdict.unit == "unprobeable" then
+    if ownerRaw ~= nil and ownerRaw ~= UIParent and ownerRaw ~= WorldFrame then
+      verdict.refused = "the tooltip's owner is " .. verdict.owner
+        .. " and this client reports neither an item nor a unit"
+      return nil, verdict
+    end
+  end
+  return text, verdict
+end
+
+--- The hovered node's name, or nil plus the verdict. Kept as the name-only door
+--- the rest of the module and the specs call.
+function T:GetHoveredNodeName(tooltip)
+  local name, verdict = T:ProbeHover(tooltip)
+  return name, verdict
 end
 
 -- ── refresh decision ring ────────────────────────────────────────────────
@@ -484,7 +712,31 @@ function T:Refresh(tooltip, source)
     when = type(GetTime) == "function" and GetTime() or nil,
   }
   local panel = panelModule()
-  local name = self:GetHoveredNodeName(tooltip)
+  local name, probe = self:ProbeHover(tooltip)
+  -- t_e9eeb448: the inputs the decision used go in the ring, so a refused hover
+  -- names its refusing input instead of collapsing into "not a herb tooltip".
+  -- A non-frame tooltip object is recorded and stops here: there is nothing on
+  -- the client to build a beast block from either.
+  if type(probe) == "table" then
+    entry.ownerApi = probe.ownerApi
+    entry.owner = probe.owner
+    entry.mouseover = probe.mouseover
+    entry.line1 = probe.line1
+    entry.line1Shape = probe.line1Shape
+    entry.item = probe.item
+    entry.unit = probe.unit
+    entry.refusal = probe.refused
+  end
+  if probe and probe.objectBroken then
+    local reason = "not a herb tooltip"
+    if type(panel) == "table" then
+      panel:Hide(reason)
+    end
+    entry.panelShown = false
+    entry.skip = reason
+    ringPush(entry)
+    return
+  end
   local lines, why, kind, cid
   if name then
     kind = "herb"
@@ -545,6 +797,10 @@ end
 function T:Poll(tooltip)
   tooltip = tooltip or GameTooltip
   if type(tooltip) ~= "table" then
+    -- t_e9eeb448: a tooltip object that is not a frame is a REFUSAL, not an
+    -- empty poll. Recording it is what makes the shape visible in ttdiag
+    -- instead of a ring with no entries and nothing to read.
+    self:Refresh(tooltip, "poll-shape")
     return nil
   end
   local shown = false
@@ -597,7 +853,34 @@ function T:Diag()
   if type(ring) ~= "table" or #ring == 0 then
     say("refresh ring: empty (no evaluation recorded yet)")
   else
-    say(("refresh ring: last %d evaluation(s), oldest first"):format(#ring))
+    say((("refresh ring: last %d evaluation(s), oldest first"):format(#ring)))
+    -- t_e9eeb448: the inputs the evaluation used are printed on the SAME line as
+    -- the decision. "not a herb tooltip" alone collapsed four refusals into one
+    -- string; ownerapi/owner/mouseover/line1/item name the input that refused,
+    -- so the next report of "the block does not show" is one line of output.
+    local function cell(v)
+      if v == nil or v == "" then
+        return "-"
+      end
+      return tostring(v)
+    end
+    local function quoted(v)
+      if type(v) ~= "string" then
+        return cell(v)
+      end
+      local text = v
+      if #text > 48 then
+        text = text:sub(1, 48) .. "…"
+      end
+      return "\"" .. text .. "\""
+    end
+    local function refusal(e)
+      local why = tostring(e.skip or "")
+      if type(e.refusal) == "string" and e.refusal ~= "" then
+        why = why .. " (" .. e.refusal .. ")"
+      end
+      return why
+    end
     for i = 1, #ring do
       local e = ring[i] or {}
       local function flag(v)
@@ -606,11 +889,12 @@ function T:Diag()
         end
         return v and "yes" or "no"
       end
-      say((("eval #%s src=%s kind=%s cid=%s name=%s panel=%s rows=%s width=%s widest=%s — %s")):format(
+      say((("eval #%s src=%s kind=%s cid=%s name=%s panel=%s rows=%s width=%s widest=%s ownerapi=%s owner=%s mouseover=%s line1=%s item=%s — %s")):format(
         tostring(e.n or "?"), tostring(e.source or "?"), tostring(e.kind or "-"),
         tostring(e.cid or "-"), tostring(e.name or "-"),
         flag(e.panelShown), tostring(e.rows or "-"), px(e.width), px(e.widest),
-        tostring(e.skip or "")))
+        cell(e.ownerApi), cell(e.owner), cell(e.mouseover),
+        quoted(e.line1), cell(e.item), refusal(e)))
     end
   end
 
