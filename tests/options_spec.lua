@@ -98,12 +98,21 @@ local function mkBase(kind)
     checked = false,
   }
   o.SetScript = function(self, n, f) self.scripts[n] = f end
-  o.SetPoint = function(self) end
+  o.points = {}
+  o.SetPoint = function(self, ...) self.points[#self.points + 1] = { ... } end
+  o.ClearAllPoints = function(self) self.points = {} end
   o.SetText = function(self, t) self.text = t end
   o.GetText = function(self) return self.text end
   o.Show = function(self) self.shown = true end
   o.Hide = function(self) self.shown = false end
+  o.IsShown = function(self) return self.shown == true end
   o.SetSize = function(self, w, h) self.size = { w, h } end
+  o.SetWidth = function(self, w) self.width = w end
+  o.SetHeight = function(self, h) self.height = h end
+  o.SetTextColor = function(self, r, g, b, a) self.textColor = { r, g, b, a } end
+  o.SetJustifyH = function(self, j) self.justifyH = j end
+  o.SetWordWrap = function(self, v) self.wordWrap = v and true or false end
+  o.SetNonSpaceWrap = function(self, v) self.nonSpaceWrap = v and true or false end
   o.Enable = function(self) self.enabled = true end
   o.Disable = function(self) self.enabled = false end
   o.SetChecked = function(self, b) self.checked = b and true or false end
@@ -649,6 +658,57 @@ check(fsText(panelFsNote) == "" and panelFsNote.shown == false,
   "panel note is hidden when the client answers availability")
 
 -- ════════════════════════════════════════════════════════════════════
+
+-- ════════════════════════════════════════════════════════════════════
+-- Layout: vertical flow, no overlapping anchors, Feedback side by side
+-- ════════════════════════════════════════════════════════════════════
+openPanel()
+check(pkg.optionsBoxes ~= nil, "pkg.optionsBoxes is exported")
+local farm = pkg.optionsBoxes and pkg.optionsBoxes.SkinRoute
+local note = pkg.optionsBoxes and pkg.optionsBoxes.SkinRouteNote
+check(farm ~= nil, "Skinning farming circle checkbox exists after OnShow")
+if farm and note then
+  local pt = note.points and note.points[#note.points]
+  check(pt ~= nil and pt[2] == farm,
+    "skin-circle status is anchored to the farming-circle checkbox (not a raw panel Y)")
+  local rel = pt and tostring(pt[3] or "")
+  check(rel:find("BOTTOM", 1, true) ~= nil,
+    "skin-circle status sits under the checkbox, not on the same row (rel=" .. rel .. ")")
+end
+
+local scanPt = recButton and recButton.points and recButton.points[#recButton.points]
+check(scanPt ~= nil and scanPt[2] == panelFsStatus,
+  "Scan now is anchored to the recipe status line, not a reserved gap below hidden notes")
+local scanRel = scanPt and tostring(scanPt[3] or "")
+check(scanRel:find("BOTTOM", 1, true) ~= nil,
+  "Scan now sits under the recipe status (rel=" .. tostring(scanRel) .. ")")
+
+local feedbackFs, reportBtn, ideaBtn
+for _, f in ipairs(fonts) do
+  if f.text == "Feedback" then feedbackFs = f end
+  if f.text == "Modules" then
+    -- present
+  end
+end
+for _, b in ipairs(buttons) do
+  if b.text == "Report a bug" then reportBtn = b end
+  if b.text == "Suggest an idea" then ideaBtn = b end
+end
+check(feedbackFs ~= nil, "panel has a Feedback section header")
+check(reportBtn ~= nil and ideaBtn ~= nil, "Feedback has Report a bug and Suggest an idea")
+if ideaBtn and reportBtn then
+  local ipt = ideaBtn.points and ideaBtn.points[#ideaBtn.points]
+  check(ipt ~= nil and ipt[2] == reportBtn,
+    "Suggest an idea is side by side with Report a bug")
+  check(ipt and ipt[1] == "LEFT" and ipt[3] == "RIGHT",
+    "Suggest an idea is to the right of Report a bug")
+end
+if reportBtn and feedbackFs then
+  local rpt = reportBtn.points and reportBtn.points[#reportBtn.points]
+  check(rpt ~= nil and rpt[2] == feedbackFs,
+    "Report a bug sits under the Feedback header")
+end
+
 if failed > 0 then
   os.exit(1)
 else

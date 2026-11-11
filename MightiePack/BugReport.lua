@@ -326,9 +326,23 @@ local function ensureCopyPopup(key, opts)
   end
   local frame = created
   p.frame = frame
-  if type(frame.SetSize) == "function" then frame:SetSize(520, 460) end
+  -- Size with both SetSize and SetWidth/SetHeight: some 16001 paths
+  -- implement only one of them.
+  if type(frame.SetSize) == "function" then pcall(frame.SetSize, frame, 520, 460) end
+  if type(frame.SetWidth) == "function" then pcall(frame.SetWidth, frame, 520) end
+  if type(frame.SetHeight) == "function" then pcall(frame.SetHeight, frame, 460) end
   if type(frame.SetPoint) == "function" then frame:SetPoint("CENTER") end
-  if type(frame.SetFrameStrata) == "function" then pcall(frame.SetFrameStrata, frame, "DIALOG") end
+  -- The Settings / Interface Options canvas is itself a DIALOG (often
+  -- toplevel). A plain DIALOG popup without SetToplevel sits under it, so
+  -- clicks and keyboard go to Options and a second Close from that window
+  -- can show through the empty inner area. Prefer FULLSCREEN_DIALOG.
+  if type(frame.SetFrameStrata) == "function" then
+    if not pcall(frame.SetFrameStrata, frame, "FULLSCREEN_DIALOG") then
+      pcall(frame.SetFrameStrata, frame, "DIALOG")
+    end
+  end
+  if type(frame.SetToplevel) == "function" then pcall(frame.SetToplevel, frame, true) end
+  if type(frame.SetFrameLevel) == "function" then pcall(frame.SetFrameLevel, frame, 100) end
   if type(frame.SetMovable) == "function" then pcall(frame.SetMovable, frame, true) end
   if type(frame.EnableMouse) == "function" then pcall(frame.EnableMouse, frame, true) end
   if type(frame.RegisterForDrag) == "function" then pcall(frame.RegisterForDrag, frame, "LeftButton") end
@@ -358,9 +372,37 @@ local function ensureCopyPopup(key, opts)
   hintFS:SetWidth(488)
   p.hintFS = hintFS
 
+  -- A templateless EditBox on Interface 16001 has no font object. Without
+  -- SetFontObject/SetFont, SetText does not render, the box has no usable
+  -- typographic height, and the player sees an empty area they cannot type
+  -- into. InputScrollFrameTemplate / ScrollingEditBoxTemplate are not
+  -- assumed to exist on this client, so the font is applied by hand.
   local edit = CreateFrame("EditBox", opts.editName, frame)
+  -- Dual-anchor so a multiline EditBox still has a real rect if SetHeight
+  -- is ignored. Leave a row at the bottom for the single Close button.
   edit:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -72)
-  if type(edit.SetSize) == "function" then edit:SetSize(488, 340) end
+  edit:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 48)
+  if type(edit.SetSize) == "function" then pcall(edit.SetSize, edit, 488, 320) end
+  if type(edit.SetWidth) == "function" then pcall(edit.SetWidth, edit, 488) end
+  if type(edit.SetHeight) == "function" then pcall(edit.SetHeight, edit, 320) end
+  if type(edit.SetFontObject) == "function" then
+    local applied = false
+    for _, key in ipairs({ "ChatFontNormal", "GameFontHighlight", "GameFontNormal" }) do
+      local font = rawget(_G, key)
+      if font ~= nil and pcall(edit.SetFontObject, edit, font) then
+        applied = true
+        break
+      end
+    end
+    if not applied and type(edit.SetFont) == "function" then
+      pcall(edit.SetFont, edit, "Fonts\\FRIZQT__.TTF", 13, "")
+    end
+  elseif type(edit.SetFont) == "function" then
+    pcall(edit.SetFont, edit, "Fonts\\FRIZQT__.TTF", 13, "")
+  end
+  if type(edit.SetTextColor) == "function" then pcall(edit.SetTextColor, edit, 1, 1, 1, 1) end
+  if type(edit.EnableMouse) == "function" then pcall(edit.EnableMouse, edit, true) end
+  if type(edit.EnableKeyboard) == "function" then pcall(edit.EnableKeyboard, edit, true) end
   if type(edit.SetMultiLine) == "function" then pcall(edit.SetMultiLine, edit, true) end
   if type(edit.SetAutoFocus) == "function" then pcall(edit.SetAutoFocus, edit, false) end
   if type(edit.SetTextInsets) == "function" then pcall(edit.SetTextInsets, edit, 6, 6, 6, 6) end
@@ -383,13 +425,22 @@ local function ensureCopyPopup(key, opts)
     end)
   end
 
-  local closeBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  closeBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 16)
-  if type(closeBtn.SetSize) == "function" then closeBtn:SetSize(96, 24) end
+  -- Exactly one Close button (named, so tests can count it). Do not also
+  -- create a UIPanelCloseButton.
+  local closeBtn = CreateFrame("Button", opts.frameName .. "Close", frame, "UIPanelButtonTemplate")
+  closeBtn:SetPoint("BOTTOM", frame, "BOTTOM", 0, 16)
+  if type(closeBtn.SetSize) == "function" then pcall(closeBtn.SetSize, closeBtn, 96, 24) end
+  if type(closeBtn.SetWidth) == "function" then pcall(closeBtn.SetWidth, closeBtn, 96) end
+  if type(closeBtn.SetHeight) == "function" then pcall(closeBtn.SetHeight, closeBtn, 24) end
   closeBtn:SetText("Close")
   closeBtn:SetScript("OnClick", function()
     frame:Hide()
   end)
+  p.closeBtn = closeBtn
+
+  if type(frame.Hide) == "function" then
+    pcall(frame.Hide, frame)
+  end
 
   if type(tinsert) == "function" and type(UISpecialFrames) == "table" then
     pcall(tinsert, UISpecialFrames, opts.frameName)
@@ -420,6 +471,15 @@ local function openCopyPopup(key, opts, text, failMsg)
       pcall(p.hintFS.SetText, p.hintFS, opts.hintFn())
     end
     if p.frame and type(p.frame.Show) == "function" then
+      -- Re-assert strata/toplevel each open: the Options window may have
+      -- raised itself since the frame was created.
+      if type(p.frame.SetFrameStrata) == "function" then
+        if not pcall(p.frame.SetFrameStrata, p.frame, "FULLSCREEN_DIALOG") then
+          pcall(p.frame.SetFrameStrata, p.frame, "DIALOG")
+        end
+      end
+      if type(p.frame.SetToplevel) == "function" then pcall(p.frame.SetToplevel, p.frame, true) end
+      if type(p.frame.Raise) == "function" then pcall(p.frame.Raise, p.frame) end
       p.frame:Show()
     end
     if p.editBox and type(p.editBox.SetFocus) == "function" then

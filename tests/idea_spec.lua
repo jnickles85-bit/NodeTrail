@@ -32,6 +32,8 @@ OKAY = "Okay"
 CANCEL = "Cancel"
 ReloadUI = function() end
 UIParent = {}
+ChatFontNormal = { name = "ChatFontNormal" }
+GameFontHighlight = { name = "GameFontHighlight" }
 UISpecialFrames = {}
 -- WoW exposes tinsert as a global; lua5.1 in CI does not.
 tinsert = table.insert
@@ -84,9 +86,20 @@ local function mkBase(kind)
   }
   o.SetScript = function(self, n, f) self.scripts[n] = f end
   o.GetScript = function(self, n) return self.scripts[n] end
-  o.SetPoint = function() end
-  o.SetSize = function(self, w, h) self.size = { w, h } end
+  o.points = {}
+  o.SetPoint = function(self, ...) self.points[#self.points + 1] = { ... } end
+  o.ClearAllPoints = function(self) self.points = {} end
+  o.SetSize = function(self, w, h) self.size = { w, h }; self.width, self.height = w, h end
   o.SetWidth = function(self, w) self.width = w end
+  o.SetHeight = function(self, h) self.height = h end
+  o.SetFontObject = function(self, f) self.fontObject = f end
+  o.SetFont = function(self, ...) self.font = { ... } end
+  o.SetTextColor = function(self, r, g, b, a) self.textColor = { r, g, b, a } end
+  o.EnableKeyboard = function(self, v) self.keyboardEnabled = v ~= false end
+  o.EnableMouse = function(self, v) self.mouseEnabled = (v ~= false) end
+  o.SetToplevel = function(self, v) self.toplevel = v and true or false end
+  o.SetFrameLevel = function(self, n) self.frameLevel = n end
+  o.Raise = function(self) self.raised = true end
   o.SetText = function(self, t) self.text = tostring(t) end
   o.GetText = function(self) return self.text end
   o.Show = function(self) self.shown = true end
@@ -100,9 +113,8 @@ local function mkBase(kind)
     return mkBase("FontString")
   end
   o.SetMovable = function() end
-  o.EnableMouse = function() end
   o.RegisterForDrag = function() end
-  o.SetFrameStrata = function() end
+  o.SetFrameStrata = function(self, s) self.strata = s end
   o.SetBackdrop = function() end
   o.SetMultiLine = function() end
   o.SetAutoFocus = function() end
@@ -281,6 +293,22 @@ SlashCmdList.MIGHTIEPACK("idea")
 local form = findFrame("MightiePackIdeaFrame")
 local edit = findFrame("MightiePackIdeaEdit")
 check(form ~= nil and form.shown == true, "/mp idea shows the popup")
+check(form and (form.strata == "FULLSCREEN_DIALOG" or form.strata == "DIALOG"),
+  "/mp idea popup uses a high strata (got " .. tostring(form and form.strata) .. ")")
+check(form and form.toplevel == true, "/mp idea popup is toplevel so it sits above Options")
+check(edit and ((edit.width or 0) > 0 or (edit.size and edit.size[1] and edit.size[1] > 0)),
+  "/mp idea EditBox has a non-zero width")
+check(edit and ((edit.height or 0) > 0 or (edit.size and edit.size[2] and edit.size[2] > 0)),
+  "/mp idea EditBox has a non-zero height")
+check(edit and (edit.fontObject ~= nil or edit.font ~= nil),
+  "/mp idea EditBox has a font object (text is otherwise invisible)")
+check(edit and edit.keyboardEnabled == true, "/mp idea EditBox has keyboard enabled")
+check(edit and edit.mouseEnabled == true, "/mp idea EditBox has mouse enabled")
+local ideaClose = 0
+for _, b in ipairs(buttons) do
+  if b.text == "Close" then ideaClose = ideaClose + 1 end
+end
+check(ideaClose == 1, "/mp idea popup has a single Close button (got " .. tostring(ideaClose) .. ")")
 check(edit ~= nil and type(edit.text) == "string" and edit.text:find("**MightiePack idea**", 1, true),
   "/mp idea fills the EditBox")
 check(edit and edit.highlighted == true, "/mp idea highlights the EditBox")

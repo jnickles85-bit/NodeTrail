@@ -11,22 +11,32 @@ local subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"
 subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
 subtitle:SetText("Tick a module to turn it on. Turning one off needs a UI reload.")
 
+local modulesHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+modulesHeader:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", 0, -16)
+modulesHeader:SetText("Modules")
+
 local boxes = {}
 pkg.optionsBoxes = boxes
 
+-- Forward declaration: syncCheckboxes (defined above the Alchemy
+-- widgets) calls this after the body is assigned.
+local relayoutLowerSections
+
 -- ── Row layout ──────────────────────────────────────────────────────
--- Modules are 32px apart. NodeTrail — the only gathering module — also
--- owns 22px indented sub-rows for its own sub-options: the skinning probe
--- (t_5507a0ba) and, under it, "Auto-refresh route" (t_2bc15917). Each is a
--- user-facing capability of NodeTrail, so each has a visible control here;
--- NodeTrail + its sub-options occupy one and a half rows and the recipe /
--- bug-report blocks below start after that, not after a fixed module count.
+-- Widgets are anchored to the previous row (vertical flow), not to a
+-- precomputed Y on the panel. That is what made the skinning-circle status
+-- overlap its checkbox and left a large gap before "Scan now" (space was
+-- reserved for hidden error/note lines).
 -- moduleOrder is complete by the time this file loads (the TOC lists every
 -- module before Options.lua).
 local ROW_H = 32
 local SUB_ROW_H = 22
 local SUB_INDENT = 36
 local FIRST_ROW_Y = -48
+local ROW_GAP = 8
+local SUB_GAP = 4
+local SECTION_GAP = 16
+local STATUS_WIDTH = 400
 
 local moduleY, skinY, autoY, skinRouteY, lastRowY = {}, nil, nil, nil, FIRST_ROW_Y
 do
@@ -126,9 +136,6 @@ local function skinRouteNote()
   end
   local ok, line = pcall(nt.SkinRoute.StatusText, nt.SkinRoute)
   if ok and type(line) == "string" and line ~= "" then
-    if #line > 84 then
-      line = line:sub(1, 81) .. "..."
-    end
     return line
   end
   return nil
@@ -225,7 +232,18 @@ local function syncCheckboxes()
       local cb = boxes[name]
       if not cb then
         cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-        cb:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
+        local prevMod
+        for i = 1, (index or 1) - 1 do
+          local earlier = (pkg.moduleOrder or {})[i]
+          if earlier and boxes[earlier] then
+            prevMod = boxes[earlier]
+          end
+        end
+        if prevMod then
+          cb:SetPoint("TOPLEFT", prevMod, "BOTTOMLEFT", 0, -ROW_GAP)
+        else
+          cb:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", 0, -ROW_GAP)
+        end
 
         local label
         if cb.Text or cb.text then
@@ -296,7 +314,12 @@ local function syncCheckboxes()
     local sb = boxes.Skinning
     if not sb then
       sb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-      sb:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT, skinY)
+      local ntCb = boxes.NodeTrail or boxes["NodeTrail"]
+      if ntCb then
+        sb:SetPoint("TOPLEFT", ntCb, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)
+      else
+        sb:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)
+      end
 
       local skinLabel
       if sb.Text or sb.text then
@@ -353,7 +376,11 @@ local function syncCheckboxes()
     local ab = boxes.AutoRefresh
     if not ab then
       ab = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-      ab:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT, autoY)
+      if boxes.Skinning then
+        ab:SetPoint("TOPLEFT", boxes.Skinning, "BOTTOMLEFT", 0, -SUB_GAP)
+      else
+        ab:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)
+      end
 
       local autoLabel
       if ab.Text or ab.text then
@@ -423,7 +450,13 @@ local function syncCheckboxes()
     local rb = boxes.SkinRoute
     if not rb then
       rb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-      rb:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT, skinRouteY)
+      if boxes.AutoRefresh then
+        rb:SetPoint("TOPLEFT", boxes.AutoRefresh, "BOTTOMLEFT", 0, -SUB_GAP)
+      elseif boxes.Skinning then
+        rb:SetPoint("TOPLEFT", boxes.Skinning, "BOTTOMLEFT", 0, -SUB_GAP)
+      else
+        rb:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)
+      end
 
       local rbLabel
       if rb.Text or rb.text then
@@ -462,7 +495,12 @@ local function syncCheckboxes()
     local note = boxes.SkinRouteNote
     if not note then
       note = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-      note:SetPoint("TOPLEFT", panel, "TOPLEFT", SUB_INDENT + 20, skinRouteY - 18)
+      note:SetPoint("TOPLEFT", rb, "BOTTOMLEFT", 20, -SUB_GAP)
+      if type(note.SetWidth) == "function" then note:SetWidth(STATUS_WIDTH) end
+      if type(note.SetJustifyH) == "function" then pcall(note.SetJustifyH, note, "LEFT") end
+      if type(note.SetWordWrap) == "function" then pcall(note.SetWordWrap, note, true) end
+      if type(note.SetNonSpaceWrap) == "function" then pcall(note.SetNonSpaceWrap, note, true) end
+      if type(note.SetTextColor) == "function" then pcall(note.SetTextColor, note, 0.7, 0.7, 0.7) end
       note:SetText("")
       boxes.SkinRouteNote = note
     end
@@ -482,6 +520,7 @@ local function syncCheckboxes()
       rb:Disable()
     end
   end
+  relayoutLowerSections()
 end
 
 -- ── Recipes block (NodeTrail's Alchemy recipe scan) ─────────────────
@@ -498,34 +537,104 @@ local function ntRecipes()
   return nil
 end
 
--- The recipe block starts under the last module/sub-option row.
+-- Style a gray, word-wrapped status line that sits on its own row.
+local function styleStatusLine(fs)
+  if type(fs.SetWidth) == "function" then fs:SetWidth(STATUS_WIDTH) end
+  if type(fs.SetJustifyH) == "function" then pcall(fs.SetJustifyH, fs, "LEFT") end
+  if type(fs.SetWordWrap) == "function" then pcall(fs.SetWordWrap, fs, true) end
+  if type(fs.SetNonSpaceWrap) == "function" then pcall(fs.SetNonSpaceWrap, fs, true) end
+  if type(fs.SetTextColor) == "function" then pcall(fs.SetTextColor, fs, 0.7, 0.7, 0.7) end
+end
+
+-- Re-anchor the Alchemy and Feedback sections under the last visible
+-- module widget so a shown/hidden status line never overlaps a checkbox
+-- and hidden recipe notes do not leave a hole above "Scan now".
+local recHeader, recStatus, recError, recNote, recButton
+local feedbackHeader, bugButton, ideaButton
+
+local function lastModuleWidget()
+  local note = boxes.SkinRouteNote
+  if note and ((type(note.IsShown) == "function" and note:IsShown()) or note.shown == true) then
+    return note, -(SUB_INDENT + 20 - 16)
+  end
+  if boxes.SkinRoute then
+    return boxes.SkinRoute, -(SUB_INDENT - 16)
+  end
+  if boxes.AutoRefresh then
+    return boxes.AutoRefresh, -(SUB_INDENT - 16)
+  end
+  if boxes.Skinning then
+    return boxes.Skinning, -(SUB_INDENT - 16)
+  end
+  if boxes.NodeTrail then
+    return boxes.NodeTrail, 0
+  end
+  local last
+  for _, name in ipairs(pkg.moduleOrder or {}) do
+    if boxes[name] then last = boxes[name] end
+  end
+  if last then return last, 0 end
+  return modulesHeader, 0
+end
+
+local function lastAlchemyWidget()
+  if recNote and ((type(recNote.IsShown) == "function" and recNote:IsShown()) or recNote.shown == true) then
+    return recNote
+  end
+  if recError and ((type(recError.IsShown) == "function" and recError:IsShown()) or recError.shown == true) then
+    return recError
+  end
+  return recButton or recStatus or recHeader
+end
+
+function relayoutLowerSections()
+  if not recHeader or type(recHeader.SetPoint) ~= "function" then
+    return
+  end
+  local anchor, dx = lastModuleWidget()
+  if type(recHeader.ClearAllPoints) == "function" then recHeader:ClearAllPoints() end
+  recHeader:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", dx or 0, -SECTION_GAP)
+  if feedbackHeader and type(feedbackHeader.SetPoint) == "function" then
+    local above = lastAlchemyWidget()
+    if type(feedbackHeader.ClearAllPoints) == "function" then feedbackHeader:ClearAllPoints() end
+    if above then
+      feedbackHeader:SetPoint("TOPLEFT", above, "BOTTOMLEFT", 0, -SECTION_GAP)
+    end
+  end
+end
+
+-- The recipe block starts under the last module/sub-option row (re-anchored
+-- in relayoutLowerSections once those rows exist).
 local recHeaderY = lastRowY - 36
 local recStatusY = recHeaderY - 18
 local recErrorY = recStatusY - 16
 local recNoteY = recErrorY - 16
 local recButtonY = recNoteY - 22
 
-local recHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-recHeader:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, recHeaderY)
+recHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+recHeader:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", 0, -120)
 recHeader:SetText("Alchemy Recipes")
 
-local recStatus = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-recStatus:SetPoint("LEFT", recHeader, "LEFT", 0, recStatusY - recHeaderY)
+recStatus = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+recStatus:SetPoint("TOPLEFT", recHeader, "BOTTOMLEFT", 0, -6)
+styleStatusLine(recStatus)
 recStatus:SetText("")
 
-local recError = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-recError:SetPoint("LEFT", recHeader, "LEFT", 0, recErrorY - recHeaderY)
+recError = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+recError:SetPoint("TOPLEFT", recButton and recButton or recStatus, "BOTTOMLEFT", 0, -6)
 recError:SetText("")
 recError:Hide()
+styleStatusLine(recError)
 
 -- t_4ab7c230: when the client answers no availability at all, the herb tooltip
 -- draws NO Alchemy line (a list of crafts he cannot make is worse than none).
 -- This is the one short place the reason lives, so nobody re-opens the card
 -- expecting a fix this client cannot support.
-local recNote = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-recNote:SetPoint("LEFT", recHeader, "LEFT", 0, recNoteY - recHeaderY)
+recNote = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+recNote:SetPoint("TOPLEFT", recError, "BOTTOMLEFT", 0, -4)
 recNote:SetText("")
 recNote:Hide()
+styleStatusLine(recNote)
 
 local function syncRecipesBlock()
   local rec = ntRecipes()
@@ -571,12 +680,15 @@ local function syncRecipesBlock()
     recNote:SetText("")
     recNote:Hide()
   end
+  relayoutLowerSections()
 end
 
-local recButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-recButton:SetPoint("TOPLEFT", recHeader, "LEFT", 0, recButtonY - recHeaderY)
+recButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+recButton:SetPoint("TOPLEFT", recStatus, "BOTTOMLEFT", 0, -8)
 recButton:SetSize(96, 24)
 recButton:SetText("Scan now")
+if type(recError.ClearAllPoints) == "function" then recError:ClearAllPoints() end
+recError:SetPoint("TOPLEFT", recButton, "BOTTOMLEFT", 0, -6)
 recButton:SetScript("OnClick", function()
   local rec = ntRecipes()
   if rec and type(rec.TryScanNow) == "function" then
@@ -605,15 +717,12 @@ end)
 -- Opens the same selectable popup as /mp bug. The report is pre-filled
 -- (version, client, modules, class+level, zone, last Lua error) for the
 -- player to copy with Ctrl+C. Nothing is uploaded.
-local bugHeaderY = recButtonY - 40
-local bugButtonY = bugHeaderY - 26
+feedbackHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+feedbackHeader:SetPoint("TOPLEFT", recButton, "BOTTOMLEFT", 0, -SECTION_GAP)
+feedbackHeader:SetText("Feedback")
 
-local bugHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-bugHeader:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, bugHeaderY)
-bugHeader:SetText("Bug reports")
-
-local bugButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-bugButton:SetPoint("TOPLEFT", bugHeader, "LEFT", 0, bugButtonY - bugHeaderY)
+bugButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+bugButton:SetPoint("TOPLEFT", feedbackHeader, "BOTTOMLEFT", 0, -8)
 bugButton:SetSize(128, 24)
 bugButton:SetText("Report a bug")
 bugButton:SetScript("OnClick", function()
@@ -634,7 +743,7 @@ bugButton:SetScript("OnLeave", function()
   GameTooltip:Hide()
 end)
 
-local ideaButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+ideaButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
 ideaButton:SetPoint("LEFT", bugButton, "RIGHT", 8, 0)
 ideaButton:SetSize(150, 24)
 ideaButton:SetText("Suggest an idea")
@@ -659,7 +768,10 @@ end)
 panel:SetScript("OnShow", function()
   syncCheckboxes()
   syncRecipesBlock()
+  relayoutLowerSections()
 end)
+
+relayoutLowerSections()
 
 StaticPopupDialogs["MIGHTIEPACK_DISABLE_MODULE"] = {
   text = "Turn off %s?\nThis needs a UI reload. OK reloads now; Cancel keeps it on.",
