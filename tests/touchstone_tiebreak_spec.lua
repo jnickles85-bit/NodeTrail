@@ -120,165 +120,132 @@ local RET_SPEC = {
   order = V.classRoleOrder("PALADIN", "melee"), level = 20,
 }
 
--- ---- 1a. The researched table is the shipped table ---------------------------
+-- ---- 1a. Retribution is the Wowhead order-only profile -------------------
 local prof = V.profileFor(RET_SPEC)
 check(type(prof) == "table", "the Retribution profile resolves")
 if type(prof) == "table" then
-  local w = prof.w or {}
-  check(w.Strength == 4, "Ret Strength weight is 4 (got " .. tostring(w.Strength) .. ")")
-  check(w.SpellPower == 4, "Ret Spell Power weight is 4 (got " .. tostring(w.SpellPower) .. ")")
-  check(w.Agility == 2.5, "Ret Agility weight is the researched 2.5 (got " .. tostring(w.Agility) .. ")")
-  check(w.Intellect == 2, "Ret Intellect weight is 2 (got " .. tostring(w.Intellect) .. ")")
-  check(w.Stamina == nil and w.Armor == nil,
-    "Stamina and Armor are NOT damage weights (they are tiebreakers)")
-  check(type(prof.tiebreak) == "table" and prof.tiebreak[1] == "Armor"
-    and prof.tiebreak[2] == "Stamina",
-    "the ranked tiebreakers are Armor then Stamina, in that order")
+  check(prof.kind == "order" and type(prof.tiers) == "table" and #prof.tiers >= 9,
+    "Retribution is an order-only profile with the published tiers")
+  check(prof.w == nil, "Retribution does not invent numeric weights")
+  check(prof.tiebreak == nil, "Retribution has no tiebreak list")
+  check(type(prof.source) == "string" and prof.source:find("wowhead.com", 1, true),
+    "Retribution cites the Wowhead stat-priority page")
+  local names = {}
+  for _, tier in ipairs(prof.tiers) do names[#names + 1] = tier.name end
+  check(names[1] == "Weapon Skill" and names[2] == "Weapon DPS & Speed"
+      and names[3] == "Hit" and names[4] == "Expertise"
+      and names[5] == "Spell Damage" and names[6] == "Intellect"
+      and names[7] == "Strength & Attack Power"
+      and names[8] == "Agility & Critical Strike Chance"
+      and names[9] == "Stamina",
+    "the published Wowhead order is the shipped tier list")
+  check(prof.tiers[3].capPercent == 9 and prof.tiers[4].capPercent == 6.5,
+    "Hit is capped at 9% and Expertise at 6.5%")
 end
-check(type(V.WEIGHT_EPSILON) == "number" and V.WEIGHT_EPSILON > 0
-  and V.WEIGHT_EPSILON <= 0.25,
-  "epsilon is <= 0.25 so a 2.5-weight half-step is never swallowed (got "
-    .. tostring(V.WEIGHT_EPSILON) .. ")")
+check(type(V.WEIGHT_EPSILON) == "number" and V.WEIGHT_EPSILON > 0,
+  "epsilon is still a named constant (used by numeric fixture packs)")
 
--- ---- 1b. Equal damage + more armor/stamina -> TIEBREAKER UPGRADE ------------
--- Safety Boots (115 Armor / +4 Str / +2 Sta, mail) against the equipped Feral
--- Shoes of Strength (51 Armor / +4 Str, leather). Damage is +0 exactly, so the
--- ranked tiebreakers speak: +64 Armor and +2 Stamina, both for the candidate.
+-- ---- 1b. Equal Strength, more Stamina -> UPGRADE decided by Stamina -------
+-- Safety Boots (115 Armor / +4 Str / +2 Sta) against Feral Shoes of Strength
+-- (51 Armor / +4 Str). Armor is not on the Wowhead list, so Stamina (tier 9)
+-- is the first (and only) ranked difference.
 local vb, rb, wb = judge(SAFETY_LINES, FERAL_LINES, RET_SPEC)
 check(vb == "UPGRADE", "the boots pair is an upgrade, got " .. tostring(vb))
-check(type(wb) == "table" and wb.total == 0,
-  "the boots pair's DAMAGE total is exactly 0 (got " .. tostring(wb and wb.total) .. ")")
 check(type(wb) == "table" and wb.profile == "Retribution",
-  "the tiebreaker quotes its profile (got " .. tostring(wb and wb.profile) .. ")")
-check(type(wb) == "table" and wb.tiebreak == "+64 Armor, +2 Stamina",
-  "the tiebreaker carries the signed deltas (got " .. tostring(wb and wb.tiebreak) .. ")")
-check(type(wb) == "table" and wb.tiebreakDir == 1,
-  "and the direction says the candidate won it")
-check(type(rb) == "string" and rb == "weighted 0 [Retribution] — tiebreaker (+64 Armor, +2 Stamina)",
-  "the reason flags a tiebreaker, not a weighted number (got " .. tostring(rb) .. ")")
+  "the boots verdict quotes its profile (got " .. tostring(wb and wb.profile) .. ")")
+check(type(wb) == "table" and wb.decidedBy == "Stamina",
+  "the boots pair is decided by Stamina (got " .. tostring(wb and wb.decidedBy) .. ")")
+check(type(wb) == "table" and wb.tiebreak == nil,
+  "there is no tiebreak flag on an order-only verdict")
+check(type(rb) == "string" and rb == "decided by Stamina [Retribution]",
+  "the reason names the deciding tier (got " .. tostring(rb) .. ")")
 
--- ---- 1c. Equal damage + less armor/stamina -> TIEBREAKER DOWNGRADE ----------
--- The same pair the other way round: the equipped boots win the tiebreak, so the
--- answer is NOT_UPGRADE with the flag — never a damage "Downgrade".
+-- ---- 1c. The same pair reversed is a Stamina downgrade --------------------
 local vr, rr, wr = judge(FERAL_LINES, SAFETY_LINES, RET_SPEC)
 check(vr == "NOT_UPGRADE", "the reversed boots pair is not an upgrade, got " .. tostring(vr))
-check(type(wr) == "table" and wr.total == 0 and wr.tiebreakDir == -1,
-  "the reversed tiebreaker is a zero-damage loss (got " .. tostring(wr and wr.total)
-    .. ", dir " .. tostring(wr and wr.tiebreakDir) .. ")")
-check(type(wr) == "table" and wr.tiebreak == "-64 Armor, -2 Stamina",
-  "the deltas are signed from the candidate's side (got " .. tostring(wr and wr.tiebreak) .. ")")
-check(type(rr) == "string" and rr == "weighted 0 [Retribution] — tiebreaker (-64 Armor, -2 Stamina)",
-  "the reason carries the negative flag (got " .. tostring(rr) .. ")")
+check(type(wr) == "table" and wr.decidedBy == "Stamina",
+  "the reverse is also decided by Stamina (got " .. tostring(wr and wr.decidedBy) .. ")")
+check(type(rr) == "string" and rr == "decided by Stamina [Retribution]",
+  "the reason names the deciding tier (got " .. tostring(rr) .. ")")
 
--- ---- 1d. ONE point of Strength beats any armor/stamina swing ----------------
--- The invariant that protects the cloak case: whatever the survivability deltas
--- say, a non-zero damage total decides and the tiebreakers are never consulted.
+-- ---- 1d. Strength (tier 7) beats any Stamina / unlisted Armor swing --------
 local ONE_STR_CAND = { "X", "Back", "500 Armor", "+5 Strength", "+10 Stamina" }
 local ONE_STR_WORN = { "Y", "Back", "10 Armor", "+4 Strength" }
 local v1, r1, w1 = judge(ONE_STR_CAND, ONE_STR_WORN, RET_SPEC)
 check(v1 == "UPGRADE", "one more Strength is an upgrade, got " .. tostring(v1))
-check(type(w1) == "table" and w1.total == 4,
-  "one point of Strength is worth 4, whatever the armor says (got "
-    .. tostring(w1 and w1.total) .. ")")
-check(type(r1) == "string" and r1:find("tiebreaker", 1, true) == nil,
-  "a damage verdict is never dressed as a tiebreaker (got " .. tostring(r1) .. ")")
+check(type(r1) == "string" and r1:find("decided by Strength & Attack Power", 1, true),
+  "Strength decides before Stamina (got " .. tostring(r1) .. ")")
 local v1b = judge(ONE_STR_WORN, ONE_STR_CAND, RET_SPEC)
 check(v1b == "NOT_UPGRADE",
-  "one point of Strength LESS is a downgrade, however much armor comes with it (got "
+  "one point of Strength LESS is a downgrade, however much stamina comes with it (got "
     .. tostring(v1b) .. ")")
 
--- ---- 1e. ONE point of Agility beats any armor/stamina swing -----------------
--- Agility now carries 2.5, so a single point is a real damage difference: it must
--- beat losing 490 Armor (the exact shape of the Dagmire pair's armor gap).
+-- ---- 1e. Agility (tier 8) still beats a Stamina-only swing -----------------
+-- Agility is ranked above Stamina, and Armor is unlisted, so +1 Agi against
+-- 500 Armor / +10 Sta is still an upgrade — by the published order, not by
+-- an invented Agility weight.
 local ONE_AGI_CAND = { "X", "Back", "10 Armor", "+1 Agility" }
 local ONE_AGI_WORN = { "Y", "Back", "500 Armor", "+10 Stamina" }
 local v2, r2, w2 = judge(ONE_AGI_CAND, ONE_AGI_WORN, RET_SPEC)
 check(v2 == "UPGRADE", "one more Agility is an upgrade, got " .. tostring(v2))
-check(type(w2) == "table" and w2.total == 2.5,
-  "one point of Agility is worth 2.5 (got " .. tostring(w2 and w2.total) .. ")")
-check(type(r2) == "string" and r2:find("tiebreaker", 1, true) == nil,
-  "and it is a damage verdict, not a tiebreaker (got " .. tostring(r2) .. ")")
+check(type(r2) == "string" and r2:find("decided by Agility & Critical Strike Chance", 1, true),
+  "Agility decides before Stamina (got " .. tostring(r2) .. ")")
 local v2b = judge(ONE_AGI_WORN, ONE_AGI_CAND, RET_SPEC)
 check(v2b == "NOT_UPGRADE",
-  "one point of Agility LESS loses to 490 Armor (got " .. tostring(v2b) .. ")")
+  "one point of Agility LESS loses, even with more Stamina (got " .. tostring(v2b) .. ")")
 
--- ---- 1f. The tiebreakers are ORDERED, not weighted --------------------------
--- Armor outranks Stamina in the research, so +10 Armor beats -50 Stamina. A
--- weighted model would lose this pair (-50 Sta is the larger number); the ranked
--- model must win it. Then the reverse: +50 Stamina still loses to -10 Armor.
+-- ---- 1f. Unlisted Armor cannot beat a Stamina difference -------------------
+-- The old Ret tiebreak ranked Armor above Stamina. The Wowhead list does not
+-- name Armor at all, so +10 Armor against +50 Stamina is a Stamina loss.
 local ARM_CAND = { "X", "Back", "20 Armor" }
 local ARM_WORN = { "Y", "Back", "10 Armor", "+50 Stamina" }
 local v3, r3, w3 = judge(ARM_CAND, ARM_WORN, RET_SPEC)
-check(v3 == "UPGRADE", "+10 Armor beats -50 Stamina because Armor ranks first, got "
-  .. tostring(v3))
-check(type(w3) == "table" and w3.tiebreak == "+10 Armor, -50 Stamina",
-  "the ranked deltas are reported in rank order (got " .. tostring(w3 and w3.tiebreak) .. ")")
-check(type(w3) == "table" and w3.tiebreakDir == 1,
-  "and the FIRST ranked difference decides the direction")
+check(v3 == "NOT_UPGRADE", "unlisted Armor cannot beat a Stamina loss, got " .. tostring(v3))
+check(type(w3) == "table" and w3.decidedBy == "Stamina",
+  "Stamina is the deciding tier (got " .. tostring(w3 and w3.decidedBy) .. ")")
 local v3b = judge(ARM_WORN, ARM_CAND, RET_SPEC)
-check(v3b == "NOT_UPGRADE",
-  "+50 Stamina still loses to -10 Armor (got " .. tostring(v3b) .. ")")
+check(v3b == "UPGRADE",
+  "the Stamina gain (with less unlisted Armor) is an upgrade (got " .. tostring(v3b) .. ")")
 
--- ---- 1g. The cloak case is untouched ---------------------------------------
--- -4 Str x 4 = -16 exactly; neither cloak carries Agility, Spell Power or
--- Intellect and Stamina/Spirit are not tiebreakers on the Ret table. The research
--- card predicted this number, and it is the proof the second tier did not leak
--- into the damage path.
+-- ---- 1g. The cloak case is still a downgrade, now by Strength --------------
+-- Worn: +4 Strength, +2 Spirit, 19 Armor. Candidate: +3 Stamina, 16 Armor.
+-- Strength is the first ranked difference.
 local vc, rc, wc = judge(CLOAK_CAND, CLOAK_WORN, RET_SPEC)
 check(vc == "NOT_UPGRADE", "the cloak case is still a downgrade, got " .. tostring(vc))
-check(type(wc) == "table" and wc.total == -16,
-  "the cloak case is still exactly -16 (got " .. tostring(wc and wc.total) .. ")")
-check(type(wc) == "table" and wc.tiebreak == nil,
-  "and no tiebreaker is involved (the damage total is not zero)")
-check(rc == "weighted -16 [Retribution]",
-  "the cloak case's reason is byte-identical to before (got " .. tostring(rc) .. ")")
+check(type(wc) == "table" and wc.decidedBy == "Strength & Attack Power",
+  "the cloak case is decided by Strength (got " .. tostring(wc and wc.decidedBy) .. ")")
+check(type(wc) == "table" and wc.tiebreak == nil, "and no tiebreaker is involved")
+check(rc == "decided by Strength & Attack Power [Retribution]",
+  "the cloak reason names the deciding tier (got " .. tostring(rc) .. ")")
 
--- ---- 1h. Agility moves the gloves pair by the researched weight -------------
--- Equipped Gloves of the Fang (52 Armor, +4 Str, +6 Agi, leather); hovering
--- Dagmire Gauntlets (110 Armor, +5 Str, +2 Agi, mail). Damage deltas: +1 Str
--- (+4) and -4 Agi. The old table scored -4 Agi at 0 and called this a +4
--- upgrade; the researched 2.5 makes -4 Agi worth -10, so the pair totals -6.
--- The move is exactly 4 x 2.5 = -10.
+-- ---- 1h. Gloves: +1 Strength decides before the Agility loss ---------------
+-- Equipped Gloves of the Fang (52 Armor, +4 Str, +6 Agi); hovering Dagmire
+-- Gauntlets (110 Armor, +5 Str, +2 Agi). Strength is tier 7 and Agility is
+-- tier 8, so the +1 Strength upgrade decides — the opposite of the old
+-- numeric table, where -4 Agility at 2.5 outweighed +1 Strength at 4.
 local vg, rg, wg = judge(DAG_LINES, FANG_LINES, RET_SPEC)
-check(vg == "NOT_UPGRADE", "the gloves pair is not an upgrade, got " .. tostring(vg))
-check(type(wg) == "table" and wg.total == -6,
-  "Dagmire vs Fang totals -6 under the researched table (got "
-    .. tostring(wg and wg.total) .. ")")
+check(vg == "UPGRADE", "the gloves pair is an upgrade on the Wowhead order, got " .. tostring(vg))
+check(type(rg) == "string" and rg:find("decided by Strength & Attack Power", 1, true),
+  "Dagmire vs Fang is decided by Strength (got " .. tostring(rg) .. ")")
 local candStats = V.statTable(DAG_LINES, "candidate")
 local wornStats = V.statTable(FANG_LINES, "worn")
 check(type(candStats) == "table" and candStats.Agility == 2 and candStats.Strength == 5,
   "the Dagmire parse is the client's (5 Str, 2 Agi)")
 check(type(wornStats) == "table" and wornStats.Agility == 6 and wornStats.Strength == 4,
   "the Fang parse is the client's (4 Str, 6 Agi)")
-local OLD_RET = { name = "Retribution (pre-card table)", w = { Strength = 4, Intellect = 1 } }
-local oldW = V.weightedTotal(candStats, wornStats, OLD_RET)
-check(type(oldW) == "table" and oldW.total == 4,
-  "the old table scored this pair +4 (an 'upgrade'), got "
-    .. tostring(oldW and oldW.total))
-check(type(wg) == "table" and type(oldW) == "table"
-  and wg.total - oldW.total == -10,
-  "Agility moves the pair by exactly 4 x 2.5 = -10 (got "
-    .. tostring(wg and wg.total) .. " vs " .. tostring(oldW and oldW.total) .. ")")
-check(type(rg) == "string" and rg:find("no change", 1, true) == nil,
-  "and it is a real downgrade word, not 'no change' (got " .. tostring(rg) .. ")")
 
--- ---- 1i. Holy and Protection are untouched ---------------------------------
--- The research card says those rows need their own evidence (routed to
--- t_7eb0fee4). This pins that this card did not quietly borrow the Ret numbers.
+-- ---- 1i. Holy and Protection are their own Wowhead order-only profiles ----
 local PAL = V.WEIGHTS.PALADIN
-check(PAL.spell.w.Intellect == 4 and PAL.spell.w.Stamina == 1
-  and PAL.spell.w.Agility == nil and PAL.spell.tiebreak == nil,
-  "the Holy table is unchanged")
-check(PAL.tank.w.Stamina == 4 and PAL.tank.w.Armor == 2 and PAL.tank.w.Intellect == 1
-  and PAL.tank.w.Strength == 1 and PAL.tank.w.Block == 1 and PAL.tank.w.Agility == nil
-  and PAL.tank.tiebreak == nil,
-  "the Protection table is unchanged")
--- And no OTHER class gained a tiebreaker list: the tier is Ret-only.
+check(PAL.holy and PAL.holy.kind == "order" and PAL.holy.w == nil
+    and PAL.holy.tiers and PAL.holy.tiers[1] and PAL.holy.tiers[1].name == "Healing Power",
+  "Holy is its own Wowhead order-only profile, not the Ret order")
+check(PAL.prot and PAL.prot.kind == "order" and PAL.prot.w == nil
+    and PAL.prot.variant == "Balanced",
+  "Protection is Wowhead's Balanced order-only profile, not the Ret order")
+-- No shipped profile carries a Ret-style numeric tiebreak list.
 for class, roles in pairs(V.WEIGHTS) do
-  if class ~= "PALADIN" then
-    for _, row in pairs(roles) do
-      check(row.tiebreak == nil, "no tiebreaker list outside Retribution (" .. class .. ")")
-    end
+  for _, row in pairs(roles) do
+    check(row.tiebreak == nil, "no tiebreaker list on " .. class)
   end
 end
 
@@ -381,6 +348,8 @@ local function rowFor(cand, worn, wornLink, spec)
     row.weighted = wd.total
     row.profile = wd.profile
     row.tiebreak = wd.tiebreak
+    row.decidedBy = wd.decidedBy
+    row.orderOutcome = wd.orderOutcome
   end
   return row
 end
@@ -389,49 +358,45 @@ local function plain(text)
   return (tostring(text or ""):gsub("^%|c%x%x%x%x%x%x%x%x", ""):gsub("%|r$", ""))
 end
 
--- ---- 2a. The boots pair reads as a flagged TIEBREAKER upgrade ---------------
+-- ---- 2a. The boots pair reads as a Stamina-decided upgrade ------------------
 local bootLines = ChestAdvisor.tooltipLines(rowFor(SAFETY_LINES, FERAL_LINES, FERAL_LINK, RET_SPEC))
 local bootHead = plain(bootLines and bootLines[1] and bootLines[1].text)
 print("rendered: " .. bootHead)
-check(bootHead == "Upgrade — tiebreaker (+64 Armor, +2 Stamina) vs "
-    .. FERAL_NAME .. " [Retribution]",
-  "the boots headline is the flagged tiebreaker with its deltas (got " .. bootHead .. ")")
+check(bootHead == "Upgrade — decided by Stamina vs " .. FERAL_NAME .. " [Retribution]",
+  "the boots headline names the deciding tier (got " .. bootHead .. ")")
 check(bootLines and bootLines[1] and bootLines[1].colour == "green",
-  "a tiebreaker upgrade keeps the upgrade's green (got "
+  "an order-only upgrade keeps the upgrade's green (got "
     .. tostring(bootLines and bootLines[1] and bootLines[1].colour) .. ")")
 check(bootHead:find("weighted", 1, true) == nil,
-  "and it does not claim a damage number it does not have (got " .. bootHead .. ")")
+  "and it does not invent a weighted number (got " .. bootHead .. ")")
 
--- ---- 2b. The other direction reads "Not an upgrade — tiebreaker" ------------
+-- ---- 2b. The other direction is a Stamina downgrade -------------------------
 local rbootLines = ChestAdvisor.tooltipLines(rowFor(FERAL_LINES, SAFETY_LINES, SAFETY_LINK, RET_SPEC))
 local rbootHead = plain(rbootLines and rbootLines[1] and rbootLines[1].text)
 print("rendered: " .. rbootHead)
-check(rbootHead == "Not an upgrade — tiebreaker (-64 Armor, -2 Stamina) vs "
-    .. SAFETY_NAME .. " [Retribution]",
-  "the losing tiebreak is flagged, never 'Downgrade' (got " .. rbootHead .. ")")
+check(rbootHead == "Downgrade — decided by Stamina vs " .. SAFETY_NAME .. " [Retribution]",
+  "the reverse boots headline is a downgrade decided by Stamina (got " .. rbootHead .. ")")
 check(rbootLines and rbootLines[1] and rbootLines[1].colour == "grey",
   "and it keeps the not-an-upgrade grey (got "
     .. tostring(rbootLines and rbootLines[1] and rbootLines[1].colour) .. ")")
 
--- ---- 2c. The cloak line is byte-identical to before -------------------------
+-- ---- 2c. The cloak line names Strength --------------------------------------
 local cloakRow = rowFor(CLOAK_CAND, CLOAK_WORN, CLOAK_WORN_LINK, RET_SPEC)
 local cloakLines = ChestAdvisor.tooltipLines(cloakRow)
 local cloakHead = plain(cloakLines and cloakLines[1] and cloakLines[1].text)
 print("rendered: " .. cloakHead)
-check(cloakHead == "Downgrade — weighted -16 vs Lambent Scale Cloak [Retribution]",
-  "the cloak headline is unchanged (got " .. cloakHead .. ")")
+check(cloakHead == "Downgrade — decided by Strength & Attack Power vs Lambent Scale Cloak [Retribution]",
+  "the cloak headline names the deciding tier (got " .. cloakHead .. ")")
 check(cloakRow.tiebreak == nil, "and the cloak row carries no tiebreaker flag")
 
--- ---- 2d. An ordinary upgrade is still a weighted upgrade --------------------
--- +2 Strength, no survivability change: the plain sentence must survive, so the
--- new flag is visibly a different verdict from a damage upgrade.
+-- ---- 2d. An ordinary Strength upgrade also uses the decided-by sentence -----
 local PLAIN_CAND = { "X", "Back", "19 Armor", "+6 Strength" }
 local PLAIN_WORN = { "Y", "Back", "19 Armor", "+4 Strength" }
 local plainLines = ChestAdvisor.tooltipLines(rowFor(PLAIN_CAND, PLAIN_WORN, CLOAK_WORN_LINK, RET_SPEC))
 local plainHead = plain(plainLines and plainLines[1] and plainLines[1].text)
 print("rendered: " .. plainHead)
-check(plainHead == "Upgrade — weighted +8 vs Lambent Scale Cloak [Retribution]",
-  "a damage upgrade keeps the weighted sentence (got " .. plainHead .. ")")
+check(plainHead == "Upgrade — decided by Strength & Attack Power vs Lambent Scale Cloak [Retribution]",
+  "a Strength upgrade uses the decided-by sentence (got " .. plainHead .. ")")
 
 if failed > 0 then
   io.stderr:write(("touchstone_tiebreak_spec: %d failure(s)\n"):format(failed))

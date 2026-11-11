@@ -345,7 +345,7 @@ local function build(host)
     advisorSlash("reset")
     syncShown(host)
   end)
-  local resetHint = SF.UI_CreateLabel(host, "Tooltip, toast, and marker glyphs. Does not clear role or the log.",
+  local resetHint = SF.UI_CreateLabel(host, "Tooltip, toast, and marker glyphs. Also clears a chosen Gear-for spec (back to Auto). Does not clear /up role or the log.",
     "GameFontHighlight")
   resetHint:SetPoint("LEFT", resetBtn, "RIGHT", 10, 0)
   resetHint:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])

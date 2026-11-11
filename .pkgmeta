@@ -26,3 +26,4 @@ ignore:
   - spec
   - tests
   - tools
+  - data

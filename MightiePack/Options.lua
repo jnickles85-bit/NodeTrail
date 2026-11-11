@@ -213,6 +213,162 @@ local function applySkinning(on)
   return true
 end
 
+
+-- ── Touchstone "Gear for" picker ────────────────────────────────────
+-- Indented under the Touchstone checkbox. A cycling button (UIDropDownMenu
+-- is not assumed present on 16001). Hidden while Touchstone is off so the
+-- NodeTrail row stays anchored directly under Touchstone (existing layout
+-- contract). When Touchstone is on, NodeTrail is re-anchored under this
+-- row so the two do not overlap. Changing the value writes ChestAdvisorDB
+-- .gearFor and rescans immediately (ChestAdvisor.setGearFor).
+local function playerClassToken()
+  if type(UnitClass) ~= "function" then return nil end
+  local ok, _, tok = pcall(UnitClass, "player")
+  if ok and type(tok) == "string" then return tok end
+  return nil
+end
+
+local function talentSpecName()
+  if not (C_SpecializationInfo and C_SpecializationInfo.GetSpecialization
+      and C_SpecializationInfo.GetSpecializationInfo) then
+    return nil
+  end
+  local ok, idx = pcall(C_SpecializationInfo.GetSpecialization)
+  if not ok or type(idx) ~= "number" or idx == 0 then return nil end
+  local ok2, _, name = pcall(C_SpecializationInfo.GetSpecializationInfo, idx)
+  if ok2 and type(name) == "string" and name ~= "" then return name end
+  return nil
+end
+
+local function gearForChoices()
+  local talent = talentSpecName()
+  local autoLabel = talent and ("Auto (talents: " .. talent .. ")") or "Auto (talents)"
+  local out = { { key = nil, label = autoLabel } }
+  if type(ChestAdvisor) == "table" and type(ChestAdvisor.specsFor) == "function" then
+    local list = ChestAdvisor.specsFor(playerClassToken())
+    if type(list) == "table" then
+      for _, e in ipairs(list) do
+        out[#out + 1] = { key = e.key, label = e.name }
+      end
+    end
+  end
+  return out
+end
+
+local function currentGearForKey()
+  if type(ChestAdvisor) == "table" and type(ChestAdvisor.gearForKey) == "function" then
+    local ok, key = pcall(ChestAdvisor.gearForKey)
+    if ok then return key end
+  end
+  return nil
+end
+
+local function applyGearFor(key)
+  if type(ChestAdvisor) == "table" and type(ChestAdvisor.setGearFor) == "function" then
+    pcall(ChestAdvisor.setGearFor, key)
+  end
+end
+
+local function refreshGearForButton()
+  local btn = boxes.GearFor
+  if not btn or type(btn.SetText) ~= "function" then return end
+  local want = currentGearForKey()
+  local label = "Auto (talents)"
+  for _, c in ipairs(gearForChoices()) do
+    if (c.key == nil and want == nil) or (c.key ~= nil and c.key == want) then
+      label = c.label
+      break
+    end
+  end
+  btn:SetText(label)
+end
+
+local function cycleGearFor()
+  local choices = gearForChoices()
+  if #choices == 0 then return end
+  local want = currentGearForKey()
+  local idx = 1
+  for i, c in ipairs(choices) do
+    if (c.key == nil and want == nil) or (c.key ~= nil and c.key == want) then
+      idx = i
+      break
+    end
+  end
+  local nxt = choices[(idx % #choices) + 1]
+  applyGearFor(nxt and nxt.key or nil)
+  refreshGearForButton()
+end
+
+local function touchstoneOn()
+  if boxes.Touchstone and type(boxes.Touchstone.GetChecked) == "function" then
+    return boxes.Touchstone:GetChecked() and true or false
+  end
+  if type(pkg.IsModuleEnabled) == "function" then
+    local ok, on = pcall(pkg.IsModuleEnabled, "Touchstone")
+    if ok then return on == true end
+  end
+  return false
+end
+
+local function placeGearForRow()
+  local ts = boxes.Touchstone
+  if not ts then return end
+  if not boxes.GearForLabel then
+    local lab = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lab:SetText("Gear for")
+    boxes.GearForLabel = lab
+  end
+  if not boxes.GearFor then
+    local btn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    if type(btn.SetSize) == "function" then btn:SetSize(220, 22) end
+    if type(btn.SetWidth) == "function" then btn:SetWidth(220) end
+    if type(btn.SetHeight) == "function" then btn:SetHeight(22) end
+    btn:SetScript("OnClick", function()
+      cycleGearFor()
+    end)
+    btn:SetScript("OnEnter", function(self)
+      if not GameTooltip then return end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetText("Gear for")
+      GameTooltip:AddLine("Which spec Touchstone scores and gates gear for, using that spec's Wowhead stat priority. Auto follows your current talents. A chosen spec wins over talents and over /up role. Tanks default to Wowhead's Balanced list (or Defensive for Feral Bear); other variants are in this list.", 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function()
+      if GameTooltip then GameTooltip:Hide() end
+    end)
+    boxes.GearFor = btn
+  end
+  local lab, btn = boxes.GearForLabel, boxes.GearFor
+  if type(lab.ClearAllPoints) == "function" then lab:ClearAllPoints() end
+  lab:SetPoint("TOPLEFT", ts, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)
+  if type(btn.ClearAllPoints) == "function" then btn:ClearAllPoints() end
+  btn:SetPoint("LEFT", lab, "RIGHT", 8, 0)
+  refreshGearForButton()
+  local nt = boxes.NodeTrail
+  if touchstoneOn() then
+    if type(lab.Show) == "function" then lab:Show() end
+    if type(btn.Show) == "function" then btn:Show() end
+    if nt and type(nt.ClearAllPoints) == "function" then
+      nt:ClearAllPoints()
+      nt:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", -(SUB_INDENT - 16), -ROW_GAP)
+    end
+  else
+    if type(lab.Hide) == "function" then lab:Hide() end
+    if type(btn.Hide) == "function" then btn:Hide() end
+    if nt and type(nt.ClearAllPoints) == "function" then
+      nt:ClearAllPoints()
+      nt:SetPoint("TOPLEFT", ts, "BOTTOMLEFT", 0, -ROW_GAP)
+    end
+  end
+end
+
+function pkg.relayoutOptions()
+  placeGearForRow()
+  if type(relayoutLowerSections) == "function" then
+    relayoutLowerSections()
+  end
+end
+
 local function syncCheckboxes()
   for index, name in ipairs(pkg.moduleOrder or {}) do
     local def = pkg.modules and pkg.modules[name]
@@ -508,6 +664,7 @@ local function syncCheckboxes()
       rb:Disable()
     end
   end
+  placeGearForRow()
   relayoutLowerSections()
 end
 
