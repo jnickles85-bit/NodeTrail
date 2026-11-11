@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  curseforge:
+    name: CurseForge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pin v2.7.0 (SHA of the released tag). No extra args: do not pass -p 0
+      # (that unsets TOC X-Curse-Project-ID 1788533). Do not set GITHUB_OAUTH,
+      # WAGO_API_TOKEN, or WOWI_API_TOKEN — CurseForge only, no GitHub Release.
+      - uses: BigWigsMods/packager@01e8631a69c69d7654c788d152630d5fed9e3812 # v2.7.0
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
