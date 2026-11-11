@@ -360,6 +360,12 @@ mustClassify("expertise rating",
 mustClassify("expertise percent text",
   { "Cand", "+10 Strength", "Equip: Increases your expertise by 1%." },
   { "Eq",   "+10 Strength" })
+mustClassify("expertise dodge/parry reduction (Forever wording)",
+  { "Cand", "+10 Strength", "Equip: Reduces the chance for your attacks to be dodged or parried by 1.0%." },
+  { "Eq",   "+10 Strength" })
+mustClassify("expertise short dodge/parry wording",
+  { "Cand", "+10 Strength", "Equip: Reduces chance to be Dodged or Parried by 1.0%." },
+  { "Eq",   "+10 Strength" })
 mustClassify("healing-only sentence",
   { "Cand", "+10 Intellect", "Equip: Increases healing done by spells and effects by up to 20." },
   { "Eq",   "+10 Intellect" })
@@ -973,6 +979,35 @@ local parsedExp = Verdict.statTable(expLine, "candidate")
 check(type(parsedExp) == "table" and parsedExp.Expertise == 1,
   "expertise percent text is stored as 1 (percent), not lifted to a rating (got "
     .. tostring(parsedExp and parsedExp.Expertise) .. ")")
+do
+-- Real Forever item wording (Warden's Signet of Vigilance / T1 4P).
+local foreverExpLine = { "Signet", "+18 Stamina",
+  "Equip: Reduces the chance for your attacks to be dodged or parried by 1.0%." }
+local parsedForever = Verdict.statTable(foreverExpLine)
+check(type(parsedForever) == "table" and parsedForever.Expertise == 1
+    and parsedForever.ExpertiseRating == nil,
+  "Forever dodge/parry wording is Expertise 1% (got "
+    .. tostring(parsedForever and parsedForever.Expertise) .. "/"
+    .. tostring(parsedForever and parsedForever.ExpertiseRating) .. ")")
+local shortForever = { "Signet", "Equip: Reduces chance to be Dodged or Parried by 1.0%." }
+local parsedShort = Verdict.statTable(shortForever)
+check(type(parsedShort) == "table" and parsedShort.Expertise == 1,
+  "short Forever dodge/parry wording is Expertise 1% (got "
+    .. tostring(parsedShort and parsedShort.Expertise) .. ")")
+local setBonusLine = { "Tier",
+  "Reduces the chance for your melee attacks to be Dodged or Parried by 1.2%." }
+local parsedSet = Verdict.statTable(setBonusLine)
+check(type(parsedSet) == "table" and parsedSet.Expertise == 1.2,
+  "T1 set-bonus dodge/parry wording is Expertise 1.2% (got "
+    .. tostring(parsedSet and parsedSet.Expertise) .. ")")
+local shortRating = { "Ring", "+10 Expertise" }
+local parsedShortRating = Verdict.statTable(shortRating)
+check(type(parsedShortRating) == "table" and parsedShortRating.ExpertiseRating == 10
+    and parsedShortRating.Expertise == nil,
+  "+N Expertise short line is ExpertiseRating (got "
+    .. tostring(parsedShortRating and parsedShortRating.ExpertiseRating) .. "/"
+    .. tostring(parsedShortRating and parsedShortRating.Expertise) .. ")")
+end
 local armsExp = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER",
   playerExpertisePercent = 5 }
 local vExp, rExp, dExp = Verdict.weightedVerdict(
@@ -998,6 +1033,25 @@ check(vRat == "UPGRADE", "rating-only expertise still ranks the raw values (got 
 check(type(rRat) == "string" and rRat:find("unknown", 1, true),
   "rating-only expertise reports cap status unknown (got " .. tostring(rRat) .. ")")
 
+do
+-- Mixed percent-vs-rating Expertise: cap unknown / TRADE_OFF, not a
+-- fake 0 percent on the rating-only side.
+local mixSpec = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER",
+  playerExpertisePercent = false }
+local vMix, rMix = Verdict.weightedVerdict(
+  { Expertise = 1 }, { ExpertiseRating = 20 }, mixSpec)
+check(vMix == "TRADE_OFF",
+  "mixed percent-vs-rating Expertise is TRADE_OFF (got " .. tostring(vMix)
+    .. " " .. tostring(rMix) .. ")")
+check(type(rMix) == "string" and rMix:find("unknown", 1, true),
+  "mixed Expertise reports cap status unknown (got " .. tostring(rMix) .. ")")
+local vMix2, rMix2 = Verdict.weightedVerdict(
+  { ExpertiseRating = 20 }, { Expertise = 1 }, mixSpec)
+check(vMix2 == "TRADE_OFF",
+  "mixed rating-vs-percent Expertise is TRADE_OFF (got " .. tostring(vMix2)
+    .. " " .. tostring(rMix2) .. ")")
+end
+
 -- Caster 17% caps use GetSpellHitModifier, not GetHitModifier.
 local savedBonus, savedHitMod, savedSpellMod = GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier
 GetCombatRatingBonus = function(cr) return 5 end
@@ -1009,13 +1063,31 @@ check(Verdict.playerHitPercent() == 8,
 check(Verdict.playerHitPercent("spell") == 13,
   "spell hit is rating + GetSpellHitModifier, not GetHitModifier (got "
     .. tostring(Verdict.playerHitPercent("spell")) .. ")")
+do
+-- No invented CR_HIT_MELEE index when the global is missing.
+local savedCRHit, savedCRSpell, savedCRMelee = CR_HIT, CR_HIT_SPELL, CR_HIT_MELEE
+CR_HIT, CR_HIT_SPELL, CR_HIT_MELEE = nil, nil, nil
+GetCombatRatingBonus = function(cr)
+  error("guessed CR index " .. tostring(cr))
+end
+GetHitModifier = function() return 3 end
+GetSpellHitModifier = function() return 8 end
+check(Verdict.playerHitPercent() == 3,
+  "melee hit with no CR_* global uses only GetHitModifier (got "
+    .. tostring(Verdict.playerHitPercent()) .. ")")
+check(Verdict.playerHitPercent("spell") == 8,
+  "spell hit with no CR_* global uses only GetSpellHitModifier (got "
+    .. tostring(Verdict.playerHitPercent("spell")) .. ")")
+CR_HIT, CR_HIT_SPELL, CR_HIT_MELEE = savedCRHit, savedCRSpell, savedCRMelee
 GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier = savedBonus, savedHitMod, savedSpellMod
+end
 
 -- GetExpertise is not assumed to be a percent.
 local savedExp, savedExpPct, savedCRB = GetExpertise, GetExpertisePercent, GetCombatRatingBonus
 GetExpertise = function() return 65 end
 GetExpertisePercent = nil
 GetCombatRatingBonus = nil
+CR_EXPERTISE = nil
 check(Verdict.playerExpertisePercent() == nil,
   "GetExpertise alone is not treated as a percent (got "
     .. tostring(Verdict.playerExpertisePercent()) .. ")")
@@ -1023,6 +1095,14 @@ GetCombatRatingBonus = function(cr) if cr == 24 then return 6.5 end end
 CR_EXPERTISE = 24
 check(Verdict.playerExpertisePercent() == 6.5,
   "GetCombatRatingBonus(CR_EXPERTISE) is the client's own percent (got "
+    .. tostring(Verdict.playerExpertisePercent()) .. ")")
+-- No invented CR_EXPERTISE index of 24 when the global is missing.
+CR_EXPERTISE = nil
+GetCombatRatingBonus = function(cr)
+  error("guessed CR_EXPERTISE index " .. tostring(cr))
+end
+check(Verdict.playerExpertisePercent() == nil,
+  "nil CR_EXPERTISE is not guessed as 24 (got "
     .. tostring(Verdict.playerExpertisePercent()) .. ")")
 GetExpertise, GetExpertisePercent, GetCombatRatingBonus = savedExp, savedExpPct, savedCRB
 
@@ -1032,10 +1112,22 @@ GetCombatRating = function(cr) return 999 end
 CR_WEAPON_SKILL = CR_WEAPON_SKILL or 1
 UnitAttackBothHands = function(unit)
   check(unit == "player", "UnitAttackBothHands is called with 'player'")
-  return 300, 8, 200, 0
+  return 300, 8, 0, 0
 end
 check(Verdict.playerWeaponSkill() == 308,
   "UnitAttackBothHands(300, 8) is the 308 skill total, not a combat rating (got "
+    .. tostring(Verdict.playerWeaponSkill()) .. ")")
+-- Dual-wield: the off-hand is considered; the lower total is used.
+UnitAttackBothHands = function(unit)
+  return 300, 8, 200, 0
+end
+check(Verdict.playerWeaponSkill() == 200,
+  "dual-wield uses the lower hand (got " .. tostring(Verdict.playerWeaponSkill()) .. ")")
+UnitAttackBothHands = function(unit)
+  return 300, 8, 305, 5
+end
+check(Verdict.playerWeaponSkill() == 308,
+  "dual-wield uses main when it is the lower total (got "
     .. tostring(Verdict.playerWeaponSkill()) .. ")")
 UnitAttackBothHands, GetCombatRating = savedUABH, savedGCR
 
@@ -1061,6 +1153,79 @@ local enhHitSpec = { class = "SHAMAN", weightsKey = "enhancement", clientRole = 
 local vEnhHit, rEnhHit = Verdict.weightedVerdict({ Hit = 10 }, { Hit = 0 }, enhHitSpec)
 check(vEnhHit == "NOT_UPGRADE" and type(rEnhHit) == "string" and rEnhHit:find("no change", 1, true),
   "Enhancement hit past 8% does not score (got " .. tostring(vEnhHit) .. " " .. tostring(rEnhHit) .. ")")
+
+do
+-- Spell-profile Hit tiers are hitKind="spell" (Arcane/Fire caps text
+-- never says "spell cap"; the family comes from SPEC_KEYS).
+local function hitKinds(pack)
+  local kinds = {}
+  if type(pack) == "table" and type(pack.tiers) == "table" then
+    for _, tier in ipairs(pack.tiers) do
+      if tier.name == "Hit" then
+        kinds[#kinds + 1] = tier.hitKind
+      end
+    end
+  end
+  return kinds
+end
+local arcaneKinds = hitKinds(Verdict.WEIGHTS.MAGE.arcane)
+local fireKinds = hitKinds(Verdict.WEIGHTS.MAGE.fire)
+check(#arcaneKinds > 0 and arcaneKinds[1] == "spell",
+  "WEIGHTS.MAGE.arcane Hit is hitKind=spell (got " .. tostring(arcaneKinds[1]) .. ")")
+check(#fireKinds > 0 and fireKinds[1] == "spell",
+  "WEIGHTS.MAGE.fire Hit is hitKind=spell (got " .. tostring(fireKinds[1]) .. ")")
+local spellPacks = {
+  { "MAGE", "arcane" }, { "MAGE", "fire" }, { "MAGE", "frost" },
+  { "WARLOCK", "affliction" }, { "WARLOCK", "demonology" }, { "WARLOCK", "destruction" },
+  { "PRIEST", "disc" }, { "PRIEST", "holy" }, { "PRIEST", "shadow" },
+  { "DRUID", "balance" }, { "DRUID", "resto" },
+  { "SHAMAN", "elemental" }, { "SHAMAN", "resto" },
+  { "PALADIN", "holy" },
+}
+for i = 1, #spellPacks do
+  local className, key = spellPacks[i][1], spellPacks[i][2]
+  local pack = Verdict.WEIGHTS[className] and Verdict.WEIGHTS[className][key]
+  local kinds = hitKinds(pack)
+  for j = 1, #kinds do
+    check(kinds[j] == "spell",
+      className .. "." .. key .. " Hit #" .. j .. " must be hitKind=spell (got "
+        .. tostring(kinds[j]) .. ")")
+  end
+end
+-- Hybrid melee lists keep their later spell/poison cap as spell, and
+-- Enhancement stays melee (numbered list is the 8% minimum only).
+local protHit = hitKinds(Verdict.WEIGHTS.PALADIN.prot)
+check(#protHit >= 2 and protHit[1] == "melee" and protHit[2] == "spell",
+  "Prot Paladin keeps melee then spell Hit kinds (got "
+    .. tostring(protHit[1]) .. "/" .. tostring(protHit[2]) .. ")")
+local rogHit = hitKinds(Verdict.WEIGHTS.ROGUE.assassination)
+check(#rogHit >= 2 and rogHit[1] == "melee" and rogHit[2] == "spell",
+  "Rogue keeps melee then poison-cap spell Hit kinds (got "
+    .. tostring(rogHit[1]) .. "/" .. tostring(rogHit[2]) .. ")")
+local enhKinds = hitKinds(Verdict.WEIGHTS.SHAMAN.enhancement)
+check(#enhKinds == 1 and enhKinds[1] == "melee",
+  "Enhancement Hit stays melee (got " .. tostring(enhKinds[1]) .. ")")
+
+-- Review repro: rating bonus 11 + GetSpellHitModifier 6 = 17%, so a
+-- +1% hit candidate is NOT_UPGRADE for Arcane and Fire. If hitKind
+-- were melee, GetHitModifier 0 would leave the player at 11% and the
+-- same candidate would incorrectly be an UPGRADE.
+local savedBonus2, savedHit2, savedSpell2 = GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier
+local savedCRSpell2 = CR_HIT_SPELL
+GetCombatRatingBonus = function() return 11 end
+GetSpellHitModifier = function() return 6 end
+GetHitModifier = function() return 0 end
+CR_HIT_SPELL = CR_HIT_SPELL or 8
+for _, key in ipairs({ "arcane", "fire" }) do
+  local spec = { class = "MAGE", weightsKey = key, clientRole = "DAMAGER" }
+  local vHit, rHit = Verdict.weightedVerdict({ Hit = 10 }, { Hit = 0 }, spec)
+  check(vHit == "NOT_UPGRADE",
+    "MAGE." .. key .. " 17% spell hit (11+6) rejects +1% hit (got "
+      .. tostring(vHit) .. " " .. tostring(rHit) .. ")")
+end
+GetCombatRatingBonus, GetHitModifier, GetSpellHitModifier = savedBonus2, savedHit2, savedSpell2
+CR_HIT_SPELL = savedCRSpell2
+end
 
 -- /up spec Auto text names a recorded /up role.
 asClass("PALADIN", "Paladin", "Retribution", "DAMAGER")

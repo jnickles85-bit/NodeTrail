@@ -113,40 +113,44 @@ CLASS_TOKEN = {
     "Hunter": "HUNTER",
 }
 
+# Third field is the profile family: every Hit tier on a "spell" profile
+# is hitKind = "spell". "melee" profiles default to melee; a numbered-list
+# item that itself is a spell or poison cap (Prot Paladin, Rogue) is still
+# marked spell from the line, not from caps-map keywords.
 SPEC_KEYS = {
-    ("Warrior", "Arms", None): ("arms", "Arms"),
-    ("Warrior", "Fury", None): ("fury", "Fury"),
-    ("Warrior", "Protection", "Balanced"): ("prot", "Protection (Balanced)"),
-    ("Warrior", "Protection", "Defensive"): ("prot_defensive", "Protection (Defensive)"),
-    ("Warrior", "Protection", "Offensive"): ("prot_offensive", "Protection (Offensive)"),
-    ("Paladin", "Holy", None): ("holy", "Holy"),
-    ("Paladin", "Protection", "Balanced"): ("prot", "Protection (Balanced)"),
-    ("Paladin", "Protection", "Defensive"): ("prot_defensive", "Protection (Defensive)"),
-    ("Paladin", "Protection", "Offensive"): ("prot_offensive", "Protection (Offensive)"),
-    ("Paladin", "Retribution", None): ("ret", "Retribution"),
-    ("Druid", "Balance", None): ("balance", "Balance"),
-    ("Druid", "Feral (Cat)", None): ("feral_cat", "Feral (Cat)"),
-    ("Druid", "Feral (Bear)", "Defensive"): ("feral_bear", "Feral (Bear, Defensive)"),
-    ("Druid", "Feral (Bear)", "Offensive"): ("feral_bear_offensive", "Feral (Bear, Offensive)"),
-    ("Druid", "Restoration", None): ("resto", "Restoration"),
-    ("Shaman", "Elemental", None): ("elemental", "Elemental"),
-    ("Shaman", "Enhancement", None): ("enhancement", "Enhancement"),
-    ("Shaman", "Restoration", None): ("resto", "Restoration"),
-    ("Priest", "Discipline", None): ("disc", "Discipline"),
-    ("Priest", "Holy", None): ("holy", "Holy"),
-    ("Priest", "Shadow", None): ("shadow", "Shadow"),
-    ("Mage", "Arcane", None): ("arcane", "Arcane"),
-    ("Mage", "Fire", None): ("fire", "Fire"),
-    ("Mage", "Frost", None): ("frost", "Frost"),
-    ("Warlock", "Affliction", None): ("affliction", "Affliction"),
-    ("Warlock", "Demonology", None): ("demonology", "Demonology"),
-    ("Warlock", "Destruction", None): ("destruction", "Destruction"),
-    ("Rogue", "Assassination", None): ("assassination", "Assassination"),
-    ("Rogue", "Combat", None): ("combat", "Combat"),
-    ("Rogue", "Subtlety", None): ("subtlety", "Subtlety"),
-    ("Hunter", "Beast Mastery", None): ("beast_mastery", "Beast Mastery"),
-    ("Hunter", "Marksmanship", None): ("marksmanship", "Marksmanship"),
-    ("Hunter", "Survival", None): ("survival", "Survival"),
+    ("Warrior", "Arms", None): ("arms", "Arms", "melee"),
+    ("Warrior", "Fury", None): ("fury", "Fury", "melee"),
+    ("Warrior", "Protection", "Balanced"): ("prot", "Protection (Balanced)", "melee"),
+    ("Warrior", "Protection", "Defensive"): ("prot_defensive", "Protection (Defensive)", "melee"),
+    ("Warrior", "Protection", "Offensive"): ("prot_offensive", "Protection (Offensive)", "melee"),
+    ("Paladin", "Holy", None): ("holy", "Holy", "spell"),
+    ("Paladin", "Protection", "Balanced"): ("prot", "Protection (Balanced)", "melee"),
+    ("Paladin", "Protection", "Defensive"): ("prot_defensive", "Protection (Defensive)", "melee"),
+    ("Paladin", "Protection", "Offensive"): ("prot_offensive", "Protection (Offensive)", "melee"),
+    ("Paladin", "Retribution", None): ("ret", "Retribution", "melee"),
+    ("Druid", "Balance", None): ("balance", "Balance", "spell"),
+    ("Druid", "Feral (Cat)", None): ("feral_cat", "Feral (Cat)", "melee"),
+    ("Druid", "Feral (Bear)", "Defensive"): ("feral_bear", "Feral (Bear, Defensive)", "melee"),
+    ("Druid", "Feral (Bear)", "Offensive"): ("feral_bear_offensive", "Feral (Bear, Offensive)", "melee"),
+    ("Druid", "Restoration", None): ("resto", "Restoration", "spell"),
+    ("Shaman", "Elemental", None): ("elemental", "Elemental", "spell"),
+    ("Shaman", "Enhancement", None): ("enhancement", "Enhancement", "melee"),
+    ("Shaman", "Restoration", None): ("resto", "Restoration", "spell"),
+    ("Priest", "Discipline", None): ("disc", "Discipline", "spell"),
+    ("Priest", "Holy", None): ("holy", "Holy", "spell"),
+    ("Priest", "Shadow", None): ("shadow", "Shadow", "spell"),
+    ("Mage", "Arcane", None): ("arcane", "Arcane", "spell"),
+    ("Mage", "Fire", None): ("fire", "Fire", "spell"),
+    ("Mage", "Frost", None): ("frost", "Frost", "spell"),
+    ("Warlock", "Affliction", None): ("affliction", "Affliction", "spell"),
+    ("Warlock", "Demonology", None): ("demonology", "Demonology", "spell"),
+    ("Warlock", "Destruction", None): ("destruction", "Destruction", "spell"),
+    ("Rogue", "Assassination", None): ("assassination", "Assassination", "melee"),
+    ("Rogue", "Combat", None): ("combat", "Combat", "melee"),
+    ("Rogue", "Subtlety", None): ("subtlety", "Subtlety", "melee"),
+    ("Hunter", "Beast Mastery", None): ("beast_mastery", "Beast Mastery", "melee"),
+    ("Hunter", "Marksmanship", None): ("marksmanship", "Marksmanship", "melee"),
+    ("Hunter", "Survival", None): ("survival", "Survival", "melee"),
 }
 
 CLASS_ORDER = [
@@ -461,20 +465,23 @@ def tier_display_name(words: list[str], raw_names: list[str]) -> str:
     return " & ".join(WORD_NAME.get(w, w) for w in words)
 
 
-def hit_kind_for(line: str, caps: dict, cap: dict) -> str | None:
-    """'spell' for a 17% spell/poison cap; 'melee' for an 8%/9% ability cap."""
+def hit_kind_for(line: str, profile_kind: str) -> str:
+    """Hit kind comes from the profile family in SPEC_KEYS, not caps keywords.
+
+    Every Hit tier on a spell profile is spell (this is what Arcane/Fire
+    need: their caps text never says 'spell cap'). On a melee profile the
+    default is melee; a numbered-list item that itself is a spell or
+    poison cap stays spell.
+    """
+    if profile_kind == "spell":
+        return "spell"
     lower = (line or "").lower()
-    caps_blob = " ".join(str(v) for v in (caps or {}).values())
-    if "poison" in lower or "spell cap" in lower or "spell" in lower:
-        return "spell"
-    if parse_total_spell_hit_percent(line, caps_blob) is not None:
-        return "spell"
-    if cap.get("comment") and "total hit" in cap["comment"]:
+    if "poison" in lower or "spell cap" in lower:
         return "spell"
     return "melee"
 
 
-def build_tier(raw_stats: list[str], verbatim: str, caps: dict, class_name: str) -> dict | None:
+def build_tier(raw_stats: list[str], verbatim: str, caps: dict, class_name: str, profile_kind: str = "melee") -> dict | None:
     words: list[str] = []
     seen = set()
     for raw in raw_stats:
@@ -514,9 +521,7 @@ def build_tier(raw_stats: list[str], verbatim: str, caps: dict, class_name: str)
             if scale_word in PERCENT_SCALE:
                 tier["ratingPerPercent"] = PERCENT_SCALE[scale_word]
         if "Hit" in words:
-            kind = hit_kind_for(verbatim or "", caps or {}, cap)
-            if kind:
-                tier["hitKind"] = kind
+            tier["hitKind"] = hit_kind_for(verbatim or "", profile_kind)
     return tier
 
 
@@ -731,7 +736,7 @@ def generate_lua(data: dict) -> str:
         ident = (class_name, spec_name, profile)
         if ident not in SPEC_KEYS:
             raise SystemExit(f"no registry key for {ident}")
-        key, display = SPEC_KEYS[ident]
+        key, display, profile_kind = SPEC_KEYS[ident]
         verbatim = list(rec.get("verbatim") or [])
         tiers_raw = list(rec.get("tiers") or [])
         if len(verbatim) != len(tiers_raw):
@@ -756,7 +761,7 @@ def generate_lua(data: dict) -> str:
         caps = rec.get("caps") or {}
         tiers = []
         for raw, line in zip(tiers_raw, verbatim):
-            t = build_tier(raw, line, caps, class_name)
+            t = build_tier(raw, line, caps, class_name, profile_kind)
             if t is None:
                 raise SystemExit(f"empty tier for {ident}: {raw}")
             tiers.append(t)
@@ -770,7 +775,7 @@ def generate_lua(data: dict) -> str:
             raise SystemExit(f"duplicate key {k}")
         seen_keys.add(k)
 
-    expected = set((CLASS_TOKEN[c], k) for (c, s, p), (k, n) in SPEC_KEYS.items())
+    expected = set((CLASS_TOKEN[c], v[0]) for (c, s, p), v in SPEC_KEYS.items())
     if seen_keys != expected:
         raise SystemExit(f"key set mismatch: missing {expected-seen_keys} extra {seen_keys-expected}")
 

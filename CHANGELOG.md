@@ -19,6 +19,11 @@ one CurseForge shows, and the bundled modules report the same number.
 - Caster 17% spell-hit caps read `GetSpellHitModifier` (and spell hit rating), not melee hit chance. Expertise current is only taken from APIs that return a percent (`GetExpertisePercent` or `GetCombatRatingBonus`). Weapon skill is read as a skill total (`UnitAttackBothHands`), not `GetCombatRating(CR_WEAPON_SKILL)`.
 - Enhancement follows Wowhead's numbered list exactly: hit past the listed 8% melee minimum is not scored, and that is noted in the caveat. The Mental Dexterity caveat cites the official Forever hotfix notes (`https://news.blizzard.com/en-us/article/24315281/wow-forever-hotfixes-november-10-2026`).
 - `/up spec` with no argument names a recorded `/up role` when Auto is in effect (precedence is chosen spec > `/up role` > talents). `/up reset` also clears a chosen Gear-for spec (back to Auto) and does not clear `/up role` or the log.
+- Arcane and Fire Mage Hit caps are scored as spell hit. `hitKind` is taken from the spec profile family (every Hit tier on a spell profile is spell), not from caps-map keywords, so a 17% cap that mentions Arcane Focus or Precision uses `GetSpellHitModifier`.
+- Combat-rating reads no longer invent a `CR_*` index when the client does not expose one (`CR_EXPERTISE`, `CR_HIT_MELEE`, and any other guessed `CR_*` fallback).
+- Mixed percent-vs-rating Expertise is a trade-off with cap status unknown, not a comparison that treats the missing percent as 0.
+- Dual-wield weapon skill uses the lower of the two hands from `UnitAttackBothHands`, not only the main hand.
+- Expertise percent text matches Forever item wording (`Reduces the chance for your attacks to be dodged or parried by N%`).
 
 ## [0.3.2-beta] - 2026-11-11
 

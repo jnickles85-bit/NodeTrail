@@ -1445,7 +1445,15 @@ local parseLine_ = function(line)
 	end
 	local num, word = trimmed:match("^%s*[%+%-%s]*(%d+)%s+(%a+)$")
 	if num and word then
-		return tonumber(num), (skillNoun(word) or word)
+		-- "+N Expertise" is a short rating line (same family as
+		-- "+N Hit"), not a percent. ratingWordOf below also maps
+		-- the multi-word form; this single-word matcher would
+		-- otherwise keep the raw word "Expertise".
+		local mapped = skillNoun(word)
+		if not mapped and word:lower() == "expertise" then
+			mapped = "ExpertiseRating"
+		end
+		return tonumber(num), (mapped or word)
 	end
 	-- Multi-word rating and weapon-DPS lines the single-word "+N Word"
 	-- matcher cannot see. A number already printed in RATING units is
@@ -1634,10 +1642,19 @@ local parseLine_ = function(line)
 	local expr = stat_sentence:match("^increases your expertise rating by (%d+%.?%d*)$")
 		or stat_sentence:match("^improves your expertise rating by (%d+%.?%d*)$")
 	if expr then return tonumber(expr), "ExpertiseRating" end
-	-- Forever prints expertise as a percent, not a rating. Store the
-	-- percent directly (no invented rating factor) so it can be compared
-	-- to Wowhead's 6.5% / 14% caps.
-	local expp = stat_sentence:match("^increases your expertise by (%d+%.?%d*)%%$")
+	-- Forever Expertise tooltip text, observed on real items (e.g.
+	-- Warden's Signet of Vigilance): "Equip: Reduces the chance for
+	-- your attacks to be dodged or parried by 1.0%." The same idea
+	-- appears as "Reduces chance to be Dodged or Parried by 1.0%" and
+	-- on tank set bonuses as "Reduces the chance for your melee
+	-- attacks to be Dodged or Parried by 1.2%." Store the percent
+	-- directly (no invented rating factor) so it can be compared to
+	-- Wowhead's 6.5% / 14% caps. The short "+N Expertise" line is a
+	-- rating (like "+N Hit") and is handled above as ExpertiseRating.
+	local expp = stat_sentence:match("^reduces the chance for your attacks to be dodged or parried by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^reduces the chance for your melee attacks to be dodged or parried by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^reduces chance to be dodged or parried by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^increases your expertise by (%d+%.?%d*)%%$")
 		or stat_sentence:match("^improves your expertise by (%d+%.?%d*)%%$")
 		or stat_sentence:match("^increases expertise by (%d+%.?%d*)%%$")
 	if expp then return tonumber(expp), "Expertise" end
@@ -4063,7 +4080,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-28",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 },
 				{ name = "Spell Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "ArcaneDamage" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
@@ -4081,7 +4098,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-03",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "melee", ratingPerPercent = 10 },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 },
 				{ name = "Spell Damage & Fire Damage", stats = { "SpellDamage", "SpellPower", "FireDamage" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
@@ -4429,31 +4446,32 @@ local function pcallNumber(fn, ...)
 	return nil
 end
 
+-- Combat-rating bonus for a named CR_* global. The index is only used
+-- when the client actually exposes it; we do not invent 6, 24, or any
+-- other fallback index.
+local function combatRatingBonus(crName)
+	local idx = rawget(_G, crName)
+	if idx == nil then return nil end
+	return pcallNumber(GetCombatRatingBonus, idx)
+end
+
 -- The player's current Hit chance, in percent, or nil when unreadable.
 -- `kind` is "spell" for a spell (or poison) 17% cap, or "melee" (default)
 -- for an 8% / 9% ability cap. Spell caps use GetSpellHitModifier, never
 -- GetHitModifier. The rating half prefers CR_HIT_SPELL, then the unified
--- CR_HIT, then (on clients that only expose one hit rating) CR_HIT_MELEE.
+-- CR_HIT, then (on clients that only expose one hit rating) CR_HIT_MELEE,
+-- and only when that global is present.
 function Verdict.playerHitPercent(kind)
 	if kind == "spell" then
-		local bonus
-		if rawget(_G, "CR_HIT_SPELL") ~= nil then
-			bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_SPELL"))
-		end
-		if bonus == nil and rawget(_G, "CR_HIT") ~= nil then
-			bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT"))
-		end
-		if bonus == nil then
-			bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_MELEE") or 6)
-		end
+		local bonus = combatRatingBonus("CR_HIT_SPELL")
+			or combatRatingBonus("CR_HIT")
+			or combatRatingBonus("CR_HIT_MELEE")
 		local mod = pcallNumber(GetSpellHitModifier)
 		if bonus == nil and mod == nil then return nil end
 		return (bonus or 0) + (mod or 0)
 	end
-	local bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_MELEE") or 6)
-	if bonus == nil and rawget(_G, "CR_HIT") ~= nil then
-		bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT"))
-	end
+	local bonus = combatRatingBonus("CR_HIT_MELEE")
+		or combatRatingBonus("CR_HIT")
 	local mod = pcallNumber(GetHitModifier)
 	if bonus == nil and mod == nil then return nil end
 	return (bonus or 0) + (mod or 0)
@@ -4462,15 +4480,17 @@ end
 -- The player's current Expertise, in percent, or nil when unreadable.
 -- Only APIs that are documented to return a percent are trusted:
 -- GetExpertisePercent, then GetCombatRatingBonus(CR_EXPERTISE) (the
--- client's own percent bonus). GetExpertise is not used: its unit is
--- not verified on Forever, and assuming it is a percent would invent
--- a conversion.
+-- client's own percent bonus) when CR_EXPERTISE is present. GetExpertise
+-- is not used: its unit is not verified on Forever, and assuming it is
+-- a percent would invent a conversion.
 function Verdict.playerExpertisePercent()
 	if type(GetExpertisePercent) == "function" then
 		local ok, mh = pcall(GetExpertisePercent)
 		if ok and type(mh) == "number" then return mh end
 	end
-	return pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_EXPERTISE") or 24)
+	local idx = rawget(_G, "CR_EXPERTISE")
+	if idx == nil then return nil end
+	return pcallNumber(GetCombatRatingBonus, idx)
 end
 
 -- Defense skill total, or nil when unreadable. Classic UnitDefense
@@ -4488,12 +4508,23 @@ end
 -- returns main-hand base, main-hand modifier, off-hand base, off-hand
 -- modifier — skill totals, not a combat rating. GetCombatRating
 -- (CR_WEAPON_SKILL) is a rating and must not be compared to the 305 /
--- 308 skill caps. Tests inject spec.playerWeaponSkill.
+-- 308 skill caps. When both hands have a skill (dual-wield), the
+-- lower total is used, because a cap of 305/308 is only met when the
+-- weaker hand reaches it. A missing or zero off-hand (two-hand or
+-- empty) is ignored and the main-hand total is returned. Tests inject
+-- spec.playerWeaponSkill.
 function Verdict.playerWeaponSkill()
 	if type(UnitAttackBothHands) == "function" then
-		local ok, mainBase, mainMod = pcall(UnitAttackBothHands, "player")
+		local ok, mainBase, mainMod, offBase, offMod = pcall(UnitAttackBothHands, "player")
 		if ok and type(mainBase) == "number" then
-			return mainBase + (tonumber(mainMod) or 0)
+			local main = mainBase + (tonumber(mainMod) or 0)
+			if type(offBase) == "number" then
+				local off = offBase + (tonumber(offMod) or 0)
+				if off > 0 then
+					if off < main then return off end
+				end
+			end
+			return main
 		end
 	end
 	return nil
@@ -4784,9 +4815,27 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 				-- compared directly (scale 1). A rating-only line lives
 				-- on ExpertiseRating and cannot be converted, so cap
 				-- status is unknown and the raw rating is ranked.
+				-- Mixed units (percent on one side, rating-only on the
+				-- other) cannot be compared: TRADE_OFF, cap unknown.
 				if word == "Expertise" then
-					if cand.Expertise == nil and eq.Expertise == nil
-						and (cand.ExpertiseRating ~= nil or eq.ExpertiseRating ~= nil) then
+					local candUnit, wornUnit
+					if cand.Expertise ~= nil then
+						candUnit = "percent"
+					elseif cand.ExpertiseRating ~= nil then
+						candUnit = "rating"
+					end
+					if eq.Expertise ~= nil then
+						wornUnit = "percent"
+					elseif eq.ExpertiseRating ~= nil then
+						wornUnit = "rating"
+					end
+					if candUnit and wornUnit and candUnit ~= wornUnit then
+						local label = "Expertise (cap status unknown)"
+						return finish(TRADE_OFF,
+							Verdict.orderReason(profile, "trade-off", label, src,
+								"percent and rating cannot be compared"),
+							label, "trade-off")
+					elseif candUnit == "rating" or wornUnit == "rating" then
 						candStat = cand.ExpertiseRating
 						wornStat = eq.ExpertiseRating
 						scale = nil
