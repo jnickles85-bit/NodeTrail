@@ -294,6 +294,18 @@ On top of that branch:
   corpse loot, whether an 8613 cast succeeded, the skinning loot in a **separate** list, and the gap
   between the corpse loot closing and the skin window opening. Personal counts only — no rate.
   Recording starts with the sub-option (not with `/mp skindiag`).
+  **Schema 2 (t_e3ea3698):** that `records` map is a RING of the newest `R.MAX_RECORDS` = 100
+  corpses per character, and it is now ROUTE DATA — the positions `Route/SkinRoute` draws its
+  farming circles from. Every number the beast panel prints is aggregated from
+  `chars[<Name-Realm>].creatures[<creatureID>]` instead (corpses, kills, skinned, skin windows and
+  the skinning item counts), which accumulate forever and are never evicted; before this, a beast
+  skinned dozens of times printed `no observations here yet` once 100 corpses had landed behind it
+  (the live desktop bucket was kills 1125 / corpse windows 641 / records 100). A schema 1 bucket
+  is upgraded IN PLACE by `R:Upgrade` from both the write path (`R:GetDB`) and the panel's read
+  path (`SkinHints.Bucket`): the totals are seeded from the records the bucket still holds, every
+  record is kept untouched, an empty bucket gains no rows, and the `schema` marker makes the
+  seeding happen exactly once. `rec.skinContribution` records what a corpse has already added, so
+  a late window re-read can never double a count.
 - **Skinning event surface, now measured** (t_80ffe952), from that same dump:
   `UNIT_DIED` fires for ordinary mobs and its **argument is the creature GUID**; Skinning is spell
   **8613** and on this client the 4th `UNIT_SPELLCAST_*` argument is the cast bar name

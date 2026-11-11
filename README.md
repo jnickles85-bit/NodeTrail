@@ -121,6 +121,8 @@ Run from repo root with lua5.1:
 - `tests/skinning_recorder_spec.lua` (replays the live kill -> corpse loot -> 8613 cast -> skin loot chain)
 - `tests/skinning_empty_window_spec.lua` (an empty corpse window never pins the cast; the skin window's own GUID is the truth)
 - `tests/skinning_default_on_spec.lua` (recording on by default: the fresh install, the one-time migration, and an explicit opt-out surviving a reload)
+- `tests/skinning_totals_spec.lua` (per-creature totals that never evict: a creature's history survives 200 later corpses, 300 kills still show totals while the ring holds 100, a re-read window is not double counted, and the circle still builds from the ring)
+- `tests/skinning_migration_spec.lua` (store schema 1 → 2: the read path upgrades, no record is lost or rewritten, the seeded totals match the records, a reload does not double-count, and an empty bucket gains no phantom totals)
 
 ## Skinning recorder (NodeTrail sub-option)
 On by default (`NodeTrailDB.skinning.enabled`): a fresh install records from the
@@ -135,6 +137,15 @@ mob GUID/name/entry, zone/subzone/map + position at death, the ordinary corpse l
 loot, and the gap between the corpse loot closing and the skin window opening. The two
 item lists are separate fields — never merged. Only counts of what was actually seen are
 stored; no drop rate is computed from such a small sample.
+
+That per-corpse window is the newest 100 corpses per character (`R.MAX_RECORDS`), and the
+positions in it are what the skinning farming circle is drawn from. The numbers the beast
+tooltip prints are NOT aggregated from it: they are kept per creature id in
+`NodeTrailDB.skinning.chars["Name-Realm"].creatures[creatureID]` (corpses, kills, skinned,
+skin windows and the skinning item counts), which accumulate for as long as the character
+exists and are never evicted. A store written before that table existed (schema 1) is
+upgraded in place on the next load — its totals are seeded from the records it still holds,
+every record is kept, and the schema marker makes the seeding happen exactly once.
 
 `COMBAT_LOG_EVENT_UNFILTERED` is a protected event on Forever 16001 and is never
 registered — kills come from `UNIT_DIED` (whose argument is the creature GUID).
