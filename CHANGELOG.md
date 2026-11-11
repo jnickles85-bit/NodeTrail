@@ -6,6 +6,9 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+### Added
+- `/mp idea` (also `/mpack idea`, and a Suggest an idea button next to Report a bug) opens a movable popup with a pre-filled, already-selected idea to copy into #mightiepack-ideas. Addon version, client version, and an Area line (NodeTrail / Touchstone / Skinning / General, or a single area if given as `/mp idea nodetrail`; only the first word after `idea` is used) are filled in; character names, realms, class, level, zone, and Lua errors are left out. WoW cannot write the clipboard, so the player presses Ctrl+C.
+
 ## [0.3.1] - 2026-11-11
 
 ### Added

@@ -634,6 +634,28 @@ bugButton:SetScript("OnLeave", function()
   GameTooltip:Hide()
 end)
 
+local ideaButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+ideaButton:SetPoint("LEFT", bugButton, "RIGHT", 8, 0)
+ideaButton:SetSize(150, 24)
+ideaButton:SetText("Suggest an idea")
+ideaButton:SetScript("OnClick", function()
+  if type(pkg.OpenIdeaReport) == "function" then
+    -- Same popup as /mp idea.
+    pkg.OpenIdeaReport()
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("MightiePack: idea form unavailable (BugReport module did not load)")
+  end
+end)
+ideaButton:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+  GameTooltip:SetText("Open a pre-filled idea form — press Ctrl+C to copy, then paste it into #mightiepack-ideas")
+  GameTooltip:AddLine("Nothing is uploaded: copy the idea and paste it into the #mightiepack-ideas Discord channel.", 1, 1, 1, true)
+  GameTooltip:Show()
+end)
+ideaButton:SetScript("OnLeave", function()
+  GameTooltip:Hide()
+end)
+
 panel:SetScript("OnShow", function()
   syncCheckboxes()
   syncRecipesBlock()

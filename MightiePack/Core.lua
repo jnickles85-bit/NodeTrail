@@ -211,6 +211,15 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     else
       pkg.Print("bug report form unavailable (BugReport module did not load)")
     end
+  elseif first == "idea" then
+    -- Same popup as the options-panel "Suggest an idea" button.
+    -- Only the first token of the rest selects Area (e.g. `/mp idea
+    -- nodetrail please` fills NodeTrail); extra words are ignored.
+    if type(pkg.OpenIdeaReport) == "function" then
+      pkg.OpenIdeaReport(rest)
+    else
+      pkg.Print("idea form unavailable (BugReport module did not load)")
+    end
   elseif first == "skindiag" then
     -- t_a5f41944 probe, re-homed by t_5507a0ba: the probe is NodeTrail's
     -- sub-feature (sub-toggle NodeTrailDB.skinning.enabled), not a module.
@@ -281,6 +290,7 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     -- rely on it); the new subcommand gets its own line.
     pkg.Print("/mpack [options|status]")
     pkg.Print("/mpack bug — open the bug report form (no upload — copy and paste into Discord)")
+    pkg.Print("/mpack idea — open the idea form (no upload — copy and paste into Discord)")
     pkg.Print("/mp skindiag (toggle) | /mp skindiag dump (skinning event probe)")
     if pkg.IsModuleEnabled("NodeTrail") then
       pkg.Print("NodeTrail: /nt help")
