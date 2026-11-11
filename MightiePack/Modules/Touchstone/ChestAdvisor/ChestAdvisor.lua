@@ -698,47 +698,75 @@ end
 -- orderWord (melee|spell — the documented stat-order word).
 ChestAdvisor.GEAR_SPECS = {
 	WARRIOR = {
-		{ key = "arms_fury", name = "Arms / Fury",  role = "DAMAGER", weightsKey = "melee", orderWord = "melee" },
-		{ key = "prot",      name = "Protection",   role = "TANK",    weightsKey = "tank",  orderWord = "melee" },
+		{ key = "arms", name = "Arms",        role = "DAMAGER", weightsKey = "arms", orderWord = "melee" },
+		{ key = "fury", name = "Fury",        role = "DAMAGER", weightsKey = "fury", orderWord = "melee" },
+		{ key = "prot", name = "Protection",  role = "TANK",    weightsKey = "prot", orderWord = "melee" },
 	},
 	PALADIN = {
-		{ key = "holy", name = "Holy",        role = "HEALER",  weightsKey = "spell", orderWord = "spell" },
-		{ key = "prot", name = "Protection",  role = "TANK",    weightsKey = "tank",  orderWord = "spell" },
-		{ key = "ret",  name = "Retribution", role = "DAMAGER", weightsKey = "melee", orderWord = "melee" },
+		{ key = "holy", name = "Holy",        role = "HEALER",  weightsKey = "holy", orderWord = "spell" },
+		{ key = "prot", name = "Protection",  role = "TANK",    weightsKey = "prot", orderWord = "spell" },
+		{ key = "ret",  name = "Retribution", role = "DAMAGER", weightsKey = "ret",  orderWord = "melee" },
 	},
 	DRUID = {
-		{ key = "balance",    name = "Balance",     role = "DAMAGER", weightsKey = "spell",     orderWord = "spell" },
-		{ key = "feral_cat",  name = "Feral (Cat)", role = "DAMAGER", weightsKey = "feral_cat", orderWord = "melee" },
-		{ key = "feral_bear", name = "Feral (Bear)",role = "TANK",    weightsKey = "feral_bear",orderWord = "melee" },
-		{ key = "resto",      name = "Restoration", role = "HEALER",  weightsKey = "resto",     orderWord = "spell" },
+		{ key = "balance",    name = "Balance",      role = "DAMAGER", weightsKey = "balance",    orderWord = "spell" },
+		{ key = "feral_cat",  name = "Feral (Cat)",  role = "DAMAGER", weightsKey = "feral_cat",  orderWord = "melee" },
+		{ key = "feral_bear", name = "Feral (Bear)", role = "TANK",    weightsKey = "feral_bear", orderWord = "melee" },
+		{ key = "resto",      name = "Restoration",  role = "HEALER",  weightsKey = "resto",      orderWord = "spell" },
 	},
 	SHAMAN = {
-		{ key = "elemental",   name = "Elemental",   role = "DAMAGER", weightsKey = "spell", orderWord = "spell" },
-		{ key = "enhancement", name = "Enhancement", role = "DAMAGER", weightsKey = "melee", orderWord = "melee" },
-		{ key = "resto",       name = "Restoration", role = "HEALER",  weightsKey = "resto", orderWord = "spell" },
+		{ key = "elemental",   name = "Elemental",   role = "DAMAGER", weightsKey = "elemental",   orderWord = "spell" },
+		{ key = "enhancement", name = "Enhancement", role = "DAMAGER", weightsKey = "enhancement", orderWord = "melee" },
+		{ key = "resto",       name = "Restoration", role = "HEALER",  weightsKey = "resto",       orderWord = "spell" },
 	},
 	PRIEST = {
-		{ key = "holy",   name = "Holy",   role = "HEALER",  weightsKey = "spell",  orderWord = "spell" },
-		{ key = "shadow", name = "Shadow", role = "DAMAGER", weightsKey = "shadow", orderWord = "spell" },
+		{ key = "holy",   name = "Holy",        role = "HEALER",  weightsKey = "holy",   orderWord = "spell" },
+		{ key = "disc",   name = "Discipline",  role = "HEALER",  weightsKey = "disc",   orderWord = "spell" },
+		{ key = "shadow", name = "Shadow",      role = "DAMAGER", weightsKey = "shadow", orderWord = "spell" },
 	},
-	MAGE    = { { key = "mage",    name = "Mage",    role = "DAMAGER", weightsKey = "spell", orderWord = "spell" } },
-	WARLOCK = { { key = "warlock", name = "Warlock", role = "DAMAGER", weightsKey = "spell", orderWord = "spell" } },
-	ROGUE   = { { key = "rogue",   name = "Rogue",   role = "DAMAGER", weightsKey = "melee", orderWord = "melee" } },
-	HUNTER  = { { key = "hunter",  name = "Hunter",  role = "DAMAGER", weightsKey = "melee", orderWord = "melee" } },
+	MAGE = {
+		{ key = "arcane", name = "Arcane", role = "DAMAGER", weightsKey = "arcane", orderWord = "spell" },
+		{ key = "fire",   name = "Fire",   role = "DAMAGER", weightsKey = "fire",   orderWord = "spell" },
+		{ key = "frost",  name = "Frost",  role = "DAMAGER", weightsKey = "frost",  orderWord = "spell" },
+	},
+	WARLOCK = {
+		{ key = "affliction",   name = "Affliction",   role = "DAMAGER", weightsKey = "affliction",   orderWord = "spell" },
+		{ key = "demonology",   name = "Demonology",   role = "DAMAGER", weightsKey = "demonology",   orderWord = "spell" },
+		{ key = "destruction",  name = "Destruction",  role = "DAMAGER", weightsKey = "destruction",  orderWord = "spell" },
+	},
+	ROGUE = {
+		{ key = "assassination", name = "Assassination", role = "DAMAGER", weightsKey = "assassination", orderWord = "melee" },
+		{ key = "combat",        name = "Combat",        role = "DAMAGER", weightsKey = "combat",        orderWord = "melee" },
+		{ key = "subtlety",      name = "Subtlety",      role = "DAMAGER", weightsKey = "subtlety",      orderWord = "melee" },
+	},
+	HUNTER = {
+		{ key = "beast_mastery", name = "Beast Mastery", role = "DAMAGER", weightsKey = "beast_mastery", orderWord = "melee" },
+		{ key = "marksmanship",  name = "Marksmanship",  role = "DAMAGER", weightsKey = "marksmanship",  orderWord = "melee" },
+		{ key = "survival",      name = "Survival",      role = "DAMAGER", weightsKey = "survival",      orderWord = "melee" },
+	},
 }
 
 local GEAR_ALIASES = {
-	prot        = { "protection", "tank" },
-	holy        = { "heal", "healer" },
-	ret         = { "retribution" },
-	resto       = { "restoration", "heal", "healer" },
-	feral_cat   = { "cat", "feral cat", "cat form", "kitty" },
-	feral_bear  = { "bear", "feral bear", "bear form" },
-	arms_fury   = { "arms", "fury", "arms fury" },
-	elemental   = { "ele" },
-	enhancement = { "enh", "enhance" },
-	balance     = { "boomkin", "moonkin", "boomy" },
-	shadow      = { "shadow priest" },
+	prot           = { "protection", "tank" },
+	holy           = { "heal", "healer" },
+	ret            = { "retribution" },
+	resto          = { "restoration", "heal", "healer" },
+	feral_cat      = { "cat", "feral cat", "cat form", "kitty" },
+	feral_bear     = { "bear", "feral bear", "bear form" },
+	arms           = { "arms warrior" },
+	fury           = { "fury warrior" },
+	elemental      = { "ele" },
+	enhancement    = { "enh", "enhance" },
+	balance        = { "boomkin", "moonkin", "boomy" },
+	shadow         = { "shadow priest" },
+	disc           = { "discipline" },
+	affliction     = { "aff" },
+	demonology     = { "demo" },
+	destruction    = { "destro" },
+	assassination  = { "assa", "assassin" },
+	subtlety       = { "sub", "subtle" },
+	beast_mastery  = { "bm", "beast mastery", "beastmastery", "beast master" },
+	marksmanship   = { "mm", "marksman", "marks" },
+	survival       = { "surv" },
 }
 
 local function foldSpecArg(s)
@@ -805,6 +833,44 @@ function ChestAdvisor.parseSpecArg(class, arg)
 	end
 	if n == 1 then
 		for k in pairs(hits) do return k end
+	end
+	return nil
+end
+
+-- Resolve a client talent-spec name (C_SpecializationInfo) onto a registry
+-- entry. "Feral Combat" / "Feral" is the one ambiguous name: the client
+-- role disambiguates Cat (DAMAGER) from Bear (TANK).
+function ChestAdvisor.specFromTalents(class, name, role)
+	local folded = foldSpecArg(name)
+	if folded == "" then return nil end
+	local list = ChestAdvisor.specsFor(class)
+	local hits, n = {}, 0
+	for _, e in ipairs(list) do
+		if foldSpecArg(e.name) == folded
+			or foldSpecArg(e.key) == folded
+			or foldSpecArg(e.key:gsub("_", " ")) == folded then
+			if not hits[e.key] then hits[e.key] = e; n = n + 1 end
+		end
+	end
+	if n == 1 then
+		for _, e in pairs(hits) do return e end
+	end
+	if type(class) == "string" and folded:find("feral", 1, true) then
+		if role == "TANK" then return ChestAdvisor.lookupSpec(class, "feral_bear") end
+		if role == "DAMAGER" then return ChestAdvisor.lookupSpec(class, "feral_cat") end
+	end
+	-- Unique prefix of the talent name against keys and display names.
+	hits, n = {}, 0
+	for _, e in ipairs(list) do
+		for _, a in ipairs({ foldSpecArg(e.name), foldSpecArg(e.key),
+		                     foldSpecArg(e.key:gsub("_", " ")) }) do
+			if #folded > 0 and (a:sub(1, #folded) == folded or folded:sub(1, #a) == a) then
+				if not hits[e.key] then hits[e.key] = e; n = n + 1 end
+			end
+		end
+	end
+	if n == 1 then
+		for _, e in pairs(hits) do return e end
 	end
 	return nil
 end
@@ -974,6 +1040,31 @@ local function buildSpec()
 			profileLabel = entry.name,
 		}
 	end
+	-- Auto: when the player has not recorded `/up role`, match the
+	-- talent name onto a registry entry so Arms vs Fury (and the
+	-- other split specs) are not guessed from the client role alone.
+	-- A recorded `/up role` still wins over the talent name, the way
+	-- it did before the picker existed.
+	local recorded = playerRole(token)
+	if recorded == nil then
+		local talent = ChestAdvisor.specFromTalents(token, si and si.name, si and si.role)
+		if talent then
+			local torder = (Verdict and Verdict.classRoleOrder)
+				and Verdict.classRoleOrder(token, talent.orderWord) or nil
+			return {
+				order = torder,
+				role = talent.orderWord,
+				class = token,
+				level = level,
+				clientRole = talent.role,
+				name = talent.name,
+				classDisplay = classDisplayName(),
+				weightsKey = talent.weightsKey,
+				profileSource = "talents",
+				profileLabel = talent.name,
+			}
+		end
+	end
 	local role  = resolvedRole(token, si)
 	local order = (Verdict and Verdict.classRoleOrder) and Verdict.classRoleOrder(token, role) or nil
 	-- A hybrid without a resolved role is not "acting as its class token":
@@ -983,7 +1074,7 @@ local function buildSpec()
 		label = token
 	end
 	-- clientRole is the client's own literal, passed through for the WEIGHT
-	-- lookup only (Verdict.weightsFor): it is what lets a Protection paladin
+	-- lookup only (Verdict.profileFor): it is what lets a Protection paladin
 	-- reach a Prot weight table at all, since `role` above is the FOLDED word
 	-- ("spell") that the order needs. Nothing else reads this field, and it is
 	-- nil wherever the client does not offer the read — which the weights layer
@@ -1474,8 +1565,7 @@ end
 -- ordinary word for its token is used unchanged ("Upgrade" / "Not an
 -- upgrade"), so the flag is the only difference from a damage verdict.
 function TOOLTIP_UI.weighted(row, order)
-	if type(row) ~= "table" or type(row.weighted) ~= "number" then return nil end
-	local total = row.weighted
+	if type(row) ~= "table" then return nil end
 	local vs = nil
 	if type(row.wornLink) == "string" then
 		vs = " vs " .. itemNameOf(row.wornLink)
@@ -1485,6 +1575,26 @@ function TOOLTIP_UI.weighted(row, order)
 		profile = " [" .. row.profile .. "]"
 	end
 	local word, head
+	-- Order-only profiles have no numeric total; the deciding tier is the
+	-- sentence (e.g. "decided by Hit (below 9% cap)").
+	if type(row.decidedBy) == "string" and row.decidedBy ~= "" then
+		word = TOOLTIP_UI.word(row.verdict)
+		if row.verdict == "NOT_UPGRADE" then
+			if row.orderOutcome == "no change" then
+				word = TOOLTIP_UI.words.NO_CHANGE
+			else
+				word = TOOLTIP_UI.words.DOWNGRADE
+			end
+		end
+		if row.verdict == "NOT_UPGRADE" and row.orderOutcome == "no change" then
+			head = "no change" .. (vs or "") .. (profile or "")
+		else
+			head = "decided by " .. row.decidedBy .. (vs or "") .. (profile or "")
+		end
+	elseif type(row.weighted) ~= "number" then
+		return nil
+	else
+	local total = row.weighted
 	if type(row.tiebreak) == "string" and row.tiebreak ~= "" then
 		-- Card t_c4911603: the damage total was tied and the profile's RANKED
 		-- tiebreaker decided. The line is deliberately a different sentence from
@@ -1506,6 +1616,7 @@ function TOOLTIP_UI.weighted(row, order)
 			if total < 0 then word = TOOLTIP_UI.words.DOWNGRADE
 			else word = TOOLTIP_UI.words.NO_CHANGE end
 		end
+	end
 	end
 	local detail = nil
 	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
@@ -3088,6 +3199,8 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 		if type(weighted) == "table" then
 			row.weighted = weighted.total
 			row.profile = weighted.profile
+			row.decidedBy = weighted.decidedBy
+			row.orderOutcome = weighted.orderOutcome
 			-- Card t_c4911603: nil on every ordinary outcome; the signed
 			-- ranked deltas when the tiebreaker decided, so the line can say
 			-- "tiebreaker (...)" instead of "weighted 0".
@@ -6196,6 +6309,8 @@ ChestAdvisor.scan = function()
 							-- not come from the weights (a weapon row, a decline).
 							weighted = w2 and w2.total or nil,
 							profile = w2 and w2.profile or nil,
+							decidedBy = w2 and w2.decidedBy or nil,
+							orderOutcome = w2 and w2.orderOutcome or nil,
 							-- Card t_c4911603: the signed ranked deltas when a
 							-- tiebreaker decided the row, nil otherwise (same
 							-- two-scalar economy as `weighted`/`profile`: one

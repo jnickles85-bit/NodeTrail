@@ -4,8 +4,9 @@
 -- A registry entry can be chosen (slash / options / saved gearFor) even when
 -- that spec has no sourced WEIGHTS table yet. In that case profileFor is
 -- nil and the verdict is "no sourced weights for <spec> yet" — silence,
--- never a guess into another pack. Existing 4/1/0 tables stay in WEIGHTS
--- with source = nil until replaced; Ret keeps its researched citation.
+-- never a guess into another pack. ForeverDB leveling tables (top = 4)
+-- ship for every spec that has one; Feral (Cat) is the one registry
+-- entry with no table.
 --
 -- Run from the repo root:  lua5.1 tests/gear_for_spec.lua
 
@@ -161,15 +162,15 @@ check(okEnable, "ChestAdvisor.Enable runs: " .. tostring(enableErr))
 
 -- ── Registry completeness ──────────────────────────────────────────
 local REQUIRED = {
-  WARRIOR = { "arms_fury", "prot" },
+  WARRIOR = { "arms", "fury", "prot" },
   PALADIN = { "holy", "prot", "ret" },
   DRUID   = { "balance", "feral_cat", "feral_bear", "resto" },
   SHAMAN  = { "elemental", "enhancement", "resto" },
-  PRIEST  = { "holy", "shadow" },
-  MAGE    = { "mage" },
-  WARLOCK = { "warlock" },
-  ROGUE   = { "rogue" },
-  HUNTER  = { "hunter" },
+  PRIEST  = { "holy", "disc", "shadow" },
+  MAGE    = { "arcane", "fire", "frost" },
+  WARLOCK = { "affliction", "demonology", "destruction" },
+  ROGUE   = { "assassination", "combat", "subtlety" },
+  HUNTER  = { "beast_mastery", "marksmanship", "survival" },
 }
 
 check(type(ChestAdvisor.specsFor) == "function", "ChestAdvisor.specsFor exists")
@@ -214,8 +215,8 @@ check(entry("PALADIN", "prot") and entry("PALADIN", "prot").role == "TANK",
   "Paladin Protection is TANK")
 check(entry("PALADIN", "holy") and entry("PALADIN", "holy").role == "HEALER",
   "Paladin Holy is HEALER")
-check(entry("PALADIN", "ret") and entry("PALADIN", "ret").weightsKey == "melee",
-  "Paladin Retribution uses the melee weights key")
+check(entry("PALADIN", "ret") and entry("PALADIN", "ret").weightsKey == "ret",
+  "Paladin Retribution uses the ret weights key")
 check(entry("WARRIOR", "prot") and entry("WARRIOR", "prot").role == "TANK",
   "Warrior Protection is TANK")
 check(entry("DRUID", "feral_cat") and entry("DRUID", "feral_cat").role == "DAMAGER",
@@ -236,33 +237,46 @@ for class, byRole in pairs(Verdict.WEIGHTS) do
   check(type(byRole) == "table", "WEIGHTS[" .. tostring(class) .. "] is a table")
   for word, pack in pairs(byRole) do
     check(type(pack) == "table", class .. "." .. tostring(word) .. " is a profile")
-    -- source = nil in a Lua constructor is absent from pairs(); the
-    -- unsourced tables still read as pack.source == nil, which is the
-    -- replace-me marker. A present source must be a non-empty citation.
-    if pack.source == nil then
-      unsourced = unsourced + 1
-    else
-      check(type(pack.source) == "string" and pack.source ~= "",
+    check(type(pack.source) == "string" and pack.source ~= "",
         class .. "." .. tostring(word) .. " source is a non-empty citation")
+      if class == "PALADIN" and word == "ret" then
+        check(pack.kind == "order" and type(pack.tiers) == "table" and #pack.tiers >= 9,
+          "Retribution is an order-only profile with the Wowhead tiers")
+        check(pack.w == nil, "Retribution does not invent numeric weights")
+        check(pack.source:find("wowhead.com/forever/guide/classes/paladin/retribution/stat-priority-pve-dps", 1, true),
+          "Retribution source cites the Wowhead stat-priority page")
+        check(pack.source:find("updated 2026-10-31", 1, true)
+            and pack.source:find("cited 2026-11-11", 1, true),
+          "Retribution source records the page date and the citation date")
+        check(pack.source:find("shift", 1, true) or pack.source:find("beta", 1, true),
+          "Retribution source notes the page is beta-based and will shift")
+        check(pack.source:find("Order-only", 1, true),
+          "Retribution source says the profile is order-only")
+      else
+        check(pack.source:find("foreverdb.net/data/bis/", 1, true),
+          class .. "." .. tostring(word) .. " source cites ForeverDB")
+        check(pack.source:find("ForeverDB hand-set leveling weights, client 1.60.1 build 70862", 1, true),
+          class .. "." .. tostring(word) .. " source names the leveling set and client")
+        check(type(pack.w) == "table", class .. "." .. tostring(word) .. " has a numeric w table")
+      end
+      check(pack.tiebreak == nil,
+        class .. "." .. tostring(word) .. " has no tiebreak list")
       sourced = sourced + 1
-    end
   end
 end
-local ret = Verdict.WEIGHTS.PALADIN and Verdict.WEIGHTS.PALADIN.melee
+local ret = Verdict.WEIGHTS.PALADIN and Verdict.WEIGHTS.PALADIN.ret
 check(ret ~= nil and type(ret.source) == "string" and ret.source ~= "",
-  "Retribution (PALADIN.melee) has a non-empty source citation")
-check(unsourced > 0, "existing 4/1/0 tables are kept and marked source = nil")
-check(sourced >= 1, "at least the Ret profile is sourced")
+  "Retribution (PALADIN.ret) has a non-empty source citation")
+check(unsourced == 0, "every shipped profile is sourced (no leftover 4/1/0 tables)")
+check(sourced == 27, "27 sourced profiles ship (26 ForeverDB numeric + Ret order-only; got "
+  .. tostring(sourced) .. ")")
 
--- No invented tables for specs that do not yet have a citation.
-local forbidden = {
-  { "DRUID", "feral_cat" }, { "DRUID", "feral_bear" }, { "DRUID", "resto" },
-  { "SHAMAN", "resto" }, { "PRIEST", "shadow" },
-}
-for _, pair in ipairs(forbidden) do
-  local pack = Verdict.WEIGHTS[pair[1]] and Verdict.WEIGHTS[pair[1]][pair[2]]
-  check(pack == nil, "no guessed WEIGHTS." .. pair[1] .. "." .. pair[2] .. " table")
-end
+-- Feral (Cat) is the one registry entry with no PvE item-weight file.
+check((Verdict.WEIGHTS.DRUID and Verdict.WEIGHTS.DRUID.feral_cat) == nil,
+  "no guessed WEIGHTS.DRUID.feral_cat table (sim / order-only lists are not weights)")
+check(Verdict.WEIGHTS.DRUID and Verdict.WEIGHTS.DRUID.feral_bear
+    and Verdict.WEIGHTS.DRUID.resto,
+  "Feral (Bear) and Restoration now have sourced tables")
 
 -- Auto / no-override Feral melee stays nil (existing contract).
 check(Verdict.profileFor({ class = "DRUID", role = "melee" }) == nil,
@@ -273,6 +287,16 @@ check(Verdict.ratingFromPercent("Crit", 1) == 14,
   "14 crit rating = 1% (got " .. tostring(Verdict.ratingFromPercent("Crit", 1)) .. ")")
 check(Verdict.ratingFromPercent("Hit", 1) == 10,
   "10 hit rating = 1% (got " .. tostring(Verdict.ratingFromPercent("Hit", 1)) .. ")")
+check(Verdict.ratingFromPercent("Haste", 1) == 10,
+  "10 haste rating = 1%")
+check(Verdict.ratingFromPercent("Expertise", 1) == 10,
+  "10 expertise rating = 1%")
+check(Verdict.ratingFromPercent("Dodge", 1) == 12,
+  "12 dodge rating = 1%")
+check(Verdict.ratingFromPercent("Parry", 1) == 15,
+  "15 parry rating = 1%")
+check(Verdict.ratingFromPercent("BlockChance", 1) == 5,
+  "5 block-chance rating = 1%")
 
 -- weightedTotal accepts Hit / Crit / Defense / WeaponDps when a pack prices them.
 -- The pack below is a test fixture, not a shipped profile.
@@ -319,6 +343,36 @@ mustClassify("increases defense rating sentence",
 mustClassify("percent crit still converts",
   { "Cand", "+10 Strength", "Improves your chance to get a critical strike by 1%." },
   { "Eq",   "+10 Strength" })
+mustClassify("haste rating",
+  { "Cand", "+10 Strength", "+10 Haste Rating" },
+  { "Eq",   "+10 Strength" })
+mustClassify("expertise rating",
+  { "Cand", "+10 Strength", "+10 Expertise Rating" },
+  { "Eq",   "+10 Strength" })
+mustClassify("healing-only sentence",
+  { "Cand", "+10 Intellect", "Equip: Increases healing done by spells and effects by up to 20." },
+  { "Eq",   "+10 Intellect" })
+mustClassify("holy damage sentence",
+  { "Cand", "+10 Strength", "Equip: Increases damage done by Holy spells and effects by up to 8." },
+  { "Eq",   "+10 Strength" })
+mustClassify("wand dps remaps off WeaponDps",
+  { "Cand Wand", "Ranged Wand", "(12.5 damage per second)", "+5 Intellect" },
+  { "Eq Wand",   "Ranged Wand", "(10.0 damage per second)", "+5 Intellect" })
+
+-- Parser unit: a percent sentence lifts to rating; a rating-unit line stays raw.
+-- Arms (a numeric ForeverDB pack) prices Crit and Strength at 4 per point, so
+-- +1% crit is 14 * 4 = 56 and beats +4 Strength (4 * 4 = 16). If the parser
+-- left the percent as 1, Strength would wrongly win (4 vs 16). Retribution is
+-- order-only and is checked separately below (Strength outranks Crit there).
+local armsSpec = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER" }
+local critItem = { "Crit Charm", "+1 Intellect", "Improves your chance to get a critical strike by 1%." }
+local strItem  = { "Str Charm",  "+4 Strength", "+1 Intellect" }
+local vCrit, rCrit, wCrit = Verdict.evaluate(
+  { canUse = true, line = critItem }, { canUse = true, line = strItem }, armsSpec)
+check(vCrit == "UPGRADE",
+  "a +1% crit item beats +4 Strength on Arms (got " .. tostring(vCrit) .. " " .. tostring(rCrit) .. ")")
+check(type(wCrit) == "table" and wCrit.total == 14*4 - 4*4,
+  "Arms +1% crit vs +4 Str is 56 - 16 = 40 (got " .. tostring(wCrit and wCrit.total) .. ")")
 
 -- ── Override precedence ────────────────────────────────────────────
 local function asClass(token, display, name, role)
@@ -345,8 +399,8 @@ local okSet, setMsg = ChestAdvisor.setGearFor("prot")
 check(okSet ~= false, "setGearFor('prot') accepted on a Paladin: " .. tostring(setMsg))
 check(ChestAdvisor.gearForKey() == "prot", "gearForKey is prot after set")
 local chosen = ChestAdvisor.buildSpec()
-check(chosen and chosen.weightsKey == "tank",
-  "chosen Protection uses the tank weights key (got " .. tostring(chosen and chosen.weightsKey) .. ")")
+check(chosen and chosen.weightsKey == "prot",
+  "chosen Protection uses the prot weights key (got " .. tostring(chosen and chosen.weightsKey) .. ")")
 check(chosen and chosen.clientRole == "TANK",
   "chosen Protection sets clientRole TANK (got " .. tostring(chosen and chosen.clientRole) .. ")")
 check(chosen and chosen.profileSource == "chosen",
@@ -356,7 +410,7 @@ check(chosen and chosen.profileLabel == "Protection",
 -- /up role spell is still saved, but gearFor wins.
 ChestAdvisorDB.role.PALADIN = "spell"
 local still = ChestAdvisor.buildSpec()
-check(still and still.weightsKey == "tank" and still.profileSource == "chosen",
+check(still and still.weightsKey == "prot" and still.profileSource == "chosen",
   "gearFor Protection wins over /up role spell")
 
 -- Invalid override for this class is ignored (talents / recorded role resume).
@@ -414,8 +468,11 @@ expectParse("DRUID", "bear", "feral_bear")
 expectParse("DRUID", "balance", "balance")
 expectParse("SHAMAN", "resto", "resto")
 expectParse("PRIEST", "shadow", "shadow")
-expectParse("WARRIOR", "arms", "arms_fury")
-expectParse("WARRIOR", "fury", "arms_fury")
+expectParse("WARRIOR", "arms", "arms")
+expectParse("WARRIOR", "fury", "fury")
+expectParse("PRIEST", "disc", "disc")
+expectParse("MAGE", "frost", "frost")
+expectParse("HUNTER", "bm", "beast_mastery")
 -- Ambiguous 'feral' names both cat and bear — no unique match.
 local feral = ChestAdvisor.parseSpecArg("DRUID", "feral")
 check(feral == nil, "parseSpecArg(DRUID, 'feral') is ambiguous (got " .. tostring(feral) .. ")")
@@ -463,8 +520,8 @@ check(policy == "required",
   "a chosen Protection paladin requires a shield (got " .. tostring(policy) .. ")")
 
 local tankProfile = Verdict.profileFor(protSpec)
-check(tankProfile ~= nil and tankProfile == Verdict.WEIGHTS.PALADIN.tank,
-  "chosen Protection scores with the (kept, unsourced) Paladin tank table")
+check(tankProfile ~= nil and tankProfile == Verdict.WEIGHTS.PALADIN.prot,
+  "chosen Protection scores with the sourced Paladin Protection table")
 -- A Stamina/Block shield is better on the tank pack than a Strength-heavy one
 -- would be for Ret: the tank table prices Stamina 4 and Block (if present).
 local shieldW = Verdict.weightedTotal(
@@ -495,7 +552,7 @@ check(dChosen and type(dChosen.profile) == "string" and dChosen.profile:find("(c
 -- when profileSource is left unset — the existing [Retribution] contract.
 ChestAdvisor.setGearFor(nil)
 ChestAdvisorDB.role = {}
-local retReason = Verdict.weightedReason({ total = -16 }, Verdict.WEIGHTS.PALADIN.melee, "downgrade")
+local retReason = Verdict.weightedReason({ total = -16 }, Verdict.WEIGHTS.PALADIN.ret, "downgrade")
 check(retReason == "weighted -16 [Retribution]",
   "existing [Retribution] wording is unchanged without a profileSource")
 
@@ -510,20 +567,21 @@ check(restoSpec and restoSpec.profileSource == "chosen"
     and restoSpec.profileLabel == "Restoration"
     and restoSpec.clientRole == "HEALER"
     and restoSpec.weightsKey == "resto",
-  "chosen Restoration resolves identity/gates even without weights")
-check(Verdict.profileFor(restoSpec) == nil,
-  "chosen Restoration does not fall back to the Balance pack")
+  "chosen Restoration resolves identity/gates")
+local restoPack = Verdict.profileFor(restoSpec)
+check(restoPack ~= nil and restoPack == Verdict.WEIGHTS.DRUID.resto,
+  "chosen Restoration scores with the sourced resto table, not Balance")
 local rv, rr = Verdict.weightedVerdict({ Intellect = 10 }, { Intellect = 0 }, restoSpec)
-check(rv == "UNKNOWN", "Restoration without sourced weights is UNKNOWN, not a guess")
-check(type(rr) == "string" and rr == "no sourced weights for Restoration yet",
-  "verdict names the unsourced spec honestly (got " .. tostring(rr) .. ")")
+check(rv == "UPGRADE", "Restoration with sourced weights scores Intellect (got " .. tostring(rv) .. ")")
+check(type(rr) == "string" and rr:find("Restoration", 1, true) and rr:find("(chosen)", 1, true),
+  "Restoration reason names the chosen pack (got " .. tostring(rr) .. ")")
 
 -- /up role spell must not leak through while resto is chosen.
 check(restoSpec.role == "spell" or restoSpec.orderWord == "spell"
     or (entry("DRUID", "resto") and entry("DRUID", "resto").orderWord == "spell"),
   "Restoration keeps the healer order word")
 -- And it must not be the Balance profile.
-check(Verdict.profileFor(restoSpec) ~= (Verdict.WEIGHTS.DRUID and Verdict.WEIGHTS.DRUID.spell),
+check(restoPack ~= (Verdict.WEIGHTS.DRUID and Verdict.WEIGHTS.DRUID.balance),
   "Restoration is not scored as Balance")
 
 local okCat = ChestAdvisor.setGearFor("feral_cat")
@@ -543,23 +601,156 @@ local bearOff = ChestAdvisor.readOffHandSpec()
 check(bearOff and bearOff.role == "TANK",
   "Feral (Bear) sets the off-hand / shield identity to TANK")
 local bv, br = Verdict.weightedVerdict({ Stamina = 10 }, { Stamina = 0 }, ChestAdvisor.buildSpec())
-check(bv == "UNKNOWN" and type(br) == "string" and br:find("no sourced weights for ", 1, true) == 1,
-  "Feral (Bear) does not guess a tank pack (got " .. tostring(br) .. ")")
+check(bv == "UPGRADE", "Feral (Bear) now scores with its sourced tank pack (got " .. tostring(bv) .. ")")
+check(type(br) == "string" and br:find("Feral (Bear)", 1, true),
+  "Feral (Bear) reason names the bear pack (got " .. tostring(br) .. ")")
 
--- Auto Feral (client DAMAGER, no unique alias) stays the old silence, not a
--- guessed Cat or Balance pack, and does not use the new 'no sourced weights'
--- wording unless a spec was actually chosen.
+-- Auto Feral (talent name "Feral" + DAMAGER) resolves to Feral (Cat) and
+-- stays silent: there is still no item-weight table, so the verdict names
+-- the unsourced cat spec rather than guessing Bear or Balance.
 ChestAdvisor.setGearFor(nil)
 ChestAdvisorDB.role = {}
 asClass("DRUID", "Druid", "Feral", "DAMAGER")
 local autoFeral = ChestAdvisor.buildSpec()
+check(autoFeral and autoFeral.weightsKey == "feral_cat" and autoFeral.profileLabel == "Feral (Cat)",
+  "Auto Feral + DAMAGER resolves to the Cat registry entry")
 check(Verdict.profileFor(autoFeral) == nil,
-  "Auto Feral (no override) still has no profile")
+  "Auto Feral (Cat) still has no sourced weights")
 local afv, afr = Verdict.weightedVerdict({ Agility = 10 }, { Agility = 0 }, autoFeral)
-check(afv == "UNKNOWN", "Auto Feral is UNKNOWN")
-check(type(afr) == "string" and not afr:find("no sourced weights for Feral", 1, true),
-  "Auto Feral without a chosen spec keeps the generic no-weights wording (got "
-    .. tostring(afr) .. ")")
+check(afv == "UNKNOWN", "Auto Feral (Cat) is UNKNOWN")
+check(type(afr) == "string" and afr == "no sourced weights for Feral (Cat) yet",
+  "Auto Feral (Cat) names the unsourced spec (got " .. tostring(afr) .. ")")
+
+-- ── Retribution order-only path (Wowhead priority) ────────────────
+local retOrderSpec = { class = "PALADIN", role = "melee", clientRole = "DAMAGER",
+  weightsKey = "ret" }
+check(Verdict.isOrderProfile(Verdict.profileFor(retOrderSpec)) == true,
+  "Retribution resolves to an order-only profile")
+
+-- Tier decision: Hit outranks Strength, so +1% hit beats +20 Strength.
+local vHit, rHit, dHit = Verdict.evaluate(
+  { canUse = true, line = { "Hit Charm", "Improves your chance to hit by 1%." } },
+  { canUse = true, line = { "Str Charm", "+20 Strength" } },
+  retOrderSpec)
+check(vHit == "UPGRADE", "Hit (tier 3) beats Strength (tier 7) on Ret (got "
+  .. tostring(vHit) .. " " .. tostring(rHit) .. ")")
+check(type(rHit) == "string" and rHit:find("decided by Hit", 1, true)
+    and rHit:find("cap status unknown", 1, true),
+  "unknown cap still ranks Hit and says so (got " .. tostring(rHit) .. ")")
+check(dHit and dHit.decidedBy and dHit.decidedBy:find("Hit", 1, true),
+  "detail.decidedBy names Hit")
+
+-- On Ret, Strength outranks Crit, so +4 Str beats +1% crit (the inverse of Arms).
+local vRetStr, rRetStr = Verdict.evaluate(
+  { canUse = true, line = strItem }, { canUse = true, line = critItem }, retOrderSpec)
+check(vRetStr == "UPGRADE" and type(rRetStr) == "string"
+    and rRetStr:find("decided by Strength & Attack Power", 1, true),
+  "Ret order: +4 Strength beats +1% crit (got " .. tostring(rRetStr) .. ")")
+
+-- Intra-tier conflict: Strength up, Attack Power down → TRADE_OFF naming them.
+-- Equal everything else.
+local vConf, rConf = Verdict.evaluate(
+  { canUse = true, line = { "A", "+10 Strength", "+4 Attack Power" } },
+  { canUse = true, line = { "B", "+6 Strength", "+12 Attack Power" } },
+  retOrderSpec)
+check(vConf == "TRADE_OFF", "intra-tier Strength/AP conflict is TRADE_OFF (got "
+  .. tostring(vConf) .. " " .. tostring(rConf) .. ")")
+check(type(rConf) == "string" and rConf:find("Strength", 1, true)
+    and rConf:find("Attack Power", 1, true) and rConf:find("conflict", 1, true),
+  "TRADE_OFF names the conflicting stats (got " .. tostring(rConf) .. ")")
+
+-- Same-direction intra-tier: both Strength and AP rise → upgrade, no conversion.
+local vSame, rSame = Verdict.evaluate(
+  { canUse = true, line = { "A", "+10 Strength", "+8 Attack Power" } },
+  { canUse = true, line = { "B", "+6 Strength", "+4 Attack Power" } },
+  retOrderSpec)
+check(vSame == "UPGRADE" and type(rSame) == "string"
+    and rSame:find("decided by Strength & Attack Power", 1, true),
+  "same-direction Strength and AP is an upgrade (got " .. tostring(rSame) .. ")")
+
+-- Cap clamp: player at 9% hit. A +20 hit-rating gain is entirely past cap
+-- and must not decide; equal Strength → no change.
+local atCap = { class = "PALADIN", role = "melee", clientRole = "DAMAGER",
+  weightsKey = "ret", playerHitPercent = 9 }
+local vCapGain, rCapGain = Verdict.evaluate(
+  { canUse = true, line = { "A", "+10 Strength", "+20 Hit Rating" } },
+  { canUse = true, line = { "B", "+10 Strength" } },
+  atCap)
+check(vCapGain == "NOT_UPGRADE" and type(rCapGain) == "string"
+    and rCapGain:find("no change", 1, true),
+  "a hit gain that is already at the 9% cap does not count (got " .. tostring(rCapGain) .. ")")
+
+-- Cap clamp the other way: player at 9%, worn has the +20 hit rating, candidate
+-- drops it. The loss falls below cap and decides a downgrade.
+local vCapLoss, rCapLoss, dCapLoss = Verdict.evaluate(
+  { canUse = true, line = { "A", "+10 Strength" } },
+  { canUse = true, line = { "B", "+10 Strength", "+20 Hit Rating" } },
+  atCap)
+check(vCapLoss == "NOT_UPGRADE", "a hit loss that drops below the 9% cap counts (got "
+  .. tostring(vCapLoss) .. " " .. tostring(rCapLoss) .. ")")
+check(type(rCapLoss) == "string" and rCapLoss:find("decided by Hit (below 9% cap)", 1, true),
+  "hit loss below cap is worded with the cap (got " .. tostring(rCapLoss) .. ")")
+
+-- Below-cap gain still ranks, and the verdict names the cap.
+local belowCap = { class = "PALADIN", role = "melee", clientRole = "DAMAGER",
+  weightsKey = "ret", playerHitPercent = 7 }
+local vBelow, rBelow = Verdict.evaluate(
+  { canUse = true, line = { "A", "+10 Strength", "+20 Hit Rating" } },
+  { canUse = true, line = { "B", "+10 Strength" } },
+  belowCap)
+check(vBelow == "UPGRADE" and type(rBelow) == "string"
+    and rBelow:find("decided by Hit (below 9% cap)", 1, true),
+  "a hit gain while below cap is decided by Hit (got " .. tostring(rBelow) .. ")")
+
+-- Forced unknown cap still ranks the raw delta.
+local unknownCap = { class = "PALADIN", role = "melee", clientRole = "DAMAGER",
+  weightsKey = "ret", playerHitPercent = false }
+local vUnk, rUnk = Verdict.evaluate(
+  { canUse = true, line = { "A", "+10 Hit Rating" } },
+  { canUse = true, line = { "B", "+10 Strength" } },
+  unknownCap)
+check(vUnk == "UPGRADE" and type(rUnk) == "string"
+    and rUnk:find("cap status unknown", 1, true),
+  "unreadable cap still ranks Hit and says unknown (got " .. tostring(rUnk) .. ")")
+
+-- Weapon DPS tier: higher DPS wins even against more Strength (DPS is tier 2).
+local vDps, rDps = Verdict.evaluate(
+  { canUse = true, line = { "Fast", "Two-Hand Sword", "(20.0 damage per second)", "Speed 2.00", "+2 Strength" } },
+  { canUse = true, line = { "Slow", "Two-Hand Sword", "(15.0 damage per second)", "Speed 3.60", "+20 Strength" } },
+  retOrderSpec)
+check(vDps == "UPGRADE" and type(rDps) == "string" and rDps:find("decided by Weapon DPS", 1, true),
+  "higher weapon DPS decides before Strength (got " .. tostring(rDps) .. ")")
+
+-- Equal DPS, different speed, later tier (Strength) decides; speed is not ranked.
+local vSpd, rSpd, dSpd = Verdict.evaluate(
+  { canUse = true, line = { "Fast", "Two-Hand Sword", "(18.0 damage per second)", "Speed 2.00", "+12 Strength" } },
+  { canUse = true, line = { "Slow", "Two-Hand Sword", "(18.0 damage per second)", "Speed 3.60", "+8 Strength" } },
+  retOrderSpec)
+check(vSpd == "UPGRADE" and type(rSpd) == "string"
+    and rSpd:find("decided by Strength & Attack Power", 1, true)
+    and not rSpd:find("Weapon DPS", 1, true),
+  "equal DPS defers to Strength; speed is not a ranking (got " .. tostring(rSpd) .. ")")
+check(dSpd and type(dSpd.speedNote) == "string" and dSpd.speedNote:find("not ranked", 1, true),
+  "equal-DPS speed difference is reported, not ranked")
+
+-- Equal DPS, different speed, nothing else differs → no change, speed noted.
+local vSpdOnly, rSpdOnly = Verdict.evaluate(
+  { canUse = true, line = { "Fast", "Two-Hand Sword", "(18.0 damage per second)", "Speed 2.00", "+8 Strength" } },
+  { canUse = true, line = { "Slow", "Two-Hand Sword", "(18.0 damage per second)", "Speed 3.60", "+8 Strength" } },
+  retOrderSpec)
+check(vSpdOnly == "NOT_UPGRADE" and type(rSpdOnly) == "string"
+    and rSpdOnly:find("no change", 1, true)
+    and rSpdOnly:find("weapon speed differs", 1, true)
+    and rSpdOnly:find("not ranked", 1, true),
+  "speed-only difference is no change, reported unranked (got " .. tostring(rSpdOnly) .. ")")
+
+-- Weapon Skill outranks Weapon DPS.
+local vSk, rSk = Verdict.evaluate(
+  { canUse = true, line = { "Skill", "Two-Hand Sword", "+1 Swords", "(12.0 damage per second)", "Speed 3.60" } },
+  { canUse = true, line = { "Dps",   "Two-Hand Sword", "(20.0 damage per second)", "Speed 3.60" } },
+  retOrderSpec)
+check(vSk == "UPGRADE" and type(rSk) == "string" and rSk:find("decided by Weapon Skill", 1, true),
+  "Weapon Skill decides before Weapon DPS (got " .. tostring(rSk) .. ")")
 
 -- ── Options 'Gear for' widget ──────────────────────────────────────
 -- Load Options.lua against this already-booted pkg, with a stub Settings

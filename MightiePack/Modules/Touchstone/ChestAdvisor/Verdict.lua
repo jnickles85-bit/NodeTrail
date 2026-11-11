@@ -634,6 +634,27 @@ local KNOWN = {
 	["WeaponDps"]        = true,
 	["MP5"]              = true,
 	["HP5"]              = true,
+	-- ForeverDB leveling packs also price these words (haste / expertise /
+	-- block chance / bonus armor / healing and school spell power / wand DPS).
+	-- They are KNOWN so a tooltip line that names them is accumulated rather
+	-- than suppressed. A pack that does not price a word still treats it as
+	-- zero, not a guess.
+	["Haste"]            = true,
+	["Expertise"]        = true,
+	["BlockChance"]      = true,
+	["BonusArmor"]       = true,
+	["HealingPower"]     = true,
+	["SpellDamage"]      = true,
+	["HolyDamage"]       = true,
+	["FireDamage"]       = true,
+	["FrostDamage"]      = true,
+	["ShadowDamage"]     = true,
+	["NatureDamage"]     = true,
+	["ArcaneDamage"]     = true,
+	["SpellPenetration"] = true,
+	["WandDps"]          = true,
+	["WeaponSkill"]      = true,
+	["WeaponSpeed"]      = true,
 }
 
 -- ---- Defect 2 (card t_548f0341): the client's own stat read -----------------
@@ -748,6 +769,23 @@ Verdict.ITEM_STAT_KEYS = {
 	-- ITEM_MOD_DAMAGE_PER_SECOND_SHORT): the packs price it as weaponDps, and
 	-- where they do, the table prices it as WDN.
 	ITEM_MOD_DAMAGE_PER_SECOND   = "WeaponDps",
+	ITEM_MOD_HASTE_RATING        = "Haste",
+	ITEM_MOD_HASTE_MELEE_RATING  = "Haste",
+	ITEM_MOD_HASTE_RANGED_RATING = "Haste",
+	ITEM_MOD_HASTE_SPELL_RATING  = "Haste",
+	ITEM_MOD_EXPERTISE_RATING    = "Expertise",
+	ITEM_MOD_BLOCK_RATING        = "BlockChance",
+	ITEM_MOD_SPELL_PENETRATION   = "SpellPenetration",
+	ITEM_MOD_SPELL_HEALING_DONE  = "HealingPower",
+	ITEM_MOD_SPELL_DAMAGE_DONE   = "SpellDamage",
+	ITEM_MOD_HOLY_POWER          = "HolyDamage",
+	ITEM_MOD_FIRE_POWER          = "FireDamage",
+	ITEM_MOD_FROST_POWER         = "FrostDamage",
+	ITEM_MOD_SHADOW_POWER        = "ShadowDamage",
+	ITEM_MOD_NATURE_POWER        = "NatureDamage",
+	ITEM_MOD_ARCANE_POWER        = "ArcaneDamage",
+	ITEM_MOD_BONUS_ARMOR         = "BonusArmor",
+	ITEM_MOD_EXTRA_ARMOR         = "BonusArmor",
 }
 
 -- May the client's own stat read EXPLAIN this tooltip line?
@@ -1150,16 +1188,27 @@ end
 -- still fires (AC-5).
 Verdict.HIT_RATING_PER_PERCENT  = 10
 Verdict.CRIT_RATING_PER_PERCENT = 14
+-- Forever 1.60.1 build 70862 combatratings.txt (same scale ForeverDB uses):
+Verdict.HASTE_RATING_PER_PERCENT      = 10
+Verdict.EXPERTISE_RATING_PER_PERCENT  = 10
+Verdict.DODGE_RATING_PER_PERCENT      = 12
+Verdict.PARRY_RATING_PER_PERCENT      = 15
+Verdict.BLOCK_CHANCE_RATING_PER_PERCENT = 5
 
 -- WORD -> rating points per 1% of that word. A tooltip PERCENT times its entry
 -- is the RATING count the client's own read returns for the same stat. The
--- whole table: a word absent from it carries no factor. Only Dodge and Parry
--- are absent, deliberately (nobody has measured their scale — see the note
--- above them); the four hit/crit sentences all lift through Hit and Crit here.
+-- whole table: a word absent from it carries no factor. Hit, crit, haste,
+-- expertise, dodge, parry and block chance all lift here so a "by 1%" sentence
+-- and a "+N Rating" line land on the same raw-rating unit the packs price.
 -- Read by ratingFromPercent ONLY.
 Verdict.PERCENT_TO_RATING = {
-	Hit  = Verdict.HIT_RATING_PER_PERCENT,
-	Crit = Verdict.CRIT_RATING_PER_PERCENT,
+	Hit         = Verdict.HIT_RATING_PER_PERCENT,
+	Crit        = Verdict.CRIT_RATING_PER_PERCENT,
+	Haste       = Verdict.HASTE_RATING_PER_PERCENT,
+	Expertise   = Verdict.EXPERTISE_RATING_PER_PERCENT,
+	Dodge       = Verdict.DODGE_RATING_PER_PERCENT,
+	Parry       = Verdict.PARRY_RATING_PER_PERCENT,
+	BlockChance = Verdict.BLOCK_CHANCE_RATING_PER_PERCENT,
 }
 
 -- THE conversion: a tooltip's percent -> the rating unit of record. ONE
@@ -1379,9 +1428,20 @@ local parseLine_ = function(line)
 	-- A chest's bare armor line ("12 Armor") lands here too and reads as
 	-- the known stat Armor — inert in practice, since no order in ORDERS
 	-- consumes Armor, and never a suppression trigger.
+	local function skillNoun(w)
+		if type(w) ~= "string" then return nil end
+		local r = w:lower():gsub("%s+$", ""):gsub("%.$", "")
+		if r == "swords" or r == "axes" or r == "maces" or r == "daggers"
+			or r == "polearms" or r == "staves" or r == "bows" or r == "guns"
+			or r == "crossbows" or r == "thrown" or r == "wands" or r == "unarmed"
+			or r == "skill" then
+			return "WeaponSkill"
+		end
+		return nil
+	end
 	local num, word = trimmed:match("^%s*[%+%-%s]*(%d+)%s+(%a+)$")
 	if num and word then
-		return tonumber(num), word
+		return tonumber(num), (skillNoun(word) or word)
 	end
 	-- Multi-word rating and weapon-DPS lines the single-word "+N Word"
 	-- matcher cannot see. A number already printed in RATING units is
@@ -1403,6 +1463,34 @@ local parseLine_ = function(line)
 		if rest == "parry rating" or rest == "parry" then return "Parry" end
 		if rest == "attack power" then return "AttackPower" end
 		if rest == "ranged attack power" then return "RangedAttackPower" end
+		if rest == "haste rating" or rest == "haste" then return "Haste" end
+		if rest == "expertise rating" or rest == "expertise" then return "Expertise" end
+		if rest == "block rating" or rest == "block chance rating"
+			or rest == "block chance" then
+			return "BlockChance"
+		end
+		if rest == "bonus armor" then return "BonusArmor" end
+		if rest == "spell power" or rest == "spellpower" then return "SpellPower" end
+		if rest == "spell damage" or rest == "spell dmg" then return "SpellDamage" end
+		if rest == "healing power" or rest == "healing" then return "HealingPower" end
+		if rest == "spell penetration" then return "SpellPenetration" end
+		if rest == "holy spell damage" or rest == "holy damage" then return "HolyDamage" end
+		if rest == "fire spell damage" or rest == "fire damage" then return "FireDamage" end
+		if rest == "frost spell damage" or rest == "frost damage" then return "FrostDamage" end
+		if rest == "shadow spell damage" or rest == "shadow damage" then return "ShadowDamage" end
+		if rest == "nature spell damage" or rest == "nature damage" then return "NatureDamage" end
+		if rest == "arcane spell damage" or rest == "arcane damage" then return "ArcaneDamage" end
+		if rest == "weapon skill" or rest == "weapon skill rating" then
+			return "WeaponSkill"
+		end
+		if rest:match("%f[%a]skill%f[%A]") or rest == "swords" or rest == "axes"
+			or rest == "maces" or rest == "daggers" or rest == "polearms"
+			or rest == "staves" or rest == "fist weapons" or rest == "bows"
+			or rest == "guns" or rest == "crossbows" or rest == "thrown"
+			or rest == "wands" or rest == "unarmed"
+			or rest:match("^two[%-%s]handed%s+%a+") then
+			return "WeaponSkill"
+		end
 		return nil
 	end
 	local rnum, rrest = trimmed:match("^%s*[%+%-%s]*(%d+%.?%d*)%s+(.+)$")
@@ -1430,6 +1518,15 @@ local parseLine_ = function(line)
 	local dps = plain:match("%((%d+%.?%d*)%s+damage per second%)")
 		or plain:match("^(%d+%.?%d*)%s+damage per second%.?$")
 	if dps then return tonumber(dps), "WeaponDps" end
+	local spd = plain:match("^speed%s*:?%s*(%d+%.?%d*)$")
+		or plain:match("^(%d+%.?%d*)%s+speed$")
+	if spd then
+		local v = tonumber(spd)
+		if v and v >= 0.5 and v <= 10 then return v, "WeaponSpeed" end
+	end
+	local skillPlain = plain:gsub("^equip:%s*", ""):gsub("%s*%.$", "")
+	local skn = skillPlain:match("^increases your skill with [%a%-%s]+ by (%d+)$")
+	if skn then return tonumber(skn), "WeaponSkill" end
 	-- ── card t_3cdbb70a (DD-1): the HIT and CRIT sentences ────────────────
 	-- The client prints these four phrasings, and until this card NOT ONE of
 	-- them was placeable: they carry a number, so they suppressed the item
@@ -1523,6 +1620,34 @@ local parseLine_ = function(line)
 	local critr = stat_sentence:match("^increases your critical strike rating by (%d+%.?%d*)$")
 		or stat_sentence:match("^increases your crit rating by (%d+%.?%d*)$")
 	if critr then return tonumber(critr), "Crit" end
+	local haster = stat_sentence:match("^increases your haste rating by (%d+%.?%d*)$")
+		or stat_sentence:match("^improves your haste rating by (%d+%.?%d*)$")
+	if haster then return tonumber(haster), "Haste" end
+	local expr = stat_sentence:match("^increases your expertise rating by (%d+%.?%d*)$")
+		or stat_sentence:match("^improves your expertise rating by (%d+%.?%d*)$")
+	if expr then return tonumber(expr), "Expertise" end
+	local dodger = stat_sentence:match("^increases your dodge rating by (%d+%.?%d*)$")
+	if dodger then return tonumber(dodger), "Dodge" end
+	local parryr = stat_sentence:match("^increases your parry rating by (%d+%.?%d*)$")
+	if parryr then return tonumber(parryr), "Parry" end
+	local blockr = stat_sentence:match("^increases your shield block rating by (%d+%.?%d*)$")
+		or stat_sentence:match("^increases your block rating by (%d+%.?%d*)$")
+	if blockr then return tonumber(blockr), "BlockChance" end
+	-- Percent sentences for the remaining combat ratings, lifted through
+	-- ratingFromPercent (dodge 12, parry 15, block chance 5, haste / expertise 10).
+	local dodgep = stat_sentence:match("^increases your chance to dodge by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^improves your chance to dodge by (%d+%.?%d*)%%$")
+	if dodgep then return Verdict.ratingFromPercent("Dodge", tonumber(dodgep)), "Dodge" end
+	local parryp = stat_sentence:match("^increases your chance to parry by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^improves your chance to parry an attack by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^increases your chance to parry an attack by (%d+%.?%d*)%%$")
+	if parryp then return Verdict.ratingFromPercent("Parry", tonumber(parryp)), "Parry" end
+	local blockp = stat_sentence:match("^increases your chance to block attacks with a shield by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^increases your chance to block by (%d+%.?%d*)%%$")
+	if blockp then return Verdict.ratingFromPercent("BlockChance", tonumber(blockp)), "BlockChance" end
+	local hastep = stat_sentence:match("^increases your haste by (%d+%.?%d*)%%$")
+		or stat_sentence:match("^improves your haste by (%d+%.?%d*)%%$")
+	if hastep then return Verdict.ratingFromPercent("Haste", tonumber(hastep)), "Haste" end
 	-- Structural tooltip chrome (gate C1). Case-insensitive, anchored.
 	-- Matched against `plain` (color/|r stripped) so a colored stat line
 	-- (e.g. "|cff9d9d9d+12 agility|r") still classifies as a stat below,
@@ -1757,22 +1882,37 @@ local parseLine_ = function(line)
 	-- suppress the whole item ("cannot classify: Equip: Increases damage and
 	-- healing..."). The number is read from the sentence itself.
 	--
-	-- Healing-only ("Increases healing done by spells...") and school-specific
-	-- ("Increases damage done by Fire spells...") are NOT this stat. They stay
-	-- unparsed on purpose: there is no Healing or FireSpellPower word to put
-	-- them in, and folding them into generic SpellPower would lie.
-	-- SpellPower is a known word so the line no longer suppresses. It is not
-	-- in any class ORDER (see the playtest note on Verdict.ORDERS), so an
-	-- ORDINAL verdict is unchanged by it: a melee character is judged on the
-	-- item's other stats, and a caster is still judged on the documented
-	-- int/spi/sta order, and a pair whose only difference is spell power
-	-- stays level on the relevance set. What the owner's later ruling added
-	-- (card t_b7cd07e1, "Spell power gets a weight from the packs") is a
-	-- WEIGHT: this word now enters the weighted sum of an ordinal trade-off
-	-- as the SPOW word of WEIGHT_KEYS below, priced from the pack the table
-	-- cites (see the SPELL POWER note in Weights.lua).
+	-- Healing-only, school-specific, and damage-only (no healing) spell
+	-- sentences are THEIR OWN words. Folding them into generic SpellPower
+	-- would lie: a Ret pack prices HolyDamage separately from SpellPower,
+	-- and a Shadow pack prices ShadowDamage at the top of the table.
+	-- Each sentence is matched on `stat_sentence` (equip: prefix and the
+	-- trailing period already stripped).
+	local healn = stat_sentence:match(
+		"^increases healing done by spells and effects by up to (%d+)$")
+	if healn then return tonumber(healn), "HealingPower" end
+	local sdn = stat_sentence:match(
+		"^increases damage done by magical spells and effects by up to (%d+)$")
+	if sdn then return tonumber(sdn), "SpellDamage" end
+	local schoolWord = {
+		holy = "HolyDamage", fire = "FireDamage", frost = "FrostDamage",
+		shadow = "ShadowDamage", nature = "NatureDamage", arcane = "ArcaneDamage",
+	}
+	for sch, sword in pairs(schoolWord) do
+		local n = stat_sentence:match(
+			"^increases damage done by " .. sch .. " spells and effects by up to (%d+)$")
+		if n then return tonumber(n), sword end
+	end
+	local spenn = stat_sentence:match("^increases your spell penetration by (%d+)$")
+		or stat_sentence:match("^increases spell penetration by (%d+)$")
+	if spenn then return tonumber(spenn), "SpellPenetration" end
+	local bval = stat_sentence:match("^increases the block value of your shield by (%d+)$")
+	if bval then return tonumber(bval), "Block" end
+	-- Classic generic spell power (damage AND healing).
 	local spn = plain:match(
 		"^equip:%s*increases damage and healing done by magical spells and effects by up to (%d+)%.?$")
+		or stat_sentence:match(
+		"^increases damage and healing done by magical spells and effects by up to (%d+)$")
 	if spn then return tonumber(spn), "SpellPower" end
 	-- A non-blank line we cannot place. Returning "Unknown" (a word) rather
 	-- than nil keeps it in the same channel as procs, so parseSide routes
@@ -1856,8 +1996,21 @@ local API_WORD_TEXT = {
 	Intellect  = { "intellect" },
 	Spirit     = { "spirit" },
 	Armor      = { "armor" },
-	SpellPower = { "spell power", "spellpower", "spell damage", "spell healing",
-	               "magical spells", "damage and healing", "spells and effects" },
+	SpellPower = { "spell power", "spellpower", "damage and healing" },
+	SpellDamage = { "spell damage", "damage done by magical spells" },
+	HealingPower = { "healing power", "healing done by spells", "spell healing" },
+	HolyDamage = { "holy spells", "holy damage" },
+	FireDamage = { "fire spells", "fire damage" },
+	FrostDamage = { "frost spells", "frost damage" },
+	ShadowDamage = { "shadow spells", "shadow damage" },
+	NatureDamage = { "nature spells", "nature damage" },
+	ArcaneDamage = { "arcane spells", "arcane damage" },
+	SpellPenetration = { "spell penetration" },
+	Haste = { "haste" },
+	Expertise = { "expertise" },
+	BlockChance = { "block rating", "chance to block", "block chance" },
+	BonusArmor = { "bonus armor" },
+	WandDps = { "wand dps" },
 	-- card t_795eee9e: the extended reader's own phrasings. The plain one-word
 	-- lines (a "N Hit"-style spelling) fall back to the word's lowercased name
 	-- in lineNamesWord, so the entries below exist for the shapes the fallback
@@ -2283,6 +2436,23 @@ local parseSide = function(lines, side, apiWords)
 			table.sort(pending)
 			for i = 1, #pending do fold(pending[i]) end
 		end
+	end
+	-- A wand's parenthesised "damage per second" line parses as WeaponDps.
+	-- Caster packs price WandDps, and a melee WeaponDps weight must not
+	-- score a wand, so remap after the type line has been seen.
+	local isWand = false
+	for _, line in ipairs(lines) do
+		if type(line) == "string" then
+			local low = deColour_(line:lower()):gsub("^%s+", ""):gsub("%s+$", "")
+			if low == "wand" or low:match("^ranged%s+wand$") then
+				isWand = true
+				break
+			end
+		end
+	end
+	if isWand and type(stats.WeaponDps) == "number" then
+		stats.WandDps = (stats.WandDps or 0) + stats.WeaponDps
+		stats.WeaponDps = nil
 	end
 	return stats, procWord, unknown, ignored, foreign
 end
@@ -2933,12 +3103,13 @@ end
 --    and ranged critical chance."
 --
 -- — and a word that does not exist needs no entry, no factor and no guard.
--- WHAT REMAINS, and why this list is not empty: Dodge and Parry. Unmeasured,
--- no factor, presence rule, unchanged; their guard still fires (AC-5 of card
--- t_ea404bae).
+-- Dodge and Parry used to remain here (unmeasured scale, presence rule).
+-- Forever 1.60.1 build 70862 combatratings.txt measures them (dodge 12,
+-- parry 15, block chance 5 per 1%), the same factors the leveling packs
+-- price against, so they have left this list. The presence-rule mechanism
+-- stays for any future unconfirmed word.
 Verdict.UNCONFIRMED_UNITS = {
-	Dodge = true, -- dodge rating vs percent: unconfirmed
-	Parry = true, -- parry rating vs percent: unconfirmed
+	-- Empty: every combat rating the packs price now has a measured factor.
 	-- Card t_9d3273cb: THE TWO SPELL ENTRIES ARE GONE. They joined this list on
 	-- card t_b91b29f9 only because the split gave them a per-rating price with no
 	-- factor; with the split retired there is no such word to guard — a spell
@@ -3406,132 +3577,265 @@ end
 -- jobs (they word a reason, and relevanceSet seeds the tiebreak set) and no
 -- longer decide anything.
 --
--- THE WEIGHTS. One profile per class AND role. The values come from the stat
--- order the corpus already documents for that class/role (stat-weights §8.1):
--- the first term scores 4 points per point of stat, the second 1, the third 0.
--- A stat the order does not name — Spirit on a warrior, Armor on a damage
--- profile — scores 0, which is the whole point: a zero-weight stat is SUPPORTING
--- DETAIL. It still appears in the delta list; it can never move the verdict.
--- The two tank profiles are the exception the owner asked for explicitly: they
--- put Stamina (and Armor/Block) on top, so the SAME item pair legitimately reads
--- as an upgrade for a Protection character. That is the proof the weights drive
--- the verdict — see tests/touchstone_weights_spec.lua.
+-- THE WEIGHTS. One profile per class AND talent spec, keyed by the same
+-- short keys the Gear-for picker uses (ret, arms, fury, frost, …). The
+-- numbers (except Retribution) are ForeverDB's hand-set LEVELING
+-- gear-planner set, already rescaled so the top non-weapon stat = 4,
+-- recorded on each profile as `source` (URL + dates + the client build).
+-- Retribution is an ORDER-ONLY profile from Wowhead's published stat
+-- priority (no invented numeric weights; see `kind = "order"`). Feral
+-- (Cat) has no PvE item-weight file in ForeverDB (sim / order-only lists
+-- only) and is therefore absent: profileFor returns nil and the verdict
+-- is "no sourced weights for Feral (Cat) yet".
 --
--- `w` is points per point of the stat. A word absent from `w` is weight 0.
+-- A numeric `w` is points per RAW RATING POINT of the stat (crit 14 = 1%,
+-- hit / haste / expertise 10 = 1%, dodge 12, parry 15, block chance 5).
+-- A word absent from `w` is weight 0. Percent tooltip sentences are
+-- lifted to that unit by ratingFromPercent; a "+N Crit Rating" line is
+-- already in it.
 --
--- TWO TIERS, RETRIBUTION ONLY (card t_c4911603). A profile may carry
--- `tiebreak = { <stat>, ... }`: an ORDERED list consulted ONLY when the damage
--- total is exactly zero. Damage stats decide first and always; a tiebreaker can
--- never outweigh one point of Strength or Agility. The entries are ranked, not
--- weighted — the first ranked stat whose two sides differ decides, so a large
--- number on a lower-ranked stat cannot outvote a higher-ranked one. This is
--- Mightie's rule, and it is what keeps the -16 cloak case a downgrade while
--- letting `+64 Armor / +2 Sta` at equal Strength read as a (flagged) upgrade.
--- The Ret table's numbers are the ones researched for WoW: Forever in card
--- t_f758a377 (vault: wiki/addons/touchstone-ret-stat-weights.md §2):
---   Strength 4, SpellPower 4 (= 1.00 x Str against a sourced 1.04 median),
---   Agility 2.5 (= 0.625 x Str for a 0.64 median), Intellect 2,
---   Armor > Stamina as ranked tiebreakers (25 Armor ~= 1 Sta of effective HP).
--- Holy and Protection keep their own rows: the same research card says their
--- numbers need separate evidence, and none of it is used here.
--- Every shipped profile carries a `source` field: a citation (URL or card
--- / vault path) plus a date when the numbers are researched, or `source = nil`
--- when the table is the unsourced 4/1/0 stand-in derived from the documented
--- stat-order rule. Unsourced tables stay until a sourced replacement arrives;
--- they still score. A spec with no table at all (Feral, Resto, Shadow, …)
--- must not invent numbers — profileFor returns nil and the verdict is
--- "no sourced weights for <spec> yet".
+-- Every shipped profile carries a `source` citation (URL + date) plus
+-- the ForeverDB hand-set leveling set (already rescaled so the top
+-- non-weapon stat = 4). Numbers are per raw rating point (crit 14 = 1%,
+-- hit/haste/expertise 10 = 1%, dodge 12, parry 15, block chance 5).
+-- Feral (Cat) has no PvE item weights in ForeverDB (sim / order-only
+-- lists only) and is therefore absent — profileFor returns nil.
+-- There is no separate Ret `tiebreak` list: Stamina and Armor are in `w`.
+local function foreverLevelingSource(slug)
+	return "https://foreverdb.net/data/bis/" .. slug
+		.. " (extracted 2026-11-09, fetched 2026-11-11). "
+		.. "ForeverDB hand-set leveling weights, client 1.60.1 build 70862"
+end
+
 Verdict.WEIGHTS = {
 	WARRIOR = {
-		melee = { name = "Arms/Fury", w = { Strength = 4, Stamina = 1 }, source = nil },
-		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Strength = 1, Block = 1 }, source = nil },
+		arms = {
+			name = "Arms",
+			w = { Strength = 4, Agility = 2.6, Stamina = 3.2, Armor = 0.12, AttackPower = 2, Hit = 3.92, Crit = 4, Haste = 3.2, Expertise = 2.8, WeaponDps = 36 },
+			source = foreverLevelingSource("warrior-arms"),
+		},
+		fury = {
+			name = "Fury",
+			w = { Strength = 3.57, Agility = 2.5, Stamina = 2.86, Armor = 0.11, AttackPower = 1.79, Hit = 4, Crit = 3.93, Haste = 3.21, Expertise = 2.75, WeaponDps = 17.86 },
+			source = foreverLevelingSource("warrior-fury"),
+		},
+		prot = {
+			name = "Protection",
+			w = { Strength = 1.07, Agility = 1.33, Stamina = 2.67, Armor = 0.27, BonusArmor = 0.27, Hit = 1.49, Expertise = 1.49, Defense = 4, Dodge = 2.67, Parry = 2.4, BlockChance = 1.6, Block = 1.6 },
+			source = foreverLevelingSource("warrior-protection"),
+		},
 	},
 	PALADIN = {
-		-- DAMAGER -> melee. Card t_c4911603 (research t_f758a377): the damage
-		-- tier is Strength + SpellPower (the Forever sim's top Ret stat, 1.04 x
-		-- Strength) + Agility (0.64 x Strength, carried as 2.5) + Intellect; the
-		-- ranked tiebreakers are Armor then Stamina. Stamina and Armor appear
-		-- ONLY in `tiebreak`, never in `w` — see the block above.
-		melee = {
-			name = "Retribution",
-			w = { Strength = 4, SpellPower = 4, Agility = 2.5, Intellect = 2 },
-			tiebreak = { "Armor", "Stamina" },
-			source = "vault: wiki/addons/touchstone-ret-stat-weights.md, card t_f758a377 (2026)",
+		holy = {
+			name = "Holy",
+			w = { Stamina = 2.96, Intellect = 2.22, Spirit = 0.44, Armor = 0.11, SpellPower = 3.7, HealingPower = 1.85, Crit = 2.22, Haste = 2.96, MP5 = 4 },
+			source = foreverLevelingSource("paladin-holy"),
 		},
-		spell = { name = "Holy", w = { Intellect = 4, Stamina = 1 }, source = nil },
-		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Intellect = 1, Strength = 1, Block = 1 }, source = nil },
+		prot = {
+			name = "Protection",
+			w = { Strength = 1.14, Stamina = 2.86, Intellect = 0.86, Armor = 0.29, BonusArmor = 0.29, SpellPower = 1.71, HolyDamage = 1.43, Hit = 1.6, Defense = 4, Dodge = 2.57, Parry = 2.29, BlockChance = 1.71, Block = 1.43 },
+			source = foreverLevelingSource("paladin-protection"),
+		},
+		ret = {
+			name = "Retribution",
+			kind = "order",
+			-- Wowhead's published priority is an ORDER, not a set of numeric
+			-- weights. Mightie ruled (2026-11-11) that Retribution must not
+			-- invent numbers: walk the tiers lexicographically; the first
+			-- tier whose sides differ decides. Intra-tier ties (Strength &
+			-- Attack Power, Agility & Crit, Spell Damage & Holy Damage) use
+			-- a source-free rule: same direction decides, a conflict is a
+			-- TRADE_OFF naming the stats, with no unit conversion.
+			tiers = {
+				{ name = "Weapon Skill", stats = { "WeaponSkill" } },
+				{ name = "Weapon DPS & Speed", stats = { "WeaponDps", "WeaponSpeed" },
+				  special = "dps_then_speed" },
+				{ name = "Hit", stats = { "Hit" }, capPercent = 9, ratingPerPercent = 10 },
+				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, ratingPerPercent = 10 },
+				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower", "HolyDamage" } },
+				{ name = "Intellect", stats = { "Intellect" } },
+				{ name = "Strength & Attack Power", stats = { "Strength", "AttackPower" } },
+				{ name = "Agility & Critical Strike Chance", stats = { "Agility", "Crit" } },
+				{ name = "Stamina", stats = { "Stamina" } },
+			},
+			source = "https://www.wowhead.com/forever/guide/classes/paladin/retribution/stat-priority-pve-dps"
+				.. " (updated 2026-10-31, cited 2026-11-11). "
+				.. "Wowhead Retribution Paladin Stat Priority in WoW Forever, by Surveillant. "
+				.. "The page is built from beta data and says the priority will shift once "
+				.. "level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
+		},
 	},
 	ROGUE = {
-		melee = { name = "Combat", w = { Agility = 4, Strength = 1 }, source = nil },
+		combat = {
+			name = "Combat",
+			w = { Strength = 2.1, Agility = 3.81, Stamina = 3.05, Armor = 0.08, AttackPower = 1.9, Hit = 4, Crit = 3.43, Haste = 3.43, Expertise = 2.93, WeaponDps = 13.33 },
+			source = foreverLevelingSource("rogue-combat"),
+		},
+		assassination = {
+			name = "Assassination",
+			w = { Strength = 2.2, Agility = 4, Stamina = 3.2, Armor = 0.08, AttackPower = 2, Hit = 3.92, Crit = 4, Haste = 3.2, Expertise = 2.8, WeaponDps = 12 },
+			source = foreverLevelingSource("rogue-assassination"),
+		},
+		subtlety = {
+			name = "Subtlety",
+			w = { Strength = 2.2, Agility = 4, Stamina = 3.2, Armor = 0.08, AttackPower = 2.2, Hit = 3.36, Crit = 3.2, Haste = 2.8, Expertise = 2.52, WeaponDps = 12 },
+			source = foreverLevelingSource("rogue-subtlety"),
+		},
 	},
 	HUNTER = {
-		melee = { name = "Hunter", w = { Agility = 4, Stamina = 1 }, source = nil },
+		beast_mastery = {
+			name = "Beast Mastery",
+			w = { Agility = 4, Stamina = 3.2, Intellect = 0.8, Armor = 0.12, AttackPower = 0.4, RangedAttackPower = 1.8, Hit = 3.36, Crit = 3.2, Haste = 3.2, WeaponDps = 16 },
+			source = foreverLevelingSource("hunter-beast-mastery"),
+		},
+		marksmanship = {
+			name = "Marksmanship",
+			w = { Agility = 4, Stamina = 3.2, Intellect = 0.8, Armor = 0.12, RangedAttackPower = 2, Hit = 3.64, Crit = 4, Haste = 3.6, WeaponDps = 20 },
+			source = foreverLevelingSource("hunter-marksmanship"),
+		},
+		survival = {
+			name = "Survival",
+			w = { Strength = 0.8, Agility = 4, Stamina = 3.2, Armor = 0.12, AttackPower = 1.8, RangedAttackPower = 0.4, Hit = 3.36, Crit = 3.6, Haste = 3.2, Parry = 1.6, WeaponDps = 24 },
+			source = foreverLevelingSource("hunter-survival"),
+		},
 	},
 	MAGE = {
-		spell = { name = "Mage", w = { Intellect = 4, Spirit = 1 }, source = nil },
+		frost = {
+			name = "Frost",
+			w = { Stamina = 3.2, Intellect = 1.6, Spirit = 0.48, Armor = 0.08, SpellPower = 4, SpellDamage = 4, FrostDamage = 4, Hit = 3.08, Crit = 3.2, Haste = 3.6, MP5 = 2.64, WandDps = 6 },
+			source = foreverLevelingSource("mage-frost"),
+		},
+		fire = {
+			name = "Fire",
+			w = { Stamina = 3.2, Intellect = 1.6, Spirit = 0.48, Armor = 0.08, SpellPower = 4, SpellDamage = 4, FireDamage = 4, Hit = 3.36, Crit = 3.6, Haste = 3.6, SpellPenetration = 1.6, MP5 = 2.64, WandDps = 6 },
+			source = foreverLevelingSource("mage-fire"),
+		},
+		arcane = {
+			name = "Arcane",
+			w = { Stamina = 3.2, Intellect = 2, Spirit = 0.72, Armor = 0.08, SpellPower = 4, SpellDamage = 4, ArcaneDamage = 3.2, Hit = 3.08, Crit = 3.2, Haste = 3.6, MP5 = 2.88, WandDps = 6 },
+			source = foreverLevelingSource("mage-arcane"),
+		},
 	},
 	PRIEST = {
-		spell = { name = "Priest", w = { Intellect = 4, Spirit = 1 }, source = nil },
+		holy = {
+			name = "Holy",
+			w = { Stamina = 2.96, Intellect = 1.85, Spirit = 1.22, Armor = 0.07, SpellPower = 3.7, HealingPower = 1.85, Crit = 1.85, Haste = 2.59, MP5 = 4, WandDps = 5.56 },
+			source = foreverLevelingSource("priest-holy"),
+		},
+		disc = {
+			name = "Discipline",
+			w = { Stamina = 2.96, Intellect = 2.22, Spirit = 1, Armor = 0.07, SpellPower = 3.7, HealingPower = 1.85, Crit = 1.85, Haste = 2.59, MP5 = 4, WandDps = 5.56 },
+			source = foreverLevelingSource("priest-discipline"),
+		},
+		shadow = {
+			name = "Shadow",
+			w = { Stamina = 3.2, Intellect = 1.2, Spirit = 0.48, Armor = 0.08, SpellPower = 4, SpellDamage = 4, ShadowDamage = 4, Hit = 3.36, Crit = 2, Haste = 3.2, SpellPenetration = 2.4, WandDps = 6 },
+			source = foreverLevelingSource("priest-shadow"),
+		},
 	},
 	WARLOCK = {
-		spell = { name = "Warlock", w = { Intellect = 4, Spirit = 1 }, source = nil },
+		affliction = {
+			name = "Affliction",
+			w = { Stamina = 3.2, Intellect = 1.2, Spirit = 0.36, Armor = 0.08, SpellPower = 4, SpellDamage = 4, ShadowDamage = 4, Hit = 3.36, Crit = 1.6, Haste = 3.2, SpellPenetration = 2.4, WandDps = 6 },
+			source = foreverLevelingSource("warlock-affliction"),
+		},
+		demonology = {
+			name = "Demonology",
+			w = { Stamina = 3.2, Intellect = 1.2, Spirit = 0.24, Armor = 0.08, SpellPower = 4, SpellDamage = 4, FireDamage = 0.6, ShadowDamage = 3.4, Hit = 3.36, Crit = 2.8, Haste = 3.2, WandDps = 6 },
+			source = foreverLevelingSource("warlock-demonology"),
+		},
+		destruction = {
+			name = "Destruction",
+			w = { Stamina = 3.2, Intellect = 1.2, Armor = 0.08, SpellPower = 4, SpellDamage = 4, FireDamage = 3.6, ShadowDamage = 0.4, Hit = 3.36, Crit = 3.6, Haste = 3.6, SpellPenetration = 2, WandDps = 6 },
+			source = foreverLevelingSource("warlock-destruction"),
+		},
 	},
-	-- C1b (t_03a1196c): a feral Druid has no documented order, so it also has no
-	-- weights. Its rows already stop at "no stat order resolved" before the
-	-- comparator, and a caller that reaches the comparator gets the unavailable
-	-- verdict below — never a guessed feral model. (Feral / Resto packs will
-	-- land here only with a sourced table; they are not invented below.)
 	DRUID = {
-		spell = { name = "Balance", w = { Intellect = 4, Agility = 1 }, source = nil },
+		balance = {
+			name = "Balance",
+			w = { Stamina = 3.2, Intellect = 1.6, Spirit = 0.48, Armor = 0.08, SpellPower = 4, SpellDamage = 4, NatureDamage = 1.6, ArcaneDamage = 2.4, Hit = 3.36, Crit = 3.2, Haste = 3.6, MP5 = 2.88 },
+			source = foreverLevelingSource("druid-balance"),
+		},
+		feral_bear = {
+			name = "Feral (Bear)",
+			w = { Strength = 1.67, Agility = 3, Stamina = 3.33, Armor = 0.5, BonusArmor = 0.5, AttackPower = 1, Hit = 1.87, Crit = 1.33, Expertise = 1.63, Defense = 4, Dodge = 3.33 },
+			source = foreverLevelingSource("druid-feral"),
+		},
+		resto = {
+			name = "Restoration",
+			w = { Stamina = 2.96, Intellect = 1.85, Spirit = 1.11, Armor = 0.07, SpellPower = 3.7, HealingPower = 1.85, Crit = 1.48, Haste = 2.59, MP5 = 4 },
+			source = foreverLevelingSource("druid-restoration"),
+		},
 	},
 	SHAMAN = {
-		melee = { name = "Enhancement", w = { Strength = 4, Intellect = 1 }, source = nil },
-		spell = { name = "Elemental", w = { Intellect = 4, Strength = 1 }, source = nil },
+		elemental = {
+			name = "Elemental",
+			w = { Stamina = 3.2, Intellect = 1.6, Spirit = 0.24, Armor = 0.12, SpellPower = 4, SpellDamage = 4, FireDamage = 1.4, NatureDamage = 2.6, Hit = 3.36, Crit = 3.2, Haste = 3.2, MP5 = 3.36 },
+			source = foreverLevelingSource("shaman-elemental"),
+		},
+		enhancement = {
+			name = "Enhancement",
+			w = { Strength = 4, Agility = 2.6, Stamina = 3.2, Intellect = 1, Armor = 0.12, AttackPower = 2, SpellPower = 0.8, Hit = 3.64, Crit = 4, Haste = 3.6, WeaponDps = 32 },
+			source = foreverLevelingSource("shaman-enhancement"),
+		},
+		resto = {
+			name = "Restoration",
+			w = { Stamina = 2.67, Intellect = 1.83, Spirit = 0.4, Armor = 0.1, SpellPower = 3.33, HealingPower = 1.67, Crit = 1.67, Haste = 2.33, MP5 = 4 },
+			source = foreverLevelingSource("shaman-restoration"),
+		},
 	},
 }
 
--- The noise floor. Weights are points per point of stat; the Ret table
--- (t_c4911603) carries the fractional 2.5, so the band must be smaller than the
--- smallest NON-zero total that table can produce. Every weight is a multiple of
--- 0.5 (4, 2.5, 2), so 0.25 sits strictly between a true zero and the smallest
--- real difference and no genuine 0.5 gain is swallowed — the reason
--- t_f758a377 pinned epsilon <= 0.25. With the old whole-point `1` a pair such as
--- +1 Agility / -1 Intellect would net 0.5 and read "no change".
--- The constant exists so the band has ONE definition that only the totals table
--- can move. The tiebreaker tier below is gated on this same band, which is safe
--- for exactly the reason above: no total these tables can produce lands inside
--- it, so "inside the band" IS a true tie.
-Verdict.WEIGHT_EPSILON = 0.25
+-- The noise floor. Weights are points per raw rating point; the smallest
+-- published ForeverDB leveling weight is 0.07 (Restoration Druid armor),
+-- so the band must sit strictly below that. 0.005 is well under a one-point
+-- armor gain and well above ordinary floating-point dust, so a genuine
+-- 0.07 total is never swallowed and a true 0 still reads as a tie.
+-- The constant exists so the band has ONE definition that only the totals
+-- table can move.
+Verdict.WEIGHT_EPSILON = 0.005
 
--- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a weights
--- role key. This is NOT ROLE_ALIAS (the stat-order alias, whose conservative
--- TANK -> spell proxy for a paladin is a separate ruling): here it only picks
--- which weight table scores the row. A class absent from this table resolves
--- from its own role word alone, so a pure class is unaffected.
+-- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a
+-- weights key, used only when that role maps to exactly one sourced pack.
+-- A class/role with two packs (Warrior DAMAGER is Arms or Fury; Priest
+-- HEALER is Holy or Discipline) is ABSENT: Auto must see a talent name or
+-- a gearFor override, never guess.
 Verdict.PROFILE_ROLE = {
-	PALADIN = { TANK = "tank", HEALER = "spell", DAMAGER = "melee" },
-	WARRIOR = { TANK = "tank", DAMAGER = "melee" },
+	PALADIN = { TANK = "prot", HEALER = "holy", DAMAGER = "ret" },
+	WARRIOR = { TANK = "prot" },
+	DRUID   = { TANK = "feral_bear", HEALER = "resto" },
+	SHAMAN  = { HEALER = "resto" },
+	PRIEST  = { DAMAGER = "shadow" },
+}
+
+-- Folded order words (melee|spell) and the historical "tank" word, used by
+-- tests and by `/up role`, onto a unique sourced pack when one exists.
+Verdict.ROLE_WEIGHT_ALIAS = {
+	PALADIN = { melee = "ret", spell = "holy", tank = "prot" },
+	WARRIOR = { tank = "prot" },
+	DRUID   = { spell = "balance", tank = "feral_bear" },
+	SHAMAN  = { melee = "enhancement", spell = "elemental" },
 }
 
 -- The active profile for a spec, or nil.
 --
 --   spec — { class = <CLASS token>, role = <melee|spell|nil>,
---            clientRole = <TANK|HEALER|DAMAGER|nil> (optional) }
+--            clientRole = <TANK|HEALER|DAMAGER|nil> (optional),
+--            weightsKey = <registry key> (optional) }
 --
--- Resolution order: the CLIENT's role word when this class maps it, then the
--- addon's own role word, then — for a class with exactly ONE profile — that
--- profile (a pure class ignores the role argument, exactly as classRoleOrder
--- does). A hybrid with no resolved role returns nil: no profile, no guess.
+-- Resolution order: a named weightsKey (chosen / talent-matched) when a
+-- table exists — a key with no table is silence, never a fallback into
+-- another pack (Feral Cat must not score as Bear or Balance). Then the
+-- CLIENT's role word when this class uniquely maps it, then a folded
+-- melee/spell/tank alias when that alias is unique, then a direct key
+-- match on spec.role. There is no "pure class, pick the only pack"
+-- fallback: Mage/Rogue/Hunter/Warlock now have three packs each, and
+-- guessing one would be a guessed weight.
 function Verdict.profileFor(spec)
 	if type(spec) ~= "table" then return nil end
 	local class = spec.class
 	local byRole = (type(class) == "string") and Verdict.WEIGHTS[class] or nil
 	if type(byRole) ~= "table" then return nil end
-	-- A chosen (or otherwise named) weights key wins when a table exists.
-	-- A key with no table is silence — never a fallback into another pack
-	-- (Resto must not score as Balance; Feral must not score as a guessed
-	-- melee model). An existing unsourced 4/1/0 table (source = nil) is
-	-- still used until a sourced replacement arrives.
 	if type(spec.weightsKey) == "string" then
 		local pack = byRole[spec.weightsKey]
 		if type(pack) == "table" then return pack end
@@ -3545,22 +3849,15 @@ function Verdict.profileFor(spec)
 			return byRole[word]
 		end
 	end
+	local folded = (type(class) == "string") and Verdict.ROLE_WEIGHT_ALIAS[class] or nil
+	if type(spec.role) == "string" and type(folded) == "table" then
+		local word = folded[spec.role]
+		if type(word) == "string" and type(byRole[word]) == "table" then
+			return byRole[word]
+		end
+	end
 	if type(spec.role) == "string" and type(byRole[spec.role]) == "table" then
 		return byRole[spec.role]
-	end
-	-- A PURE class ignores the role argument (exactly as classRoleOrder does) and
-	-- resolves the profile keyed by its one documented order word. A HYBRID must
-	-- name a role: "no role resolved" is nil here too, never a default profile —
-	-- which is why a feral Druid (a documented role with no documented order, and
-	-- therefore no weights) resolves to nothing instead of silently scoring as
-	-- Balance.
-	if not isHybrid(class) then
-		local orders = Verdict.ORDERS[class]
-		if type(orders) == "table" then
-			for word in pairs(orders) do
-				if type(byRole[word]) == "table" then return byRole[word] end
-			end
-		end
 	end
 	return nil
 end
@@ -3590,6 +3887,270 @@ end
 -- nothing; a stat one side carries is a KNOWN absence (the parse zero-fills it,
 -- gates 5 and 8 having already refused anything unclassifiable), so it weighs in
 -- at its full delta.
+
+-- ── ORDER-ONLY PROFILES ─────────────────────────────────────────────────────
+--
+-- A profile with `kind = "order"` (and a `tiers` list) has no invented
+-- numeric weights. The comparator walks the published priority in order
+-- and the first tier whose sides differ decides. This is the general
+-- path so later specs can switch from ForeverDB numbers to a Wowhead
+-- (or other) order without a second scoring engine.
+--
+-- Intra-tier rule (source-free, no unit conversion): if every differing
+-- stat in the tier moves the same way, that direction decides; if two
+-- stats in the tier conflict, the verdict is TRADE_OFF and names them.
+--
+-- Caps (Hit 9%, Expertise 6.5% on the Ret Wowhead page): the player's
+-- current percent is read from the 1.60.1 client — GetCombatRatingBonus
+-- + GetHitModifier for Hit, GetExpertise() (returns a percent on this
+-- client, forever + 1.60.1) or GetCombatRatingBonus(CR_EXPERTISE) for
+-- Expertise — each call pcall'd. If the read fails, the reason says
+-- "cap status unknown" and the raw delta still ranks the tier. A stat
+-- already at/over cap counts only up to the cap: gains past cap do not
+-- count, losses that drop below cap do.
+--
+-- Weapon DPS & Speed: compare DPS first (higher is better). Speed alone
+-- is only considered when DPS is equal, and is REPORTED but not ranked
+-- (the source prefers slow weapons for Twist and fast for Shockadin,
+-- and does not pick one).
+
+function Verdict.isOrderProfile(profile)
+	return type(profile) == "table"
+		and (profile.kind == "order" or type(profile.tiers) == "table")
+		and type(profile.tiers) == "table" and #profile.tiers > 0
+end
+
+local function pcallNumber(fn, ...)
+	if type(fn) ~= "function" then return nil end
+	local ok, a = pcall(fn, ...)
+	if ok and type(a) == "number" then return a end
+	return nil
+end
+
+-- The player's current Hit chance, in percent, or nil when unreadable.
+-- 1.60.1 exposes GetCombatRatingBonus (forever + 1.60.1) and, when
+-- present, GetHitModifier (talent / buff hit that is not from rating).
+-- CR_HIT_MELEE is 6 in PaperDollFrame.lua; Forever unified melee/spell
+-- /ranged hit, so this one bonus is the rating half of the paperdoll.
+function Verdict.playerHitPercent()
+	local bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT_MELEE") or 6)
+	if bonus == nil and rawget(_G, "CR_HIT") ~= nil then
+		bonus = pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_HIT"))
+	end
+	local mod = pcallNumber(GetHitModifier)
+	if bonus == nil and mod == nil then return nil end
+	return (bonus or 0) + (mod or 0)
+end
+
+-- The player's current Expertise, in percent, or nil when unreadable.
+-- GetExpertise() on forever + 1.60.1 returns main-hand / off-hand /
+-- ranged PERCENTAGES (warcraft.wiki.gg). GetCombatRatingBonus(CR_EXPERTISE)
+-- (index 24) is the fallback when GetExpertise is missing.
+function Verdict.playerExpertisePercent()
+	local mh = pcallNumber(GetExpertise)
+	if type(mh) == "number" then return mh end
+	return pcallNumber(GetCombatRatingBonus, rawget(_G, "CR_EXPERTISE") or 24)
+end
+
+-- Resolve the current percent for a capped stat. `spec.playerHitPercent`
+-- / `spec.playerExpertisePercent` override the client read so a test can
+-- inject a value; the value `false` forces "cap status unknown".
+function Verdict.currentCapPercent(word, spec)
+	if type(spec) == "table" then
+		if word == "Hit" then
+			if spec.playerHitPercent == false then return nil end
+			if type(spec.playerHitPercent) == "number" then return spec.playerHitPercent end
+		elseif word == "Expertise" then
+			if spec.playerExpertisePercent == false then return nil end
+			if type(spec.playerExpertisePercent) == "number" then return spec.playerExpertisePercent end
+		end
+	end
+	if word == "Hit" then return Verdict.playerHitPercent() end
+	if word == "Expertise" then return Verdict.playerExpertisePercent() end
+	return nil
+end
+
+-- Clamp one side's rating contribution so only the portion under `cap`
+-- counts. `current` is the player's total percent INCLUDING the worn
+-- item. Returns (effective_delta_in_percent, capStatus).
+-- capStatus is "unknown", "below", or "at".
+function Verdict.clampedPercentDelta(candRating, wornRating, current, cap, ratingPerPercent)
+	local scale = tonumber(ratingPerPercent) or 10
+	if scale == 0 then scale = 10 end
+	local candPct = (tonumber(candRating) or 0) / scale
+	local wornPct = (tonumber(wornRating) or 0) / scale
+	if type(current) ~= "number" then
+		return candPct - wornPct, "unknown"
+	end
+	local wornTotal = current
+	local candTotal = current - wornPct + candPct
+	local function effective(x)
+		if x > cap then return cap end
+		return x
+	end
+	local status = (current >= cap and "at") or "below"
+	-- After a loss that drops below cap, the comparison is about the
+	-- region under the cap; call that "below" so the verdict can say so.
+	if effective(candTotal) < cap or effective(wornTotal) < cap then
+		status = "below"
+	end
+	return effective(candTotal) - effective(wornTotal), status
+end
+
+local function orderProfileLabel(profile, src)
+	local pname = type(profile) == "table" and profile.name or "no profile"
+	if src == "chosen" or src == "talents" then
+		pname = tostring(pname) .. " (" .. src .. ")"
+	end
+	return pname
+end
+
+function Verdict.orderReason(profile, kind, decidedBy, profileSource, extra)
+	local pname = orderProfileLabel(profile, profileSource)
+	if kind == "trade-off" then
+		local named = type(decidedBy) == "string" and decidedBy or "stats in the same tier"
+		return "decided by " .. named .. " [" .. pname .. "] — " .. (extra or "those stats conflict")
+	end
+	if kind == "no change" then
+		local head = "no change [" .. pname .. "]"
+		if type(extra) == "string" and extra ~= "" then
+			return head .. " — " .. extra
+		end
+		return head
+	end
+	if type(decidedBy) == "string" and decidedBy ~= "" then
+		return "decided by " .. decidedBy .. " [" .. pname .. "]"
+	end
+	return "[" .. pname .. "]"
+end
+
+-- Walk one order-only profile. Returns the same (verdict, reason, detail)
+-- contract as weightedVerdict.
+function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
+	if type(allow) ~= "function" then
+		allow = function(verdict, reason) return verdict, reason end
+	end
+	profile = profile or (type(spec) == "table" and Verdict.profileFor(spec) or nil)
+	if not Verdict.isOrderProfile(profile) then
+		return "UNKNOWN", "verdict unavailable: the profile is not an order-only pack"
+	end
+	local cand = (type(candStats) == "table") and candStats or {}
+	local eq   = (type(eqStats)   == "table") and eqStats   or {}
+	local src  = type(spec) == "table" and spec.profileSource or nil
+	local pname = orderProfileLabel(profile, src)
+	local speedNote = nil
+
+	local function finish(verdict, reason, decidedBy, kind)
+		local detail = {
+			profile = pname,
+			decidedBy = decidedBy,
+			orderOutcome = kind,
+			speedNote = speedNote,
+		}
+		if verdict == "UPGRADE" then
+			local v, r = allow(verdict, reason)
+			if v ~= "UPGRADE" then return v, r end
+			return v, r, detail
+		end
+		if verdict == "TRADE_OFF" or verdict == TRADE_OFF then
+			local v, r = allow(TRADE_OFF, reason)
+			if v ~= TRADE_OFF then return v, r end
+			return v, r, detail
+		end
+		return verdict, reason, detail
+	end
+
+	local function capLabel(tier, status)
+		local cap = tier.capPercent
+		local capText
+		if cap == math.floor(cap) then
+			capText = string.format("%d%%", cap)
+		else
+			capText = tostring(cap) .. "%"
+		end
+		if status == "unknown" then
+			return tier.name .. " (cap status unknown)"
+		end
+		if status == "at" then
+			return tier.name .. " (at " .. capText .. " cap)"
+		end
+		return tier.name .. " (below " .. capText .. " cap)"
+	end
+
+	local function signedDelta(word)
+		return (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
+	end
+
+	for _, tier in ipairs(profile.tiers) do
+		if type(tier) == "table" and type(tier.stats) == "table" then
+			if tier.special == "dps_then_speed" then
+				local dpsDelta = signedDelta("WeaponDps")
+				if dpsDelta ~= 0 then
+					local kind = (dpsDelta > 0) and "upgrade" or "downgrade"
+					local v = (dpsDelta > 0) and "UPGRADE" or "NOT_UPGRADE"
+					return finish(v, Verdict.orderReason(profile, kind, "Weapon DPS", src),
+						"Weapon DPS", kind)
+				end
+				local spdDelta = signedDelta("WeaponSpeed")
+				if spdDelta ~= 0 then
+					-- DPS is equal; speed differs. The source does not say
+					-- whether fast or slow is better, so do not rank it.
+					-- Fall through and remember the note.
+					speedNote = "weapon speed differs (not ranked; the source does not prefer fast or slow)"
+				end
+			elseif type(tier.capPercent) == "number" then
+				-- One capped rating (Hit, Expertise). Use the first stat.
+				local word = tier.stats[1]
+				local current = Verdict.currentCapPercent(word, spec)
+				local delta, status = Verdict.clampedPercentDelta(
+					cand[word], eq[word], current, tier.capPercent,
+					tier.ratingPerPercent or 10)
+				if delta ~= 0 then
+					local kind = (delta > 0) and "upgrade" or "downgrade"
+					local v = (delta > 0) and "UPGRADE" or "NOT_UPGRADE"
+					local label = capLabel(tier, status)
+					return finish(v, Verdict.orderReason(profile, kind, label, src),
+						label, kind)
+				end
+			else
+				-- Ordinary or bundled tier. Collect signed deltas; do not
+				-- convert units or invent a combined score.
+				local up, down, parts = {}, {}, {}
+				for _, word in ipairs(tier.stats) do
+					local delta = signedDelta(word)
+					if delta ~= 0 then
+						parts[#parts + 1] = word
+						if delta > 0 then
+							up[#up + 1] = word
+						else
+							down[#down + 1] = word
+						end
+					end
+				end
+				if #up > 0 and #down > 0 then
+					local named = table.concat(parts, " and ")
+					local extra = named .. " conflict"
+					return finish(TRADE_OFF,
+						Verdict.orderReason(profile, "trade-off", tier.name, src, extra),
+						tier.name, "trade-off")
+				end
+				if #parts > 0 then
+					local kind = (#up > 0) and "upgrade" or "downgrade"
+					local v = (#up > 0) and "UPGRADE" or "NOT_UPGRADE"
+					return finish(v, Verdict.orderReason(profile, kind, tier.name, src),
+						tier.name, kind)
+				end
+			end
+		end
+	end
+
+	-- No ranked tier decided. An unranked speed difference is reported
+	-- but does not become an upgrade or a downgrade.
+	return finish("NOT_UPGRADE",
+		Verdict.orderReason(profile, "no change", nil, src, speedNote),
+		nil, "no change")
+end
+
 function Verdict.weightedTotal(candStats, eqStats, profile)
 	local weights = (type(profile) == "table") and profile.w or nil
 	if type(weights) ~= "table" then return nil end
@@ -3726,6 +4287,12 @@ function Verdict.weightedVerdict(candStats, eqStats, spec, allow)
 		local role = type(spec) == "table" and spec.role or nil
 		return "UNKNOWN", "verdict unavailable: no stat weights for this character (class "
 			.. tostring(class or "unknown") .. ", role " .. tostring(role or "unresolved") .. ")"
+	end
+	-- Order-only packs (Retribution today; other specs later) never invent
+	-- a numeric total. They share this entry point so evaluate(), the
+	-- tooltip, and the tests stay on one call.
+	if Verdict.isOrderProfile(profile) then
+		return Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	end
 	local w = Verdict.weightedTotal(candStats, eqStats, profile)
 	if w == nil then
@@ -5244,6 +5811,42 @@ end
 function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide)
 	local candNumbers = weaponNumbers(candLines)
 	local wornNumbers = weaponNumbers(wornLines)
+
+	-- An order-only profile (Retribution today) judges a weapon on the
+	-- same published tiers as armour: Weapon Skill, then Weapon DPS,
+	-- then the rest. DPS-only compareDPS would skip Weapon Skill and
+	-- invent a ranking the source does not give for speed.
+	local orderProfile = type(spec) == "table" and Verdict.profileFor(spec) or nil
+	if Verdict.isOrderProfile(orderProfile) then
+		if type(wornLines) ~= "table" then
+			if wornSlotFilled then
+				return "UNKNOWN", "the equipped weapon could not be read"
+			end
+			return "UPGRADE", "upgrade: fills the weapon slot"
+		end
+		local api = type(apiBySide) == "table" and apiBySide or nil
+		local candWords = api and select(1, apiSideResolve(rawget(api, "candidate"))) or nil
+		local wornWords = api and select(1, apiSideResolve(rawget(api, "worn"))) or nil
+		-- Strip damage-range chrome so "19 - 36 Damage" does not suppress,
+		-- then fold the printed DPS / speed back in.
+		local candStats, candProc, candUnknown = parseSide(weaponStatLines(candLines), "candidate", candWords)
+		local eqStats,   eqProc,   eqUnknown   = parseSide(weaponStatLines(wornLines), "worn",      wornWords)
+		if candProc or candUnknown then
+			return "UNKNOWN", "cannot classify: " .. tostring(candUnknown or candProc)
+		end
+		if eqProc or eqUnknown then
+			return "UNKNOWN", "cannot classify: " .. tostring(eqUnknown or eqProc)
+		end
+		if type(candNumbers) == "table" then
+			if candNumbers.dps then candStats.WeaponDps = candNumbers.dps end
+			if candNumbers.speed then candStats.WeaponSpeed = candNumbers.speed end
+		end
+		if type(wornNumbers) == "table" then
+			if wornNumbers.dps then eqStats.WeaponDps = wornNumbers.dps end
+			if wornNumbers.speed then eqStats.WeaponSpeed = wornNumbers.speed end
+		end
+		return Verdict.orderVerdict(candStats, eqStats, spec, nil, orderProfile)
+	end
 
 	local statLed = type(spec) == "table"
 		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)

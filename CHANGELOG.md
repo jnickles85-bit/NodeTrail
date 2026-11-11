@@ -8,6 +8,8 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ### Added
 - Touchstone can score and gate gear for a chosen spec (`/up spec`, and a Gear for picker under Touchstone in settings) even when you are talented into a different one. Auto still follows your current talents. A spec without sourced weight numbers is silent (`no sourced weights for <spec> yet`) rather than guessing another pack.
+- Touchstone now ships ForeverDB hand-set leveling stat weights (already rescaled so the top non-weapon stat is 4; client 1.60.1 build 70862) for every Forever spec that has a PvE item-weight file — 26 numeric profiles. Feral (Cat) still has no item weights (sim / order-only lists only) and stays silent.
+- Retribution is an exception by ruling: it follows Wowhead's published *Retribution Paladin Stat Priority in WoW Forever* (https://www.wowhead.com/forever/guide/classes/paladin/retribution/stat-priority-pve-dps, updated 2026-10-31) as an order-only profile, with no invented numeric weights. Tiers are compared in published order; the first differing tier decides. Hit is capped at 9% and Expertise at 6.5% when the client can be read (otherwise the verdict says cap status unknown and still ranks the stat). The page is beta-based and says the priority will shift once level 60 dungeon and raid gear is available. The order-only path is general, so other specs can switch to a Wowhead order later without a second engine.
 
 ## [0.3.2-beta] - 2026-11-11
 

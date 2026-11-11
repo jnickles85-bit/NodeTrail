@@ -22,8 +22,9 @@
 --      which is what proves the WEIGHTS are driving it;
 --   2. the ROW the scan builds (Verdict.evaluate's third return) and
 --   3. the LINE the player reads (ChestAdvisor.tooltipLines), which must lead
---      with "Downgrade — weighted -16 vs Lambent Scale Cloak [Retribution]" and
---      keep the stamina delta in the supporting detail underneath.
+--      with the deciding Ret tier ("Downgrade — decided by Strength & Attack
+--      Power vs Lambent Scale Cloak [Retribution]") and keep the stamina
+--      delta in the supporting detail underneath.
 --
 -- Fails on 8828350: there the comparator answers TRADE_OFF for the live pair
 -- (proved below, first assertion of section 1) and no line carries a weight.
@@ -89,26 +90,22 @@ local PROT_SPEC = {
   order = V.classRoleOrder("PALADIN", "spell"), level = 70,
 }
 
--- ---- 1a. The live case is a DOWNGRADE with a negative weighted total -------
+-- ---- 1a. The live case is a DOWNGRADE decided by Strength ------------------
+-- Retribution is order-only (Wowhead priority). The first ranked difference
+-- is -4 Strength, so Strength & Attack Power decides; Stamina is a later tier
+-- and Armor / Spirit are unlisted.
 local v, reason, weighted = judge(CAND_LINES, WORN_LINES, RET_SPEC)
 check(v == "NOT_UPGRADE",
   "live case: the verdict is a downgrade (NOT_UPGRADE), got " .. tostring(v))
-check(type(weighted) == "table" and type(weighted.total) == "number",
-  "live case: the comparator returns the weighted total it decided on")
-if type(weighted) == "table" then
-  check(weighted.total < 0,
-    "live case: the weighted total is negative, got " .. tostring(weighted.total))
-  -- -4 Str x 4 + 3 Sta x 0 + -3 Armor x 0 + -2 Spi x 0
-  check(weighted.total == -16,
-    "live case: -4 Str at weight 4 and three zero-weight stats = -16, got "
-      .. tostring(weighted.total))
-  check(weighted.profile == "Retribution",
-    "live case: the profile is named, got " .. tostring(weighted.profile))
-end
+check(type(weighted) == "table" and weighted.profile == "Retribution",
+  "live case: the profile is named, got " .. tostring(weighted and weighted.profile))
+check(type(weighted) == "table" and weighted.decidedBy == "Strength & Attack Power",
+  "live case: decided by Strength & Attack Power, got "
+    .. tostring(weighted and weighted.decidedBy))
 check(type(reason) == "string" and reason:find("Retribution", 1, true) ~= nil,
   "live case: the reason quotes the profile (got " .. tostring(reason) .. ")")
-check(type(reason) == "string" and reason:find("-16", 1, true) ~= nil,
-  "live case: the reason quotes the weighted total (got " .. tostring(reason) .. ")")
+check(type(reason) == "string" and reason:find("decided by Strength & Attack Power", 1, true) ~= nil,
+  "live case: the reason names the deciding tier (got " .. tostring(reason) .. ")")
 
 -- ---- 1b. The SAME pair is an UPGRADE for a stamina-heavy tank profile -------
 -- This is the acceptance's proof that the weights, not the direction of the
@@ -118,9 +115,9 @@ check(vp == "UPGRADE",
   "the same pair is an upgrade for Protection, got " .. tostring(vp))
 check(type(wp) == "table" and wp.total > 0,
   "Protection's weighted total is positive, got " .. tostring(wp and wp.total))
--- +3 Sta x 4 + -3 Armor x 2 + -4 Str x 1 = +2
-check(type(wp) == "table" and wp.total == 2,
-  "Protection: 3 Sta x4, -3 Armor x2, -4 Str x1 = +2, got " .. tostring(wp and wp.total))
+-- +3 Sta x 2.86 + -3 Armor x 0.29 + -4 Str x 1.14 = +3.15
+check(type(wp) == "table" and V.numText(wp.total) == "+3.15",
+  "Protection: 3 Sta x2.86, -3 Armor x0.29, -4 Str x1.14 = +3.15, got " .. tostring(wp and wp.total))
 check(type(wp) == "table" and wp.profile == "Protection",
   "Protection names its profile, got " .. tostring(wp and wp.profile))
 
@@ -128,18 +125,15 @@ check(type(wp) == "table" and wp.profile == "Protection",
 check(type(V.WEIGHT_EPSILON) == "number" and V.WEIGHT_EPSILON > 0,
   "epsilon is an explicit named constant (Verdict.WEIGHT_EPSILON)")
 
--- ---- 1d. A genuine sidegrade still says trade-off --------------------------
--- +1 Str (+4) and -2 Int (-4) under the Ret profile: equal weighted total, one
--- stat up, one stat down. That is the one shape a trade-off describes.
--- (Card t_c4911603 moved Intellect 1 -> 2 on the researched Ret table, so this
--- fixture's Intellect swing is -2, not -4: the arithmetic it pins is "equal
--- damage on both sides", not the old weight.)
-local SIDE_WORN = { "X", "+11 Strength", "+12 Intellect" }
-local SIDE_CAND = { "Y", "+12 Strength", "+10 Intellect" }
+-- ---- 1d. A genuine intra-tier conflict still says trade-off ---------------
+-- Strength up and Attack Power down in the same Wowhead tier: no unit
+-- conversion, so the tier conflicts and the verdict is TRADE_OFF.
+local SIDE_WORN = { "X", "+11 Strength", "+12 Attack Power" }
+local SIDE_CAND = { "Y", "+12 Strength", "+8 Attack Power" }
 local vs_, rs, ws = judge(SIDE_CAND, SIDE_WORN, RET_SPEC)
 check(vs_ == "TRADE_OFF", "a genuine sidegrade is a trade-off, got " .. tostring(vs_))
-check(type(ws) == "table" and ws.total == 0,
-  "the sidegrade's weighted total is 0, got " .. tostring(ws and ws.total))
+check(type(rs) == "string" and rs:find("conflict", 1, true),
+  "the trade-off names the conflicting stats (got " .. tostring(rs) .. ")")
 
 -- ---- 1e. A zero-weight stat that rises, with nothing else moving ----------
 -- +3 Spirit is weight 0 on the Retribution damage profile — and, unlike Stamina
@@ -155,8 +149,8 @@ check(vz == "NOT_UPGRADE",
   "a zero-weight stat cannot move the verdict, got " .. tostring(vz))
 check(vz ~= "TRADE_OFF",
   "a zero-weight gain is never a trade-off (got the trade-off token)")
-check(type(wz) == "table" and wz.total == 0,
-  "the zero-weight gain weighs 0, got " .. tostring(wz and wz.total))
+check(type(wz) == "table" and (wz.total == 0 or wz.orderOutcome == "no change"),
+  "the zero-weight gain does not move the verdict, got " .. tostring(wz and (wz.total or wz.orderOutcome)))
 local same = judge(ZERO_BASE, ZERO_BASE, RET_SPEC)
 check(same == vz, "the verdict is unchanged by the zero-weight stat")
 check(type(rz) == "string" and rz:find("no change", 1, true) ~= nil,
@@ -193,9 +187,11 @@ check(type(profileFor) == "function",
   "Verdict.profileFor resolves the active profile")
 if type(profileFor) == "function" then
   check(profileFor({ class = "DRUID", role = "melee" }) == nil,
-    "a feral Druid has no weight profile (no documented order)")
-  check(type(profileFor({ class = "WARRIOR", role = "WARRIOR" })) == "table",
-    "a pure class resolves its one profile with no role word")
+    "a feral Druid has no weight profile without a talent name or override")
+  check(profileFor({ class = "WARRIOR", role = "WARRIOR" }) == nil,
+    "Warrior DAMAGER is Arms or Fury: no unique profile without a spec key")
+  check(type(profileFor({ class = "WARRIOR", clientRole = "TANK" })) == "table",
+    "Warrior TANK uniquely resolves to Protection")
 end
 
 -- ===========================================================================
@@ -297,6 +293,8 @@ local function rowFor(spec)
   if type(wd) == "table" then
     row.weighted = wd.total
     row.profile = wd.profile
+    row.decidedBy = wd.decidedBy
+    row.orderOutcome = wd.orderOutcome
   end
   return row
 end
@@ -316,8 +314,8 @@ if type(lines) == "table" and lines[2] then print("detail:   " .. plain(lines[2]
 
 check(headline:sub(1, #"Downgrade") == "Downgrade",
   "the headline word is Downgrade (got " .. headline .. ")")
-check(headline:find("weighted -16", 1, true) ~= nil,
-  "the headline quotes the weighted total (got " .. headline .. ")")
+check(headline:find("decided by Strength & Attack Power", 1, true) ~= nil,
+  "the headline names the deciding tier (got " .. headline .. ")")
 check(headline:find("vs " .. WORN_NAME, 1, true) ~= nil,
   "the headline names the item it was compared against (got " .. headline .. ")")
 check(headline:find("[" .. "Retribution" .. "]", 1, true) ~= nil,
@@ -340,7 +338,7 @@ local protLines = ChestAdvisor.tooltipLines(rowFor(PROT_SPEC))
 local protHead = plain(protLines and protLines[1] and protLines[1].text)
 check(protHead:sub(1, #"Upgrade") == "Upgrade",
   "Protection sees an Upgrade for the same pair (got " .. protHead .. ")")
-check(protHead:find("weighted +2", 1, true) ~= nil,
+check(protHead:find("weighted +3.15", 1, true) ~= nil,
   "and it quotes Protection's total (got " .. protHead .. ")")
 check(protHead:find("[Protection]", 1, true) ~= nil,
   "and names Protection (got " .. protHead .. ")")

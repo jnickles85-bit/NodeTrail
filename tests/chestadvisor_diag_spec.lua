@@ -60,19 +60,20 @@ local v, _, w = judge(CAND, WORN)
 check(v == "NOT_UPGRADE", "the cloak pair is a downgrade, got " .. tostring(v))
 check(type(w) == "table", "the comparator returns the weighted record, got " .. type(w))
 if type(w) == "table" then
-  check(type(w.total) == "number", "the weighted record carries .total")
   check(w.profile == "Retribution",
     "the weighted record names the profile, got " .. tostring(w.profile))
+  check(w.decidedBy == "Strength & Attack Power",
+    "the record names the deciding tier, got " .. tostring(w.decidedBy))
 end
 
--- 1b. A tiebreak row: equal damage, more armour and stamina. That is the shape
--- where .tiebreak has to be a string, because the row stores it verbatim.
+-- 1b. An order-only row: equal Strength, more Stamina. The deciding tier is
+-- recorded on .decidedBy so the tooltip / diag can quote it.
 local TB_WORN = { "Feral Shoes of Strength", "Feet", "51 Armor", "+4 Strength" }
 local TB_CAND = { "Safety Boots", "Feet", "115 Armor", "+4 Strength", "+2 Stamina" }
 local vb, _, wb = judge(TB_CAND, TB_WORN)
-check(vb == "UPGRADE", "the boots are a tiebreaker upgrade, got " .. tostring(vb))
-check(type(wb) == "table" and type(wb.tiebreak) == "string",
-  "a tiebreak row carries .tiebreak as a string, got " .. type(wb and wb.tiebreak))
+check(vb == "UPGRADE", "the boots are a Stamina-decided upgrade, got " .. tostring(vb))
+check(type(wb) == "table" and wb.decidedBy == "Stamina",
+  "an order-only row carries .decidedBy, got " .. tostring(wb and wb.decidedBy))
 
 -- ---- 2. The generated scan copies them, from a scope it can see -------------
 local advisor = readFile(TOUCH .. "ChestAdvisor/ChestAdvisor.lua")
