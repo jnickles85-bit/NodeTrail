@@ -42,10 +42,31 @@
 --     produces no step, it only fills in the mob's name.
 --
 -- The classification rule the recorder codes against: a window is SKIN loot
--- only when it opens on the same corpse GUID within SKIN_WINDOW seconds of a
+-- when it opens on the same corpse GUID within SKIN_WINDOW seconds of a
 -- successful Skinning cast. A window with a pending cast that cannot be tied
 -- to a corpse we have seen is recorded as UNCLASSIFIED, never guessed into
 -- either list.
+--
+-- t_a2f44fb2 — A SKIN COUNTS ON ITS OWN. Two things this file used to do are
+-- wrong and are fixed here:
+--
+--   * A corpse with nothing in it still gets a LOOT_OPENED/LOOT_CLOSED pair.
+--     That empty window was taken as "the corpse the player just looted" and
+--     PINNED the cast to a corpse that was never skinned, which marked it
+--     skinned with no items and filed the REAL skin window as corpse loot
+--     (live: sk 34 empty ..0CC9AE -> cast -> sk 41 ..475CDA i=2934x1 read as
+--     k=corpse). A window with NO items is never a pin.
+--   * The cast was never claimed by the window that identified its corpse, so
+--     nothing could correct the pin. A successful cast is now remembered until
+--     a loot window CLAIMS it: an unpinned cast files no skin at cast time and
+--     the window that follows -- whose own GUID is the authority -- is that
+--     corpse's skin loot. Loot is irrelevant to whether the skin is recorded
+--     ("it should still count the skin even if i dont get loot from the kill"),
+--     and a skin window on a corpse whose death was never observed still counts.
+--
+-- The pin is still used, and only used, for the case where it is the only
+-- evidence there will ever be: a real (non-empty) corpse window followed by a
+-- successful cast and NO skin window at all.
 --
 -- NO SavedVariables here: the step buffer is in-memory state on this table.
 -- The record shape lives in Record.lua, which persists to
@@ -87,6 +108,10 @@ P.SKIN_WINDOW = 60    -- a Skinning cast attributes a second loot window within 
 -- of a death from a minute ago; the live gap was 1.87s.
 P.DEATH_FALLBACK_WINDOW = 10
 P.MAX_DEATHS = 30     -- ring buffer of recent deaths the fallback may use
+-- t_a2f44fb2: successful Skinning casts awaiting the window that identifies
+-- their corpse. Bounded like the death ring: a cast that no window claimed
+-- inside SKIN_WINDOW simply ages out.
+P.MAX_CASTS = 8
 P.LINE_CAP = 120      -- hard cap on every printed line (the card says ~120)
 P.MAX_ITEMS_SHOWN = 3 -- per step line (the full list stays in the step record)
 -- Two copies of one event land in the same frame on this client, so GetTime()
@@ -107,12 +132,13 @@ P.capturing = false
 P.steps = {}          -- ring buffer of step records (full detail, uncut)
 P._seq = 0
 P._events = {}        -- event -> true | "invalid event" | error string
-P.lastSkin = nil      -- { spellID=, name=, at= }
-P.lastLoot = nil      -- { src=, at=, kind= }
+P.lastSkin = nil      -- { spellID=, name=, at=, guid= } — guid is nil when nothing pinned it
+P.lastLoot = nil      -- { src=, at=, kind=, rule=, count= } — count = items seen in that window
 P.lastKill = nil      -- { guid=, name=, at= }
 P._skinSpells = {}    -- spellID -> name, confirmed by name match
 P._deadGuids = {}     -- guid -> t: a death already reported (TARGET_DEAD fallback gate)
 P._deaths = {}        -- ring of { guid=, at=, source=, usedAt= } — the GUID-less-window fallback
+P._casts = {}         -- ring of { at=, guid=, spellID=, name=, taken= } — see P:PendingCast
 P._win = nil          -- the loot window that is currently OPEN: { guid=, kind=, at=, items=, money=, rereads= }
 P._suppressed = {}    -- event -> count of duplicates dropped before recording
 P._pendingClose = nil -- t of the LOOT_CLOSED step this window already emitted
@@ -459,27 +485,27 @@ function P:ReadLoot()
   return items, src, money
 end
 
--- ── attribution (confirmed live, see the header) ─────────────────────
--- SKIN loot = a window opening within SKIN_WINDOW seconds of a successful
--- Skinning cast. The cast carries no GUID, so it is pinned to the corpse the
--- player looted (lastSkin.guid) — the live order: corpse window -> cast ->
--- skin window.
+-- ── attribution (t_a2f44fb2: the window's own GUID is the truth) ──────
+-- Returns kind, guid, rule, cast — four values. `rule` names the evidence the
+-- GUID came from ("loot-source" | "UNIT_DIED" | "TARGET_DEAD" | "none") so the
+-- dump can print WHICH rule fired instead of presenting a fallback as a fact;
+-- `cast` is the successful 8613 cast this window claimed (or nil), so the
+-- recorder can date the skin from the cast that produced it.
 --
--- TWO rules, in this order, because the live run at Razor Hill broke the old
--- one:
+-- Two rules, in this order:
 --   1. A window with NO source GUID is NOT a dead end. It is attributed to the
 --      most recent death inside DEATH_FALLBACK_WINDOW (live: UNIT_DIED at
 --      759876.51, GUID-less LOOT_OPENED at 759878.38 on the same corpse).
---      The rule that fired is returned so the dump can print it.
---   2. Skin classification depends on the CAST, never on the corpse window
---      having been attributed. A successful 8613 followed, inside the window,
---      by a loot window is skin loot. The old code required a matching
---      cast.guid, so a corpse window that arrived without a GUID made the
---      player's own skin window "unclassified".
---
--- Returns kind, guid, rule — three values. `rule` names the evidence the GUID
--- came from ("loot-source" | "UNIT_DIED" | "TARGET_DEAD" | "none") so the dump
--- can print WHICH rule fired instead of presenting a fallback as a fact.
+--   2. Skin classification needs a CAST, and the CAST needs a corpse. The cast
+--      is pinned only by a real, non-empty corpse window (P:OnCast). When it
+--      has no pin it files nothing at cast time and the next window CLAIMS it:
+--      that window's GUID is the authority, whatever was looted last. An empty
+--      corpse window can therefore never steal the cast (live, t_a2f44fb2:
+--      sk 34 empty ..0CC9AE, sk 39 cast, sk 41 ..475CDA i=2934x1 is the SKIN
+--      window). A corpse already skinned by an earlier cast is not skinned a
+--      second time.
+-- A pinned cast still wins for its own corpse, and a window on a DIFFERENT
+-- corpse while a pinned cast is pending stays ordinary corpse loot.
 function P:Classify(src, t)
   local guid, rule = nil, "none"
   if type(src) == "string" and src ~= "" then
@@ -491,23 +517,29 @@ function P:Classify(src, t)
       d.usedAt = t
     end
   end
-  local cast = self.lastSkin
-  if cast and (t - cast.at) <= self.SKIN_WINDOW then
-    -- the cast is the authority. A window on a DIFFERENT corpse right after a
-    -- cast is ordinary corpse loot; anything else is the skin window.
-    if cast.guid ~= nil and guid ~= nil and cast.guid ~= guid then
-      return "corpse", guid, rule
-    end
+  local cast = self:PendingCast(t)
+  if cast then
     if guid == nil then
       -- a cast is pending and nothing at all identifies this window: saying
       -- "skin" would file items under a corpse we do not have, and saying
-      -- "corpse" would be the guess the old code made. Unclassified.
-      return "unclassified", nil, rule
+      -- "corpse" would be the guess the old code made. Unclassified, and the
+      -- cast stays open for the window that does identify its corpse.
+      return "unclassified", nil, rule, nil
     end
-    return "skin", guid, rule
+    if cast.guid ~= nil and cast.guid ~= guid then
+      -- the cast was pinned to a corpse whose window carried loot; this window
+      -- opened on a different corpse, so it is that corpse's ordinary loot.
+      return "corpse", guid, rule, nil
+    end
+    if cast.guid == nil and self:IsSkinned(guid) then
+      -- already skinned by an earlier cast: a window on it is not a second skin
+      return "corpse", guid, rule, nil
+    end
+    cast.taken = true
+    return "skin", guid, rule, cast
   end
-  if guid ~= nil then return "corpse", guid, rule end
-  return "unattributed", nil, rule
+  if guid ~= nil then return "corpse", guid, rule, nil end
+  return "unattributed", nil, rule, nil
 end
 
 -- The recorder is optional: this file must load and work when Record.lua is
@@ -527,6 +559,45 @@ function P:Suppressed(which)
   local s = self._suppressed
   s[which] = (s[which] or 0) + 1
   return s[which]
+end
+
+-- ── the casts awaiting a corpse (t_a2f44fb2) ─────────────────────────
+-- A successful Skinning cast carries NO GUID: the only thing that can say
+-- WHICH corpse it was applied to is a loot window. So the cast is remembered
+-- here until a window CLAIMS it, and a cast nothing claims inside SKIN_WINDOW
+-- is a cast that produced no skin window — which the accounting line reports
+-- as a lost cast instead of being guessed onto somebody else's corpse.
+function P:RememberCast(cast)
+  if type(cast) ~= "table" then return nil end
+  self._casts[#self._casts + 1] = cast
+  while #self._casts > self.MAX_CASTS do table.remove(self._casts, 1) end
+  return cast
+end
+
+-- The newest successful cast that is still inside SKIN_WINDOW and has not been
+-- claimed by a loot window, or nil. This is the cast a window opens "under".
+function P:PendingCast(t)
+  for i = #self._casts, 1, -1 do
+    local c = self._casts[i]
+    if type(c) == "table" and not c.taken and type(c.at) == "number"
+      and (t - c.at) <= self.SKIN_WINDOW then
+      return c
+    end
+  end
+  return nil
+end
+
+-- Is this corpse already recorded as skinned? Asked of the recorder, which owns
+-- the records (the probe can be loaded without it). With no recorder, or no
+-- record yet, the answer is "no": a skin on a corpse whose kill was never
+-- observed still counts, so a missing record is not a reason to refuse.
+function P:IsSkinned(guid)
+  local R = self:Recorder()
+  if type(R) == "table" and type(R.Find) == "function" then
+    local ok, rec = pcall(R.Find, R, guid)
+    if ok and type(rec) == "table" then return rec.skinned == true end
+  end
+  return false
 end
 
 -- ── spell / skinning detection ────────────────────────────────────────
@@ -616,21 +687,33 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
     -- resolved spell name, so a cast bar can never be mistaken for a name
     and self:IsSkinningSpell(id, clientName)
   if isSkin then
-    -- Pin the cast to the corpse the player just looted. That is the live
-    -- order (loot ..F29C6F at sk 14, cast at sk 20, loot ..F29C6F at sk 23),
-    -- and it is the only join the cast event allows: it carries no GUID.
+    -- Pin the cast to the corpse the player just looted — but ONLY when that
+    -- window is real evidence: a corpse window the client showed items in.
+    --
+    -- t_a2f44fb2: a corpse with nothing in it still gets a LOOT_OPENED /
+    -- LOOT_CLOSED pair. Taking that empty window as the pin is what stole the
+    -- cast from the corpse the player actually skinned and marked the empty
+    -- corpse skinned with no items (live: sk 34 i=- on ..0CC9AE, cast, real
+    -- skin window sk 41 on ..475CDA filed as corpse loot). An empty window
+    -- pins nothing; the cast is then claimed by the window that follows it
+    -- (P:Classify), which carries the corpse's own GUID.
     --
     -- BOUNDED by SKIN_WINDOW: a window looted minutes ago says nothing about
-    -- what this cast is being applied to. Without the bound, a cast re-pinned
-    -- itself to any old corpse and every later window on a different GUID was
-    -- filed as ordinary corpse loot instead of skin loot.
+    -- what this cast is being applied to.
     local guid = nil
     local prev = self.lastLoot
     if type(prev) == "table" and type(prev.src) == "string" and prev.at ~= nil
-      and (t - prev.at) <= self.SKIN_WINDOW then
+      and (t - prev.at) <= self.SKIN_WINDOW
+      and prev.kind == "corpse"
+      and type(prev.count) == "number" and prev.count > 0 then
       guid = prev.src
     end
     self.lastSkin = { spellID = id, name = name, at = t, guid = guid }
+    -- the cast is remembered either way: a pinned one for its own corpse, an
+    -- unpinned one for the window that names its corpse
+    self:RememberCast({
+      at = t, guid = guid, spellID = id, name = name, taken = false,
+    })
     if id and not self._skinSpells[id] then
       self._skinSpells[id] = name or tostring(id)
     end
@@ -751,6 +834,15 @@ function P:RereadWindow(why)
   if R and win.guid and type(R.SetWindowItems) == "function" then
     pcall(R.SetWindowItems, R, win.guid, win.kind, win.items, win.money, t)
   end
+  -- `count` is how many items this window has been SEEN to carry. It is what
+  -- makes a window a valid cast pin (t_a2f44fb2: an empty window pins nothing),
+  -- so it follows the window's accumulated list, not just the first read —
+  -- the client can fill the slots after LOOT_OPENED.
+  if type(win) == "table" and type(self.lastLoot) == "table"
+    and self.lastLoot.at == win.at then
+    self.lastLoot.count = type(win.items) == "table" and #win.items or 0
+    self.lastLoot.kind = win.kind
+  end
   if not added then return nil end
   return win.items, win.money
 end
@@ -769,8 +861,9 @@ function P:OnLootOpened()
     local ok, nm = pcall(GetLootSourceName)
     if ok and isClientText(nm) then srcName = nm end
   end
-  local kind, guid, rule = self:Classify(src, t)
-  self.lastLoot = { src = guid, raw = src, at = t, kind = kind, rule = rule }
+  local kind, guid, rule, claimed = self:Classify(src, t)
+  self.lastLoot = { src = guid, raw = src, at = t, kind = kind, rule = rule,
+    count = #items }
   -- the window that is open RIGHT NOW: slot-cleared and the close both re-read
   -- it, which is how a late-populated window is still recorded correctly
   self._win = {
@@ -803,6 +896,13 @@ function P:OnLootOpened()
     local ev = {
       guid = guid, name = srcName, items = items, money = money, t = t,
       kind = kind, rule = rule,
+      -- the successful 8613 cast this window claimed, if any: the recorder
+      -- dates the skin from the cast and marks the corpse skinned on THIS
+      -- window's authority (t_a2f44fb2). A window filed as skin with no cast
+      -- behind it carries no claim and marks nothing.
+      cast = claimed ~= nil,
+      castAt = claimed and claimed.at or nil,
+      spellID = claimed and claimed.spellID or nil,
       zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
     }
     if kind == "corpse" and type(R.OnCorpseLoot) == "function" then
@@ -1187,6 +1287,7 @@ function P:Disable()
   self.lastKill = nil
   self._deadGuids = {}
   self._deaths = {}
+  self._casts = {}
   self._win = nil
   self._suppressed = {}
   self._pendingClose = nil
@@ -1214,6 +1315,7 @@ function P:Enable()
   self.enabled = true
   self._deadGuids = {}
   self._deaths = {}
+  self._casts = {}
   self._win = nil
   self._suppressed = {}
   self._pendingClose = nil

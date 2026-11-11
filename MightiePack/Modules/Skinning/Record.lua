@@ -511,27 +511,26 @@ function R:OnCorpseLoot(ev)
 end
 
 -- A successful Skinning cast. The cast event carries no GUID, so the probe
--- pins it to the corpse the player just looted (lastSkin.guid) and passes that
--- in. With no pin (a cast before any window was seen) it falls back to the
--- newest corpse record whose death is still inside SKIN_WINDOW — and to
--- nothing at all when there is none. Never guessed.
+-- pins it to a corpse ONLY when a real (non-empty) corpse window preceded it
+-- and passes that in (t_a2f44fb2: an empty corpse window pins nothing).
+--
+-- With NO pin nothing is marked here, and nothing is guessed: the old code
+-- fell back to "the newest corpse whose death is still inside SKIN_WINDOW",
+-- which is how the empty ..0CC9AE was marked skinned with no items while the
+-- corpse the player actually skinned got its window filed as corpse loot. The
+-- cast is COUNTED, and the skin window that follows names its own corpse and
+-- marks it (R:OnSkinLoot). A cast no window claims stays visible as a lost
+-- cast in the accounting line — which is honest, and is the signal that made
+-- this defect visible in the first place.
 function R:OnSkinCast(ev)
   ev = ev or {}
   local store = self:Store()
   local at = ev.t or nowT()
-  local rec = nil
-  if type(ev.guid) == "string" and ev.guid ~= "" then
-    rec = self:RecordFor(ev.guid, at)
-  else
-    for i = #store.order, 1, -1 do
-      local cand = store.records[store.order[i]]
-      if cand and cand.diedAt and (at - cand.diedAt) <= R.SKIN_WINDOW then
-        rec = cand
-        break
-      end
-    end
-  end
   store.counts.skinCasts = store.counts.skinCasts + 1
+  if type(ev.guid) ~= "string" or ev.guid == "" then
+    return nil
+  end
+  local rec = self:RecordFor(ev.guid, at)
   if not rec then return nil end
   rec.skinned = true
   rec.skinSpellID = ev.spellID or R.SKIN_SPELL_ID
@@ -543,6 +542,14 @@ end
 -- 8613 cast inside the window, and no other corpse it could belong to). Each
 -- open is its own snapshot for the same reason as the corpse side: the client
 -- may fill the slots after LOOT_OPENED and the late read must replace, not add.
+--
+-- t_a2f44fb2: the WINDOW'S OWN GUID is the authority for whether the skin was
+-- observed. When the probe says a successful cast claimed this window
+-- (`ev.cast`), the corpse WAS skinned — loot is irrelevant to that ("it should
+-- still count the skin even if i dont get loot from the kill"), so an empty
+-- skin window still sets skinned = true. A window filed as skin with no cast
+-- behind it (a direct caller, or a window that only looks like skin) marks
+-- nothing: the cast is what makes a corpse skinned.
 function R:OnSkinLoot(ev)
   ev = ev or {}
   local rec = self:RecordFor(ev.guid, ev.t)
@@ -552,6 +559,11 @@ function R:OnSkinLoot(ev)
   rec.skinItems = mergeWindows(windowLog(rec, "skin"))
   rec.skinWindowAt = ev.t
   rec.skinLootOpens = (rec.skinLootOpens or 0) + 1
+  if ev.cast == true then
+    rec.skinned = true
+    rec.skinSpellID = ev.spellID or R.SKIN_SPELL_ID
+    rec.skinCastAt = ev.castAt or ev.t
+  end
   if rec.corpseClosedAt then
     rec.corpseToSkinGap = round2(ev.t - rec.corpseClosedAt)
   end
