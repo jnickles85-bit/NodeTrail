@@ -6,6 +6,8 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+## [0.3.3-beta] - 2026-11-11
+
 ### Added
 - Touchstone can score and gate gear for a chosen spec (`/up spec`, and a Gear for picker under Touchstone in settings) even when you are talented into a different one. Auto still follows your current talents. A spec without a sourced profile would stay silent (`no sourced weights for <spec> yet`) rather than guessing another pack.
 - Wowhead is the sole source for every shipped Touchstone spec. All 28 Forever specs (including Feral Cat) use the published stat-priority list as an order-only, cap-aware profile: tiers are compared in published order, the first differing tier decides, and there are no invented numeric weights. Per-spec caps come from each page (for example melee hit is 8% for Arms / Rogue / Feral Cat / Enhancement and 9% for Fury / Retribution / Hunter; Rogue then has a second Hit cap at 17% for poisons). When the client can be read, gains past a cap do not count and losses that drop below a cap do; otherwise the verdict says cap status unknown and still ranks the stat. Each profile records its Wowhead URL and the page's updated date (pages fetched 2026-11-11). The lists live in `data/wowhead_stat_priorities.json`; `tools/gen_wowhead_priorities.py` regenerates the Lua tables, so an update is a data change.
