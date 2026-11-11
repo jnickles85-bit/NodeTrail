@@ -189,9 +189,9 @@ if type(P) == "table" and type(R) == "table" and type(H) == "table" and type(S) 
   local function fire(event, ...) onEvent(frame, event, ...) end
 
   local function succeedSkin()
-    fire("UNIT_SPELLCAST_START", "player", "CastBar-SKIN", 8613, "CastBar-SKIN")
-    fire("UNIT_SPELLCAST_SUCCEEDED", "player", "CastBar-SKIN", 8613, "CastBar-SKIN")
-    fire("UNIT_SPELLCAST_STOP", "player", "CastBar-SKIN", 8613, "CastBar-SKIN")
+    fire("UNIT_SPELLCAST_START", "player", "CastBar-1B595C80CD3B37", 8613, "CastBar-1B595C80CD3B37")
+    fire("UNIT_SPELLCAST_SUCCEEDED", "player", "CastBar-1B595C80CD3B37", 8613, "CastBar-1B595C80CD3B37")
+    fire("UNIT_SPELLCAST_STOP", "player", "CastBar-1B595C80CD3B37", 8613, "CastBar-1B595C80CD3B37")
   end
 
   local function openSkinWindow(items, src)

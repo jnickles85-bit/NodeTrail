@@ -100,6 +100,12 @@ P.EVENTS = {
 
 P.MAX_STEPS = 120     -- ring buffer: the dump stays short and screenshot-able
 P.SKIN_WINDOW = 60    -- a Skinning cast attributes a second loot window within this many seconds
+-- A GUID-less window may be attributed to the dead target only this long
+-- after UNIT_SPELLCAST_SUCCEEDED. Starting bound is 3 seconds; it should
+-- be live-measured on a real skin (the SUCCEEDED -> LOOT_OPENED gap). It
+-- must stay much shorter than SKIN_WINDOW so a later herb, chest, or
+-- fishing window cannot steal the pending cast.
+P.TARGET_ATTRIB_WINDOW = 3
 -- A loot window with NO source GUID is not the end of the chain: the client
 -- opens the corpse window a second or two after UNIT_DIED and hands back no
 -- GUID at all (live at Razor Hill, 759876.51 UNIT_DIED ..EF7D0D -> 759878.38
@@ -125,7 +131,19 @@ P.DUP_TICK = 0.1
 -- ("n=CastBar-1B595C.."), so the old name-only detector could not see it —
 -- which is why sk 23 was dumped as k=corpse. The ID is the primary detector;
 -- the name heuristic below stays for builds that do send the name.
-P.SKIN_SPELL_IDS = { [8613] = true }
+-- Classic ranks (1–4) plus the Forever 1.60.1.70532 IDs (foreverdiff).
+-- Detection is by ID: the 4th UNIT_SPELLCAST_* argument on this client is
+-- a CastBar frame name and must not be required to contain "skin".
+P.SKIN_SPELL_IDS = {
+  [8613] = true,    -- Skinning
+  [8617] = true,    -- Skinning
+  [8618] = true,    -- Skinning
+  [10768] = true,   -- Skinning
+  [1240952] = true, -- Forever
+  [1240963] = true, -- Forever
+  [1240974] = true, -- Forever
+  [1240987] = true, -- Forever
+}
 
 -- state (session-only; never written to any SavedVariable)
 P.capturing = false
@@ -506,11 +524,9 @@ end
 --      second time.
 -- A pinned cast still wins for its own corpse, and a window on a DIFFERENT
 -- corpse while a pinned cast is pending stays ordinary corpse loot.
--- The corpse the player is pointing at. Skinning requires a dead target, so
--- a successful 8613 (or a loot window that opened under that cast) can use
--- this GUID when the loot source is missing and the 10s death fallback has
--- already aged out — the live farm that left rec.skinned false for a whole
--- pack (tooltip "kills seen: N · skinned: 0", /nt skinroute "0 of 8").
+-- The corpse the player is pointing at. Used only as a short-lived fill
+-- for a GUID-less skin window (see TARGET_ATTRIB_WINDOW in P:Classify),
+-- never as a 60s hang off a pending pin.
 function P:DeadTargetGuid()
   if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function"
     or type(UnitGUID) ~= "function" then
@@ -531,26 +547,37 @@ function P:Classify(src, t)
   local guid, rule = nil, "none"
   if type(src) == "string" and src ~= "" then
     guid, rule = src, "loot-source"
-  else
+  end
+  local cast = self:PendingCast(t)
+  -- Death fallback is for a GUID-less window that is still on the corpse
+  -- (live: UNIT_DIED then a source-less LOOT_OPENED). After the player
+  -- retargets, that fallback must not name a herb or chest as the corpse
+  -- a pending Skinning cast is waiting on.
+  if guid == nil and not (type(cast) == "table" and cast.targetAttribExpired) then
     local d = self:RecentDeath(t)
     if d then
       guid, rule = d.guid, (d.source == "TARGET_DEAD" and "TARGET_DEAD" or "UNIT_DIED")
       d.usedAt = t
     end
   end
-  local cast = self:PendingCast(t)
-  -- A pending Skinning cast can name this window when the loot source and
-  -- the 10s death fallback both come up empty: use the pin if the cast has
-  -- one, otherwise the dead target the player is skinning. Without a pending
-  -- cast a GUID-less window stays unattributed (it is not a corpse guess).
-  if guid == nil and type(cast) == "table" then
+  -- A GUID-less window is never named from cast.guid (that filed herb and
+  -- chest loot under a pinned corpse). The dead target may name it only
+  -- inside TARGET_ATTRIB_WINDOW after SUCCEEDED, only if target-attribution
+  -- has not been cleared (retarget / an unclaimed LOOT_CLOSED), and only
+  -- when the current dead target is still the cast's corpse if we know it
+  -- (the pin, or the target snapshotted at SUCCEEDED).
+  if guid == nil and type(cast) == "table" and not cast.targetAttribExpired
+    and type(cast.at) == "number"
+    and (t - cast.at) <= (self.TARGET_ATTRIB_WINDOW or 3) then
+    local tgt = self:DeadTargetGuid()
+    local expected = nil
     if type(cast.guid) == "string" then
-      guid, rule = cast.guid, "cast-pin"
-    else
-      local tgt = self:DeadTargetGuid()
-      if tgt then
-        guid, rule = tgt, "target"
-      end
+      expected = cast.guid
+    elseif type(cast.targetGuid) == "string" then
+      expected = cast.targetGuid
+    end
+    if tgt and (expected == nil or expected == tgt) then
+      guid, rule = tgt, "target"
     end
   end
   if cast then
@@ -602,6 +629,21 @@ end
 -- here until a window CLAIMS it, and a cast nothing claims inside SKIN_WINDOW
 -- is a cast that produced no skin window — which the accounting line reports
 -- as a lost cast instead of being guessed onto somebody else's corpse.
+-- Drop target-based attribution for any unclaimed pending cast. A later
+-- loot window that carries its own source GUID can still claim the cast;
+-- only the GUID-less DeadTargetGuid fill is revoked (retarget, or a
+-- loot window that closed without claiming the skin).
+function P:ExpireTargetAttrib()
+  local casts = self._casts
+  if type(casts) ~= "table" then return end
+  for i = 1, #casts do
+    local c = casts[i]
+    if type(c) == "table" and not c.taken then
+      c.targetAttribExpired = true
+    end
+  end
+end
+
 function P:RememberCast(cast)
   if type(cast) ~= "table" then return nil end
   self._casts[#self._casts + 1] = cast
@@ -748,6 +790,7 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
     -- unpinned one for the window that names its corpse
     self:RememberCast({
       at = t, guid = guid, spellID = id, name = name, taken = false,
+      targetGuid = self:DeadTargetGuid(),
     })
     if id and not self._skinSpells[id] then
       self._skinSpells[id] = name or tostring(id)
@@ -1016,6 +1059,12 @@ function P:OnLootClosed()
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   self._win = nil
+  -- A window that did not claim the pending skin must not leave target
+  -- attribution armed for the next GUID-less herb/chest/fishing open.
+  -- A skin window already set taken=true, so ExpireTargetAttrib skips it.
+  if not (self.lastLoot and self.lastLoot.kind == "skin") then
+    self:ExpireTargetAttrib()
+  end
   local R = self:Recorder()
   if R and type(R.OnLootClosed) == "function" then
     pcall(R.OnLootClosed, R, t)
@@ -1111,6 +1160,11 @@ end
 -- argument cannot provide on this client.
 function P:OnTargetChanged()
   if not self.capturing then return end
+  -- Any target change (including clearing the target, or selecting a herb
+  -- node) revokes GUID-less target attribution for unclaimed casts. The
+  -- existing dead-target kill fallback still runs below when the new
+  -- target is a corpse.
+  self:ExpireTargetAttrib()
   if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function" then return end
   local okE, exists = pcall(UnitExists, "target")
   if not okE or not exists then return end
