@@ -161,7 +161,7 @@ local BEAST_TYPES = {
   ["bête"] = true, ["bete"] = true, -- frFR
   bestia = true, -- esES / esMX / itIT
   fera = true, -- ptBR
-  ["животное"] = true, -- ruRU
+  ["Животное"] = true, ["животное"] = true, -- ruRU (Lua 5.1 lower does not fold Cyrillic)
   ["야수"] = true, -- koKR
   ["野兽"] = true, -- zhCN
   ["野獸"] = true, -- zhTW
@@ -371,10 +371,18 @@ function T.BuildBeastLines(unit)
   -- UnitCreatureType is localized; comparing it to English "Beast" was
   -- dropping Demons such as Cursed Darkhound (npc 1548) even when we
   -- already had records for that id. Type is consulted only when we have
-  -- no data, as a Beast-only fallback hint.
+  -- no skin data, as a Beast-only fallback hint.
+  -- Aggregate once and reuse for HasSkinData and Rows.
+  local agg
+  if type(H.Aggregate) == "function" then
+    local okA, a = pcall(H.Aggregate, cid)
+    if okA and type(a) == "table" then
+      agg = a
+    end
+  end
   local hasData = false
   if type(H.HasSkinData) == "function" then
-    local okD, known = pcall(H.HasSkinData, cid)
+    local okD, known = pcall(H.HasSkinData, cid, agg)
     hasData = okD and known == true
   end
   if not hasData then
@@ -387,7 +395,7 @@ function T.BuildBeastLines(unit)
     end
   end
   local name = unitName(unit, guid)
-  local lines = H.Rows(cid, name)
+  local lines = H.Rows(cid, name, agg)
   if type(lines) ~= "table" or #lines == 0 then
     return nil, "no rows for this creature", cid
   end

@@ -242,20 +242,23 @@ function H.Aggregate(cid)
   return agg
 end
 
--- True when we have recorded observations (kills, skins, or leather drops)
--- for this NPC id. Used by the tooltip so known data is shown regardless of
--- creature type. A static skinnable list would also count if we shipped one;
--- none is shipped today.
-function H.HasSkinData(cid)
-  if type(cid) ~= "number" then
-    return false
-  end
-  local ok, agg = pcall(H.Aggregate, cid)
-  if not ok or type(agg) ~= "table" then
-    return false
-  end
-  if (tonumber(agg.records) or 0) > 0 then
-    return true
+-- True when we have recorded skin evidence for this NPC id (a successful
+-- skin, a skin-loot window, or leather drops) — not merely a kill.
+-- The recorder logs every UNIT_DIED with no type filter, so treating
+-- records>0 as skin data would show the panel on a Humanoid or Undead
+-- that was only killed. Used by the tooltip so known skin data is shown
+-- regardless of creature type. `agg` may be passed in so a caller that
+-- already aggregated this id does not do it twice.
+function H.HasSkinData(cid, agg)
+  if type(agg) ~= "table" then
+    if type(cid) ~= "number" then
+      return false
+    end
+    local ok, a = pcall(H.Aggregate, cid)
+    if not ok or type(a) ~= "table" then
+      return false
+    end
+    agg = a
   end
   if (tonumber(agg.skinned) or 0) > 0 then
     return true
@@ -406,7 +409,7 @@ local function itemRows(rows, list, samples, label)
   end
 end
 
-function H.Rows(cid, creatureName)
+function H.Rows(cid, creatureName, agg)
   local rows = {}
   local nameOK = creatureName ~= nil
     and (isSecret(creatureName)
@@ -415,7 +418,9 @@ function H.Rows(cid, creatureName)
     -- The client's own name, in its own slot: see the row contract above.
     rows[#rows + 1] = { name = creatureName }
   end
-  local agg = H.Aggregate(cid)
+  if type(agg) ~= "table" then
+    agg = H.Aggregate(cid)
+  end
   if not agg or agg.records == 0 then
     -- Never zeros dressed as data: a creature we have no corpse for says so.
     rows[#rows + 1] = { left = "no observations here yet" }

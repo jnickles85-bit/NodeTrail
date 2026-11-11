@@ -164,6 +164,13 @@ NodeTrailDB = {
 
 local function reset()
   Pr:Forget()
+  -- Hide and clear leftover rows so a later "stays hidden" check cannot
+  -- read the previous hover's panel.
+  if P and type(P.Reset) == "function" then
+    P:Reset()
+  elseif P and type(P.Hide) == "function" then
+    P:Hide("reset")
+  end
 end
 
 -- ── records, built by calling the real recorder ────────────────────────────
@@ -444,16 +451,32 @@ for _, ctype in ipairs({ "Demon", "Humanoid", "Dragonkin" }) do
   check(P:IsShown() == false, "5: an unknown " .. ctype .. " with no data draws nothing")
 end
 
+-- A non-beast with kills only (no skin windows, no leather drops) stays hidden.
+-- The recorder logs every UNIT_DIED, so records>0 must not light the panel.
+local KILLONLY = 1550
+observe(KILLONLY, CORPSE, nil)
+reset()
+hoverBeast({ guid = guidOf(KILLONLY, seq), ctype = "Humanoid", name = "Scarlet Warrior" })
+check(P:IsShown() == false, "5: a non-beast with kills only keeps the panel hidden")
+
 -- Unknown Beast still gets the empty fallback hint.
 reset()
 hoverBeast({ guid = guidOf(UNKNOWN, 801), ctype = "Beast", name = "Young Stranglethorn Tiger" })
+check(P:IsShown() == true, "5: an unknown Beast shows the empty-hint panel")
 check(findRow("no observations here yet"),
   "5: an unknown Beast still shows the empty hint (got:\n" .. joined() .. ")")
 -- Localized Beast name (deDE) also gets the fallback, not an English-only compare.
 reset()
 hoverBeast({ guid = guidOf(UNKNOWN, 802), ctype = "Wildtier", name = "Junger Tiger" })
+check(P:IsShown() == true, "5: a deDE Beast without data shows the empty-hint panel")
 check(findRow("no observations here yet"),
   "5: a deDE Beast without data still gets the fallback hint (got:\n" .. joined() .. ")")
+-- ruRU: the client sends "Животное"; Lua 5.1 string.lower does not fold it.
+reset()
+hoverBeast({ guid = guidOf(UNKNOWN, 803), ctype = "Животное", name = "Молодой тигр" })
+check(P:IsShown() == true, "5: a ruRU Beast (Животное) without data shows the empty-hint panel")
+check(findRow("no observations here yet"),
+  "5: a ruRU Beast without data still gets the fallback hint (got:\n" .. joined() .. ")")
 
 -- A player or a pet has a GUID that is not a Creature GUID: nothing.
 reset()
