@@ -119,6 +119,7 @@ Run from repo root with lua5.1:
 - `tests/slash_spec.lua`
 - `tests/skindiag_spec.lua`
 - `tests/skinning_recorder_spec.lua` (replays the live kill -> corpse loot -> 8613 cast -> skin loot chain)
+- `tests/skinning_empty_window_spec.lua` (an empty corpse window never pins the cast; the skin window's own GUID is the truth)
 
 ## Skinning recorder (NodeTrail sub-option)
 Off by default (`NodeTrailDB.skinning.enabled`). When on, the addon records one

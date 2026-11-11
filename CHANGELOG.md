@@ -6,6 +6,9 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+### Fixed
+- Skinning now counts a skin even when the corpse had no loot, and the skin loot attaches to the corpse that was actually skinned. A corpse with nothing in it produces a `LOOT_OPENED`/`LOOT_CLOSED` pair in the same instant, and the recorder used to treat that empty window as "the corpse the player just looted" — so the cast was pinned to the empty corpse and the real skin window was filed as ordinary corpse loot. The corpse you skinned was never marked skinned, which also kept it out of the skinning farming circles. A real run that reported `kills=8 corpse-windows=3 skin-windows=1 skin-casts=2 | lost casts=1` now reports `lost casts=0` with the skinned corpse carrying its own skin items.
+
 ## [0.3.3-beta] - 2026-11-11
 
 ### Added
