@@ -877,7 +877,10 @@ function T:Diag()
     local function refusal(e)
       local why = tostring(e.skip or "")
       if type(e.refusal) == "string" and e.refusal ~= "" then
-        why = why .. " (" .. e.refusal .. ")"
+        -- Named as the herb probe's own answer, so it reads correctly beside a
+        -- beast decision too ("panel shows 3 row(s) (herb probe: mouseover
+        -- holds a unit)" says why the herb block is not the one showing).
+        why = why .. " (herb probe: " .. e.refusal .. ")"
       end
       return why
     end

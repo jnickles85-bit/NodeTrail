@@ -291,9 +291,9 @@ check(out:find("owner=frame:AnotherAddonTipHost", 1, true) ~= nil,
   "10: the eval line names the owning frame")
 check(out:find("mouseover=none", 1, true) ~= nil, "10: the eval line names the mouseover answer")
 check(out:find('line1="Copper Vein"', 1, true) ~= nil, "10: the eval line quotes the first line")
-check(out:find("not a herb tooltip (", 1, true) ~= nil,
+check(out:find("not a herb tooltip (herb probe:", 1, true) ~= nil,
   "10: the refusal is printed beside the decision, not instead of it")
-check(out:find('not a herb tooltip (the first line "Copper Vein" is not a node name)', 1, true) ~= nil,
+check(out:find('not a herb tooltip (herb probe: the first line "Copper Vein" is not a node name)', 1, true) ~= nil,
   "10: that refusal names the first line as the input that refused")
 
 -- ── 11. a tooltip object that is not a frame is recorded, not skipped ──────
