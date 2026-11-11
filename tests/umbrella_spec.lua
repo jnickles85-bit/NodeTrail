@@ -238,12 +238,34 @@ check(registeredCategory and registeredCategory.frame == pkg.optionsPanel, "cate
 check(type(NodeTrailDB) == "table", "NodeTrailDB is table")
 check(type(pkg.NodeTrail) == "table" and type(pkg.NodeTrail.GetSkinDB) == "function",
   "NodeTrail owns the skinning sub-toggle accessors")
+-- t_ba64b076: the recorder is ON by default, so a first login arms the probe
+-- with no setup. The migration marker is written here too (there is nothing to
+-- migrate on a fresh install) and no user-set flag is invented: a default is
+-- not a choice.
 check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == false,
-  "skinning sub-toggle defaults OFF")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == false,
-  "sub-toggle persisted at NodeTrailDB.skinning.enabled (default false)")
-check(pkg.Skinning.Probe.enabled ~= true, "probe stays unarmed while the sub-toggle is off")
+  and pkg.NodeTrail.IsSkinningEnabled() == true,
+  "skinning sub-toggle defaults ON (t_ba64b076)")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
+  "sub-toggle persisted at NodeTrailDB.skinning.enabled (default true)")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinMigration == 1,
+  "the one-time skinning migration is marked as run on a fresh install")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet ~= true,
+  "no skinUserSet flag on a fresh install (the default is not a player choice)")
+check(pkg.Skinning.Probe.enabled == true, "the probe is armed at first login (default ON)")
+
+-- t_ba64b076, the card's own observable: "/mp skindiag reports the sub-option
+-- on" for a fresh install. The real dump command, first line only.
+local skBefore = #chat
+SlashCmdList.MIGHTIEPACK("skindiag dump")
+local skFirst = nil
+for i = skBefore + 1, #chat do
+  local m = tostring(chat[i])
+  if m:find("capture ", 1, true) then skFirst = m break end
+end
+check(skFirst ~= nil and skFirst:find("sub-option ON", 1, true) ~= nil,
+  "/mp skindiag dump reports the sub-option ON for a fresh install (got: " .. tostring(skFirst) .. ")")
+check(skFirst ~= nil and skFirst:find("NodeTrailDB.skinning", 1, true) ~= nil,
+  "/mp skindiag dump says the records are saved to NodeTrailDB.skinning")
 
 local before = #chat
 SlashCmdList.NODETRAIL("help")
@@ -261,12 +283,12 @@ for i = before + 1, #chat do
   if m:find("NodeTrail: on", 1, true) then foundOn = true end
   if m:find("Touchstone: off", 1, true) then foundOff = true end
   if m:find("Skinning:", 1, true) then foundSkinLine = true end
-  if m:find("NodeTrail: on (loaded) - skinning off", 1, true) then foundSkinOnNT = true end
+  if m:find("NodeTrail: on (loaded) - skinning on", 1, true) then foundSkinOnNT = true end
 end
 check(foundOn, "status shows NodeTrail on")
 check(foundOff, "status shows Touchstone off")
 check(not foundSkinLine, "status prints NO separate 'Skinning:' module line")
-check(foundSkinOnNT, "status reports skinning on the NodeTrail line: 'NodeTrail: on (loaded) - skinning off'")
+check(foundSkinOnNT, "status reports skinning on the NodeTrail line: 'NodeTrail: on (loaded) - skinning on'")
 
 openedId = nil
 SlashCmdList.MIGHTIEPACK("")
@@ -297,7 +319,7 @@ check(skinBox ~= nil, "a skinning sub-option checkbox exists")
 check(skinBox and skinBox.template == "UICheckButtonTemplate",
   "the sub-option is a real checkbutton")
 if skinBox then
-  check(skinBox:GetChecked() == false, "skinning sub-option unchecked (default off)")
+  check(skinBox:GetChecked() == true, "skinning sub-option checked (default ON, t_ba64b076)")
   check(skinBox:IsEnabled() == true, "skinning sub-option is usable while NodeTrail is on")
   local function point1(box)
     return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
@@ -413,10 +435,14 @@ if skin3 then
   local skinClick = skin3:GetScript("OnClick")
   check(type(skinClick) == "function", "the sub-option has an OnClick handler")
   if type(skinClick) == "function" then skinClick(skin3) end
-  check(type(pkg.NodeTrail.GetSkinDB) == "function"
-    and pkg.NodeTrail.GetSkinDB().enabled == false,
-    "clicking the greyed sub-option saves nothing")
-  check(skin3:GetChecked() == false, "clicking the greyed sub-option snaps back to off")
+  -- t_ba64b076: the greyed row is inert, so it must not record a CHOICE. What
+  -- it snaps back to is the stored value (the default, ON); no user-set flag
+  -- may appear from a click that could not be honoured.
+  local greyDB = type(pkg.NodeTrail.GetSkinDB) == "function" and pkg.NodeTrail.GetSkinDB() or nil
+  check(type(greyDB) == "table" and greyDB.skinUserSet ~= true,
+    "clicking the greyed sub-option records no player choice (no skinUserSet)")
+  check(skin3:GetChecked() == true,
+    "clicking the greyed sub-option snaps back to the stored value (ON)")
   check(pkg.Skinning.Probe.enabled ~= true, "probe stays off while NodeTrail is off")
 end
 check(#shownPopups == 1, "the inert sub-option raises no popup")
@@ -431,12 +457,40 @@ check(reloads == 1, "no extra reload on re-tick")
 check(#shownPopups == 1, "no new popup on re-tick")
 check(boxes3.Skinning:IsEnabled() == true, "sub-option becomes usable when NodeTrail is re-ticked")
 
--- Turning the sub-option ON: persisted at NodeTrailDB.skinning.enabled,
+-- t_ba64b076: the sub-option is ON by default, so BOTH directions are
+-- exercised here. An untick is the player's explicit opt-out and must be
+-- written as such (skinUserSet); a tick is the explicit opt-in. Neither needs a
+-- reload, and neither raises a popup.
+check(boxes3.Skinning:GetChecked() == true,
+  "sub-option is checked once NodeTrail is on (default ON, t_ba64b076)")
+check(pkg.Skinning.Probe.enabled == true, "the probe is armed by the default, with no setup")
+
+boxes3.Skinning:SetChecked(false)
+boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == false,
+  "unticking persists enabled = false")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet == true,
+  "unticking writes skinUserSet (an explicit off, not a default)")
+check(pkg.Skinning.Probe.enabled == false, "unticking stops the probe immediately (no reload)")
+check(#shownPopups == 1, "no popup when the sub-option is turned off")
+check(reloads == 1, "no reload when the sub-option is turned off")
+
+local stOff = #chat
+SlashCmdList.MIGHTIEPACK("status")
+local foundSkinOff = false
+for i = stOff + 1, #chat do
+  if tostring(chat[i]):find("NodeTrail: on (loaded) - skinning off", 1, true) then foundSkinOff = true end
+end
+check(foundSkinOff, "status shows 'NodeTrail: on (loaded) - skinning off' after the opt-out")
+
+-- Turning it back ON: persisted at NodeTrailDB.skinning.enabled,
 -- probe armed immediately, no reload popup (a reload is NOT required).
 boxes3.Skinning:SetChecked(true)
 boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
 check(type(NodeTrailDB.skinning) == "table" and NodeTrailDB.skinning.enabled == true,
   "sub-option persists in NodeTrailDB.skinning.enabled")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet == true,
+  "the opt-in keeps the user-set flag (both directions are choices)")
 check(MightiePackDB.modules.Skinning == nil, "the sub-toggle is NOT written to MightiePackDB.modules")
 check(pkg.Skinning.Probe.enabled == true, "ticking the sub-option arms the probe immediately")
 check(#shownPopups == 1, "no reload popup for the sub-option")
@@ -450,15 +504,6 @@ for i = stBefore + 1, #chat do
 end
 check(foundSkinOn, "status shows 'NodeTrail: on (loaded) - skinning on'")
 
--- Turning it OFF: immediate (probe events unregistered), still no popup.
-boxes3.Skinning:SetChecked(false)
-boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == false,
-  "sub-option off persists")
-check(pkg.Skinning.Probe.enabled == false, "unticking stops the probe immediately (no reload)")
-check(#shownPopups == 1, "no popup when the sub-option is turned off")
-check(reloads == 1, "no reload when the sub-option is turned off")
-
 -- Test 4
 pkg = loadPackage({ modules = { NodeTrail = false, Touchstone = true } })
 check(MightiePackDB.modules.NodeTrail == false, "saved NodeTrail false preserved")
@@ -470,12 +515,15 @@ check(pkg.modules.Touchstone.loaded ~= true,
 -- build) is kept but inert — the sub-toggle lives in NodeTrailDB.
 pkg = loadPackage({ modules = { NodeTrail = true, Skinning = true } })
 check(MightiePackDB.modules.Skinning == true, "the stale modules.Skinning key is not lost")
+-- t_ba64b076: the stale key has no say over the persisted value either way;
+-- what the probe follows now is the DEFAULT (ON), and the stale key must not
+-- be mistaken for a player choice.
 check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == false,
-  "the stale modules.Skinning key does not turn the probe on")
-check(NodeTrailDB.skinning == nil or NodeTrailDB.skinning.enabled == false,
-  "it is not copied into NodeTrailDB.skinning")
-check(pkg.Skinning.Probe.enabled ~= true, "probe stays unarmed from the stale key")
+  and pkg.NodeTrail.IsSkinningEnabled() == true,
+  "the stale modules.Skinning key does not decide the sub-option: the default (ON) applies")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet ~= true,
+  "the stale key is not copied in as a player choice (no skinUserSet)")
+check(pkg.Skinning.Probe.enabled == true, "the probe is armed by the default, not by the stale key")
 
 -- Test 6: the sub-toggle round-trips through NodeTrailDB and arms the probe
 -- at boot, without losing the keys that were already there.
@@ -492,13 +540,16 @@ check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
   "and the saved value is not rewritten to false")
 
 -- Test 7: a pre-t_5507a0ba NodeTrailDB (no skinning table) gains the key
--- without losing anything.
+-- without losing anything — and, since t_ba64b076, gains it with the new
+-- default (ON) and the migration marker already written.
 pkg = loadPackage({ modules = { NodeTrail = true } }, { profile = { routeSource = "gm2" } })
 check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == false,
-  "an old NodeTrailDB defaults the sub-toggle off")
+  and pkg.NodeTrail.IsSkinningEnabled() == true,
+  "an old NodeTrailDB gets the new default (ON)")
 check(NodeTrailDB.profile.routeSource == "gm2", "the old profile is untouched")
 check(type(NodeTrailDB.skinning) == "table", "the sub-toggle key is added lazily")
+check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinMigration == 1,
+  "and the one-time migration is marked as run with it")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")

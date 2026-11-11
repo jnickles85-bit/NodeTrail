@@ -178,8 +178,8 @@ check(type(P) == "table", "pkg.Skinning.Probe loaded")
 check(type(R) == "table", "pkg.Skinning.Recorder loaded (Record.lua)")
 check(type(pkg.NodeTrail) == "table" and type(pkg.NodeTrail.SetSkinningEnabled) == "function",
   "NodeTrail owns the skinning sub-toggle")
-check(pkg.NodeTrail and pkg.NodeTrail.IsSkinningEnabled() == false,
-  "the sub-toggle defaults OFF")
+check(pkg.NodeTrail and pkg.NodeTrail.IsSkinningEnabled() == true,
+  "the sub-toggle defaults ON (t_ba64b076)")
 check(R and R.SKIN_SPELL_ID == 8613,
   "the recorder knows the live-confirmed skinning spell 8613")
 check(R and R.CreatureID("Creature-0-7072-1-48-3124-F090F29C6F") == 3124,

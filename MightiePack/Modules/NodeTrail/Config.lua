@@ -45,10 +45,14 @@ ns.defaults = {
   },
   -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature, so its
   -- sub-toggle lives in NodeTrail's own saved variable (top level, NOT
-  -- inside profile and NOT in MightiePackDB.modules). OFF by default: the
-  -- event surface is still unverified on this client.
+  -- inside profile and NOT in MightiePackDB.modules).
+  -- t_ba64b076: ON by default. The recorder shipped off while the event
+  -- surface was unverified; recording is the product now, so a fresh install
+  -- records from the first corpse with no setup. The old default is carried
+  -- over by the one-time migration in ns.GetSkinDB, and an explicit off
+  -- (Options box or /nt skin off) is remembered through skinUserSet.
   skinning = {
-    enabled = false,
+    enabled = true,
   },
   -- t_b46e5e87: the skinning farming circle. Its own switch, separate from the
   -- probe (NodeTrailDB.skinning.enabled) and from the herb route: the circle is
@@ -127,20 +131,35 @@ function ns.GetDB()
 end
 
 -- ── Skinning sub-toggle (t_5507a0ba) ────────────────────────────────
--- Persisted at NodeTrailDB.skinning.enabled, default false. Filled in
--- lazily so a NodeTrailDB written before this key existed keeps every
--- other key it already has (a saved profile is never replaced).
+-- Persisted at NodeTrailDB.skinning.enabled, default true (t_ba64b076).
+-- Filled in lazily so a NodeTrailDB written before this key existed keeps
+-- every other key it already has (a saved profile is never replaced).
 function ns.GetSkinDB()
   if type(NodeTrailDB) ~= "table" then
     NodeTrailDB = CopyTable(ns.defaults)
   end
   if type(NodeTrailDB.skinning) ~= "table" then
-    NodeTrailDB.skinning = { enabled = false }
+    NodeTrailDB.skinning = { enabled = true }
   end
   if type(NodeTrailDB.skinning.enabled) ~= "boolean" then
-    NodeTrailDB.skinning.enabled = false
+    NodeTrailDB.skinning.enabled = true
   end
-  return NodeTrailDB.skinning
+  -- t_ba64b076: the same shape as the arrow's migration in ns.GetDB, on the
+  -- value it owns. The recorder shipped default-OFF, so a bucket written by
+  -- that build stored `false`. Changing the default cannot undo a stored
+  -- value, so an install that carries the old default is flipped ON once.
+  -- Only an explicit switch (the Options checkbox or /nt skin, both of which
+  -- go through ns.SetSkinningEnabled) sets skinUserSet, so a player's own
+  -- "off" is never overridden — not by this migration, by a later one, or by
+  -- a /reload. The marker is written either way, so this runs exactly once.
+  local db = NodeTrailDB.skinning
+  if db.skinMigration ~= 1 then
+    if db.skinUserSet ~= true then
+      db.enabled = true
+    end
+    db.skinMigration = 1
+  end
+  return db
 end
 
 function ns.IsSkinningEnabled()
@@ -148,8 +167,13 @@ function ns.IsSkinningEnabled()
 end
 
 function ns.SetSkinningEnabled(on)
-  ns.GetSkinDB().enabled = on and true or false
-  return NodeTrailDB.skinning.enabled
+  local db = ns.GetSkinDB()
+  db.enabled = on and true or false
+  -- This is the player asking, not a default: it must outlive the migration
+  -- above and every future one. Writes from the Options checkbox and from
+  -- /nt skin both land here, so there is one flag and one meaning.
+  db.skinUserSet = true
+  return db.enabled
 end
 
 -- ── Skinning farming circle switch (t_b46e5e87) ─────────────────────

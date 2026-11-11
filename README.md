@@ -120,9 +120,15 @@ Run from repo root with lua5.1:
 - `tests/skindiag_spec.lua`
 - `tests/skinning_recorder_spec.lua` (replays the live kill -> corpse loot -> 8613 cast -> skin loot chain)
 - `tests/skinning_empty_window_spec.lua` (an empty corpse window never pins the cast; the skin window's own GUID is the truth)
+- `tests/skinning_default_on_spec.lua` (recording on by default: the fresh install, the one-time migration, and an explicit opt-out surviving a reload)
 
 ## Skinning recorder (NodeTrail sub-option)
-Off by default (`NodeTrailDB.skinning.enabled`). When on, the addon records one
+On by default (`NodeTrailDB.skinning.enabled`): a fresh install records from the
+first corpse with no setup. A one-time migration turns the old default on for an
+existing install, and an explicit off — un-ticking the Options box or `/nt skin
+off` (`/nt skin status` reads it back) — is written as the player's own choice
+(`skinUserSet`), so it survives `/reload` and every later update and the
+migration never overrides it. When on, the addon records one
 entry per corpse, keyed by the corpse GUID, in `NodeTrailDB.skinning.chars["Name-Realm"]`:
 mob GUID/name/entry, zone/subzone/map + position at death, the ordinary corpse loot
 (items from `LOOT_OPENED`), whether a Skinning cast (spell 8613) succeeded, the skinning
