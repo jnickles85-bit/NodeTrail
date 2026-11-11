@@ -285,7 +285,7 @@ end
 --   store.creatures[cid] = {
 --     corpses     = records this id ever produced (any evidence),
 --     kills       = records whose death we observed (killObserved),
---     skinned     = records a successful 8613 cast was pinned to,
+--     skinned     = records this id was observed skinned (either path, ONCE),
 --     skinWindows = skin loot windows filed for this id,
 --     skin        = { [itemID] = { itemID, count, seen, name } },
 --   }
@@ -773,6 +773,14 @@ end
 -- skin window still sets skinned = true. A window filed as skin with no cast
 -- behind it (a direct caller, or a window that only looks like skin) marks
 -- nothing: the cast is what makes a corpse skinned.
+--
+-- t_6976540d: the window ALSO increments the corpse's totals row when it marks
+-- it. It used to set rec.skinned and nothing else, so a skin the probe reported
+-- the normal way (unpinned cast, then this window) reached skinWindows and the
+-- record but never totals.skinned — and the beast panel undercounted (live:
+-- 5 Plainstriders skinned, panel said 3). The `rec.skinned` flag guards the
+-- increment, so a corpse the cast path or a previous window already counted is
+-- never counted twice.
 function R:OnSkinLoot(ev)
   ev = ev or {}
   local rec = self:RecordFor(ev.guid, ev.t)
@@ -782,7 +790,15 @@ function R:OnSkinLoot(ev)
   rec.skinItems = mergeWindows(windowLog(rec, "skin"))
   rec.skinWindowAt = ev.t
   rec.skinLootOpens = (rec.skinLootOpens or 0) + 1
+  local row = R:CreatureRow(store, rec.creatureID, true)
   if ev.cast == true then
+    -- A skin is counted exactly ONCE, by whichever path observed it first.
+    -- After #18 the probe sends an UNPINNED cast on the normal path, and
+    -- R:OnSkinCast returns early on one — so the window is the only place this
+    -- corpse's skin reaches the totals. `rec.skinned` is the flag both paths
+    -- agree on (and the one seedTotals sets from a schema 1 store): a corpse
+    -- the cast path already counted, or a seeded one, is never counted twice.
+    if not rec.skinned and row then row.skinned = row.skinned + 1 end
     rec.skinned = true
     rec.skinSpellID = ev.spellID or R.SKIN_SPELL_ID
     rec.skinCastAt = ev.castAt or ev.t
@@ -792,7 +808,6 @@ function R:OnSkinLoot(ev)
   end
   if ev.name and rec.name == nil then rec.name = usableName(ev.name, ev.guid) end
   store.counts.skinWindows = store.counts.skinWindows + 1
-  local row = R:CreatureRow(store, rec.creatureID, true)
   if row then
     row.skinWindows = row.skinWindows + 1
     applySkinItems(row, rec)
