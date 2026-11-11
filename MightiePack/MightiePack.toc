@@ -3,7 +3,7 @@
 ## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone (gear upgrade advice).
 ## Author: Mightie
 ## Version: @project-version@
-## X-Curse-Project-ID: 000000
+## X-Curse-Project-ID: 1788533
 ## SavedVariables: MightiePackDB, NodeTrailDB, StatForgeDB
 ## SavedVariablesPerCharacter: ChestAdvisorDB
 ## Assets: Modules/Touchstone/ChestAdvisor/marker.tga
