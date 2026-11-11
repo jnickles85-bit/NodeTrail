@@ -6,6 +6,8 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+## [0.3.4-beta] - 2026-11-11
+
 ### Changed
 - The skinning recorder is on by default: a fresh install records from the first corpse with no setup. A one-time migration switches the previous default on for an existing install, and an explicit off — un-ticking Skinning (experimental) in settings or `/nt skin off` — is stored as the player's own choice (`NodeTrailDB.skinning.skinUserSet`), so it survives `/reload` and later updates and the migration never overrides it. `/nt skin status` reports the current state.
 
