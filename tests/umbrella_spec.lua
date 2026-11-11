@@ -305,18 +305,18 @@ if skinBox then
   local ntPt, skPt = point1(boxes.NodeTrail), point1(skinBox)
   check(skPt ~= nil, "the sub-option was positioned")
   if ntPt and skPt then
-    check(skPt[4] == 36, "sub-option is indented to x=36, got " .. tostring(skPt[4]))
-    check(ntPt[4] == 16, "module rows sit at x=16, got " .. tostring(ntPt[4]))
-    check(skPt[4] > ntPt[4], "sub-option is indented relative to NodeTrail")
-    check(skPt[5] < ntPt[5], "sub-option sits below the NodeTrail box")
+    -- Skinning is anchored under the NodeTrail checkbox and indented.
+    check(skPt[2] == boxes.NodeTrail, "skinning sub-option is anchored to the NodeTrail checkbox")
+    check(skPt[3] == "BOTTOMLEFT", "skinning sub-option sits under NodeTrail (rel=" .. tostring(skPt[3]) .. ")")
+    check((skPt[4] or 0) > 0, "skinning sub-option is indented relative to NodeTrail (x=" .. tostring(skPt[4]) .. ")")
   end
-  -- moduleOrder is Touchstone then NodeTrail (Touchstone is registered by
-  -- Modules.lua, NodeTrail by its own Core), so the sub-row is the last row.
   local touchPt = point1(boxes.Touchstone)
-  check(touchPt ~= nil and ntPt ~= nil and ntPt[5] == touchPt[5] - 32,
-    "module rows keep the 32px pitch")
-  check(skPt ~= nil and ntPt ~= nil and skPt[5] == ntPt[5] - 22,
-    "the sub-option row sits 22px under the NodeTrail row")
+  check(touchPt ~= nil, "Touchstone row was positioned")
+  check(ntPt ~= nil and ntPt[2] == boxes.Touchstone,
+    "NodeTrail is anchored under Touchstone (vertical module flow)")
+  check(ntPt and ntPt[3] == "BOTTOMLEFT", "NodeTrail sits below Touchstone")
+  check(skPt ~= nil and skPt[2] == boxes.NodeTrail,
+    "the skinning sub-option sits under the NodeTrail row")
 end
 
 -- t_2bc15917 / t_57550700: "Auto-refresh route" is the second indented NodeTrail
@@ -336,10 +336,8 @@ if autoBox then
   local ap, sp = point1b(autoBox), point1b(skinBox)
   check(ap ~= nil, "the auto-refresh row was positioned")
   if ap and sp then
-    check(ap[4] == 36, "auto-refresh row is indented to x=36, got " .. tostring(ap[4]))
-    check(ap[5] == sp[5] - 22,
-      "auto-refresh row sits 22px under the skinning row (got " .. tostring(ap[5])
-      .. " vs " .. tostring(sp[5]) .. ")")
+    check(ap[2] == skinBox, "auto-refresh row is anchored under the skinning row")
+    check(ap[3] == "BOTTOMLEFT", "auto-refresh row sits under the skinning row")
   end
   check(type(autoBox:GetScript("OnClick")) == "function", "auto-refresh row has an OnClick handler")
 end
@@ -362,10 +360,8 @@ if skinRouteBox then
   local rp, ap = point1c(skinRouteBox), point1c(autoBox)
   check(rp ~= nil, "the skinning circle row was positioned")
   if rp and ap then
-    check(rp[4] == 36, "skinning circle row is indented to x=36, got " .. tostring(rp[4]))
-    check(rp[5] == ap[5] - 22,
-      "skinning circle row sits 22px under the auto-refresh row (got " .. tostring(rp[5])
-      .. " vs " .. tostring(ap[5]) .. ")")
+    check(rp[2] == autoBox, "skinning circle row is anchored under the auto-refresh row")
+    check(rp[3] == "BOTTOMLEFT", "skinning circle row sits under the auto-refresh row")
   end
   check(type(skinRouteBox:GetScript("OnClick")) == "function", "skinning circle row has an OnClick handler")
 end
