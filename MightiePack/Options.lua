@@ -228,7 +228,6 @@ local function syncCheckboxes()
   for index, name in ipairs(pkg.moduleOrder or {}) do
     local def = pkg.modules and pkg.modules[name]
     if def then
-      local y = moduleY[name] or (FIRST_ROW_Y - (index - 1) * ROW_H)
       local cb = boxes[name]
       if not cb then
         cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
@@ -605,12 +604,6 @@ end
 
 -- The recipe block starts under the last module/sub-option row (re-anchored
 -- in relayoutLowerSections once those rows exist).
-local recHeaderY = lastRowY - 36
-local recStatusY = recHeaderY - 18
-local recErrorY = recStatusY - 16
-local recNoteY = recErrorY - 16
-local recButtonY = recNoteY - 22
-
 recHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 recHeader:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", 0, -120)
 recHeader:SetText("Alchemy Recipes")
@@ -620,8 +613,15 @@ recStatus:SetPoint("TOPLEFT", recHeader, "BOTTOMLEFT", 0, -6)
 styleStatusLine(recStatus)
 recStatus:SetText("")
 
+-- Create Scan now before recError so the error line can sit under the
+-- button from the start (scripts are attached after syncRecipesBlock).
+recButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+recButton:SetPoint("TOPLEFT", recStatus, "BOTTOMLEFT", 0, -8)
+recButton:SetSize(96, 24)
+recButton:SetText("Scan now")
+
 recError = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-recError:SetPoint("TOPLEFT", recButton and recButton or recStatus, "BOTTOMLEFT", 0, -6)
+recError:SetPoint("TOPLEFT", recButton, "BOTTOMLEFT", 0, -6)
 recError:SetText("")
 recError:Hide()
 styleStatusLine(recError)
@@ -683,12 +683,6 @@ local function syncRecipesBlock()
   relayoutLowerSections()
 end
 
-recButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-recButton:SetPoint("TOPLEFT", recStatus, "BOTTOMLEFT", 0, -8)
-recButton:SetSize(96, 24)
-recButton:SetText("Scan now")
-if type(recError.ClearAllPoints) == "function" then recError:ClearAllPoints() end
-recError:SetPoint("TOPLEFT", recButton, "BOTTOMLEFT", 0, -6)
 recButton:SetScript("OnClick", function()
   local rec = ntRecipes()
   if rec and type(rec.TryScanNow) == "function" then

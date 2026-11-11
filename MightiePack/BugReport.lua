@@ -387,8 +387,8 @@ local function ensureCopyPopup(key, opts)
   if type(edit.SetHeight) == "function" then pcall(edit.SetHeight, edit, 320) end
   if type(edit.SetFontObject) == "function" then
     local applied = false
-    for _, key in ipairs({ "ChatFontNormal", "GameFontHighlight", "GameFontNormal" }) do
-      local font = rawget(_G, key)
+    for _, fontName in ipairs({ "ChatFontNormal", "GameFontHighlight", "GameFontNormal" }) do
+      local font = rawget(_G, fontName)
       if font ~= nil and pcall(edit.SetFontObject, edit, font) then
         applied = true
         break
