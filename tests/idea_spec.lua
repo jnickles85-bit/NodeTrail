@@ -33,6 +33,8 @@ CANCEL = "Cancel"
 ReloadUI = function() end
 UIParent = {}
 UISpecialFrames = {}
+-- WoW exposes tinsert as a global; lua5.1 in CI does not.
+tinsert = table.insert
 GameTooltip = {
   SetOwner = function() end,
   SetText = function() end,
@@ -152,6 +154,14 @@ local function countNamed(name)
   return n
 end
 
+local function specialCount(name)
+  local n = 0
+  for _, v in ipairs(UISpecialFrames) do
+    if v == name then n = n + 1 end
+  end
+  return n
+end
+
 local function privacyLacks(text, label)
   lacks(text, "SecretPlayer", label .. ": no character name")
   lacks(text, "SecretRealm", label .. ": no realm")
@@ -196,6 +206,16 @@ check(pkg.ParseIdeaArea("unknown-module") == "NodeTrail / Touchstone / Skinning 
   "unknown arg stays a choice list (raw text is not echoed)")
 check(pkg.ParseIdeaArea("SecretPlayer") == "NodeTrail / Touchstone / Skinning / General",
   "a lookalike name is not copied into Area")
+check(pkg.ParseIdeaArea("nodetrail please") == "NodeTrail",
+  "first token only: nodetrail please")
+check(pkg.ParseIdeaArea("nt extra words") == "NodeTrail",
+  "first token only: nt extra words")
+check(pkg.ParseIdeaArea("|Hitem:19019|h[Thunderfury]|h") == "NodeTrail / Touchstone / Skinning / General",
+  "item-link arg is the choice list")
+check(pkg.ParseIdeaArea([[|TInterface\Icons\INV_Misc_QuestionMark:20|t]]) == "NodeTrail / Touchstone / Skinning / General",
+  "texture-escape arg is the choice list")
+check(pkg.ParseIdeaArea(string.rep("A", 20000)) == "NodeTrail / Touchstone / Skinning / General",
+  "20k-char arg is the choice list")
 
 -- ── Text content ──
 local report = pkg.BuildIdeaReport()
@@ -219,6 +239,34 @@ has(unknown, "Area: NodeTrail / Touchstone / Skinning / General",
   "unknown arg does not invent an Area")
 lacks(unknown, "not-a-module", "unknown arg is not echoed")
 
+local please = pkg.BuildIdeaReport("nodetrail please")
+has(please, "Area: NodeTrail", "/mp idea nodetrail please fills NodeTrail")
+lacks(please, "please", "trailing words after the area token are not echoed")
+
+local link = pkg.BuildIdeaReport("|Hitem:19019:0:0:0:0:0:0:0|h[Thunderfury]|h")
+has(link, "Area: NodeTrail / Touchstone / Skinning / General",
+  "item-link arg uses the choice list")
+lacks(link, "|H", "item link |H is not echoed")
+lacks(link, "Thunderfury", "item link name is not echoed")
+lacks(link, "19019", "item id is not echoed")
+
+local tex = pkg.BuildIdeaReport([[|TInterface\Icons\INV_Misc_QuestionMark:20|t]])
+has(tex, "Area: NodeTrail / Touchstone / Skinning / General",
+  "texture-escape arg uses the choice list")
+lacks(tex, "|T", "texture escape |T is not echoed")
+lacks(tex, "INV_Misc_QuestionMark", "texture path is not echoed")
+
+local hugeArg = string.rep("A", 20000)
+local huge = pkg.BuildIdeaReport(hugeArg)
+has(huge, "Area: NodeTrail / Touchstone / Skinning / General",
+  "20k-char arg uses the choice list")
+lacks(huge, "AAAAAAAAAA", "20k-char arg is not echoed")
+check(huge:find(hugeArg, 1, true) == nil, "20k-char arg is not present in full")
+
+local mixed = pkg.BuildIdeaReport("nodetrail |Hitem:1|h[x]|h")
+has(mixed, "Area: NodeTrail", "known first token still fills Area")
+lacks(mixed, "|H", "hostile rest after a known token is not echoed")
+
 -- Invite hook mirrors the bug hint
 check(pkg.IdeaCopyHint() == "Press Ctrl+C to copy, then paste it into #mightiepack-ideas.",
   "default idea hint names the channel")
@@ -239,13 +287,19 @@ check(edit and edit.highlighted == true, "/mp idea highlights the EditBox")
 check(edit and edit.hasFocus == true, "/mp idea focuses the EditBox")
 privacyLacks(edit and edit.text, "/mp idea EditBox")
 check(countNamed("MightiePackIdeaFrame") == 1, "first open creates one idea frame")
+check(specialCount("MightiePackIdeaFrame") == 1, "idea frame is registered in UISpecialFrames")
 
 local framesBefore = #frames
 SlashCmdList.MIGHTIEPACK("idea nodetrail")
 check(countNamed("MightiePackIdeaFrame") == 1, "second open is idempotent (no second frame)")
 check(#frames == framesBefore, "second open creates no extra widgets")
+check(specialCount("MightiePackIdeaFrame") == 1, "second open does not re-register UISpecialFrames")
 check(edit and edit.text:find("Area: NodeTrail", 1, true),
   "reopen with an arg refreshes the EditBox text")
+SlashCmdList.MIGHTIEPACK("idea nodetrail please")
+check(edit and edit.text:find("Area: NodeTrail", 1, true),
+  "/mp idea nodetrail please fills NodeTrail in the EditBox")
+lacks(edit and edit.text, "please", "trailing slash words are not echoed in the EditBox")
 
 -- keyboard trap: Escape clears focus and hides; OnHide also clears focus
 check(edit and type(edit.scripts.OnEscapePressed) == "function", "EditBox has OnEscapePressed")
@@ -265,16 +319,37 @@ form.scripts.OnHide(form)
 check(edit.hasFocus == false, "OnHide clears EditBox focus")
 check(callLog.clearFocus >= 1, "OnHide called ClearFocus")
 
--- /mpack idea is the same handler; /mp bug is unchanged
+-- /mpack idea is the same handler; opening one copy popup hides the other
+-- (they both sit at CENTER) and the two EditBox texts stay isolated.
 local bugBefore = countNamed("MightiePackBugReportFrame")
+check(form and form.shown == true, "idea is shown before opening bug")
 SlashCmdList.MIGHTIEPACK("bug")
 check(countNamed("MightiePackBugReportFrame") == bugBefore + 1 or findFrame("MightiePackBugReportFrame") ~= nil,
   "/mp bug still opens the bug popup")
+local bugForm = findFrame("MightiePackBugReportFrame")
 local bugEdit = findFrame("MightiePackBugReportEdit")
+check(bugForm ~= nil and bugForm.shown == true, "/mp bug shows the bug popup")
+check(form and form.shown == false, "opening bug hides the idea popup")
 check(bugEdit ~= nil and type(bugEdit.text) == "string"
   and bugEdit.text:find("MightiePack bug report", 1, true),
   "/mp bug EditBox is still the bug report")
 lacks(bugEdit.text, "**MightiePack idea**", "/mp bug was not overwritten by the idea form")
+check(edit and type(edit.text) == "string"
+  and edit.text:find("**MightiePack idea**", 1, true),
+  "idea EditBox is unchanged after opening bug")
+lacks(edit.text, "MightiePack bug report", "idea EditBox was not overwritten by the bug form")
+check(specialCount("MightiePackBugReportFrame") == 1, "bug frame is registered in UISpecialFrames")
+
+-- bug-then-idea: the idea popup comes back and hides bug, texts stay isolated
+SlashCmdList.MIGHTIEPACK("idea")
+check(form and form.shown == true, "reopening idea shows the idea popup")
+check(bugForm and bugForm.shown == false, "opening idea hides the bug popup")
+check(edit and edit.text:find("**MightiePack idea**", 1, true),
+  "idea EditBox is still the idea form after reopen")
+lacks(edit.text, "MightiePack bug report", "reopened idea was not overwritten by the bug form")
+check(bugEdit and bugEdit.text:find("MightiePack bug report", 1, true),
+  "hidden bug EditBox still holds the bug report")
+lacks(bugEdit.text, "**MightiePack idea**", "hidden bug EditBox was not overwritten by the idea form")
 
 -- usage line mentions idea
 chat = {}

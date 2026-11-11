@@ -213,7 +213,8 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     end
   elseif first == "idea" then
     -- Same popup as the options-panel "Suggest an idea" button.
-    -- Optional second word selects Area (e.g. /mp idea nodetrail).
+    -- Only the first token of the rest selects Area (e.g. `/mp idea
+    -- nodetrail please` fills NodeTrail); extra words are ignored.
     if type(pkg.OpenIdeaReport) == "function" then
       pkg.OpenIdeaReport(rest)
     else

@@ -271,12 +271,16 @@ function pkg.BuildBugReport()
 end
 
 -- Map a /mp idea argument to a single area, or the choice list when
--- missing/unknown. Never echoes the raw argument (it is player-typed).
+-- missing/unknown. Only the first token of the rest is considered
+-- (e.g. `/mp idea nodetrail please` fills NodeTrail). Never echoes the
+-- raw argument (it is player-typed).
 function pkg.ParseIdeaArea(arg)
   local s = safeStr(arg)
   if not s then return IDEA_AREA_CHOICE end
-  s = s:lower():gsub("%s+", "")
-  return IDEA_AREA_ALIASES[s] or IDEA_AREA_CHOICE
+  local token = s:match("^%s*(%S+)")
+  if not token then return IDEA_AREA_CHOICE end
+  token = token:lower()
+  return IDEA_AREA_ALIASES[token] or IDEA_AREA_CHOICE
 end
 
 function pkg.BuildIdeaReport(areaArg)
@@ -395,8 +399,19 @@ local function ensureCopyPopup(key, opts)
   return p
 end
 
+-- The two popups both sit at CENTER; opening one hides the other so
+-- they never stack on top of each other.
+local function hideOtherCopyPopups(exceptKey)
+  for k, p in pairs(copyPopups) do
+    if k ~= exceptKey and p and p.frame and type(p.frame.Hide) == "function" then
+      pcall(p.frame.Hide, p.frame)
+    end
+  end
+end
+
 local function openCopyPopup(key, opts, text, failMsg)
   local ok, err = pcall(function()
+    hideOtherCopyPopups(key)
     local p = ensureCopyPopup(key, opts)
     if p.editBox and type(p.editBox.SetText) == "function" then
       p.editBox:SetText(text)
