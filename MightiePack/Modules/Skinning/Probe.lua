@@ -506,6 +506,27 @@ end
 --      second time.
 -- A pinned cast still wins for its own corpse, and a window on a DIFFERENT
 -- corpse while a pinned cast is pending stays ordinary corpse loot.
+-- The corpse the player is pointing at. Skinning requires a dead target, so
+-- a successful 8613 (or a loot window that opened under that cast) can use
+-- this GUID when the loot source is missing and the 10s death fallback has
+-- already aged out — the live farm that left rec.skinned false for a whole
+-- pack (tooltip "kills seen: N · skinned: 0", /nt skinroute "0 of 8").
+function P:DeadTargetGuid()
+  if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function"
+    or type(UnitGUID) ~= "function" then
+    return nil
+  end
+  local okE, exists = pcall(UnitExists, "target")
+  if not okE or not exists then return nil end
+  local okD, dead = pcall(UnitIsDead, "target")
+  if not okD or not dead then return nil end
+  local ok, g = pcall(UnitGUID, "target")
+  if not ok or g == nil then return nil end
+  if isSecret(g) then return g end
+  if isClientText(g) then return g end
+  return nil
+end
+
 function P:Classify(src, t)
   local guid, rule = nil, "none"
   if type(src) == "string" and src ~= "" then
@@ -518,6 +539,20 @@ function P:Classify(src, t)
     end
   end
   local cast = self:PendingCast(t)
+  -- A pending Skinning cast can name this window when the loot source and
+  -- the 10s death fallback both come up empty: use the pin if the cast has
+  -- one, otherwise the dead target the player is skinning. Without a pending
+  -- cast a GUID-less window stays unattributed (it is not a corpse guess).
+  if guid == nil and type(cast) == "table" then
+    if type(cast.guid) == "string" then
+      guid, rule = cast.guid, "cast-pin"
+    else
+      local tgt = self:DeadTargetGuid()
+      if tgt then
+        guid, rule = tgt, "target"
+      end
+    end
+  end
   if cast then
     if guid == nil then
       -- a cast is pending and nothing at all identifies this window: saying
@@ -1576,4 +1611,121 @@ function P:Diag()
         .. (cut(tostring(lineErr), 50) or "a secret value"))
     end
   end
+end
+
+
+-- Compact, copyable dump for the options button and `/mp skindiag copy`.
+-- Same facts as P:Diag (header, counts/accounting, last steps) but joined
+-- into one string for the bug-report EditBox, trimmed to the last ~20 steps
+-- so a paste usually fits Discord's 2000-character message limit. Nothing
+-- is printed to chat. No account name or filesystem paths.
+P.COMPACT_STEPS = 20
+P.DISCORD_CAP = 2000
+
+function P:DumpText(opts)
+  opts = type(opts) == "table" and opts or {}
+  local maxSteps = tonumber(opts.maxSteps) or self.COMPACT_STEPS or 20
+  if maxSteps < 1 then maxSteps = 1 end
+  local lines = {}
+  local function say(m)
+    if type(m) == "string" then lines[#lines + 1] = m end
+  end
+
+  local R = self:Recorder()
+  local db = false
+  if type(R) == "table" and type(R.IsEnabled) == "function" then
+    local okE, on = pcall(R.IsEnabled, R)
+    db = okE and on == true
+  end
+  say("capture " .. (self.capturing and "on" or "off")
+    .. "; sub-option " .. (db and "ON" or "off") .. " (NodeTrail)"
+    .. "; records: " .. (db
+      and "NodeTrailDB.skinning, saved"
+      or "session buffer only, nothing saved")
+    .. "; steps=" .. tostring(#self.steps) .. "/" .. tostring(self.MAX_STEPS))
+  if self._error then
+    local errText = cut(self._error, 60)
+    say("last error: " .. (errText or "(a secret value - not read)"))
+  end
+
+  if type(R) == "table" and type(R.Store) == "function" then
+    local okS, store = pcall(R.Store, R)
+    if okS and type(store) == "table" then
+      local c = store.counts or {}
+      say("counts kills=" .. tostring(c.kills or 0)
+        .. " corpse-windows=" .. tostring(c.corpseWindows or 0)
+        .. " skin-windows=" .. tostring(c.skinWindows or 0)
+        .. " skin-casts=" .. tostring(c.skinCasts or 0))
+      if type(R.AccountingLine) == "function" then
+        local okA, line = pcall(R.AccountingLine, R, store)
+        if okA and type(line) == "string" then
+          say(line)
+        end
+      end
+      local creatures = store.creatures
+      if type(creatures) == "table" then
+        local ids = {}
+        for cid in pairs(creatures) do
+          if type(cid) == "number" then ids[#ids + 1] = cid end
+        end
+        table.sort(ids)
+        local capC = 12
+        local shown = math.min(#ids, capC)
+        for i = 1, shown do
+          local row = creatures[ids[i]]
+          if type(row) == "table" then
+            say("cid " .. tostring(ids[i])
+              .. " corpses=" .. tostring(row.corpses or 0)
+              .. " kills=" .. tostring(row.kills or 0)
+              .. " skinned=" .. tostring(row.skinned or 0)
+              .. " skinWindows=" .. tostring(row.skinWindows or 0))
+          end
+        end
+        if #ids > capC then
+          say("... " .. tostring(#ids - capC) .. " more creature id(s)")
+        end
+      end
+    elseif not okS then
+      say("record: store failed: " .. (cut(tostring(store), 60) or "a secret value"))
+    end
+  else
+    say("record: the recorder (Record.lua) did not load — nothing stored")
+  end
+
+  local n = #self.steps
+  if n == 0 then
+    say("captured: none (kill a skinnable, loot it, cast Skinning, loot it again)")
+  else
+    local from = math.max(1, n - maxSteps + 1)
+    if from > 1 then
+      say("... " .. tostring(from - 1) .. " older step(s) held in the ring buffer")
+    end
+    say("steps: last " .. tostring(n - from + 1) .. " of " .. tostring(n))
+    for i = from, n do
+      local s = self.steps[i]
+      local okLine, lineOrErr = pcall(function()
+        local detail = s.detail or ""
+        if type(s.repeats) == "number" and s.repeats > 1 then
+          detail = detail .. " (x" .. tostring(s.repeats) .. ")"
+        end
+        local pre = string.format("sk %3d %.2f %s %s", s.n, s.t, s.event, detail)
+        if s.name ~= nil then
+          pre = pre .. (s.nameLabel or " n=") .. s.name
+        end
+        return pre
+      end)
+      if okLine and type(lineOrErr) == "string" then
+        say(lineOrErr)
+      else
+        say("step " .. tostring(s and s.n) .. " not printable")
+      end
+    end
+  end
+
+  local text = table.concat(lines, "\n")
+  if type(text) == "string" and #text > (self.DISCORD_CAP or 2000) then
+    text = "Note: this text is over Discord's 2000-character limit and may need splitting.\n"
+      .. text
+  end
+  return text
 end

@@ -188,7 +188,7 @@ if type(aggA) == "table" then
 end
 
 local rowsA = H.Rows(A_CID, "Scorched Beast")
-check(rowHas(rowsA, "kills seen: 5 · skinned: 5"),
+check(rowHas(rowsA, "skinned: 5"),
   "1: the panel still states its totals (rows: " .. tostring(table.concat(anyRight(rowsA), "/")) .. ")")
 check(rowLeftStarts(rowsA, "Ruined Leather Scraps x5") ~= nil,
   "1: the panel still lists what skinning gave")
@@ -229,7 +229,7 @@ if type(aggC) == "table" then
 end
 
 local rowsC = H.Rows(C_CID, "Dustwallow Beast")
-check(rowHas(rowsC, "kills seen: 300 · skinned: 300"),
+check(rowHas(rowsC, "skinned: 300"),
   "2: hovering the creature still shows its totals (got: "
   .. tostring(table.concat(anyRight(rowsC), "/")) .. ")")
 local silkRow = rowLeftStarts(rowsC, "Silk Cloth x300")

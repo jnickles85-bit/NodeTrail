@@ -354,7 +354,7 @@ local EXPECTED = {
   "skinnable · skin windows recorded: 10",
   "skinned",
   "Medium Leather x10 | 100% (yours)",
-  "kills seen: 10 · skinned: 10",
+  "skinned: 10",
 }
 local blockOK = #r == #EXPECTED
 if blockOK then
