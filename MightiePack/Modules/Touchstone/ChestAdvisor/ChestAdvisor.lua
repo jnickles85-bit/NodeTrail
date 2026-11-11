@@ -688,9 +688,11 @@ end
 -- ---- Gear-for-spec registry -------------------------------------------------
 -- Per-class list of specs the player can ask Touchstone to score and gate
 -- for. A registry entry always exists for the picker / slash / options /
--- shield and off-hand gates, even when that spec has no sourced WEIGHTS
--- table yet. Missing weights are silence ("no sourced weights for <spec>
--- yet"), never a guessed pack.
+-- shield and off-hand gates. Every Forever spec now has a sourced Wowhead
+-- order-only profile (including Feral Cat). Missing weights would still
+-- be silence ("no sourced weights for <spec> yet"), never a guessed pack.
+-- Tank defaults are Wowhead's Balanced list (Protection) or Defensive
+-- (Feral Bear). Offensive / Defensive variants are also in the picker.
 --
 -- Each entry: key (saved in ChestAdvisorDB.gearFor), name (display),
 -- role (TANK|HEALER|DAMAGER — the client literal the gates use),
@@ -700,17 +702,30 @@ ChestAdvisor.GEAR_SPECS = {
 	WARRIOR = {
 		{ key = "arms", name = "Arms",        role = "DAMAGER", weightsKey = "arms", orderWord = "melee" },
 		{ key = "fury", name = "Fury",        role = "DAMAGER", weightsKey = "fury", orderWord = "melee" },
-		{ key = "prot", name = "Protection",  role = "TANK",    weightsKey = "prot", orderWord = "melee" },
+		{ key = "prot", name = "Protection (Balanced)",  role = "TANK", weightsKey = "prot",
+		  talentName = "Protection", orderWord = "melee" },
+		{ key = "prot_defensive", name = "Protection (Defensive)", role = "TANK",
+		  weightsKey = "prot_defensive", orderWord = "melee" },
+		{ key = "prot_offensive", name = "Protection (Offensive)", role = "TANK",
+		  weightsKey = "prot_offensive", orderWord = "melee" },
 	},
 	PALADIN = {
 		{ key = "holy", name = "Holy",        role = "HEALER",  weightsKey = "holy", orderWord = "spell" },
-		{ key = "prot", name = "Protection",  role = "TANK",    weightsKey = "prot", orderWord = "spell" },
+		{ key = "prot", name = "Protection (Balanced)",  role = "TANK", weightsKey = "prot",
+		  talentName = "Protection", orderWord = "spell" },
+		{ key = "prot_defensive", name = "Protection (Defensive)", role = "TANK",
+		  weightsKey = "prot_defensive", orderWord = "spell" },
+		{ key = "prot_offensive", name = "Protection (Offensive)", role = "TANK",
+		  weightsKey = "prot_offensive", orderWord = "spell" },
 		{ key = "ret",  name = "Retribution", role = "DAMAGER", weightsKey = "ret",  orderWord = "melee" },
 	},
 	DRUID = {
 		{ key = "balance",    name = "Balance",      role = "DAMAGER", weightsKey = "balance",    orderWord = "spell" },
 		{ key = "feral_cat",  name = "Feral (Cat)",  role = "DAMAGER", weightsKey = "feral_cat",  orderWord = "melee" },
-		{ key = "feral_bear", name = "Feral (Bear)", role = "TANK",    weightsKey = "feral_bear", orderWord = "melee" },
+		{ key = "feral_bear", name = "Feral (Bear, Defensive)", role = "TANK", weightsKey = "feral_bear",
+		  talentName = "Feral (Bear)", orderWord = "melee" },
+		{ key = "feral_bear_offensive", name = "Feral (Bear, Offensive)", role = "TANK",
+		  weightsKey = "feral_bear_offensive", orderWord = "melee" },
 		{ key = "resto",      name = "Restoration",  role = "HEALER",  weightsKey = "resto",      orderWord = "spell" },
 	},
 	SHAMAN = {
@@ -746,12 +761,15 @@ ChestAdvisor.GEAR_SPECS = {
 }
 
 local GEAR_ALIASES = {
-	prot           = { "protection", "tank" },
+	prot           = { "protection", "tank", "protection balanced", "prot balanced", "balanced" },
+	prot_defensive = { "protection defensive", "prot defensive", "defensive" },
+	prot_offensive = { "protection offensive", "prot offensive", "offensive" },
 	holy           = { "heal", "healer" },
 	ret            = { "retribution" },
 	resto          = { "restoration", "heal", "healer" },
 	feral_cat      = { "cat", "feral cat", "cat form", "kitty" },
-	feral_bear     = { "bear", "feral bear", "bear form" },
+	feral_bear     = { "bear", "feral bear", "bear form", "feral bear defensive", "bear defensive" },
+	feral_bear_offensive = { "feral bear offensive", "bear offensive" },
 	arms           = { "arms warrior" },
 	fury           = { "fury warrior" },
 	elemental      = { "ele" },
@@ -848,7 +866,8 @@ function ChestAdvisor.specFromTalents(class, name, role)
 	for _, e in ipairs(list) do
 		if foldSpecArg(e.name) == folded
 			or foldSpecArg(e.key) == folded
-			or foldSpecArg(e.key:gsub("_", " ")) == folded then
+			or foldSpecArg(e.key:gsub("_", " ")) == folded
+			or (type(e.talentName) == "string" and foldSpecArg(e.talentName) == folded) then
 			if not hits[e.key] then hits[e.key] = e; n = n + 1 end
 		end
 	end

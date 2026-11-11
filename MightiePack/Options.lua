@@ -330,7 +330,7 @@ local function placeGearForRow()
       if not GameTooltip then return end
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
       GameTooltip:SetText("Gear for")
-      GameTooltip:AddLine("Which spec Touchstone scores and gates gear for. Auto follows your current talents. A chosen spec wins over talents and over /up role. Specs without sourced weights stay silent rather than guessing another pack.", 1, 1, 1, true)
+      GameTooltip:AddLine("Which spec Touchstone scores and gates gear for, using that spec's Wowhead stat priority. Auto follows your current talents. A chosen spec wins over talents and over /up role. Tanks default to Wowhead's Balanced list (or Defensive for Feral Bear); other variants are in this list.", 1, 1, 1, true)
       GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function()

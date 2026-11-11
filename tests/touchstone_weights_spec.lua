@@ -113,13 +113,11 @@ check(type(reason) == "string" and reason:find("decided by Strength & Attack Pow
 local vp, rp, wp = judge(CAND_LINES, WORN_LINES, PROT_SPEC)
 check(vp == "UPGRADE",
   "the same pair is an upgrade for Protection, got " .. tostring(vp))
-check(type(wp) == "table" and wp.total > 0,
-  "Protection's weighted total is positive, got " .. tostring(wp and wp.total))
--- +3 Sta x 2.86 + -3 Armor x 0.29 + -4 Str x 1.14 = +3.15
-check(type(wp) == "table" and V.numText(wp.total) == "+3.15",
-  "Protection: 3 Sta x2.86, -3 Armor x0.29, -4 Str x1.14 = +3.15, got " .. tostring(wp and wp.total))
-check(type(wp) == "table" and wp.profile == "Protection",
-  "Protection names its profile, got " .. tostring(wp and wp.profile))
+check(type(wp) == "table" and wp.decidedBy == "Stamina",
+  "Protection (Balanced) decides the cloak pair by Stamina (got "
+    .. tostring(wp and wp.decidedBy) .. ")")
+check(type(wp) == "table" and wp.profile == "Protection (Balanced)",
+  "Protection names its Balanced profile, got " .. tostring(wp and wp.profile))
 
 -- ---- 1c. epsilon is a named constant, not a number in the branch ----------
 check(type(V.WEIGHT_EPSILON) == "number" and V.WEIGHT_EPSILON > 0,
@@ -338,10 +336,10 @@ local protLines = ChestAdvisor.tooltipLines(rowFor(PROT_SPEC))
 local protHead = plain(protLines and protLines[1] and protLines[1].text)
 check(protHead:sub(1, #"Upgrade") == "Upgrade",
   "Protection sees an Upgrade for the same pair (got " .. protHead .. ")")
-check(protHead:find("weighted +3.15", 1, true) ~= nil,
-  "and it quotes Protection's total (got " .. protHead .. ")")
-check(protHead:find("[Protection]", 1, true) ~= nil,
-  "and names Protection (got " .. protHead .. ")")
+check(protHead:find("decided by Stamina", 1, true) ~= nil,
+  "and it names the deciding tier (got " .. protHead .. ")")
+check(protHead:find("[Protection (Balanced)]", 1, true) ~= nil,
+  "and names Protection (Balanced) (got " .. protHead .. ")")
 check(protLines and protLines[1] and protLines[1].colour == "green",
   "an upgrade keeps the green the arrow uses (got "
     .. tostring(protLines and protLines[1] and protLines[1].colour) .. ")")

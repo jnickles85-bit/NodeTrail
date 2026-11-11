@@ -143,7 +143,7 @@ if type(prof) == "table" then
     "Hit is capped at 9% and Expertise at 6.5%")
 end
 check(type(V.WEIGHT_EPSILON) == "number" and V.WEIGHT_EPSILON > 0,
-  "epsilon is still a named constant (used by numeric packs)")
+  "epsilon is still a named constant (used by numeric fixture packs)")
 
 -- ---- 1b. Equal Strength, more Stamina -> UPGRADE decided by Stamina -------
 -- Safety Boots (115 Armor / +4 Str / +2 Sta) against Feral Shoes of Strength
@@ -234,14 +234,14 @@ check(type(candStats) == "table" and candStats.Agility == 2 and candStats.Streng
 check(type(wornStats) == "table" and wornStats.Agility == 6 and wornStats.Strength == 4,
   "the Fang parse is the client's (4 Str, 6 Agi)")
 
--- ---- 1i. Holy and Protection keep their own ForeverDB numeric tables -------
+-- ---- 1i. Holy and Protection are their own Wowhead order-only profiles ----
 local PAL = V.WEIGHTS.PALADIN
-check(PAL.holy and type(PAL.holy.w) == "table" and PAL.holy.w.MP5 == 4
-    and PAL.holy.kind ~= "order",
-  "the Holy table is a numeric ForeverDB pack, not the Ret order")
-check(PAL.prot and type(PAL.prot.w) == "table" and PAL.prot.w.Defense == 4
-    and PAL.prot.kind ~= "order",
-  "the Protection table is a numeric ForeverDB pack, not the Ret order")
+check(PAL.holy and PAL.holy.kind == "order" and PAL.holy.w == nil
+    and PAL.holy.tiers and PAL.holy.tiers[1] and PAL.holy.tiers[1].name == "Healing Power",
+  "Holy is its own Wowhead order-only profile, not the Ret order")
+check(PAL.prot and PAL.prot.kind == "order" and PAL.prot.w == nil
+    and PAL.prot.variant == "Balanced",
+  "Protection is Wowhead's Balanced order-only profile, not the Ret order")
 -- No shipped profile carries a Ret-style numeric tiebreak list.
 for class, roles in pairs(V.WEIGHTS) do
   for _, row in pairs(roles) do
