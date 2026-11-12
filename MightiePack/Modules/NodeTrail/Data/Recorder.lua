@@ -68,17 +68,19 @@ end
 -- this build, which cannot know that shape. A non-numeric schema is
 -- treated as unknown and left alone.
 --
--- The per-map folded marker (db.folded[mapID] = {aggT, hsT, noTN, n})
--- is the downgrade round-trip guard. An older build may reset the schema
+-- The per-map folded marker (db.folded[mapID] = {aggT, hsT, n}) is
+-- the downgrade round-trip guard. An older build may reset the schema
 -- stamp, re-attach previously trimmed raw picks, or append new ones
 -- without updating mapTotals/stats. On the next upgrade, picks with
--- t <= aggT are not applied to aggregates again, picks with t <= hsT
--- are not folded into hotspots again, and picks beyond those watermarks
--- are folded before the list is trimmed. hsT advances after each timed
--- pick is folded (the evicted prefix is processed in time order), so a
--- crash mid-loop cannot re-fold those picks on retry. Picks with no
--- timestamp cannot use hsT; they are folded exactly once via noTN (the
--- count of no-t picks already folded on this map). Nothing is
+-- t <= aggT are not applied to aggregates again. Fold idempotency is
+-- a per-record mark (rec.hsFolded = true), set as soon as a pick is
+-- folded, so a crash mid-loop, a second live trim, or two picks that
+-- share a timestamp cannot skip or double-count. hsT is only a
+-- fallback when the evicted prefix has no hsFolded marks, which
+-- is a downgrade that re-attached the trimmed prefix without the
+-- mark (unmarked picks with t <= hsT were already folded). A
+-- mid-loop retry has at least one mark, so remaining same-second
+-- siblings are still folded. noTN is not consulted. Nothing is
 -- double-counted or dropped from lifetime totals.
 R.MAX_SAMPLES_PER_MAP = 2000
 -- 2% of normalized map width (0..1). A map is at most 50×50 cells,
@@ -460,10 +462,11 @@ local function foldNewRawIntoAggregates(db, mapID, list)
   end
 end
 
--- Fold evicted picks (t > hsT) into hotspots, then replace the list.
--- Returns the (possibly new) list. hsT / noTN advance per folded pick
--- so a crash mid-loop cannot re-fold those picks on retry; the raw
--- list is only replaced after the loop.
+-- Fold evicted picks into hotspots, then replace the list. Returns
+-- the (possibly new) list. Idempotency is rec.hsFolded, set as soon
+-- as a pick is folded, so a crash mid-loop cannot re-fold it. The
+-- raw list is only replaced after the loop. hsT is a downgrade
+-- fallback for unmarked re-attached picks, not the first-pass rule.
 local function foldEvictedAndTrim(db, mapID, list)
   if type(list) ~= "table" then return list end
   local maxN = R.MAX_SAMPLES_PER_MAP
@@ -472,48 +475,37 @@ local function foldEvictedAndTrim(db, mapID, list)
   end
   local f = foldedOf(db, mapID)
   local drop = #list - maxN
-  -- Time-ordered copy of the evicted prefix, so advancing hsT after
-  -- each timed pick cannot skip an earlier timestamp still waiting
-  -- in the loop. Timed picks are processed first; no-t picks use
-  -- folded.noTN and are folded exactly once.
-  local evicted = {}
+  -- hsT is a downgrade fallback only when this prefix has no marks
+  -- (re-attached copies). A mid-loop crash leaves at least one
+  -- hsFolded record, so remaining same-second siblings are folded
+  -- instead of being treated as already done.
+  local anyMarked = false
+  local hsT0 = f.hsT
   for i = 1, drop do
-    evicted[i] = list[i]
-  end
-  table.sort(evicted, function(a, b)
-    local ta, tb = recTime(a), recTime(b)
-    if ta and tb then
-      return ta < tb
+    local rec = list[i]
+    if type(rec) == "table" and rec.hsFolded == true then
+      anyMarked = true
+      break
     end
-    if ta then return true end
-    if tb then return false end
-    return false
-  end)
-  -- Compare no-t skips against the count at the start of this pass;
-  -- f.noTN is incremented as new no-t picks are folded and must not
-  -- make later picks in the same loop look already-folded.
-  local alreadyNoT = f.noTN or 0
-  local skippedNoT = 0
-  for i = 1, #evicted do
-    local rec = evicted[i]
-    local t = recTime(rec)
-    if t then
-      -- t < hsT: already folded (a downgrade re-attached the prefix,
-      -- or a retry after a mid-loop crash). t == hsT: treated as
-      -- already folded, so a replay of the same boundary pick cannot
-      -- double-count. Live evictions after the first trim have t > hsT.
-      if t > f.hsT then
-        R.FoldHerbIntoHotspots(db, mapID, rec)
-        f.n = f.n + 1
-        f.hsT = t
-      end
-    else
-      if skippedNoT < alreadyNoT then
-        skippedNoT = skippedNoT + 1
+  end
+  for i = 1, drop do
+    local rec = list[i]
+    if type(rec) == "table" then
+      if rec.hsFolded == true then
+        -- Already folded: a mid-loop crash left the mark on this
+        -- still-untrimmed record, or a re-attached pick kept it.
       else
-        R.FoldHerbIntoHotspots(db, mapID, rec)
-        f.n = f.n + 1
-        f.noTN = (f.noTN or 0) + 1
+        local t = recTime(rec)
+        if (not anyMarked) and t and t <= hsT0 then
+          rec.hsFolded = true
+        else
+          R.FoldHerbIntoHotspots(db, mapID, rec)
+          rec.hsFolded = true
+          f.n = f.n + 1
+          if t and t > f.hsT then
+            f.hsT = t
+          end
+        end
       end
     end
   end

@@ -29,10 +29,12 @@
 --      on the older build are folded in;
 --   9. a non-numeric schema is left alone;
 --  10. the hotspot grid stays within its cell and per-cell node bounds;
---  11. a crash-matrix for mid-loop folding: hsT / noTN already advanced
---      on a still-untrimmed list does not re-fold on retry; NT.Hotspots
---      returns a copy of cell.nodes; HerbCellKey survives a SECRET
---      coordinate and a tonumber that raises.
+--  11. a crash-matrix for mid-loop folding: rec.hsFolded on a still-
+--      untrimmed list does not re-fold on retry; NT.Hotspots returns
+--      a copy of cell.nodes; HerbCellKey survives a SECRET coordinate
+--      and a tonumber that raises; a second live trim folds newly
+--      evicted untimed picks; same-second siblings both fold and a
+--      downgrade re-attach of them does not double-count.
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -485,8 +487,8 @@ local function listOf(n, t0, opts)
   return list
 end
 
--- 11a. Mid-loop crash after some timed picks: hsT already advanced,
--- list still over the cap, schema already 2 (a live trim / retry).
+-- 11a. Mid-loop crash after some timed picks: those records are marked
+-- hsFolded, the list is still over the cap, schema already 2.
 local crashN = CAP + 20
 local crashDB = {
   schema = 2, total = crashN,
@@ -500,8 +502,9 @@ local partial = 8
 for i = 1, partial do
   local rec = crashDB.maps[MAP_A][i]
   R.FoldHerbIntoHotspots(crashDB, MAP_A, rec)
+  rec.hsFolded = true
 end
-crashDB.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 1700000000 + partial, noTN = 0, n = partial }
+crashDB.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 1700000000 + partial, n = partial }
 check(gridN(crashDB, MAP_A) == partial, "11a: pre-retry grid holds the 8 already-folded picks")
 check(#crashDB.maps[MAP_A] == crashN, "11a: the raw list is still untrimmed after the crash")
 NodeTrailDB = { herbs = crashDB }
@@ -515,7 +518,7 @@ check(crashDB.folded[MAP_A].hsT == 1700000000 + 20,
 check(gridN(crashDB, MAP_A) == 20,
   "11a: the grid is not double-counted (n=" .. tostring(gridN(crashDB, MAP_A)) .. ")")
 
--- 11b. Mid-loop crash after some no-t folds: noTN already advanced.
+-- 11b. Mid-loop crash after some no-t folds: those records are marked.
 local noT = 5
 local crashNoT = {
   schema = 2, total = crashN,
@@ -528,14 +531,12 @@ local crashNoT = {
 local partialNoT = 3
 for i = 1, partialNoT do
   R.FoldHerbIntoHotspots(crashNoT, MAP_A, crashNoT.maps[MAP_A][i])
+  crashNoT.maps[MAP_A][i].hsFolded = true
 end
-crashNoT.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 0, noTN = partialNoT, n = partialNoT }
+crashNoT.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 0, n = partialNoT }
 NodeTrailDB = { herbs = crashNoT }
 ns.GetHerbDB()
 check(#crashNoT.maps[MAP_A] == CAP, "11b: retry trims the no-t store to the cap")
-check(crashNoT.folded[MAP_A].noTN == noT,
-  "11b: no-t picks are folded exactly once (noTN="
-    .. tostring(crashNoT.folded[MAP_A].noTN) .. ")")
 check(crashNoT.folded[MAP_A].n == 20,
   "11b: n is 5 no-t + 15 timed, not re-folded (n="
     .. tostring(crashNoT.folded[MAP_A].n) .. ")")
@@ -553,8 +554,9 @@ local done = {
 }
 for i = 1, 20 do
   R.FoldHerbIntoHotspots(done, MAP_A, done.maps[MAP_A][i])
+  done.maps[MAP_A][i].hsFolded = true
 end
-done.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 1700000000 + 20, noTN = 0, n = 20 }
+done.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 1700000000 + 20, n = 20 }
 NodeTrailDB = { herbs = done }
 ns.GetHerbDB()
 check(#done.maps[MAP_A] == CAP, "11c: retry after a pre-trim crash still trims")
@@ -597,6 +599,91 @@ local okNum, kNum = pcall(R.HerbCellKey, "0.5", "0.5")
 check(okNum and kNum == R.HerbCellKey(0.5, 0.5),
   "11e: a numeric string still keys the same cell as a number")
 tonumber, issecretvalue = realTonumber, realSecret
+
+-- 11f. A second live trim must fold newly evicted untimed picks.
+-- First trim drops 3 untimed (n=3). The next two oldest kept picks
+-- are also untimed and unmarked; appending two new records evicts
+-- them, and they must be folded (n=5). A lifetime noTN count would
+-- skip them.
+local live2 = {
+  schema = 2, total = CAP + 3,
+  maps = { [MAP_A] = listOf(CAP + 3, 1700000000, { noT = 5 }) },
+  mapTotals = { [MAP_A] = CAP + 3 },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = {},
+}
+NodeTrailDB = { herbs = live2 }
+ns.GetHerbDB()
+check(#live2.maps[MAP_A] == CAP, "11f: the first trim brings the list to the cap")
+check(live2.folded[MAP_A].n == 3,
+  "11f: the first trim folded the 3 evicted untimed picks (n="
+    .. tostring(live2.folded[MAP_A].n) .. ")")
+check(gridN(live2, MAP_A) == 3, "11f: the grid holds those 3")
+check(live2.maps[MAP_A][1].t == nil and live2.maps[MAP_A][2].t == nil,
+  "11f: the new oldest kept picks are the remaining untimed ones")
+check(live2.maps[MAP_A][1].hsFolded ~= true and live2.maps[MAP_A][2].hsFolded ~= true,
+  "11f: those kept untimed picks are not marked yet")
+for i = 1, 2 do
+  live2.maps[MAP_A][#live2.maps[MAP_A] + 1] = {
+    x = 0.91, y = 0.92, t = 1800000000 + i,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+  }
+end
+live2.total = live2.total + 2
+ns.GetHerbDB()
+check(#live2.maps[MAP_A] == CAP, "11f: the second trim stays at the cap")
+check(live2.folded[MAP_A].n == 5,
+  "11f: the second trim folded the 2 newly evicted untimed picks (n="
+    .. tostring(live2.folded[MAP_A].n) .. ")")
+check(gridN(live2, MAP_A) == 5,
+  "11f: the grid holds all 5 untimed evictions (n="
+    .. tostring(gridN(live2, MAP_A)) .. ")")
+
+-- 11g. Two evicted picks that share a timestamp both fold.
+local sib = {
+  schema = 2, total = CAP + 2,
+  maps = { [MAP_A] = {} },
+  mapTotals = { [MAP_A] = CAP + 2 },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = {},
+}
+for i = 1, CAP + 2 do
+  sib.maps[MAP_A][i] = {
+    x = 0.10 + (i == 2 and 0.04 or 0), y = 0.10,
+    t = (i <= 2) and 5000 or (6000 + i),
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+  }
+end
+NodeTrailDB = { herbs = sib }
+ns.GetHerbDB()
+check(#sib.maps[MAP_A] == CAP, "11g: same-second evictions are trimmed to the cap")
+check(sib.folded[MAP_A].n == 2,
+  "11g: both picks at t=5000 were folded (n=" .. tostring(sib.folded[MAP_A].n) .. ")")
+check(gridN(sib, MAP_A) == 2,
+  "11g: the grid holds both same-second picks (n=" .. tostring(gridN(sib, MAP_A)) .. ")")
+check(sib.folded[MAP_A].hsT == 5000,
+  "11g: hsT is the shared second (got " .. tostring(sib.folded[MAP_A].hsT) .. ")")
+-- Downgrade re-attaches unmarked copies of those two picks.
+local restored = {
+  { x = 0.10, y = 0.10, t = 5000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.14, y = 0.10, t = 5000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+}
+for i = 1, #sib.maps[MAP_A] do
+  restored[#restored + 1] = sib.maps[MAP_A][i]
+end
+local snapN, snapGrid = sib.folded[MAP_A].n, gridN(sib, MAP_A)
+sib.maps[MAP_A] = restored
+sib.schema = 1
+ns.GetHerbDB()
+check(#sib.maps[MAP_A] == CAP, "11g: the re-attached prefix is trimmed again")
+check(sib.folded[MAP_A].n == snapN,
+  "11g: re-attaching unmarked same-second picks does not double-fold (n="
+    .. tostring(sib.folded[MAP_A].n) .. ")")
+check(gridN(sib, MAP_A) == snapGrid,
+  "11g: the grid is unchanged after the re-attach (n="
+    .. tostring(gridN(sib, MAP_A)) .. ")")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
