@@ -1,9 +1,11 @@
 -- NodeTrail — "can THIS character gather herbs?" (t_d4848ce0)
 --
 -- The herb block used to appear on every herb node on every character, and it
--- carried `Your picks: N` filled from NodeTrailDB.herbs.maps — ONE saved table
--- for the whole account (Recorder.lua, no per-character key). On a character
--- with no Herbalism that line reported somebody else's gathers as "yours".
+-- carried `Your picks: N` filled from the account-wide herb DB (lifetime
+-- totals and db.stats, not a count of the capped raw lists in
+-- NodeTrailDB.herbs.maps — Recorder.lua, no per-character key). On a
+-- character with no Herbalism that line reported somebody else's gathers
+-- as "yours".
 --
 -- So the block needs two facts:
 --   1. does this character have Herbalism at all?  -> this module

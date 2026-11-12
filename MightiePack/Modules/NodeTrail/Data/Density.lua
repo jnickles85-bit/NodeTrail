@@ -182,6 +182,10 @@ function D.Build(points, opts)
   }
 end
 
+-- Density is built from the newest MAX_SAMPLES_PER_MAP (2,000) raw
+-- picks on this map. Trimmed history lives in herbs.hotspots for a
+-- later "Find a resource" feature (ns.Hotspots) and is not yet mixed
+-- into this route.
 function ns.BuildDensityRouteForMap(mapID)
   if not mapID then
     return nil, "NO_MAP"

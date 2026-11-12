@@ -18,7 +18,17 @@
 --   4. RecordHerb past the cap grows lifetime totals and stats but does not
 --      grow the raw list;
 --   5. a density route can still be built from a few thousand synthetic
---      gathers after the cap has trimmed the raw list.
+--      gathers after the cap has trimmed the raw list (it sees only the
+--      newest 2,000 raw picks, not the hotspot cells);
+--   6. trimmed picks seed the per-map hotspot grid at migration, and
+--      NT.Hotspots can query it;
+--   7. a live trim (RecordHerb past the cap) folds the evicted pick into
+--      hotspots without double-counting aggregates;
+--   8. a downgrade/upgrade round-trip that re-attaches trimmed raw picks
+--      does not double-count aggregates or hotspots, and new picks made
+--      on the older build are folded in;
+--   9. a non-numeric schema is left alone;
+--  10. the hotspot grid stays within its cell and per-cell node bounds.
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -254,6 +264,193 @@ if route then
   check(type(route.stops) == "number" and route.stops >= 2,
     "5: the route has at least two stops (got " .. tostring(route.stops) .. ")")
 end
+-- Density does not yet mix in hotspot cells.
+check(type(ns.Hotspots) == "function", "5: Hotspots read API exists")
+
+-- ── 6. hotspot seeding at migration ──────────────────────────────────
+NodeTrailDB = { herbs = schema1Store() }
+local seeded = ns.GetHerbDB()
+check(R.HOTSPOT_CELL == 0.02, "6: cell size is 2% of map width")
+check(R.HOTSPOT_MAX_CELLS == 2500, "6: the grid is bounded to 50x50 cells")
+local trimmed = BIG - CAP -- 500
+local gridA = seeded.hotspots and seeded.hotspots[MAP_A]
+check(type(gridA) == "table", "6: map A has a hotspot grid after migration")
+local cellN, nodeN, lastMax = 0, 0, 0
+if type(gridA) == "table" then
+  for _, cell in pairs(gridA) do
+    if type(cell) == "table" then
+      cellN = cellN + (cell.n or 0)
+      if type(cell.last) == "number" and cell.last > lastMax then
+        lastMax = cell.last
+      end
+      if type(cell.nodes) == "table" then
+        for _ in pairs(cell.nodes) do
+          nodeN = nodeN + 1
+        end
+      end
+    end
+  end
+end
+check(cellN == trimmed,
+  "6: every trimmed map A pick is in the grid (n=" .. tostring(cellN) .. " want " .. trimmed .. ")")
+check(type(seeded.folded) == "table" and type(seeded.folded[MAP_A]) == "table",
+  "6: a folded marker is stored for map A")
+local foldA = seeded.folded and seeded.folded[MAP_A]
+check(foldA and foldA.n == trimmed,
+  "6: folded.n is the trimmed count (got " .. tostring(foldA and foldA.n) .. ")")
+check(foldA and foldA.hsT == 1700000000 + trimmed,
+  "6: hsT is the last trimmed timestamp (got " .. tostring(foldA and foldA.hsT) .. ")")
+check(foldA and foldA.aggT == 1700000000 + BIG,
+  "6: aggT is the newest raw timestamp (got " .. tostring(foldA and foldA.aggT) .. ")")
+-- Map B was under the cap: nothing to fold.
+local gridB = seeded.hotspots and seeded.hotspots[MAP_B]
+local cellB = 0
+if type(gridB) == "table" then
+  for _, cell in pairs(gridB) do
+    if type(cell) == "table" then cellB = cellB + (cell.n or 0) end
+  end
+end
+check(cellB == 0, "6: an under-cap map does not mint hotspots (got " .. tostring(cellB) .. ")")
+local hs = ns.Hotspots(MAP_A)
+local hsN = 0
+for i = 1, #hs do hsN = hsN + (hs[i].n or 0) end
+check(hsN == trimmed, "6: NT.Hotspots(mapA) sums to the trimmed count (got " .. tostring(hsN) .. ")")
+check(#hs >= 1 and type(hs[1].x) == "number" and type(hs[1].y) == "number",
+  "6: each hotspot has a cell-centre position")
+local swiftHS = ns.Hotspots(MAP_A, SWIFT)
+local swiftN = 0
+for i = 1, #swiftHS do swiftN = swiftN + (swiftHS[i].n or 0) end
+-- Trimmed prefix is i=1..500; every 10th pick carried Swiftthistle -> 50.
+check(swiftN == 50,
+  "6: a node filter returns only that node's folded picks (got " .. tostring(swiftN) .. ")")
+
+-- ── 7. folding on a live trim ────────────────────────────────────────
+local beforeHN = foldA.n
+local beforeG = H.GetPersonalStats(PEACE)
+local beforeTotal = seeded.total
+ns.RecordHerb(MAP_A, 0.91, 0.92, { { id = PEACE, name = "Peacebloom", count = 1 } })
+check(#seeded.maps[MAP_A] == CAP, "7: raw list stays at the cap")
+check(seeded.folded[MAP_A].n == beforeHN + 1,
+  "7: the evicted pick is folded into hotspots (n=" .. tostring(seeded.folded[MAP_A].n) .. ")")
+local hs2 = ns.Hotspots(MAP_A)
+local hs2N = 0
+for i = 1, #hs2 do hs2N = hs2N + (hs2[i].n or 0) end
+check(hs2N == trimmed + 1, "7: Hotspots includes the newly evicted pick (got " .. tostring(hs2N) .. ")")
+local g7 = H.GetPersonalStats(PEACE)
+check(g7 == beforeG + 1, "7: aggregates grow by the new pick only, not the evicted one again")
+check(seeded.total == beforeTotal + 1, "7: lifetime total grows by one")
+
+-- ── 8. downgrade / upgrade round-trip ────────────────────────────────
+NodeTrailDB = { herbs = schema1Store() }
+local rt = ns.GetHerbDB()
+local snapTotal, snapA = rt.total, rt.mapTotals[MAP_A]
+local snapG, snapCo = H.GetPersonalStats(PEACE)
+local snapHN = rt.folded[MAP_A].n
+local snapHS, snapAgg = rt.folded[MAP_A].hsT, rt.folded[MAP_A].aggT
+-- An older build resets the schema stamp and re-attaches the trimmed prefix.
+local prefix = {}
+for i = 1, trimmed do
+  prefix[i] = {
+    x = 0.10 + (i % 80) * 0.01,
+    y = 0.10 + (math.floor((i - 1) / 80) % 80) * 0.01,
+    t = 1700000000 + i,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+  }
+  if i % 10 == 0 then
+    prefix[i].items[#prefix[i].items + 1] = { id = SWIFT, name = "Swiftthistle", count = 1 }
+  end
+end
+local restored = {}
+for i = 1, trimmed do restored[i] = prefix[i] end
+for i = 1, #rt.maps[MAP_A] do
+  restored[trimmed + i] = rt.maps[MAP_A][i]
+end
+rt.maps[MAP_A] = restored
+rt.schema = 1
+ns.GetHerbDB()
+check(rt.schema == 2, "8: schema is re-stamped 2 after the downgrade")
+check(rt.total == snapTotal, "8: lifetime total is not double-counted (got " .. tostring(rt.total) .. ")")
+check(rt.mapTotals[MAP_A] == snapA, "8: map lifetime is not double-counted")
+check(#rt.maps[MAP_A] == CAP, "8: the restored prefix is trimmed again")
+local g8, co8 = H.GetPersonalStats(PEACE)
+check(g8 == snapG and co8[SWIFT] == snapCo[SWIFT], "8: personal stats are not double-counted (gathers=" .. tostring(g8) .. " swift=" .. tostring(co8 and co8[SWIFT]) .. ")")
+check(rt.folded[MAP_A].n == snapHN, "8: hotspots are not folded a second time (n=" .. tostring(rt.folded[MAP_A].n) .. ")")
+check(rt.folded[MAP_A].hsT == snapHS and rt.folded[MAP_A].aggT == snapAgg, "8: folded watermarks are unchanged")
+
+-- The older build also appended 10 new picks (updating total, not mapTotals/stats).
+local extra = 10
+for i = 1, extra do
+  rt.maps[MAP_A][#rt.maps[MAP_A] + 1] = {
+    x = 0.93, y = 0.94, t = snapAgg + i,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+  }
+end
+rt.total = rt.total + extra
+rt.schema = 1
+ns.GetHerbDB()
+check(rt.mapTotals[MAP_A] == snapA + extra,
+  "8: picks recorded on the older build are folded into mapTotals (got "
+    .. tostring(rt.mapTotals[MAP_A]) .. ")")
+check(rt.total == snapTotal + extra, "8: total is raised to the new lifetime, not added twice")
+local g8b = H.GetPersonalStats(PEACE)
+check(g8b == snapG + extra, "8: personal gathers include the older-build picks once")
+check(#rt.maps[MAP_A] == CAP, "8: the list is trimmed back to the cap")
+-- The 10 new picks evict 10 previously-kept samples into hotspots.
+check(rt.folded[MAP_A].n == snapHN + extra,
+  "8: newly evicted kept-window picks are folded into hotspots (n="
+    .. tostring(rt.folded[MAP_A].n) .. ")")
+
+-- ── 9. a non-numeric schema is left alone ────────────────────────────
+local odd = {
+  schema = "unknown",
+  total = 3,
+  maps = { [MAP_A] = {} },
+}
+for i = 1, CAP + 5 do
+  odd.maps[MAP_A][i] = { x = 0.1, y = 0.1, t = i, items = {} }
+end
+NodeTrailDB = { herbs = odd }
+ns.GetHerbDB()
+check(odd.schema == "unknown", "9: a non-numeric schema is not rewritten (got " .. tostring(odd.schema) .. ")")
+check(#odd.maps[MAP_A] == CAP + 5,
+  "9: a non-numeric schema is not trimmed (got " .. tostring(#odd.maps[MAP_A]) .. ")")
+check(odd.hotspots == nil, "9: a non-numeric schema does not grow a hotspot table")
+check(odd.folded == nil, "9: a non-numeric schema does not grow a folded marker")
+
+-- ── 10. hotspots stay within bounds ──────────────────────────────────
+NodeTrailDB = { herbs = schema1Store() }
+local bounded = ns.GetHerbDB()
+local cells = 0
+if type(bounded.hotspots) == "table" and type(bounded.hotspots[MAP_A]) == "table" then
+  for _ in pairs(bounded.hotspots[MAP_A]) do cells = cells + 1 end
+end
+check(cells <= R.HOTSPOT_MAX_CELLS,
+  "10: migration cannot mint more than " .. R.HOTSPOT_MAX_CELLS .. " cells (got " .. cells .. ")")
+-- 40 distinct node ids in one cell: n grows, but nodes is capped.
+local oneCell = { schema = 2, total = 0, maps = { [MAP_A] = {} }, mapTotals = { [MAP_A] = 0 },
+  stats = { gathers = {}, co = {}, names = {} }, hotspots = {}, folded = {} }
+for i = 1, 40 do
+  R.FoldHerbIntoHotspots(oneCell, MAP_A, {
+    x = 0.5, y = 0.5, t = 100 + i, items = { { id = 1000 + i, name = "N" .. i, count = 1 } },
+  })
+end
+local key = R.HerbCellKey(0.5, 0.5)
+local cell = oneCell.hotspots[MAP_A][key]
+local nKeys = 0
+if type(cell) == "table" and type(cell.nodes) == "table" then
+  for _ in pairs(cell.nodes) do nKeys = nKeys + 1 end
+end
+check(cell and cell.n == 40, "10: n still counts every pick in an overfull cell (got " .. tostring(cell and cell.n) .. ")")
+check(nKeys == R.HOTSPOT_MAX_NODES,
+  "10: a cell keeps at most " .. R.HOTSPOT_MAX_NODES .. " node keys (got " .. tostring(nKeys) .. ")")
+local k1 = R.HerbCellKey(1, 1)
+local k0 = R.HerbCellKey(0, 0)
+local kOob = R.HerbCellKey(1.5, -0.2)
+check(k0 == "0:0", "10: the origin cell is 0:0 (got " .. tostring(k0) .. ")")
+check(k1 == "49:49", "10: x=y=1 clamps to the last bin, not a 50th (got " .. tostring(k1) .. ")")
+check(kOob == k1 or kOob == "49:0", "10: out-of-range positions clamp into the 50x50 grid (got " .. tostring(kOob) .. ")")
+-- -0.2, 1.5 -> x clamps to 1 -> 49, y clamps to 0 -> 0, so 49:0
+check(R.HerbCellKey(1.5, -0.2) == "49:0", "10: clamped oob key is 49:0")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
