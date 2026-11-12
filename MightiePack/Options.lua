@@ -648,10 +648,10 @@ local function syncCheckboxes()
       rb:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Skinning farming circle")
-        GameTooltip:AddLine("A green closed loop through the places this character has killed AND skinned on "
+        GameTooltip:AddLine("A rust-coloured closed loop through the places this character has killed AND skinned on "
           .. "the current zone's map. Built from your own recorded corpses only. It stays hidden until the map "
           .. "has enough skinned corpses to make a circle, until a Skinning character is logged in, and while "
-          .. "this box is unticked. The herb route (white) is a separate line and is not affected.",
+          .. "this box is unticked. The herb route (teal) is a separate line and is not affected.",
           1, 1, 1, true)
         GameTooltip:Show()
       end)
@@ -681,6 +681,18 @@ local function syncCheckboxes()
     else
       note:SetText("")
       note:Hide()
+    end
+
+    local legend = boxes.RouteLegend
+    if not legend then
+      legend = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      legend:SetPoint("TOPLEFT", note, "BOTTOMLEFT", 0, -SUB_GAP)
+      if type(legend.SetWidth) == "function" then legend:SetWidth(STATUS_WIDTH) end
+      if type(legend.SetJustifyH) == "function" then pcall(legend.SetJustifyH, legend, "LEFT") end
+      if type(legend.SetWordWrap) == "function" then pcall(legend.SetWordWrap, legend, true) end
+      if type(legend.SetTextColor) == "function" then pcall(legend.SetTextColor, legend, 0.7, 0.7, 0.7) end
+      legend:SetText("Route colours: teal for herbs, rust for skinning.")
+      boxes.RouteLegend = legend
     end
 
     rb:SetChecked(skinRouteOn())

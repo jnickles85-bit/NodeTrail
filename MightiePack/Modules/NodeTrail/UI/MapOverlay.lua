@@ -507,6 +507,48 @@ local function displayedMapID(mapFrame)
   return nil
 end
 
+local function windowClip(window)
+  if type(window) ~= "table" then
+    return nil
+  end
+  local left, top = tonumber(window.left), tonumber(window.top)
+  local w, h = tonumber(window.width), tonumber(window.height)
+  if not left or not top or not w or not h then
+    return nil
+  end
+  return { shape = "rect", left = left, top = top, right = left + w, bottom = top + h }
+end
+
+local function sameViewNum(a, b)
+  a, b = tonumber(a), tonumber(b)
+  if a == nil or b == nil then
+    return a == nil and b == nil
+  end
+  return math.abs(a - b) <= 0.05
+end
+
+--- Pure: two canvas-view samples describe the same zoom/pan/size/map.
+function M.SameCanvasView(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then
+    return false
+  end
+  return sameViewNum(a.scale, b.scale)
+    and sameViewNum(a.hs, b.hs)
+    and sameViewNum(a.vs, b.vs)
+    and sameViewNum(a.nhs, b.nhs)
+    and sameViewNum(a.nvs, b.nvs)
+    and sameViewNum(a.nz, b.nz)
+    and sameViewNum(a.cl, b.cl)
+    and sameViewNum(a.ct, b.ct)
+    and sameViewNum(a.cw, b.cw)
+    and sameViewNum(a.ch, b.ch)
+    and sameViewNum(a.rl, b.rl)
+    and sameViewNum(a.rt, b.rt)
+    and sameViewNum(a.rw, b.rw)
+    and sameViewNum(a.rh, b.rh)
+    and (a.mapID == b.mapID)
+end
+
 local function mapZoom(mapFrame)
   if mapFrame and isFn(mapFrame.GetCanvasScale) then
     local ok, scale = pcall(mapFrame.GetCanvasScale, mapFrame)
@@ -593,6 +635,13 @@ function M:ReleaseVisuals(why)
       ns.LineDraw.MarkIdle(self.drawer, why)
     else
       ns.LineDraw.Clear(self.drawer)
+    end
+  end
+  if self.styleDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.styleDrawer, why)
+    else
+      ns.LineDraw.Clear(self.styleDrawer)
     end
   end
   if self.host then
@@ -775,6 +824,13 @@ function M:ReleaseSkin(why)
       ns.LineDraw.MarkIdle(self.skinDrawer, why)
     else
       ns.LineDraw.Clear(self.skinDrawer)
+    end
+  end
+  if self.skinStyleDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.skinStyleDrawer, why)
+    else
+      ns.LineDraw.Clear(self.skinStyleDrawer)
     end
   end
   if self.skinHost then
@@ -1192,8 +1248,9 @@ function M:_redraw()
     return x >= win.left - 0.01 and x <= win.left + win.width + 0.01
       and y >= win.top - 0.01 and y <= win.top + win.height + 0.01
   end
-  for i = 1, #self.path do
-    local p = self.path[i]
+  local path = self.drawPath or self.path
+  for i = 1, #path do
+    local p = path[i]
     if geom.IsMapPoint(p) then
       local x, y = geom.FractionToPixel(p.x, p.y, rect)
       px[i] = {
@@ -1205,8 +1262,8 @@ function M:_redraw()
       skipped[#skipped + 1] = "point " .. i .. " not a map point"
     end
   end
-  for i = 1, #self.path - 1 do
-    local a, b = self.path[i], self.path[i + 1]
+  for i = 1, #path - 1 do
+    local a, b = path[i], path[i + 1]
     if geom.IsMapPoint(a) and geom.IsMapPoint(b) then
       local x1, y1 = geom.FractionToPixel(a.x, a.y, rect)
       local x2, y2 = geom.FractionToPixel(b.x, b.y, rect)
@@ -1277,6 +1334,12 @@ function M:_redraw()
   local metrics = ns.LineDraw.DotMetrics(stroke, unitScale, self._screenFloor)
   self._dotMetrics = metrics
   ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / unitScale, r, g, b, a, "ydown", metrics)
+  do
+    local dpts = self._decorPts or {}
+    self._decorPts = dpts
+    dpts = ns.PathGeom.PackProjected(px, dpts)
+    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, b, a, "ydown", metrics, windowClip(window))
+  end
   -- Why it might still not READ, measured next to the draw: the alpha the whole
   -- parent chain multiplies us down to, and any frame that outranks the host
   -- over the map. Both are read here, on every redraw, because both change
@@ -1314,6 +1377,7 @@ function M:_redraw()
   -- After `_why` is settled: the probe records the reason when nothing survived,
   -- so a zero-painted record can never be mistaken for an empty route.
   self:RecordProbe()
+  self:RememberCanvasView()
 end
 
 function M:Redraw()
@@ -1338,6 +1402,91 @@ function M:Redraw()
   else
     self._skinError = nil
   end
+  self:RememberCanvasView()
+end
+
+function M:CaptureCanvasView(out)
+  out = out or {}
+  out.scale, out.mapID = nil, nil
+  out.hs, out.vs, out.nhs, out.nvs, out.nz = nil, nil, nil, nil, nil
+  out.cl, out.ct, out.cw, out.ch = nil, nil, nil, nil
+  out.rl, out.rt, out.rw, out.rh = nil, nil, nil, nil
+  local mapFrame = _G.WorldMapFrame
+  local scroll = mapFrame and mapFrame.ScrollContainer
+  local canvas = getCanvas(mapFrame)
+  out.scale = mapZoom(mapFrame)
+  out.mapID = displayedMapID(mapFrame)
+  out.hs = call(scroll, "GetHorizontalScroll")
+  out.vs = call(scroll, "GetVerticalScroll")
+  out.nhs = call(scroll, "GetNormalizedHorizontalScroll")
+  out.nvs = call(scroll, "GetNormalizedVerticalScroll")
+  out.nz = call(scroll, "GetNormalizedZoom")
+  if out.nz == nil then
+    out.nz = call(mapFrame, "GetCanvasScale")
+  end
+  out.cl = call(canvas, "GetLeft")
+  out.ct = call(canvas, "GetTop")
+  local cw, ch = frameSize(canvas)
+  out.cw, out.ch = cw, ch
+  local rect = self._mappingInfo and self._mappingInfo.rect
+  if type(rect) == "table" then
+    out.rl, out.rt, out.rw, out.rh = rect.left, rect.top, rect.width, rect.height
+  end
+  return out
+end
+
+function M:RememberCanvasView()
+  self._canvasView = self:CaptureCanvasView(self._canvasView)
+end
+
+--- Redraw when the canvas scale or pan has moved. The overlay is parented
+--- to WorldMapFrame (frame mode), so a zoom or scroll leaves the route
+--- glued to the window until the projection is measured again.
+function M:PollCanvasView()
+  if self._busy then
+    return
+  end
+  if not self.path and not self.skinPath then
+    return
+  end
+  local mapFrame = _G.WorldMapFrame
+  if mapFrame and isFn(mapFrame.IsShown) then
+    local ok, shown = pcall(mapFrame.IsShown, mapFrame)
+    if ok and shown == false then
+      return
+    end
+  end
+  local scratch = self._viewScratch or {}
+  self._viewScratch = scratch
+  self:CaptureCanvasView(scratch)
+  if type(self._canvasView) == "table" and M.SameCanvasView(scratch, self._canvasView) then
+    return
+  end
+  self._viewScratch, self._canvasView = self._canvasView, scratch
+  if type(self._viewScratch) ~= "table" then
+    self._viewScratch = {}
+  end
+  self:Redraw()
+end
+
+function M:EnsureViewWatch()
+  if self._viewWatchHooked then
+    return
+  end
+  local events = self._events
+  if not events or not isFn(events.SetScript) then
+    return
+  end
+  self._viewWatchHooked = true
+  self._viewAcc = 0
+  pcall(events.SetScript, events, "OnUpdate", function(_, elapsed)
+    M._viewAcc = (M._viewAcc or 0) + (tonumber(elapsed) or 0)
+    if M._viewAcc < 0.05 then
+      return
+    end
+    M._viewAcc = 0
+    M:PollCanvasView()
+  end)
 end
 
 function M:TryHookMap()
@@ -1423,7 +1572,8 @@ function M:TryHookMap()
     self._viewHooked = true
     local views = {
       { frame = mapFrame.ScrollContainer,
-        events = { "OnSizeChanged", "OnScrollRangeChanged", "OnVerticalScroll" } },
+        events = { "OnSizeChanged", "OnScrollRangeChanged",
+          "OnVerticalScroll", "OnHorizontalScroll", "OnMouseWheel", "OnMouseUp" } },
       { frame = getCanvas(mapFrame), events = { "OnSizeChanged" } },
       { frame = mapFrame, events = { "OnSizeChanged" } },
     }
@@ -1440,8 +1590,20 @@ function M:TryHookMap()
     if isFn(hooksecurefunc) then
       pcall(hooksecurefunc, mapFrame, "SetZoom", function() M:Redraw() end)
       pcall(hooksecurefunc, mapFrame, "SetMapZoom", function() M:Redraw() end)
+      pcall(hooksecurefunc, mapFrame, "SetCanvasScale", function() M:Redraw() end)
+      pcall(hooksecurefunc, mapFrame, "OnCanvasPanChanged", function() M:Redraw() end)
+      pcall(hooksecurefunc, mapFrame, "SetPanTargetOffset", function() M:Redraw() end)
+      local scroll = mapFrame.ScrollContainer
+      if scroll then
+        pcall(hooksecurefunc, scroll, "SetHorizontalScroll", function() M:Redraw() end)
+        pcall(hooksecurefunc, scroll, "SetVerticalScroll", function() M:Redraw() end)
+        pcall(hooksecurefunc, scroll, "SetNormalizedHorizontalScroll", function() M:Redraw() end)
+        pcall(hooksecurefunc, scroll, "SetNormalizedVerticalScroll", function() M:Redraw() end)
+        pcall(hooksecurefunc, scroll, "SetNormalizedZoom", function() M:Redraw() end)
+      end
     end
   end
+  self:EnsureViewWatch()
 end
 
 function M:SetRoute(route)
@@ -1451,6 +1613,11 @@ function M:SetRoute(route)
   end
   self.mapID = route.mapID
   self.path = route.path
+  if ns.PathGeom and type(ns.PathGeom.BuildDrawPath) == "function" then
+    self.drawPath = ns.PathGeom.BuildDrawPath(route) or route.path
+  else
+    self.drawPath = route.path
+  end
   self._retries = 0
   self:TryHookMap()
   self:Redraw()
@@ -1467,6 +1634,11 @@ function M:SetSkinRoute(route)
     return
   end
   self.skinPath = route.path
+  if ns.PathGeom and type(ns.PathGeom.BuildDrawPath) == "function" then
+    self.skinDrawPath = ns.PathGeom.BuildDrawPath(route) or route.path
+  else
+    self.skinDrawPath = route.path
+  end
   self.skinMapID = route.mapID
   self.skinColor = route.color
   self.skinRoute = route
@@ -1477,6 +1649,7 @@ end
 
 function M:ClearSkinRoute()
   self.skinPath = nil
+  self.skinDrawPath = nil
   self.skinMapID = nil
   self.skinColor = nil
   self.skinRoute = nil
@@ -1581,8 +1754,9 @@ function M:_redrawSkin()
     return x >= win.left - 0.01 and x <= win.left + win.width + 0.01
       and y >= win.top - 0.01 and y <= win.top + win.height + 0.01
   end
-  for i = 1, #self.skinPath do
-    local p = self.skinPath[i]
+  local skinPath = self.skinDrawPath or self.skinPath
+  for i = 1, #skinPath do
+    local p = skinPath[i]
     if geom.IsMapPoint(p) then
       local x, y = geom.FractionToPixel(p.x, p.y, rect)
       px[i] = {
@@ -1594,8 +1768,8 @@ function M:_redrawSkin()
       skipped[#skipped + 1] = "point " .. i .. " not a map point"
     end
   end
-  for i = 1, #self.skinPath - 1 do
-    local a, b = self.skinPath[i], self.skinPath[i + 1]
+  for i = 1, #skinPath - 1 do
+    local a, b = skinPath[i], skinPath[i + 1]
     if geom.IsMapPoint(a) and geom.IsMapPoint(b) then
       local x1, y1 = geom.FractionToPixel(a.x, a.y, rect)
       local x2, y2 = geom.FractionToPixel(b.x, b.y, rect)
@@ -1648,17 +1822,24 @@ function M:_redrawSkin()
   if type(unitScale) ~= "number" or unitScale ~= unitScale or unitScale <= 0 then
     unitScale = 1
   end
-  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.1, 0.85, 0.35, 0.95 }
-  local r = tonumber(c[1]) or 0.1
-  local g = tonumber(c[2]) or 0.85
-  local b = tonumber(c[3]) or 0.35
-  local a = tonumber(c[4]) or 0.95
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.78, 0.38, 0.16, 0.85 }
+  local r = tonumber(c[1]) or 0.78
+  local g = tonumber(c[2]) or 0.38
+  local b = tonumber(c[3]) or 0.16
+  local a = tonumber(c[4]) or 0.85
   local widthFrac = tonumber((self.skinRoute and self.skinRoute.width) or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
   if widthFrac <= 0 then widthFrac = 2 end
   local metrics = ns.LineDraw.DotMetrics(widthFrac, unitScale, self._screenFloor)
   self._skinDotMetrics = metrics
   ns.LineDraw.Draw(self.skinDrawer, host, buf, count, widthFrac / unitScale,
     r, g, b, a, "ydown", metrics)
+  do
+    local src = self._skinPx or px
+    local dpts = self._skinDecorPts or {}
+    self._skinDecorPts = dpts
+    dpts = ns.PathGeom.PackProjected(src, dpts)
+    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, b, a, "ydown", metrics, windowClip(self._window or window))
+  end
   self._skinQueued = count
   if count > 0 then
     pcall(host.Show, host)

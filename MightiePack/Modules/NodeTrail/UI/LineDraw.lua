@@ -33,7 +33,7 @@ function D.ColorWidth()
   return r, g, b, a, width
 end
 
-function D.BindOverlay(host, parent)
+function D.BindOverlay(host, parent, clipChildren)
   if not host or not parent then
     return
   end
@@ -55,13 +55,14 @@ function D.BindOverlay(host, parent)
   if host.SetPassThroughButtons then
     pcall(host.SetPassThroughButtons, host, "LeftButton", "RightButton", "MiddleButton")
   end
-  -- An overlay must never clip its own dots: a host that clips would cut the
-  -- route at its own edge, which looks exactly like "only the opening leg
-  -- painted". The client defaults this to off, but it is set explicitly (and
-  -- always measured back by /nt mapdiag) so a client that defaults it on cannot
-  -- silently crop the route.
+  -- The world-map host must not clip its own dots: a host that clips would
+  -- cut the route at its own edge, which looks exactly like "only the opening
+  -- leg painted". The minimap host is the opposite: anything that escapes
+  -- the square is drawn over the rest of the UI, so that overlay asks to clip.
+  -- The client default is off; the flag is set explicitly so a client that
+  -- defaults it on cannot silently crop the world-map route.
   if host.SetClipsChildren then
-    pcall(host.SetClipsChildren, host, false)
+    pcall(host.SetClipsChildren, host, clipChildren and true or false)
   end
   if parent.GetFrameLevel and host.SetFrameLevel then
     local ok, level = pcall(parent.GetFrameLevel, parent)
@@ -413,6 +414,106 @@ function D.TextureProofText(p)
     type(p.numPoints) == "number" and string.format("%d", p.numPoints) or "absent")
 end
 
+--- SetRotation + size, read back. CreateLine taught us that a call that
+--- succeeds and keeps no geometry is an invisible draw, so this is only
+--- "took" when GetRotation and the size setters both keep what they were given.
+function D.RotateProof(tex)
+  local out = {
+    setRotation = type(tex) == "table" and type(tex.SetRotation) == "function",
+    getRotation = type(tex) == "table" and type(tex.GetRotation) == "function",
+  }
+  if not out.setRotation then
+    out.took = false
+    out.why = "the region exposes no SetRotation"
+    return out
+  end
+  if tex.ClearAllPoints then
+    pcall(tex.ClearAllPoints, tex)
+  end
+  if tex.SetWidth then
+    pcall(tex.SetWidth, tex, 64)
+  end
+  if tex.SetHeight then
+    pcall(tex.SetHeight, tex, 8)
+  end
+  local angle = 0.35
+  pcall(tex.SetRotation, tex, angle)
+  out.width = numberMethod(tex, "GetWidth")
+  out.height = numberMethod(tex, "GetHeight")
+  out.rotation = numberMethod(tex, "GetRotation")
+  out.sized = type(out.width) == "number" and type(out.height) == "number"
+    and math.abs(out.width - 64) <= 0.5 and math.abs(out.height - 8) <= 0.5
+  if not out.getRotation then
+    out.took = false
+    out.why = "SetRotation is present but GetRotation is not, so the angle cannot be proved"
+    return out
+  end
+  out.took = out.sized and type(out.rotation) == "number" and math.abs(out.rotation - angle) <= 0.02
+  out.why = out.took and "the size and rotation were kept"
+    or "SetRotation did not keep the size or the angle"
+  return out
+end
+
+--- SetTexCoord, read back with GetTexCoord. Same rule as LineProof: a
+--- setter that cannot be confirmed is not treated as a working stroke.
+function D.TexCoordProof(tex)
+  local out = {
+    setTexCoord = type(tex) == "table" and type(tex.SetTexCoord) == "function",
+    getTexCoord = type(tex) == "table" and type(tex.GetTexCoord) == "function",
+  }
+  if not out.setTexCoord then
+    out.took = false
+    out.why = "the region exposes no SetTexCoord"
+    return out
+  end
+  -- Four-value form (left, right, top, bottom). Clients that only accept the
+  -- eight-corner form still typically answer GetTexCoord with four or eight
+  -- numbers we can compare.
+  pcall(tex.SetTexCoord, tex, 0.125, 0.875, 0.25, 0.75)
+  if not out.getTexCoord then
+    out.took = false
+    out.why = "SetTexCoord is present but GetTexCoord is not, so the coords cannot be proved"
+    return out
+  end
+  local ok, a, b, c, d = pcall(tex.GetTexCoord, tex)
+  if not ok then
+    out.took = false
+    out.why = "GetTexCoord raised"
+    return out
+  end
+  out.u0, out.u1, out.v0, out.v1 = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+  local function close(got, want)
+    return type(got) == "number" and math.abs(got - want) <= 0.02
+  end
+  out.took = close(out.u0, 0.125) and close(out.u1, 0.875)
+    and close(out.v0, 0.25) and close(out.v1, 0.75)
+  out.why = out.took and "the tex coords were kept"
+    or "SetTexCoord did not keep the coordinates"
+  return out
+end
+
+--- Pick the best STROKE primitive from measured proofs. A session pin from
+--- `/nt linetest use ...` wins, otherwise a rotation that kept its angle
+--- and size is the confirmed default, then a CreateLine that kept its
+--- endpoints, then the two-corner-anchor dots (the last resort). Texcoord
+--- is never chosen automatically: it dropped on Forever, and the only way
+--- to use it is `/nt linetest use texcoord`.
+function D.PickStrokeMode(capability, pin)
+  if type(pin) == "string" and pin ~= "" and pin ~= "auto" then
+    return pin
+  end
+  capability = capability or {}
+  local rot = capability.rotate
+  if type(rot) == "table" and rot.took then
+    return "rotate"
+  end
+  local line = capability.line
+  if type(line) == "table" and line.took then
+    return "line"
+  end
+  return "dots"
+end
+
 --- Paint one object with the route colour, and report WHICH call the client
 --- actually took. Modern clients accept `SetColorTexture` and it wins over
 --- `SetVertexColor` — so `GetVertexColor` reads back 1,1,1,1 no matter what
@@ -565,15 +666,33 @@ local function detect(drawer, parent)
   pcall(tex.Hide, tex)
   local proof = D.TextureProof(tex, parent)
   drawer.capability.dots = proof
-  -- The chain-of-quads fallback needs only SetPoint: it never touches
-  -- SetWidth/SetHeight/SetSize, SetRotation or SetTexCoord, so it is the
-  -- primitive with the fewest things left to be a silent no-op.
+  drawer.capability.rotate = D.RotateProof(tex)
+  drawer.capability.texcoord = D.TexCoordProof(tex)
+  pcall(tex.Hide, tex)
+  if tex.SetRotation then
+    pcall(tex.SetRotation, tex, 0)
+  end
+  if tex.SetTexCoord then
+    pcall(tex.SetTexCoord, tex, 0, 1, 0, 1)
+  end
   -- `disableDots` is the diagnostic/spec switch that reaches the legacy
   -- texture primitives below (the same role `disableLine` has above).
+  -- When a proof actually KEPT its geometry, prefer that stroke over the
+  -- axis-aligned dot chain (which still stairs on a diagonal). When no
+  -- proof can be confirmed, keep the two-corner-anchor dots: they are the
+  -- only primitive this client has already shown it paints.
   if proof.canAnchor and not drawer.disableDots then
-    -- The proof texture carries the measured SetWidth(64)/SetHeight(8); it is
-    -- discarded rather than reused so no draw object starts out sized by a
-    -- measurement instead of by its anchors.
+    local pick = D.PickStrokeMode(drawer.capability, D._forceMode)
+    if pick == "rotate" or pick == "texcoord" or pick == "line" then
+      -- Line was already considered above; a forced line with a failed
+      -- proof still falls through to dots rather than drawing invisible
+      -- segments. rotate/texcoord reuse the proof texture as pool[1].
+      if pick ~= "line" then
+        drawer.pool[1] = tex
+        drawer.mode = pick
+        return
+      end
+    end
     drawer.mode = "dots"
     return
   end
@@ -594,6 +713,17 @@ local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space, sublevel)
   local half = (size or 2) * 0.5
   obj:SetParent(parent)
   local via = applyColor(obj, r, g, b, a, WHITE)
+  -- Forever: SetColorTexture can succeed the call and still leave an
+  -- untextured black square. The rotate stroke already proved WHITE8X8
+  -- + SetVertexColor keeps colour, so re-apply that path after the
+  -- colour probe. Decorations and any leftover dots must never render
+  -- as black blocks.
+  if obj.SetTexture then
+    pcall(obj.SetTexture, obj, WHITE)
+  end
+  if obj.SetVertexColor then
+    pcall(obj.SetVertexColor, obj, r, g, b, a)
+  end
   -- A pooled region can still carry an alpha from an earlier use, and an
   -- inherited parent alpha multiplies whatever we set. The vertex colour is the
   -- only alpha this draw means, so the region's own alpha is pinned to 1 (the
@@ -678,21 +808,15 @@ function D.DotMetrics(pathWidth, canvasScale, screenFloor)
   if screenSize < floor then
     screenSize = floor
   end
-  -- ── The pitch is the RIM WIDTH, not the dot width ──────────────────────
-  -- Each dot is painted twice (a dark rim, then the white core). The rim is
-  -- bigger than the core by DOT_OUTLINE_GROW, so a pitch equal to the CORE
-  -- leaves the neighbouring rim reaching half a grow — 1 px — into this core.
-  -- That is not a theoretical worry: on the reported draw (2.02 canvas px core,
-  -- 2.02 pitch, 3.36 rim) the next dot's rim buried 33% of every white core on
-  -- a straight run and 39% on a 45° one, and the route — correct, opaque,
-  -- above the art — read as "extremely transparent". Spacing the dots by the
-  -- RIM width puts the neighbouring rim exactly one pixel clear of the core,
-  -- so no paint order, no sublevel and no region-creation order can bury a
-  -- white dot ever again. The chain stays continuous: the rims touch edge to
-  -- edge, which is the dark outline of the stroke.
-  local screenSpacing = screenSize + DOT_OUTLINE_GROW
-  if screenSpacing < DOT_SPACING_MIN then
-    screenSpacing = DOT_SPACING_MIN
+  -- ── The pitch is well inside the CORE, so a diagonal of squares blends ─
+  -- A 1 screen-px overlap still reads as a staircase of axis-aligned
+  -- squares on a diagonal. Overlapping by more than half the core turns
+  -- that chain into a stroke even when SetRotation cannot be proved.
+  -- Neighbouring rims overlap the next core geometrically; that is safe
+  -- because every rim is painted first, then every core (see D.Draw).
+  local screenSpacing = screenSize * 0.4
+  if screenSpacing < 1 then
+    screenSpacing = 1
   end
   local screenOutline = screenSize + DOT_OUTLINE_GROW
   return {
@@ -901,7 +1025,7 @@ local function paintLine(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, spa
   obj:Show()
 end
 
-local function paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
+local function paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space, sublevel)
   local dx, dy = x2 - x1, y2 - y1
   local length = math.sqrt(dx * dx + dy * dy)
   if length < 0.75 then
@@ -916,11 +1040,14 @@ local function paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, s
   if obj.SetVertexColor then
     obj:SetVertexColor(r, g, b, a)
   end
+  if obj.SetAlpha then
+    pcall(obj.SetAlpha, obj, 1)
+  end
   if obj.SetTexCoord then
     obj:SetTexCoord(0, 1, 0, 1)
   end
   if obj.SetDrawLayer then
-    pcall(obj.SetDrawLayer, obj, "OVERLAY", 7)
+    pcall(obj.SetDrawLayer, obj, "OVERLAY", sublevel or 7)
   end
   if obj.SetBlendMode then
     pcall(obj.SetBlendMode, obj, "BLEND")
@@ -1146,73 +1273,81 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     end
     drawer.dotOutside, drawer.dotBox = nil, nil
     local function paint(plans)
-      local index, painted, missing = 1, 0, 0
+      local index
+      local painted, missing = 0, 0
       local first
       -- A retry repaints the pool, so the sample must describe the LAST paint:
       -- keeping the first paint's read-back would print a plan that is no longer
       -- on screen.
       drawer.lastApplied.sampleDot, drawer.lastApplied.sampleRim = nil, nil
       outside, box = 0, {}
-      for i = 1, count do
-        local seg, plan = buf[i], plans[i]
-        if seg and plan and plan.steps > 0 then
-          first = first or plan
-          local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
-          for k = 0, plan.steps do
-            local t = k / plan.steps
-            local cx, cy = seg[1] + dx * t, seg[2] + dy * t
-            -- Each dot is drawn TWICE: a dark rim, then the white core on top.
-            -- The rim is one screen px wider on each side, and the dots are
-            -- spaced by the RIM's width (DotMetrics), so the rim of the next
-            -- dot stops one pixel short of this core — the paint order, the
-            -- region-creation order and the client's sublevel support no longer
-            -- decide whether a white dot survives. Measured on the previous
-            -- geometry (pitch == core) the neighbouring rim buried a third of
-            -- every core, which is the ghost this card is about.
-            local under = acquire(drawer, index, parent)
-            local rimVia
-            if under then
-              rimVia = paintDot(under, parent, cx, cy, plan.size * rimRatio,
-                DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
-              if not drawer.lastApplied.sampleRim then
-                drawer.lastApplied.sampleRim = D.ReadBack(under, {
-                  requested = { DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A },
-                  via = rimVia,
-                  planned = plan.size * rimRatio,
-                  screen = (plan.size * rimRatio) * (m.scale > 0 and m.scale or 1),
-                })
-              end
+      -- Two passes over the same plan: every rim first (sublevel 6), then
+      -- every core (sublevel 7). Pool layout is unchanged (odd = rim, even
+      -- = core) so existing diag pairing still holds. Cores may overlap
+      -- neighbouring rims geometrically; because every core is painted
+      -- after every rim, those rims cannot bury the stroke.
+      local function eachDot(fn)
+        for i = 1, count do
+          local seg, plan = buf[i], plans[i]
+          if seg and plan and plan.steps > 0 then
+            first = first or plan
+            local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
+            for k = 0, plan.steps do
+              local tt = k / plan.steps
+              fn(seg[1] + dx * tt, seg[2] + dy * tt, plan)
             end
-            index = index + 1
-            local obj = acquire(drawer, index, parent)
-            if obj then
-              local dotVia = paintDot(obj, parent, cx, cy, plan.size, r, g, b, dotAlpha, space, 7)
-              painted = painted + 1
-              measured(cx, cy)
-              -- ONE sampled dot, read back from the client at draw time. The
-              -- acceptance asks for the requested colour next to GetVertexColor:
-              -- a dot whose vertex alpha is not what the draw passed means the
-              -- alpha never reached the texture, which is a different bug from
-              -- a dot that is simply too small or under something.
-              if not drawer.lastApplied.sampleDot then
-                drawer.lastApplied.sampleDot = D.ReadBack(obj, {
-                  requested = { r, g, b, dotAlpha },
-                  via = dotVia,
-                  requestedAlpha = dotRequested,
-                  planned = plan.size,
-                  screen = plan.size * (m.scale > 0 and m.scale or 1),
-                })
-              end
-            else
-              -- No region for this dot: it is NOT painted, whatever the plan
-              -- says. Counting it as painted is what made a route that stopped
-              -- after its opening leg report "painted == planned".
-              missing = missing + 1
-            end
-            index = index + 1
           end
         end
       end
+      -- Acquire rim+core interleaved so a region ceiling is spent on
+      -- complete dots, not on a first pass of rims only. Then paint
+      -- every rim, then every core, so the stroke sits on top even
+      -- when the client has no SetDrawLayer.
+      local n = 0
+      eachDot(function()
+        n = n + 1
+        acquire(drawer, n * 2 - 1, parent)
+        acquire(drawer, n * 2, parent)
+      end)
+      n = 0
+      eachDot(function(cx, cy, plan)
+        n = n + 1
+        local under = acquire(drawer, n * 2 - 1, parent)
+        if under then
+          local rimVia = paintDot(under, parent, cx, cy, plan.size * rimRatio,
+            DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
+          if not drawer.lastApplied.sampleRim then
+            drawer.lastApplied.sampleRim = D.ReadBack(under, {
+              requested = { DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A },
+              via = rimVia,
+              planned = plan.size * rimRatio,
+              screen = (plan.size * rimRatio) * (m.scale > 0 and m.scale or 1),
+            })
+          end
+        end
+      end)
+      n = 0
+      eachDot(function(cx, cy, plan)
+        n = n + 1
+        local obj = acquire(drawer, n * 2, parent)
+        if obj then
+          local dotVia = paintDot(obj, parent, cx, cy, plan.size, r, g, b, dotAlpha, space, 7)
+          painted = painted + 1
+          measured(cx, cy)
+          if not drawer.lastApplied.sampleDot then
+            drawer.lastApplied.sampleDot = D.ReadBack(obj, {
+              requested = { r, g, b, dotAlpha },
+              via = dotVia,
+              requestedAlpha = dotRequested,
+              planned = plan.size,
+              screen = plan.size * (m.scale > 0 and m.scale or 1),
+            })
+          end
+        else
+          missing = missing + 1
+        end
+      end)
+      index = n * 2 + 1
       return index, painted, missing, first
     end
 
@@ -1377,30 +1512,383 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     drawer.lastApplied.dotScreenSize = m.screenSize
     drawer.lastApplied.dotScreenSpacing = m.screenSpacing
     drawer.lastApplied.dotScreenOutline = m.screenOutline
-    -- The legibility invariant, as one number: the gap between the edge of the
-    -- NEIGHBOURING dot's rim and the edge of this core. Negative means that rim
-    -- crosses into the white dot (the ghost, whatever the paint order); zero or
-    -- more means no draw order and no sublevel support can bury a dot.
+    -- Geometric clearance between a neighbouring rim and this core. With
+    -- overlapping cores this is negative; the two-pass paint (rims, then
+    -- cores) is what keeps the stroke from being buried, not the gap.
     drawer.lastApplied.dotClearance =
       m.screenSpacing - (m.screenOutline + m.screenSize) * 0.5
+    drawer.lastApplied.dotCoreOverlap = m.screenSize - m.screenSpacing
     drawer.lastApplied.dotFloor = m.screenFloor
     drawer.lastApplied.dotPathWidth = m.pathWidth
     return
   end
+  -- A dark under-stroke, then the coloured stroke, two regions per segment.
+  local outlineW = (tonumber(thickness) or 2) + 2
+  if outlineW < 3 then outlineW = 3 end
+  local function paintSeg(obj, x1, y1, x2, y2, w, cr, cg, cb, ca)
+    if drawer.mode == "line" then
+      paintLine(obj, parent, x1, y1, x2, y2, w, cr, cg, cb, ca, space)
+    elseif drawer.mode == "rotate" then
+      paintRotate(obj, parent, x1, y1, x2, y2, w, cr, cg, cb, ca, space)
+    else
+      local sx, sy, ex, ey = toBottomLeft(parent, x1, y1, x2, y2, space)
+      paintTexCoord(obj, parent, sx, sy, ex, ey, w, cr, cg, cb, ca)
+    end
+  end
   for i = 1, count do
     local seg = buf[i]
-    local obj = acquire(drawer, i, parent)
-    if obj and seg then
+    if seg then
       local x1, y1, x2, y2 = seg[1], seg[2], seg[3], seg[4]
-      if drawer.mode == "line" then
-        paintLine(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
-      elseif drawer.mode == "rotate" then
-        paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
-      else
-        local sx, sy, ex, ey = toBottomLeft(parent, x1, y1, x2, y2, space)
-        paintTexCoord(obj, parent, sx, sy, ex, ey, thickness, r, g, b, a)
+      local under = acquire(drawer, i * 2 - 1, parent)
+      if under then
+        paintSeg(under, x1, y1, x2, y2, outlineW, DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A)
+      end
+      local obj = acquire(drawer, i * 2, parent)
+      if obj then
+        paintSeg(obj, x1, y1, x2, y2, thickness, r, g, b, a)
       end
     end
   end
-  hideFrom(drawer, count + 1, false)
+  hideFrom(drawer, count * 2 + 1, false)
+end
+
+
+-- ── Direction chevrons and start/end/loop markers ─────────────────────
+-- Drawn from a SEPARATE drawer so the stroke pool's rim/core pairing
+-- (and every mapdiag / capacity spec that reads it) stays unchanged.
+-- Decorations copy the rotate stroke's exact colour and layer sequence:
+-- WHITE8X8, SetVertexColor, SetDrawLayer("OVERLAY", sub). WoW sublevels
+-- only run from -8 to 7; a core at sublevel 8 is dropped, so the rust
+-- fill sat under the black rim and showed as a solid black dash or
+-- square. Cores therefore use sublevel 7 and rims use 6, the same
+-- values as the stroke, and every rim is painted before every core so
+-- the fill still sits on top when SetDrawLayer is missing.
+-- A chevron is a V of two short rust bars pointing along the path
+-- (or one short perpendicular tick if rotation is unavailable). Those
+-- ticks have no rim, so a failed core cannot leave a black dash.
+-- Start/end/loop markers are a light cream square with a thin dark rim,
+-- sized in screen px so the world map and minimap stay in proportion.
+
+local DECOR_CHEV_LEN = 7    -- screen px length of each chevron arm
+local DECOR_CHEV_THICK = 2  -- screen px thickness of a chevron tick
+local DECOR_CHEV_SPREAD = 4 -- screen px half-width of the V
+local DECOR_MARK = 3.5      -- screen px of a start/end marker (half of 7)
+local DECOR_LOOP_GROW = 1   -- loop is 4.5 screen px (half of the old 9)
+local DECOR_RIM = 0.5       -- screen px the dark marker rim adds (thin vs 3.5)
+-- Cream fill so a marker reads against the rust/teal stroke.
+local DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A = 0.98, 0.92, 0.78, 1
+-- Same layer and sublevels the rotate / dot stroke already proved.
+local DECOR_LAYER = "OVERLAY"
+local DECOR_RIM_SUB = 6
+local DECOR_CORE_SUB = 7
+
+local function decorSize(screen, scale)
+  scale = (tonumber(scale) and scale > 0) and scale or 1
+  return screen / scale
+end
+
+--- A filled square painted with the same sequence as paintRotate:
+--- WHITE8X8, vertex colour, OVERLAY at a valid sublevel (default 7).
+--- Size setters + a centre point when the client kept them; two-corner
+--- anchors otherwise.
+local function paintSolid(obj, parent, cx, cy, size, r, g, b, a, space, sub)
+  obj:SetParent(parent)
+  obj:ClearAllPoints()
+  if obj.SetTexture then
+    obj:SetTexture(WHITE)
+  end
+  if obj.SetVertexColor then
+    obj:SetVertexColor(r, g, b, a)
+  end
+  if obj.SetAlpha then
+    pcall(obj.SetAlpha, obj, 1)
+  end
+  if obj.SetTexCoord then
+    obj:SetTexCoord(0, 1, 0, 1)
+  end
+  if obj.SetDrawLayer then
+    pcall(obj.SetDrawLayer, obj, DECOR_LAYER, sub or DECOR_CORE_SUB)
+  end
+  if obj.SetBlendMode then
+    pcall(obj.SetBlendMode, obj, "BLEND")
+  end
+  if obj.SetWidth and obj.SetHeight then
+    pcall(obj.SetWidth, obj, size)
+    pcall(obj.SetHeight, obj, size)
+    if space == "yup" then
+      obj:SetPoint("CENTER", parent, "CENTER", cx, cy)
+    else
+      obj:SetPoint("CENTER", parent, "TOPLEFT", cx, -cy)
+    end
+    if obj.SetRotation then
+      pcall(obj.SetRotation, obj, 0)
+    end
+  else
+    local half = (size or 2) * 0.5
+    if space == "yup" then
+      obj:SetPoint("BOTTOMLEFT", parent, "CENTER", cx - half, cy - half)
+      obj:SetPoint("TOPRIGHT", parent, "CENTER", cx + half, cy + half)
+    else
+      obj:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", cx - half, -(cy + half))
+      obj:SetPoint("TOPRIGHT", parent, "TOPLEFT", cx + half, -(cy - half))
+    end
+  end
+  obj:Show()
+end
+
+function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
+  if not drawer or not parent then
+    return
+  end
+  if drawer.parent ~= parent then
+    D.Invalidate(drawer)
+    drawer.parent = parent
+  end
+  if not drawer.mode then
+    -- Prefer the proved rotate path for decorations too. Texcoord stays
+    -- non-default unless `/nt linetest` pinned it.
+    drawer.disableLine = true
+    detect(drawer, parent)
+    if drawer.mode == "texcoord" and D._forceMode ~= "texcoord" then
+      local rot = drawer.capability and drawer.capability.rotate
+      if type(rot) == "table" and rot.took then
+        drawer.mode = "rotate"
+      elseif type(parent.CreateTexture) == "function" then
+        drawer.mode = "dots"
+      end
+    end
+  end
+  count = count or 0
+  if drawer.mode == "none" or count < 1 then
+    D.Clear(drawer)
+    drawer.lastApplied = drawer.lastApplied or {}
+    drawer.lastApplied.paintedDots = 0
+    drawer.lastApplied.plannedDots = 0
+    drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+    return
+  end
+  local scale = 1
+  if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
+    scale = metrics.scale
+  end
+  local chevLen = math.max(0.75, decorSize(DECOR_CHEV_LEN, scale))
+  local chevThick = math.max(0.75, decorSize(DECOR_CHEV_THICK, scale))
+  local chevSpread = math.max(0.75, decorSize(DECOR_CHEV_SPREAD, scale))
+  local mark = decorSize(DECOR_MARK, scale)
+  local loop = decorSize(DECOR_MARK + DECOR_LOOP_GROW, scale)
+  local rimGrow = decorSize(DECOR_RIM, scale)
+  local useRotate = drawer.mode == "rotate"
+  -- A closed path plans both a start and a loop at the first vertex.
+  -- Drawing both would stack two marks; keep the slightly larger loop.
+  local hasLoop = false
+  for i = 1, count do
+    local it = items[i]
+    if type(it) == "table" and it.kind == "loop" then
+      hasLoop = true
+      break
+    end
+  end
+  -- Plan first, then acquire, then paint every rim, then every core —
+  -- the same two-pass order the stroke uses.
+  drawer._decorJobs = drawer._decorJobs or {}
+  local jobs, nJobs = drawer._decorJobs, 0
+  local function addJob()
+    nJobs = nJobs + 1
+    local j = jobs[nJobs]
+    if type(j) ~= "table" then
+      j = {}
+      jobs[nJobs] = j
+    end
+    j.rimObj, j.coreObj = nil, nil
+    return j
+  end
+  local function addBar(x1, y1, x2, y2, thickness, cr, cg, cb, ca, hasRim)
+    local j = addJob()
+    j.style = "bar"
+    j.x1, j.y1, j.x2, j.y2 = x1, y1, x2, y2
+    j.thickness = thickness
+    j.r, j.g, j.b, j.a = cr, cg, cb, ca
+    j.hasRim = hasRim and true or false
+  end
+  local function addSquare(cx, cy, size, cr, cg, cb, ca, hasRim)
+    local j = addJob()
+    j.style = "square"
+    j.cx, j.cy, j.size = cx, cy, size
+    j.r, j.g, j.b, j.a = cr, cg, cb, ca
+    j.hasRim = hasRim and true or false
+  end
+  local function unit(dx, dy)
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1e-8 then
+      return 1, 0
+    end
+    return dx / len, dy / len
+  end
+  for i = 1, count do
+    local it = items[i]
+    if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number" then
+      if it.kind == "chevron" then
+        local dx, dy = unit(tonumber(it.dx) or 0, tonumber(it.dy) or 0)
+        if useRotate then
+          -- Two short bars forming a V that points in the travel direction.
+          local px, py = -dy, dx
+          local tx, ty = it.x + dx * (chevLen * 0.55), it.y + dy * (chevLen * 0.55)
+          local bx, by = it.x - dx * (chevLen * 0.45), it.y - dy * (chevLen * 0.45)
+          addBar(bx + px * chevSpread, by + py * chevSpread, tx, ty,
+            chevThick, r, g, b, a, false)
+          addBar(bx - px * chevSpread, by - py * chevSpread, tx, ty,
+            chevThick, r, g, b, a, false)
+        else
+          -- No rotation: a short tick across the path, not along it.
+          addSquare(it.x, it.y, chevThick, r, g, b, a, false)
+        end
+      elseif it.kind == "loop" then
+        addSquare(it.x, it.y, loop, DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A, true)
+      elseif it.kind == "end" then
+        addSquare(it.x, it.y, mark, DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A, true)
+      elseif it.kind == "start" or it.kind == nil then
+        if not hasLoop then
+          addSquare(it.x, it.y, mark, DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A, true)
+        end
+      end
+    end
+  end
+  for i = #jobs, nJobs + 1, -1 do
+    jobs[i] = nil
+  end
+  local index = 1
+  for i = 1, nJobs do
+    local j = jobs[i]
+    if j.hasRim then
+      j.rimObj = acquire(drawer, index, parent)
+      index = index + 1
+    end
+    j.coreObj = acquire(drawer, index, parent)
+    index = index + 1
+  end
+  for i = 1, nJobs do
+    local j = jobs[i]
+    if j.hasRim and j.rimObj then
+      if j.style == "bar" then
+        paintRotate(j.rimObj, parent, j.x1, j.y1, j.x2, j.y2, j.thickness + rimGrow,
+          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, DECOR_RIM_SUB)
+      else
+        paintSolid(j.rimObj, parent, j.cx, j.cy, j.size + rimGrow,
+          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, DECOR_RIM_SUB)
+      end
+    end
+  end
+  local painted = 0
+  for i = 1, nJobs do
+    local j = jobs[i]
+    if j.coreObj then
+      if j.style == "bar" then
+        paintRotate(j.coreObj, parent, j.x1, j.y1, j.x2, j.y2, j.thickness,
+          j.r, j.g, j.b, j.a, space, DECOR_CORE_SUB)
+      else
+        paintSolid(j.coreObj, parent, j.cx, j.cy, j.size,
+          j.r, j.g, j.b, j.a, space, DECOR_CORE_SUB)
+      end
+      painted = painted + 1
+    end
+    j.rimObj, j.coreObj = nil, nil
+  end
+  hideFrom(drawer, index, false)
+  drawer.lastApplied = drawer.lastApplied or {}
+  drawer.lastApplied.paintedDots = painted
+  drawer.lastApplied.plannedDots = painted
+  drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+  drawer.lastApplied.mode = drawer.mode
+end
+
+
+--- Plan and paint decorations onto a holder-owned drawer (`field`).
+--- `pts` is a list of already-projected {x,y} points (host units).
+--- Scratch arrays live on the holder so a redraw allocates nothing new.
+function D.ApplyDecor(holder, field, host, pts, r, g, b, a, space, metrics, clip)
+  if type(holder) ~= "table" or type(ns.PathGeom) ~= "table" then
+    return
+  end
+  local G = ns.PathGeom
+  local drawer = holder[field]
+  if not drawer then
+    drawer = D.Create()
+    holder[field] = drawer
+  end
+  if type(pts) ~= "table" or #pts < 1 or not host then
+    D.Clear(drawer)
+    return
+  end
+  local scale = 1
+  if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
+    scale = metrics.scale
+  end
+  -- About 48 screen px between chevrons, in this surface's units.
+  local spacing = 48 / scale
+  holder._chevBuf = holder._chevBuf or {}
+  holder._markBuf = holder._markBuf or {}
+  holder._decorBuf = holder._decorBuf or {}
+  holder._clipBuf = holder._clipBuf or {}
+  local chevs, cn = G.PlaceChevrons(pts, spacing, holder._chevBuf)
+  local marks, mn = G.PlaceMarkers(pts, holder._markBuf)
+  local buf, n = holder._decorBuf, 0
+  for i = 1, mn do
+    n = n + 1
+    buf[n] = marks[i]
+  end
+  for i = 1, cn do
+    n = n + 1
+    buf[n] = chevs[i]
+  end
+  for i = #buf, n + 1, -1 do
+    buf[i] = nil
+  end
+  -- Drop decorations whose centre sits outside the surface's clip (the
+  -- minimap circle, or the visible world-map window). Stroke segments are
+  -- already clipped; without this, a chevron or marker on an unprojected
+  -- or off-screen vertex paints into the rest of the UI.
+  if clip then
+    buf, n = G.ClipItems(buf, n, clip, holder._clipBuf)
+  end
+  D.DrawDecor(drawer, host, buf, n, r, g, b, a, space, metrics)
+end
+
+--- Run every stroke proof on `parent` and return a report. `/nt linetest`
+--- prints this and, when a method is proved, pins it for the rest of the
+--- session so the next redraw uses it.
+function D.RunLineTest(parent)
+  local report = {
+    recommended = "dots",
+    line = { took = false, why = "no parent" },
+    dots = { canAnchor = false, why = "no parent" },
+    rotate = { took = false, why = "no parent" },
+    texcoord = { took = false, why = "no parent" },
+  }
+  if not parent then
+    return report
+  end
+  if type(parent.CreateLine) == "function" then
+    report.line = D.LineProof(parent)
+  else
+    report.line = { took = false, why = "the client exposes no Frame:CreateLine" }
+  end
+  if type(parent.CreateTexture) == "function" then
+    local ok, tex = pcall(parent.CreateTexture, parent, nil, "OVERLAY")
+    if ok and tex then
+      report.dots = D.TextureProof(tex, parent)
+      report.rotate = D.RotateProof(tex)
+      report.texcoord = D.TexCoordProof(tex)
+      pcall(tex.Hide, tex)
+    else
+      report.dots = { canAnchor = false, why = "CreateTexture raised or returned nothing" }
+    end
+  else
+    report.dots = { canAnchor = false, why = "the host exposes no CreateTexture" }
+  end
+  local cap = { line = report.line, rotate = report.rotate, texcoord = report.texcoord, dots = report.dots }
+  report.recommended = D.PickStrokeMode(cap, nil)
+  if report.recommended == "dots" and report.dots and report.dots.canAnchor == false then
+    report.recommended = "none"
+  end
+  return report
 end

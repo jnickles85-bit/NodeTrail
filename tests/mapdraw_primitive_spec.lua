@@ -225,6 +225,7 @@ loadAddon("Core.lua")
 local ns = pkg.NodeTrail
 local M = ns.MapOverlay
 ns.Enable()
+ns.GetDB().pathColor = { 1, 1, 1, 0.9 }
 
 local function lineStartingWith(text, prefix)
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
@@ -266,7 +267,7 @@ else
   local m = LD.DotMetrics(2, 1)
   local cover = LD.DotPlan(400, m.size, m.spacing)
   check(cover.count == cover.steps + 1, "0b: both endpoints of the segment are drawn")
-  near(cover.spacing, 6, "0b: a 2px stroke is spaced 6px — the rim width, one px clear of the next core")
+  near(cover.spacing, 1.6, "0b: a 2px stroke is spaced 1.6px — cores overlap by more than half their width")
   near(cover.size, 4, "0b: the dot is 4 screen px, so the spacing leaves no hole")
   check(cover.steps * cover.spacing >= 400, "0b: the chain spans the segment")
   check((cover.steps - 1) * cover.spacing < 400, "0b: no more dots than the length needs")
@@ -299,7 +300,7 @@ check(M.drawer.mode == "dots",
 check(M.drawer.capability and M.drawer.capability.line
   and M.drawer.capability.line.took == false,
   "A: the failed line proof is recorded for the diag")
-check(M._lastQueued == 2, "A: two segments queued, got " .. tostring(M._lastQueued))
+check(M._lastQueued >= 2, "A: at least the two raw segments are queued, got " .. tostring(M._lastQueued))
 check(M.host:IsShown(), "A: the host is shown")
 
 -- ═══ B. the dots are two-corner-anchored quads that cover the segment ═════
@@ -309,9 +310,10 @@ local function isWhiteDot(o)
 end
 local textures = {}
 local whiteDots = {}
-for i = 1, #M.host.children do
-  local child = M.host.children[i]
-  if child.kind == "texture" and child.shown then
+local pool = (M.drawer and M.drawer.pool) or {}
+for i = 1, #pool do
+  local child = pool[i]
+  if child and child.shown then
     textures[#textures + 1] = child
     if isWhiteDot(child) then
       whiteDots[#whiteDots + 1] = child
@@ -347,9 +349,9 @@ if first then
   near(first.sublevel, 7, "B: the white dot is drawn on the top sublevel")
   -- The dark outline underneath it: larger, and drawn first.
   local under
-  for i = 1, #M.host.children do
-    if M.host.children[i] == first then
-      under = M.host.children[i - 1]
+  for i = 1, #pool do
+    if pool[i] == first then
+      under = pool[i - 1]
       break
     end
   end
@@ -361,28 +363,25 @@ if first then
     "B: the outline sits on a lower sublevel than the white dot")
 end
 
--- Every white dot sits on its segment, spaced ~6px apart (the rim width), and the
--- chain reaches
--- the second point.
-local seg1 = {}
-for i = 1, #whiteDots do
-  local t = whiteDots[i]
-  if t.points[1] and math.abs(t.points[1][5] + (133.6 + HALF)) <= 0.05 then
-    seg1[#seg1 + 1] = t
-  end
+-- The chain still starts on the first route point and ends on the last, and
+-- consecutive cores overlap by more than half their width (pitch ~1.6) so the stroke is continuous.
+-- Light smoothing may lift mid-span samples slightly off a straight chord,
+-- so we measure along the painted chain rather than along the original y.
+local last = whiteDots[#whiteDots]
+check(last ~= nil, "B: the last core exists")
+if last and last.points[1] then
+  near(last.points[1][4], 400.8 - HALF, "B: the chain ends on the last route point (x)")
+  near(last.points[1][5], -(267.2 + HALF), "B: the chain ends on the last route point (y)")
 end
-check(#seg1 > 20, "B: segment 1 has a dot chain, got " .. #seg1)
-local last = seg1[#seg1]
-if last then
-  near(last.points[1][4], 400.8 - HALF, "B: the chain ends on the segment's second point")
-end
-if #seg1 >= 2 then
-  local gap = seg1[2].points[1][4] - seg1[1].points[1][4]
-  -- The gap is the segment's length divided into whole steps, so it lands just
-  -- under the 6px pitch; what matters is that it stays at or above the rim
-  -- width's clearance (5 = rim 6 minus the 1px a rim reaches short of a core).
-  check(gap > 5.5 and gap <= 6.05,
-    "B: dots are spaced by the rim width, ~6px (one px clear of the next core), got " .. tostring(gap))
+if #whiteDots >= 2 and whiteDots[1].points[1] and whiteDots[2].points[1] then
+  local a, b = whiteDots[1], whiteDots[2]
+  local ax = (a.points[1][4] + a.points[2][4]) * 0.5
+  local ay = (a.points[1][5] + a.points[2][5]) * 0.5
+  local bx = (b.points[1][4] + b.points[2][4]) * 0.5
+  local by = (b.points[1][5] + b.points[2][5]) * 0.5
+  local gap = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+  check(gap > 1.2 and gap <= 1.8,
+    "B: cores overlap by more than half their width (pitch ~1.6), got " .. tostring(gap))
 end
 
 -- A dot is drawn without any size setter: the stub only has anchors.
@@ -412,7 +411,7 @@ check(joined:find("two corner anchors -> 64x8 points=2", 1, true) ~= nil,
 check(joined:find("SetWidth=absent SetHeight=absent", 1, true) ~= nil,
   "C: the anchor probe lists which setters the texture has (got "
     .. tostring(joined:match("anchor probe[^\n]*")) .. ")")
-check(joined:find("redraw: queued=2 segment(s); LineDraw mode=dots", 1, true) ~= nil,
+check(joined:find("LineDraw mode=dots", 1, true) ~= nil and joined:find("redraw: queued=", 1, true) ~= nil,
   "C: the redraw line counts SEGMENTS and names the primitive")
 check(joined:find("object=Texture", 1, true) ~= nil,
   "C: the held object's GetObjectType is printed")
@@ -433,7 +432,7 @@ check(verdict and verdict:find("verdict: PRIMITIVE", 1, true) ~= nil,
     .. tostring(verdict) .. ")")
 check(verdict and verdict:find("kept no geometry (reads start=TOPLEFT(0.0,absent) end=TOPLEFT(0.0,absent))", 1, true) ~= nil,
   "C: the verdict quotes the endpoint read-back (got " .. tostring(verdict) .. ")")
-check(verdict and verdict:find("anchored dots (size=4.00 spacing=6.00)", 1, true) ~= nil,
+check(verdict and verdict:find("anchored dots (size=4.00 spacing=1.60)", 1, true) ~= nil,
   "C: the verdict says how the route is drawn instead (got " .. tostring(verdict) .. ")")
 check(joined:find("error:", 1, true) == nil, "C: the diag printed no error line")
 
@@ -483,7 +482,8 @@ local offText = table.concat(chat, "\n")
 check(offText:find("probe: off (marker, border and diagonal removed)", 1, true) ~= nil,
   "E: probe off says what it removed (got " .. tostring(offText:match("probe:[^\n]*")) .. ")")
 check(M._probe == nil, "E: the probe state is cleared")
-check(M._lastQueued == 2, "E: the route is untouched by the probe (got "
+check(M.path and #M.path == 3, "E: the unsmoothed route is untouched by the probe (got " .. tostring(M.path and #M.path) .. ")")
+check(M._lastQueued and M._lastQueued >= 2, "E: the draw plan is still present after the probe (got "
   .. tostring(M._lastQueued) .. ")")
 
 -- ═══ E2. the primitive can be pinned in game; the request is not a promise ══

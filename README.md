@@ -60,6 +60,7 @@ registers `/touchstone`, `/sf`, and `/statforge` on one handler, and `/ts`,
 | `/nt skinroute [on\|off\|status]` | Green closed loop through skinned corpses on this zone's map |
 | `/nt skin [on\|off\|status]` | Corpse-skinning recorder (on by default); an explicit off survives `/reload` |
 | `/nt ttdiag` **(diag)** | Item-name resolver failures (ids that could not be named, and which lookups failed) |
+| `/nt linetest [use auto\|line\|rotate\|texcoord\|dots]` **(diag)** | Measure which line primitive this client actually keeps, pin it, and redraw |
 | `/touchstone` (aliases `/sf`, `/statforge`) | Toggle the Touchstone window |
 | `/touchstone options` | Open Touchstone on the Settings tab |
 | `/touchstone diag` or `diagnostics` **(diag)** | Open the Touchstone diagnostics panel |
@@ -154,7 +155,7 @@ Repo-only (not shipped): `README.md`, `tests/`,
 ## NodeTrail details
 - Herb routes come from your own recorded herb gathers, drawn as a density corridor.
 - GatherMate2 is optional (`routeSource = "gm2"` fallback).
-- White polyline pathColor `{1,1,1,0.9}`, pathWidth 2 on world map and minimap.
+- Teal polyline for herb routes (Touchstone accent, pathColor `{0.400, 0.988, 0.945, 0.85}`), rust for skinning; dark outline, direction chevrons, and start/end or loop markers. pathWidth 2 on world map and minimap.
 - `/nt stop` releases both overlays.
 - `/nt skinroute` draws the skinning farming circle once a zone has enough skinned corpses and the character has Skinning. `/nt skin` toggles the recorder.
 
@@ -216,7 +217,7 @@ are de-duplicated before recording. `/mp skindiag` toggles the capture,
 compact dump in a copyable popup.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 70 specs:
 
 - `tests/alchemy_skill_gate_spec.lua`
 - `tests/beast_profession_gate_spec.lua`
@@ -246,12 +247,14 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
 - `tests/nav_arrow_spec.lua`
 - `tests/nav_target_spec.lua`
 - `tests/options_spec.lua`
+- `tests/pathcolor_migration_spec.lua`
 - `tests/pathgeom_spec.lua`
 - `tests/profession_gate_spec.lua`
 - `tests/recipe_diag_spec.lua`
 - `tests/recorder_spec.lua`
 - `tests/route_auto_spec.lua`
 - `tests/route_stability_spec.lua`
+- `tests/route_style_spec.lua`
 - `tests/skin_tooltip_skinned_spec.lua`
 - `tests/skin_tooltip_spec.lua`
 - `tests/skindiag_copy_spec.lua`

@@ -603,6 +603,41 @@ do
   fractionsUnchanged("after the fallback round trip")
 end
 
+-- ═══ 10. A canvas zoom or pan must invalidate the drawn projection ══════════
+-- The host lives on WorldMapFrame, so the route is in window pixels. A
+-- zoom or pan that is not followed by a redraw leaves the circle stuck to
+-- the frame while the map moves under it.
+do
+  check(type(M.SameCanvasView) == "function", "10: SameCanvasView is exported")
+  check(M.SameCanvasView({ scale = 1, hs = 0, vs = 0, mapID = 1 },
+      { scale = 1, hs = 0, vs = 0, mapID = 1 }),
+    "10: identical views match")
+  check(not M.SameCanvasView({ scale = 1, hs = 0 }, { scale = 1.25, hs = 0 }),
+    "10: a scale change is a new view")
+  check(not M.SameCanvasView({ scale = 1, hs = 0 }, { scale = 1, hs = 40 }),
+    "10: a pan change is a new view")
+  check(not M.SameCanvasView({ scale = 1, mapID = 1 }, { scale = 1, mapID = 2 }),
+    "10: a map change is a new view")
+  check(not M.SameCanvasView(nil, { scale = 1 }),
+    "10: a missing sample is not the same view")
+
+  setView(1)
+  M:SetRoute({ mapID = 1413, path = { { x = 0.720, y = 0.350 }, { x = 0.450, y = 0.430 } } })
+  local n = M._drawNum or 0
+  M:PollCanvasView()
+  check((M._drawNum or 0) == n, "10: polling an unchanged canvas does not redraw (drawNum="
+    .. tostring(M._drawNum) .. ")")
+  setView(2)
+  M:PollCanvasView()
+  check((M._drawNum or 0) > n, "10: a canvas scale/position change forces a redraw (drawNum="
+    .. tostring(M._drawNum) .. " after " .. tostring(n) .. ")")
+  n = M._drawNum or 0
+  setView(2, 80, 0)
+  M:PollCanvasView()
+  check((M._drawNum or 0) > n, "10: a canvas pan forces a redraw (drawNum="
+    .. tostring(M._drawNum) .. " after " .. tostring(n) .. ")")
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " map frame projection check(s) failed\n")
   os.exit(1)

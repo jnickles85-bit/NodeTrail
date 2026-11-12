@@ -58,10 +58,10 @@ S.MIN_CLUSTERS = 3
 -- herb cluster cell.
 S.CELL = 0.03
 S.MAX_STOPS = 40
--- Green. The herb route is white (Config.pathColor = {1,1,1,0.9}), so a
--- screenshot cannot confuse the two lines; the colour is passed to the draw,
--- never read back from the herb profile.
-S.COLOR = { 0.10, 0.85, 0.35, 0.95 }
+-- Rust / warm leather (audit §2.2). The herb route is teal
+-- (Config.pathColor), so the two lines stay distinct on a green map. The
+-- colour is passed to the draw, never read back from the herb profile.
+S.COLOR = { 0.78, 0.38, 0.16, 0.85 }
 S.WIDTH = 2
 
 local function recorder()

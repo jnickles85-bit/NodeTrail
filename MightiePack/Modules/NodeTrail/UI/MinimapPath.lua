@@ -431,13 +431,21 @@ local function toPixel(xDist, yDist, sample)
   return px, py
 end
 
-local function clipToMinimap(x1, y1, x2, y2, halfW, halfH)
-  local shape = "ROUND"
+local function minimapShape()
   if type(GetMinimapShape) == "function" then
     local ok, value = pcall(GetMinimapShape)
     if ok and type(value) == "string" then
-      shape = value
+      return value
     end
+  end
+  return "ROUND"
+end
+
+-- shape is the value sampleFor already stored, so a cached redraw and a
+-- fresh clip cannot disagree about ROUND vs everything else.
+local function clipToMinimap(x1, y1, x2, y2, halfW, halfH, shape)
+  if type(shape) ~= "string" then
+    shape = minimapShape()
   end
   if shape == "ROUND" then
     return ns.PathGeom.ClipCircle(x1, y1, x2, y2, math.min(halfW, halfH) * ROUND_INSET)
@@ -454,6 +462,21 @@ end
 --- use the same scale as the line it sits on top of — two projections of the
 --- same minimap that disagree by a few percent would put the arrow on the
 --- wrong bearing (t_d17939c1).
+local function decorClip(sample)
+  if type(sample) ~= "table" then
+    return nil
+  end
+  if (sample.shape or "ROUND") == "ROUND" then
+    return {
+      shape = "circle", x = 0, y = 0,
+      r = math.min(sample.halfW or 0, sample.halfH or 0) * ROUND_INSET,
+    }
+  end
+  local hw = (sample.halfW or 0) * SQUARE_INSET
+  local hh = (sample.halfH or 0) * SQUARE_INSET
+  return { shape = "rect", left = -hw, top = -hh, right = hw, bottom = hh }
+end
+
 function M:ViewRadiusYards()
   return viewRadiusYards()
 end
@@ -462,6 +485,12 @@ function M:ReleaseVisuals()
   if self.drawer then
     ns.LineDraw.Clear(self.drawer)
   end
+  if self.styleDrawer then
+    ns.LineDraw.Clear(self.styleDrawer)
+  end
+  self._projKey = nil
+  self._projSample = nil
+  self._projPoints = nil
   if self.host then
     pcall(self.host.Hide, self.host)
   end
@@ -476,6 +505,7 @@ end
 
 function M:Clear()
   self.path = nil
+  self.drawPath = nil
   self.points = nil
   self.mapID = nil
   self.useWorld = nil
@@ -510,7 +540,7 @@ function M:EnsureHost()
   if not ok or not host then
     return nil
   end
-  ns.LineDraw.BindOverlay(host, Minimap)
+  ns.LineDraw.BindOverlay(host, Minimap, true)
   self.host = host
   self.drawer = ns.LineDraw.Create()
   return host
@@ -529,7 +559,7 @@ function M:EnsureSkinHost()
   if not ok or not host then
     return nil
   end
-  ns.LineDraw.BindOverlay(host, Minimap)
+  ns.LineDraw.BindOverlay(host, Minimap, true)
   self.skinHost = host
   self.skinDrawer = ns.LineDraw.Create()
   return host
@@ -544,6 +574,16 @@ function M:ReleaseSkinVisuals(why)
       ns.LineDraw.Clear(self.skinDrawer)
     end
   end
+  if self.skinStyleDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.skinStyleDrawer, why)
+    else
+      ns.LineDraw.Clear(self.skinStyleDrawer)
+    end
+  end
+  self._skinProjKey = nil
+  self._skinProjSample = nil
+  self._skinProjPoints = nil
   if self.skinHost then
     pcall(self.skinHost.Hide, self.skinHost)
   end
@@ -615,8 +655,19 @@ local function indexRoute(route)
   return out
 end
 
+local function withDrawPath(route)
+  if not route or type(ns.PathGeom) ~= "table" or type(ns.PathGeom.BuildDrawPath) ~= "function" then
+    return route
+  end
+  local path = ns.PathGeom.BuildDrawPath(route)
+  if type(path) ~= "table" or #path < 2 then
+    return route
+  end
+  return { path = path, mapID = route.mapID, color = route.color, anchors = route.anchors }
+end
+
 function M:_indexPoints(route)
-  local r = indexRoute(route)
+  local r = indexRoute(withDrawPath(route))
   self.points = r.points
   self.useWorld = r.useWorld
   self._worldPoints = r.worldPoints
@@ -627,7 +678,7 @@ end
 --- The same indexing for the skinning circle, kept in its own fields so neither
 --- layer can overwrite the other's projection.
 function M:_indexSkinPoints(route)
-  local r = indexRoute(route)
+  local r = indexRoute(withDrawPath(route))
   self.skinPoints = r.points
   self.skinUseWorld = r.useWorld
   self._skinWorldPoints = r.worldPoints
@@ -638,7 +689,34 @@ end
 --- One projection sample for one route. The herb route calls it through
 --- `_sample` (which records the reason on self._sampleWhy); the skinning circle
 --- passes its own map/space so the two can be on different maps at once.
-local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
+local function clearSample(out)
+  out.mode = nil
+  out.px, out.py, out.pinst = nil, nil, nil
+  out.mx, out.my = nil, nil
+  out.zoneW, out.zoneH = nil, nil
+  out.radius, out.radiusUnit = nil, nil
+  out.sinF, out.cosF = nil, nil
+  out.halfW, out.halfH = nil, nil
+  out.shape = nil
+  out.r, out.g, out.b, out.a, out.width = nil, nil, nil, nil, nil
+  return out
+end
+
+local function scratchOf(self, field)
+  local t = self[field]
+  if type(t) ~= "table" then
+    t = {}
+    self[field] = t
+  end
+  return t
+end
+
+--- One projection sample for one route. The herb route calls it through
+--- `_sample` (which records the reason on self._sampleWhy); the skinning circle
+--- passes its own map/space so the two can be on different maps at once.
+--- `out` is a reused scratch table so a cache hit does not allocate.
+local function sampleFor(self, mapID, useWorld, zoneW, zoneH, out)
+  out = clearSample(out or {})
   local halfW, halfH = minimapHalf()
   if not halfW then
     return nil, "the minimap has no measurable size"
@@ -649,6 +727,7 @@ local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
   end
   local radiusYards = viewRadiusYards()
   local HBD = getHBD()
+  local shape = minimapShape()
 
   if useWorld and HBD and type(HBD.GetPlayerWorldPosition) == "function" and radiusYards then
     local ok, x, y, inst = pcall(HBD.GetPlayerWorldPosition, HBD)
@@ -658,15 +737,15 @@ local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
       -- with "the fraction the draw was built from", and in world mode that
       -- stamp read `frac=(absent,absent)` (review round 3).
       local mx, my = playerMapPosition(mapID, HBD)
-      return {
-        mode = "world",
-        px = x, py = y, pinst = inst,
-        mx = mx, my = my,
-        radius = radiusYards,
-        radiusUnit = "yards",
-        sinF = sinF, cosF = cosF,
-        halfW = halfW, halfH = halfH,
-      }, nil
+      out.mode = "world"
+      out.px, out.py, out.pinst = x, y, inst
+      out.mx, out.my = mx, my
+      out.radius = radiusYards
+      out.radiusUnit = "yards"
+      out.sinF, out.cosF = sinF, cosF
+      out.halfW, out.halfH = halfW, halfH
+      out.shape = shape
+      return out, nil
     end
   end
 
@@ -675,43 +754,93 @@ local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
     return nil, ("no player position on map %s"):format(tostring(mapID))
   end
   if zoneW and zoneH and radiusYards then
-    return {
-      mode = "zone",
-      mx = mx, my = my,
-      zoneW = zoneW, zoneH = zoneH,
-      radius = radiusYards,
-      radiusUnit = "yards",
-      sinF = sinF, cosF = cosF,
-      halfW = halfW, halfH = halfH,
-    }, nil
+    out.mode = "zone"
+    out.mx, out.my = mx, my
+    out.zoneW, out.zoneH = zoneW, zoneH
+    out.radius = radiusYards
+    out.radiusUnit = "yards"
+    out.sinF, out.cosF = sinF, cosF
+    out.halfW, out.halfH = halfW, halfH
+    out.shape = shape
+    return out, nil
   end
   local fraction = fallbackViewFraction()
-  return {
-    mode = "frac",
-    mx = mx, my = my,
-    radius = fraction,
-    radiusUnit = "map fractions (fallback: no yard radius for this zone)",
-    sinF = sinF, cosF = cosF,
-    halfW = halfW, halfH = halfH,
-  }, nil
+  out.mode = "frac"
+  out.mx, out.my = mx, my
+  out.radius = fraction
+  out.radiusUnit = "map fractions (fallback: no yard radius for this zone)"
+  out.sinF, out.cosF = sinF, cosF
+  out.halfW, out.halfH = halfW, halfH
+  out.shape = shape
+  return out, nil
 end
 
 function M:_sample()
-  local sample, why = sampleFor(self, self.mapID, self.useWorld, self.zoneW, self.zoneH)
+  local sample, why = sampleFor(self, self.mapID, self.useWorld, self.zoneW, self.zoneH,
+    scratchOf(self, "_sampleScratch"))
   self._sampleWhy = why
   return sample
 end
 
+local function sameNum(a, b)
+  a, b = tonumber(a), tonumber(b)
+  if a == nil or b == nil then
+    return a == nil and b == nil
+  end
+  return a == b
+end
+
+--- Compare the current sample (and the route table) to the one the last
+--- projection was built from. No key string is allocated.
+local function sameView(points, prevPoints, sample, prev)
+  if type(points) ~= "table" or points ~= prevPoints then
+    return false
+  end
+  if type(sample) ~= "table" or type(prev) ~= "table" then
+    return false
+  end
+  return sample.mode == prev.mode
+    and sample.shape == prev.shape
+    and sameNum(sample.radius, prev.radius)
+    and sameNum(sample.halfW, prev.halfW)
+    and sameNum(sample.halfH, prev.halfH)
+    and sameNum(sample.sinF, prev.sinF)
+    and sameNum(sample.cosF, prev.cosF)
+    and sameNum(sample.px or sample.mx, prev.px or prev.mx)
+    and sameNum(sample.py or sample.my, prev.py or prev.my)
+    and sameNum(sample.pinst, prev.pinst)
+    and sameNum(sample.zoneW, prev.zoneW)
+    and sameNum(sample.zoneH, prev.zoneH)
+    and sameNum(sample.r, prev.r)
+    and sameNum(sample.g, prev.g)
+    and sameNum(sample.b, prev.b)
+    and sameNum(sample.a, prev.a)
+    and sameNum(sample.width, prev.width)
+end
+
+-- After a miss, keep this tick's sample as the accepted view and recycle
+-- the previous accepted table as the next scratch so neither a hit nor a
+-- miss allocates a new sample table after the first pair is built.
+local function adoptSample(self, scratchField, acceptedField, scratch)
+  self[scratchField] = self[acceptedField]
+  self[acceptedField] = scratch
+  if type(self[scratchField]) ~= "table" then
+    self[scratchField] = {}
+  end
+end
+
 function M:_redraw()
-  self._lastQueued = 0
   self._why = nil
-  self._proj = nil
   if not self.points or #self.points < 2 then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "no route"
     self:ReleaseVisuals()
     return
   end
   if not ns.GetDB().showMinimap then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "showMinimap is off"
     self:ReleaseVisuals()
     return
@@ -719,6 +848,8 @@ function M:_redraw()
   if Minimap and type(Minimap.IsVisible) == "function" then
     local ok, visible = pcall(Minimap.IsVisible, Minimap)
     if ok and not visible then
+      self._lastQueued = 0
+      self._proj = nil
       self._why = "the minimap is hidden"
       self:ReleaseVisuals()
       return
@@ -727,17 +858,39 @@ function M:_redraw()
 
   local sample = self:_sample()
   if not sample or not sample.radius or sample.radius <= 0 then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "no projection: " .. tostring(self._sampleWhy or "the sample is unusable")
     self:ReleaseVisuals()
     return
   end
   local host = self:EnsureHost()
   if not host or not self.drawer then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "no overlay host (CreateFrame failed)"
     self:ReleaseVisuals()
     return
   end
+  local r, g, bCol, alpha, thickness = ns.LineDraw.ColorWidth()
+  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, alpha, thickness
+  if sameView(self.points, self._projPoints, sample, self._projSample) and self._proj then
+    -- Reuse the pixels, but keep the stamp's clock in step with this tick
+    -- so a still redraw is still dated.
+    local tnow = nowTime()
+    if type(self._stamp) == "table" then
+      self._stamp.time = tnow
+    end
+    if type(self.drawer) == "table" and type(self.drawer.lastApplied) == "table" then
+      self.drawer.lastApplied.time = tnow
+    end
+    return
+  end
+  adoptSample(self, "_sampleScratch", "_projSample", sample)
+  self._projPoints = self.points
 
+  self._lastQueued = 0
+  self._proj = nil
   local buf = self._segBuf or {}
   self._segBuf = buf
   local count = 0
@@ -776,7 +929,7 @@ function M:_redraw()
     local a, b = proj.points[i], proj.points[i + 1]
     local entry = { index = i }
     if a and b and a.x and b.x then
-      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
+      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH, sample.shape)
       local raw = math.sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
       if cx1 then
         count = count + 1
@@ -819,7 +972,6 @@ function M:_redraw()
     proj.segs[i] = entry
   end
 
-  local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
   -- Same treatment as the world map: the dot is a screen measurement, divided
   -- by whatever scale this host is drawn at, so both surfaces agree in px.
   local hostScale = 1
@@ -831,7 +983,13 @@ function M:_redraw()
   end
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._dotMetrics = metrics
-  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, alpha, "yup", metrics)
+  do
+    local dpts = self._decorPts or {}
+    self._decorPts = dpts
+    dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
+    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics, decorClip(sample))
+  end
   self._lastQueued = count
   self._proj = proj
 
@@ -988,10 +1146,10 @@ end
 --- the same dot machinery as the herb pass; its own drawer, host, colour and
 --- stamps, so neither layer can blank the other.
 function M:_redrawSkin()
-  self._skinQueued = 0
   self._skinWhy = nil
-  self._skinProj = nil
   if not self.skinPoints or #self.skinPoints < 2 then
+    self._skinQueued = 0
+    self._skinProj = nil
     self._skinWhy = "no skinning circle"
     self:ReleaseSkinVisuals()
     return
@@ -1010,7 +1168,8 @@ function M:_redrawSkin()
     end
   end
 
-  local sample, why = sampleFor(self, self.skinMapID, self.skinUseWorld, self.skinZoneW, self.skinZoneH)
+  local sample, why = sampleFor(self, self.skinMapID, self.skinUseWorld, self.skinZoneW, self.skinZoneH,
+    scratchOf(self, "_skinSampleScratch"))
   if not sample or not sample.radius or sample.radius <= 0 then
     self._skinWhy = "no projection: " .. tostring(why or "the sample is unusable")
     self:ReleaseSkinVisuals(self._skinWhy)
@@ -1022,7 +1181,27 @@ function M:_redrawSkin()
     self:ReleaseSkinVisuals(self._skinWhy)
     return
   end
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.78, 0.38, 0.16, 0.85 }
+  local r = tonumber(c[1]) or 0.78
+  local g = tonumber(c[2]) or 0.38
+  local bCol = tonumber(c[3]) or 0.16
+  local alpha = tonumber(c[4]) or 0.85
+  local thickness = tonumber((self.skinRoute and self.skinRoute.width)
+    or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
+  if thickness <= 0 then thickness = 2 end
+  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, alpha, thickness
+  if sameView(self.skinPoints, self._skinProjPoints, sample, self._skinProjSample) and self._skinProj then
+    local tnow = nowTime()
+    if type(self.skinDrawer) == "table" and type(self.skinDrawer.lastApplied) == "table" then
+      self.skinDrawer.lastApplied.time = tnow
+    end
+    return
+  end
+  adoptSample(self, "_skinSampleScratch", "_skinProjSample", sample)
+  self._skinProjPoints = self.skinPoints
 
+  self._skinQueued = 0
+  self._skinProj = nil
   local buf = self._skinBuf or {}
   self._skinBuf = buf
   local count = 0
@@ -1047,7 +1226,7 @@ function M:_redrawSkin()
     local a, b = proj.points[i], proj.points[i + 1]
     local entry = { index = i }
     if a and b and a.x and b.x then
-      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
+      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH, sample.shape)
       if cx1 then
         count = count + 1
         local seg = buf[count]
@@ -1062,14 +1241,6 @@ function M:_redrawSkin()
     proj.segs[i] = entry
   end
 
-  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.1, 0.85, 0.35, 0.95 }
-  local r = tonumber(c[1]) or 0.1
-  local g = tonumber(c[2]) or 0.85
-  local bCol = tonumber(c[3]) or 0.35
-  local a = tonumber(c[4]) or 0.95
-  local thickness = tonumber((self.skinRoute and self.skinRoute.width)
-    or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
-  if thickness <= 0 then thickness = 2 end
   local hostScale = 1
   if host and type(host.GetScale) == "function" then
     local okS, s = pcall(host.GetScale, host)
@@ -1079,7 +1250,13 @@ function M:_redrawSkin()
   end
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._skinDotMetrics = metrics
-  ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, alpha, "yup", metrics)
+  do
+    local dpts = self._skinDecorPts or {}
+    self._skinDecorPts = dpts
+    dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
+    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics, decorClip(sample))
+  end
   self._skinQueued = count
   self._skinProj = proj
   self._skinSample = sample

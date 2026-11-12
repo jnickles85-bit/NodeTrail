@@ -309,6 +309,7 @@ local function boot(ceiling)
 
   local ns = pkg.NodeTrail
   ns.Enable()
+  ns.GetDB().pathColor = { 1, 1, 1, 0.9 }
   local ctx = {
     ns = ns,
     M = ns.MapOverlay,
@@ -534,8 +535,9 @@ local short = { mapID = 1413, path = { { x = ROUTE[1].x, y = ROUTE[1].y },
   { x = ROUTE[2].x, y = ROUTE[2].y }, { x = ROUTE[3].x, y = ROUTE[3].y } } }
 F.M:SetRoute(short)
 local shortApplied = (F.M.drawer or {}).lastApplied or {}
-check(F.M._lastQueued == 2,
-  "F: the second draw queues the shorter buffer (queued=" .. tostring(F.M._lastQueued) .. ")")
+check(F.M._lastQueued >= 2 and F.M._lastQueued < (full.count or 16),
+  "F: the second draw queues the shorter buffer (queued=" .. tostring(F.M._lastQueued)
+    .. " full=" .. tostring(full.count) .. ")")
 check((shortApplied.hideFromIndex or 0) > 0,
   "F: the shorter draw records where it started hiding (hideFrom="
     .. tostring(shortApplied.hideFromIndex) .. ")")
@@ -551,10 +553,12 @@ check(type(shortApplied.paintedDots) == "number" and visible == shortApplied.pai
 local fDiag = F.diag()
 local drawsLine = lineStartingWith(fDiag, "draws:")
 check(drawsLine ~= nil, "F: /nt mapdiag prints the draw history (got " .. tostring(drawsLine) .. ")")
-check(drawsLine and drawsLine:find("count=16", 1, true) ~= nil,
-  "F: the history keeps the earlier 16-segment pass (" .. tostring(drawsLine) .. ")")
-check(drawsLine and drawsLine:find("count=2", 1, true) ~= nil,
-  "F: the history shows the later 2-segment pass (" .. tostring(drawsLine) .. ")")
+check(drawsLine and type(full.count) == "number"
+    and drawsLine:find("count=" .. tostring(full.count), 1, true) ~= nil,
+  "F: the history keeps the earlier full pass (" .. tostring(drawsLine) .. ")")
+check(drawsLine and type(F.M._lastQueued) == "number"
+    and drawsLine:find("count=" .. tostring(F.M._lastQueued), 1, true) ~= nil,
+  "F: the history shows the later shorter pass (" .. tostring(drawsLine) .. ")")
 
 -- ═══ G. a retry the client cannot fit is never painted ══════════════════════
 -- The 40-region client cannot hold the 32-dot floor of this route. Painting a
@@ -594,7 +598,7 @@ do
   check((narrow.missingDots or 0) > 0,
     "H: the narrow client reports the shortfall first (missing=" .. tostring(narrow.missingDots) .. ")")
   check(type(narrow.capacity) == "number", "H: the ceiling is recorded (capacity=" .. tostring(narrow.capacity) .. ")")
-  H.setCeiling(400)
+  H.setCeiling(1000)
   H.M:SetRoute(route("H2"))
   local wide = (H.M.drawer or {}).lastApplied or {}
   check(wide.paintedDots == wide.plannedDots,
@@ -607,7 +611,7 @@ do
   check(wide.capacity == nil and wide.capacityStale == true,
     "H: the stale ceiling is cleared and the diag says so (capacity=" .. tostring(wide.capacity)
       .. " stale=" .. tostring(wide.capacityStale) .. ")")
-  check(H.created() <= 400, "H: the wider plan still respects the new ceiling (asked=" .. H.created() .. ")")
+  check(H.created() <= 1000, "H: the wider plan still respects the new ceiling (asked=" .. H.created() .. ")")
 end
 
 -- ═══ I. the middle-dot diag prints MEASURED size next to the planned size ══
@@ -643,7 +647,7 @@ end
 -- edge sat above the bottom edge, so the height was 0. That reading sent three
 -- rounds of work after a geometry bug that was only in the probe.
 do
-  local K = boot(400)
+  local K = boot(1000)
   K.M:SetRoute(route("K"))
   local probeTex = K.M:_probeTexture(K.M.host)
   check(probeTex ~= nil, "K: the probe texture is created on the host")
@@ -673,8 +677,8 @@ do
   L.M:SetRoute(route("L"))
   local a = (L.M.drawer or {}).lastApplied or {}
   near(a.dotScale, CANVAS_SCALE, "L: the canvas scale is the live one", 0.001)
-  check(a.plannedDots == 76,
-    "L: the 17-point route plans 76 dots at a 4 screen px core on a 6 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
+  check(a.plannedDots == 236,
+    "L: the 17-point route plans 236 dots at a 4 screen px core on a 1.6 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
   check(a.paintedDots == a.plannedDots,
     "L: every planned dot is painted (painted=" .. tostring(a.paintedDots) .. " planned="
       .. tostring(a.plannedDots) .. ")")

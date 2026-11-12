@@ -234,6 +234,7 @@ local ns = pkg.NodeTrail
 local LD = ns.LineDraw
 local M = ns.MapOverlay
 ns.Enable()
+ns.GetDB().pathColor = { 1, 1, 1, 0.9 }
 
 local function lines()
   return table.concat(chat, "\n")
@@ -277,8 +278,8 @@ else
       .. " vs " .. tostring(m.size) .. ")")
   near(m.screenOutline - m.screenSize, 2,
     "A: the outline adds 2 screen px (a 1px rim on each side)", 1e-9)
-  near(m.screenSpacing, m.screenSize + 2,
-    "A: dots are spaced by the RIM width (core + 1px each side), so no rim reaches a core", METRIC_TOL)
+  near(m.screenSpacing, m.screenSize * 0.4,
+    "A: cores overlap by more than half their width so a diagonal of squares blends", METRIC_TOL)
 
   -- The floor holds on any surface: a zoomed-in canvas (scale > 1) still gets 4
   -- screen px, which means a SMALLER canvas dot.
@@ -289,7 +290,7 @@ else
   -- A pathWidth above the floor is honoured in screen px, not overridden.
   local wide = LD.DotMetrics(8, 1)
   near(wide.size, 8, "A: a wide stroke is not shrunk to the floor", 1e-9)
-  near(wide.screenSpacing, 10, "A: a wide stroke spaces by its rim width (8 + 2)", 1e-9)
+  near(wide.screenSpacing, 8 * 0.4, "A: a wide 8px stroke spaces at 40% of the core (heavy overlap)", 1e-9)
 
   -- Unusable scales degrade to 1 (and never divide by zero).
   near(LD.DotMetrics(2, nil).size, 4, "A: no scale reads as 1", 1e-9)
