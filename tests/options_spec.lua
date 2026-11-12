@@ -595,14 +595,11 @@ local lineNoReag = fsText(panelFsStatus)
 check(lineNoReag == "last scan found no reagents",
   "panel state: 'last scan found no reagents' (got " .. tostring(lineNoReag) .. ")")
 local errLine = fsText(panelFsError)
-check(type(errLine) == "string" and errLine:sub(1, 12) == "last error: ",
-  "panel error line present (got " .. tostring(errLine) .. ")")
-check(type(errLine) == "string" and errLine:find("schematic surface mismatch", 1, true) ~= nil,
-  "panel error line carries the real _diag error string")
-if type(errLine) == "string" then
-  check(#errLine < #bigErr, "panel error line is truncated (panel=" .. #errLine .. " raw=" .. #bigErr .. ")")
-  check(errLine:find("...", 1, true) ~= nil, "truncation marked with '...'")
-end
+check(errLine == "Alchemy scan isn't available on this client yet",
+  "panel error line is plain language (got " .. tostring(errLine) .. ")")
+local rawErr = Rec.LastError and Rec:LastError()
+check(type(rawErr) == "string" and rawErr:find("schematic surface mismatch", 1, true) ~= nil,
+  "LastError() still carries the real _diag error string for /nt recipediag")
 check(panelFsError and panelFsError.shown == true, "error line is visible")
 
 if type(savedClick) == "function" then

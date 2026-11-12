@@ -10,3 +10,6 @@ dist/
 *~
 .DS_Store
 Thumbs.db
+
+# Python bytecode from running tools/sync_touchstone.py locally
+__pycache__/

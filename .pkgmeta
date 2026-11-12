@@ -20,7 +20,7 @@ ignore:
   - .gitignore
   - .luacheckrc
   - .pkgmeta
-  - HANDOFF.md
+  - docs
   - README.md
   - evidence
   - spec

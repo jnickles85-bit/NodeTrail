@@ -830,7 +830,10 @@ local function syncRecipesBlock()
     end
   end
   if err then
-    recError:SetText("last error: " .. err)
+    -- The technical string stays on LastError() / /nt recipediag / the Scan-now
+    -- chat line. The options panel is a player-facing surface, so it gets a
+    -- plain sentence rather than a probe dump.
+    recError:SetText("Alchemy scan isn't available on this client yet")
     recError:Show()
   else
     recError:SetText("")

@@ -250,6 +250,16 @@ check(ok, "(h) back to the C_AddOns-only shape: no error")
 check(st:find("version 0.3.0", 1, true) ~= nil,
   "(h) the same loaded package reads C_AddOns again (no cached provider)")
 
+-- pkg.PackVersion tracks the TOC at call time (no stale "0.3.0" constant).
+check(type(pkg.PackVersion) == "function", "pkg.PackVersion exists")
+check(pkg.PackVersion() == "0.3.0", "PackVersion follows the current C_AddOns stub")
+check(pkg.version == nil, "the hardcoded pkg.version assignment is gone")
+local savedC = C_AddOns
+C_AddOns = nil
+GetAddOnMetadata = nil
+check(pkg.PackVersion() == nil, "PackVersion is nil-safe when no provider exists")
+C_AddOns = savedC
+
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
   os.exit(1)

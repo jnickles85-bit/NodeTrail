@@ -2,7 +2,6 @@ local addonName, pkg = ...
 
 MightiePack = pkg
 pkg.addonName = addonName
-pkg.version = "0.3.0"
 
 function pkg.Print(msg)
   DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99MightiePack|r: " .. tostring(msg or ""))
@@ -32,6 +31,21 @@ function pkg.GetAddOnMeta(addon, field)
     if ok and type(val) == "string" and val ~= "" then
       return val
     end
+  end
+  return nil
+end
+
+-- Pack version from the TOC (C_AddOns.GetAddOnMetadata, then the legacy
+-- GetAddOnMetadata). Nil-safe: a missing provider or empty/token value
+-- returns nil rather than a stale hardcoded string. /mp status already
+-- uses this path; the Touchstone window header does too.
+function pkg.PackVersion()
+  if type(pkg.GetAddOnMeta) ~= "function" then
+    return nil
+  end
+  local ok, val = pcall(pkg.GetAddOnMeta, pkg.addonName or "MightiePack", "Version")
+  if ok and type(val) == "string" and val ~= "" then
+    return val
   end
   return nil
 end

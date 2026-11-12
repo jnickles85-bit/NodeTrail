@@ -354,7 +354,24 @@ local function createMainFrame()
   -- B12 (card t_4412b04b): this used to read "Classic Hardcore · v…", which named
   -- a product scope the addon never had (it is not Hardcore-only). The ruling
   -- makes the scope plain: in-game Classic-era gear advice.
-  subtitle:SetText("Classic-era item advisor  ·  v" .. SF.VERSION)
+  -- Pack audit: the header showed Touchstone's upstream module version (SF.VERSION,
+  -- e.g. 0.8.3) while the pack was 0.3.x. Show the pack TOC version here; the
+  -- module version stays on the Settings About line and in diagnostics.
+  local packVer
+  do
+    local pkg = rawget(_G, "MightiePack")
+    if type(pkg) == "table" and type(pkg.PackVersion) == "function" then
+      local ok, v = pcall(pkg.PackVersion)
+      if ok and type(v) == "string" and v ~= "" then
+        packVer = v
+      end
+    end
+  end
+  if packVer then
+    subtitle:SetText("Classic-era item advisor  ·  v" .. packVer)
+  else
+    subtitle:SetText("Classic-era item advisor")
+  end
   subtitle:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
 
   local close = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")

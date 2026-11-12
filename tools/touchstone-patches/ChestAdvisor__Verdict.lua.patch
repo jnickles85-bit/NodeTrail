@@ -1,0 +1,2014 @@
+--- a/ChestAdvisor/Verdict.lua
++++ b/ChestAdvisor/Verdict.lua
+@@ -620,6 +620,42 @@
+ 	["Hit"]            = true,
+ 	["Crit"]           = true,
+ 	["FeralAttackPower"] = true,
++	-- Upcoming sourced packs will price these keys (Hit/Crit rating,
++	-- Defense, weapon DPS, and the usual companion combat stats). They
++	-- are KNOWN so a tooltip line that names them is accumulated rather
++	-- than suppressed. Whether a profile PRICES a word is still the
++	-- weight table's answer; an unpriced known word is a zero, not a
++	-- guess.
++	["Defense"]          = true,
++	["Dodge"]            = true,
++	["Parry"]            = true,
++	["AttackPower"]      = true,
++	["RangedAttackPower"] = true,
++	["WeaponDps"]        = true,
++	["MP5"]              = true,
++	["HP5"]              = true,
++	-- ForeverDB leveling packs also price these words (haste / expertise /
++	-- block chance / bonus armor / healing and school spell power / wand DPS).
++	-- They are KNOWN so a tooltip line that names them is accumulated rather
++	-- than suppressed. A pack that does not price a word still treats it as
++	-- zero, not a guess.
++	["Haste"]            = true,
++	["Expertise"]        = true,
++	["ExpertiseRating"]  = true,
++	["BlockChance"]      = true,
++	["BonusArmor"]       = true,
++	["HealingPower"]     = true,
++	["SpellDamage"]      = true,
++	["HolyDamage"]       = true,
++	["FireDamage"]       = true,
++	["FrostDamage"]      = true,
++	["ShadowDamage"]     = true,
++	["NatureDamage"]     = true,
++	["ArcaneDamage"]     = true,
++	["SpellPenetration"] = true,
++	["WandDps"]          = true,
++	["WeaponSkill"]      = true,
++	["WeaponSpeed"]      = true,
+ }
+ 
+ -- ---- Defect 2 (card t_548f0341): the client's own stat read -----------------
+@@ -734,6 +770,23 @@
+ 	-- ITEM_MOD_DAMAGE_PER_SECOND_SHORT): the packs price it as weaponDps, and
+ 	-- where they do, the table prices it as WDN.
+ 	ITEM_MOD_DAMAGE_PER_SECOND   = "WeaponDps",
++	ITEM_MOD_HASTE_RATING        = "Haste",
++	ITEM_MOD_HASTE_MELEE_RATING  = "Haste",
++	ITEM_MOD_HASTE_RANGED_RATING = "Haste",
++	ITEM_MOD_HASTE_SPELL_RATING  = "Haste",
++	ITEM_MOD_EXPERTISE_RATING    = "ExpertiseRating",
++	ITEM_MOD_BLOCK_RATING        = "BlockChance",
++	ITEM_MOD_SPELL_PENETRATION   = "SpellPenetration",
++	ITEM_MOD_SPELL_HEALING_DONE  = "HealingPower",
++	ITEM_MOD_SPELL_DAMAGE_DONE   = "SpellDamage",
++	ITEM_MOD_HOLY_POWER          = "HolyDamage",
++	ITEM_MOD_FIRE_POWER          = "FireDamage",
++	ITEM_MOD_FROST_POWER         = "FrostDamage",
++	ITEM_MOD_SHADOW_POWER        = "ShadowDamage",
++	ITEM_MOD_NATURE_POWER        = "NatureDamage",
++	ITEM_MOD_ARCANE_POWER        = "ArcaneDamage",
++	ITEM_MOD_BONUS_ARMOR         = "BonusArmor",
++	ITEM_MOD_EXTRA_ARMOR         = "BonusArmor",
+ }
+ 
+ -- May the client's own stat read EXPLAIN this tooltip line?
+@@ -1136,16 +1189,30 @@
+ -- still fires (AC-5).
+ Verdict.HIT_RATING_PER_PERCENT  = 10
+ Verdict.CRIT_RATING_PER_PERCENT = 14
++-- Forever 1.60.1 build 70862 combatratings.txt (same scale ForeverDB uses):
++Verdict.HASTE_RATING_PER_PERCENT      = 10
++-- Expertise has no sourced rating-per-percent on Forever (combatratings.txt
++-- has no expertise entry). Percent tooltip text is stored as a percent and
++-- compared directly to Wowhead's 6.5% / 14% caps. A rating-only line is
++-- accumulated as ExpertiseRating and cannot be clamped.
++Verdict.DODGE_RATING_PER_PERCENT      = 12
++Verdict.PARRY_RATING_PER_PERCENT      = 15
++Verdict.BLOCK_CHANCE_RATING_PER_PERCENT = 5
+ 
+ -- WORD -> rating points per 1% of that word. A tooltip PERCENT times its entry
+ -- is the RATING count the client's own read returns for the same stat. The
+--- whole table: a word absent from it carries no factor. Only Dodge and Parry
+--- are absent, deliberately (nobody has measured their scale — see the note
+--- above them); the four hit/crit sentences all lift through Hit and Crit here.
+--- Read by ratingFromPercent ONLY.
++-- whole table: a word absent from it carries no factor. Hit, crit, haste,
++-- dodge, parry and block chance all lift here so a "by 1%" sentence and a
++-- "+N Rating" line land on the same raw-rating unit the packs price.
++-- Expertise is absent: there is no sourced factor, so a percent sentence
++-- stays a percent. Read by ratingFromPercent ONLY.
+ Verdict.PERCENT_TO_RATING = {
+-	Hit  = Verdict.HIT_RATING_PER_PERCENT,
+-	Crit = Verdict.CRIT_RATING_PER_PERCENT,
++	Hit         = Verdict.HIT_RATING_PER_PERCENT,
++	Crit        = Verdict.CRIT_RATING_PER_PERCENT,
++	Haste       = Verdict.HASTE_RATING_PER_PERCENT,
++	Dodge       = Verdict.DODGE_RATING_PER_PERCENT,
++	Parry       = Verdict.PARRY_RATING_PER_PERCENT,
++	BlockChance = Verdict.BLOCK_CHANCE_RATING_PER_PERCENT,
+ }
+ 
+ -- THE conversion: a tooltip's percent -> the rating unit of record. ONE
+@@ -1365,11 +1432,94 @@
+ 	-- A chest's bare armor line ("12 Armor") lands here too and reads as
+ 	-- the known stat Armor — inert in practice, since no order in ORDERS
+ 	-- consumes Armor, and never a suppression trigger.
++	local function skillNoun(w)
++		if type(w) ~= "string" then return nil end
++		local r = w:lower():gsub("%s+$", ""):gsub("%.$", "")
++		if r == "swords" or r == "axes" or r == "maces" or r == "daggers"
++			or r == "polearms" or r == "staves" or r == "bows" or r == "guns"
++			or r == "crossbows" or r == "thrown" or r == "wands" or r == "unarmed"
++			or r == "skill" then
++			return "WeaponSkill"
++		end
++		return nil
++	end
+ 	local num, word = trimmed:match("^%s*[%+%-%s]*(%d+)%s+(%a+)$")
+ 	if num and word then
+-		return tonumber(num), word
++		-- "+N Expertise" is a short rating line (same family as
++		-- "+N Hit"), not a percent. ratingWordOf below also maps
++		-- the multi-word form; this single-word matcher would
++		-- otherwise keep the raw word "Expertise".
++		local mapped = skillNoun(word)
++		if not mapped and word:lower() == "expertise" then
++			mapped = "ExpertiseRating"
++		end
++		return tonumber(num), (mapped or word)
++	end
++	-- Multi-word rating and weapon-DPS lines the single-word "+N Word"
++	-- matcher cannot see. A number already printed in RATING units is
++	-- returned as-is — ratingFromPercent is only for the percent
++	-- sentences below (14 crit rating = 1%, 10 hit rating = 1%).
++	local function ratingWordOf(rest)
++		if type(rest) ~= "string" then return nil end
++		rest = rest:lower():gsub("%s+$", ""):gsub("%.$", "")
++		if rest == "hit rating" or rest == "hit" then return "Hit" end
++		if rest == "crit rating" or rest == "critical strike rating"
++			or rest == "critical rating" or rest == "crit" then
++			return "Crit"
++		end
++		if rest == "defense rating" or rest == "defence rating"
++			or rest == "defense" or rest == "defence" then
++			return "Defense"
++		end
++		if rest == "dodge rating" or rest == "dodge" then return "Dodge" end
++		if rest == "parry rating" or rest == "parry" then return "Parry" end
++		if rest == "attack power" then return "AttackPower" end
++		if rest == "ranged attack power" then return "RangedAttackPower" end
++		if rest == "haste rating" or rest == "haste" then return "Haste" end
++		if rest == "expertise rating" then return "ExpertiseRating" end
++		if rest == "expertise" then return "ExpertiseRating" end
++		if rest == "block rating" or rest == "block chance rating"
++			or rest == "block chance" then
++			return "BlockChance"
++		end
++		if rest == "bonus armor" then return "BonusArmor" end
++		if rest == "spell power" or rest == "spellpower" then return "SpellPower" end
++		if rest == "spell damage" or rest == "spell dmg" then return "SpellDamage" end
++		if rest == "healing power" or rest == "healing" then return "HealingPower" end
++		if rest == "spell penetration" then return "SpellPenetration" end
++		if rest == "holy spell damage" or rest == "holy damage" then return "HolyDamage" end
++		if rest == "fire spell damage" or rest == "fire damage" then return "FireDamage" end
++		if rest == "frost spell damage" or rest == "frost damage" then return "FrostDamage" end
++		if rest == "shadow spell damage" or rest == "shadow damage" then return "ShadowDamage" end
++		if rest == "nature spell damage" or rest == "nature damage" then return "NatureDamage" end
++		if rest == "arcane spell damage" or rest == "arcane damage" then return "ArcaneDamage" end
++		if rest == "weapon skill" or rest == "weapon skill rating" then
++			return "WeaponSkill"
++		end
++		if rest:match("%f[%a]skill%f[%A]") or rest == "swords" or rest == "axes"
++			or rest == "maces" or rest == "daggers" or rest == "polearms"
++			or rest == "staves" or rest == "fist weapons" or rest == "bows"
++			or rest == "guns" or rest == "crossbows" or rest == "thrown"
++			or rest == "wands" or rest == "unarmed"
++			or rest:match("^two[%-%s]handed%s+%a+") then
++			return "WeaponSkill"
++		end
++		return nil
++	end
++	local rnum, rrest = trimmed:match("^%s*[%+%-%s]*(%d+%.?%d*)%s+(.+)$")
++	if rnum and rrest then
++		local rw = ratingWordOf(rrest)
++		if rw then return tonumber(rnum), rw end
++	end
++	-- Multi-word "Equip: +N Hit Rating" first (a trailing word would
++	-- otherwise be captured as the proc form "Equip:Hit").
++	local epnum, eprest = trimmed:match("^%s*Equip:%s*%+%s*(%d+%.?%d*)%s+(.+)$")
++	if epnum and eprest then
++		local ew = ratingWordOf(eprest)
++		if ew then return tonumber(epnum), ew end
+ 	end
+-	-- proc line:  "Equip: +X Foo"
++	-- proc line:  "Equip: +X Foo" (original shape, no end-anchor — a
++	-- trailing period is still a Strength/etc. proc, not a suppression).
+ 	local pnum, pword = trimmed:match("^%s*Equip:%s*%+%s*(%d+)%s+(%a+)")
+ 	if pnum and pword then
+ 		return nil, "Equip:" .. pword
+@@ -1377,6 +1527,22 @@
+ 	-- "Adds X" style lines, if the client ever uses them here.
+ 	local an, aw = trimmed:match("^%s*Adds%s*(%d+)%s+(%a+)")
+ 	if an and aw then return tonumber(an), aw end
++	-- Weapon DPS: "(12.5 damage per second)" or "12.5 Damage Per Second".
++	local dps = plain:match("%((%d+%.?%d*)%s+damage per second%)")
++		or plain:match("^(%d+%.?%d*)%s+damage per second%.?$")
++	if dps then return tonumber(dps), "WeaponDps" end
++	local spd = plain:match("^speed%s*:?%s*(%d+%.?%d*)$")
++		or plain:match("^(%d+%.?%d*)%s+speed$")
++	if spd then
++		local v = tonumber(spd)
++		-- Parse disambiguator, not a scoring weight: Classic weapon
++		-- tooltips print speeds in about 1.00–4.00. Values outside
++		-- 0.5–10 are not weapon speeds (a level, a sell price, etc.).
++		if v and v >= 0.5 and v <= 10 then return v, "WeaponSpeed" end
++	end
++	local skillPlain = plain:gsub("^equip:%s*", ""):gsub("%s*%.$", "")
++	local skn = skillPlain:match("^increases your skill with [%a%-%s]+ by (%d+)$")
++	if skn then return tonumber(skn), "WeaponSkill" end
+ 	-- ── card t_3cdbb70a (DD-1): the HIT and CRIT sentences ────────────────
+ 	-- The client prints these four phrasings, and until this card NOT ONE of
+ 	-- them was placeable: they carry a number, so they suppressed the item
+@@ -1459,6 +1625,62 @@
+ 	if meleehitp then return Verdict.ratingFromPercent("Hit", tonumber(meleehitp)), "Hit" end
+ 	local meleecritp = stat_sentence:match("^improves your chance to get a critical strike by (%d+%.?%d*)%%$")
+ 	if meleecritp then return Verdict.ratingFromPercent("Crit", tonumber(meleecritp)), "Crit" end
++	-- Rating-unit sentences (already a rating, not a percent — do not lift).
++	local defn = stat_sentence:match("^increases your defense rating by (%d+%.?%d*)$")
++		or stat_sentence:match("^increases defense rating by (%d+%.?%d*)$")
++	if defn then return tonumber(defn), "Defense" end
++	local hitr = stat_sentence:match("^increases your hit rating by (%d+%.?%d*)$")
++		or stat_sentence:match("^improves your hit rating by (%d+%.?%d*)$")
++	if hitr then return tonumber(hitr), "Hit" end
++	-- Lua 5.1 has no alternation groups of unequal length; spell both forms out.
++	local critr = stat_sentence:match("^increases your critical strike rating by (%d+%.?%d*)$")
++		or stat_sentence:match("^increases your crit rating by (%d+%.?%d*)$")
++	if critr then return tonumber(critr), "Crit" end
++	local haster = stat_sentence:match("^increases your haste rating by (%d+%.?%d*)$")
++		or stat_sentence:match("^improves your haste rating by (%d+%.?%d*)$")
++	if haster then return tonumber(haster), "Haste" end
++	local expr = stat_sentence:match("^increases your expertise rating by (%d+%.?%d*)$")
++		or stat_sentence:match("^improves your expertise rating by (%d+%.?%d*)$")
++	if expr then return tonumber(expr), "ExpertiseRating" end
++	-- Forever Expertise tooltip text, observed on real items (e.g.
++	-- Warden's Signet of Vigilance): "Equip: Reduces the chance for
++	-- your attacks to be dodged or parried by 1.0%." The same idea
++	-- appears as "Reduces chance to be Dodged or Parried by 1.0%" and
++	-- on tank set bonuses as "Reduces the chance for your melee
++	-- attacks to be Dodged or Parried by 1.2%." Store the percent
++	-- directly (no invented rating factor) so it can be compared to
++	-- Wowhead's 6.5% / 14% caps. The short "+N Expertise" line is a
++	-- rating (like "+N Hit") and is handled above as ExpertiseRating.
++	local expp = stat_sentence:match("^reduces the chance for your attacks to be dodged or parried by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^reduces the chance for your melee attacks to be dodged or parried by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^reduces chance to be dodged or parried by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^increases your expertise by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^improves your expertise by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^increases expertise by (%d+%.?%d*)%%$")
++	if expp then return tonumber(expp), "Expertise" end
++	local dodger = stat_sentence:match("^increases your dodge rating by (%d+%.?%d*)$")
++	if dodger then return tonumber(dodger), "Dodge" end
++	local parryr = stat_sentence:match("^increases your parry rating by (%d+%.?%d*)$")
++	if parryr then return tonumber(parryr), "Parry" end
++	local blockr = stat_sentence:match("^increases your shield block rating by (%d+%.?%d*)$")
++		or stat_sentence:match("^increases your block rating by (%d+%.?%d*)$")
++	if blockr then return tonumber(blockr), "BlockChance" end
++	-- Percent sentences for the remaining combat ratings, lifted through
++	-- ratingFromPercent (dodge 12, parry 15, block chance 5, haste 10).
++	-- Expertise percent is handled above and is NOT lifted.
++	local dodgep = stat_sentence:match("^increases your chance to dodge by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^improves your chance to dodge by (%d+%.?%d*)%%$")
++	if dodgep then return Verdict.ratingFromPercent("Dodge", tonumber(dodgep)), "Dodge" end
++	local parryp = stat_sentence:match("^increases your chance to parry by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^improves your chance to parry an attack by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^increases your chance to parry an attack by (%d+%.?%d*)%%$")
++	if parryp then return Verdict.ratingFromPercent("Parry", tonumber(parryp)), "Parry" end
++	local blockp = stat_sentence:match("^increases your chance to block attacks with a shield by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^increases your chance to block by (%d+%.?%d*)%%$")
++	if blockp then return Verdict.ratingFromPercent("BlockChance", tonumber(blockp)), "BlockChance" end
++	local hastep = stat_sentence:match("^increases your haste by (%d+%.?%d*)%%$")
++		or stat_sentence:match("^improves your haste by (%d+%.?%d*)%%$")
++	if hastep then return Verdict.ratingFromPercent("Haste", tonumber(hastep)), "Haste" end
+ 	-- Structural tooltip chrome (gate C1). Case-insensitive, anchored.
+ 	-- Matched against `plain` (color/|r stripped) so a colored stat line
+ 	-- (e.g. "|cff9d9d9d+12 agility|r") still classifies as a stat below,
+@@ -1693,22 +1915,37 @@
+ 	-- suppress the whole item ("cannot classify: Equip: Increases damage and
+ 	-- healing..."). The number is read from the sentence itself.
+ 	--
+-	-- Healing-only ("Increases healing done by spells...") and school-specific
+-	-- ("Increases damage done by Fire spells...") are NOT this stat. They stay
+-	-- unparsed on purpose: there is no Healing or FireSpellPower word to put
+-	-- them in, and folding them into generic SpellPower would lie.
+-	-- SpellPower is a known word so the line no longer suppresses. It is not
+-	-- in any class ORDER (see the playtest note on Verdict.ORDERS), so an
+-	-- ORDINAL verdict is unchanged by it: a melee character is judged on the
+-	-- item's other stats, and a caster is still judged on the documented
+-	-- int/spi/sta order, and a pair whose only difference is spell power
+-	-- stays level on the relevance set. What the owner's later ruling added
+-	-- (card t_b7cd07e1, "Spell power gets a weight from the packs") is a
+-	-- WEIGHT: this word now enters the weighted sum of an ordinal trade-off
+-	-- as the SPOW word of WEIGHT_KEYS below, priced from the pack the table
+-	-- cites (see the SPELL POWER note in Weights.lua).
++	-- Healing-only, school-specific, and damage-only (no healing) spell
++	-- sentences are THEIR OWN words. Folding them into generic SpellPower
++	-- would lie: a Ret pack prices HolyDamage separately from SpellPower,
++	-- and a Shadow pack prices ShadowDamage at the top of the table.
++	-- Each sentence is matched on `stat_sentence` (equip: prefix and the
++	-- trailing period already stripped).
++	local healn = stat_sentence:match(
++		"^increases healing done by spells and effects by up to (%d+)$")
++	if healn then return tonumber(healn), "HealingPower" end
++	local sdn = stat_sentence:match(
++		"^increases damage done by magical spells and effects by up to (%d+)$")
++	if sdn then return tonumber(sdn), "SpellDamage" end
++	local schoolWord = {
++		holy = "HolyDamage", fire = "FireDamage", frost = "FrostDamage",
++		shadow = "ShadowDamage", nature = "NatureDamage", arcane = "ArcaneDamage",
++	}
++	for sch, sword in pairs(schoolWord) do
++		local n = stat_sentence:match(
++			"^increases damage done by " .. sch .. " spells and effects by up to (%d+)$")
++		if n then return tonumber(n), sword end
++	end
++	local spenn = stat_sentence:match("^increases your spell penetration by (%d+)$")
++		or stat_sentence:match("^increases spell penetration by (%d+)$")
++	if spenn then return tonumber(spenn), "SpellPenetration" end
++	local bval = stat_sentence:match("^increases the block value of your shield by (%d+)$")
++	if bval then return tonumber(bval), "Block" end
++	-- Classic generic spell power (damage AND healing).
+ 	local spn = plain:match(
+ 		"^equip:%s*increases damage and healing done by magical spells and effects by up to (%d+)%.?$")
++		or stat_sentence:match(
++		"^increases damage and healing done by magical spells and effects by up to (%d+)$")
+ 	if spn then return tonumber(spn), "SpellPower" end
+ 	-- A non-blank line we cannot place. Returning "Unknown" (a word) rather
+ 	-- than nil keeps it in the same channel as procs, so parseSide routes
+@@ -1792,8 +2029,21 @@
+ 	Intellect  = { "intellect" },
+ 	Spirit     = { "spirit" },
+ 	Armor      = { "armor" },
+-	SpellPower = { "spell power", "spellpower", "spell damage", "spell healing",
+-	               "magical spells", "damage and healing", "spells and effects" },
++	SpellPower = { "spell power", "spellpower", "damage and healing" },
++	SpellDamage = { "spell damage", "damage done by magical spells" },
++	HealingPower = { "healing power", "healing done by spells", "spell healing" },
++	HolyDamage = { "holy spells", "holy damage" },
++	FireDamage = { "fire spells", "fire damage" },
++	FrostDamage = { "frost spells", "frost damage" },
++	ShadowDamage = { "shadow spells", "shadow damage" },
++	NatureDamage = { "nature spells", "nature damage" },
++	ArcaneDamage = { "arcane spells", "arcane damage" },
++	SpellPenetration = { "spell penetration" },
++	Haste = { "haste" },
++	ExpertiseRating = { "expertise rating", "expertise" },
++	BlockChance = { "block rating", "chance to block", "block chance" },
++	BonusArmor = { "bonus armor" },
++	WandDps = { "wand dps" },
+ 	-- card t_795eee9e: the extended reader's own phrasings. The plain one-word
+ 	-- lines (a "N Hit"-style spelling) fall back to the word's lowercased name
+ 	-- in lineNamesWord, so the entries below exist for the shapes the fallback
+@@ -2220,6 +2470,30 @@
+ 			for i = 1, #pending do fold(pending[i]) end
+ 		end
+ 	end
++	-- A wand's parenthesised "damage per second" line parses as WeaponDps.
++	-- Caster packs price WandDps, and a melee WeaponDps weight must not
++	-- score a wand, so remap after the type line has been seen.
++	local isWand = false
++	for _, line in ipairs(lines) do
++		if type(line) == "string" then
++			local low = deColour_(line:lower()):gsub("^%s+", ""):gsub("%s+$", "")
++			if low == "wand" or low:match("^ranged%s+wand$") then
++				isWand = true
++				break
++			end
++		end
++	end
++	if isWand and type(stats.WeaponDps) == "number" then
++		stats.WandDps = (stats.WandDps or 0) + stats.WeaponDps
++		stats.WeaponDps = nil
++	end
++	-- A percent Expertise reading is the sourced unit. When the same item
++	-- also carries ITEM_MOD_EXPERTISE_RATING (or a short "+N Expertise"
++	-- rating line), keep the percent only so the two units are not mixed
++	-- on one side.
++	if type(stats.Expertise) == "number" then
++		stats.ExpertiseRating = nil
++	end
+ 	return stats, procWord, unknown, ignored, foreign
+ end
+ 
+@@ -2869,12 +3143,13 @@
+ --    and ranged critical chance."
+ --
+ -- — and a word that does not exist needs no entry, no factor and no guard.
+--- WHAT REMAINS, and why this list is not empty: Dodge and Parry. Unmeasured,
+--- no factor, presence rule, unchanged; their guard still fires (AC-5 of card
+--- t_ea404bae).
++-- Dodge and Parry used to remain here (unmeasured scale, presence rule).
++-- Forever 1.60.1 build 70862 combatratings.txt measures them (dodge 12,
++-- parry 15, block chance 5 per 1%), the same factors the leveling packs
++-- price against, so they have left this list. The presence-rule mechanism
++-- stays for any future unconfirmed word.
+ Verdict.UNCONFIRMED_UNITS = {
+-	Dodge = true, -- dodge rating vs percent: unconfirmed
+-	Parry = true, -- parry rating vs percent: unconfirmed
++	-- Empty: every combat rating the packs price now has a measured factor.
+ 	-- Card t_9d3273cb: THE TWO SPELL ENTRIES ARE GONE. They joined this list on
+ 	-- card t_b91b29f9 only because the split gave them a per-rating price with no
+ 	-- factor; with the split retired there is no such word to guard — a spell
+@@ -3342,118 +3617,746 @@
+ -- jobs (they word a reason, and relevanceSet seeds the tiebreak set) and no
+ -- longer decide anything.
+ --
+--- THE WEIGHTS. One profile per class AND role. The values come from the stat
+--- order the corpus already documents for that class/role (stat-weights §8.1):
+--- the first term scores 4 points per point of stat, the second 1, the third 0.
+--- A stat the order does not name — Spirit on a warrior, Armor on a damage
+--- profile — scores 0, which is the whole point: a zero-weight stat is SUPPORTING
+--- DETAIL. It still appears in the delta list; it can never move the verdict.
+--- The two tank profiles are the exception the owner asked for explicitly: they
+--- put Stamina (and Armor/Block) on top, so the SAME item pair legitimately reads
+--- as an upgrade for a Protection character. That is the proof the weights drive
+--- the verdict — see tests/touchstone_weights_spec.lua.
+---
+--- `w` is points per point of the stat. A word absent from `w` is weight 0.
+---
+--- TWO TIERS, RETRIBUTION ONLY (card t_c4911603). A profile may carry
+--- `tiebreak = { <stat>, ... }`: an ORDERED list consulted ONLY when the damage
+--- total is exactly zero. Damage stats decide first and always; a tiebreaker can
+--- never outweigh one point of Strength or Agility. The entries are ranked, not
+--- weighted — the first ranked stat whose two sides differ decides, so a large
+--- number on a lower-ranked stat cannot outvote a higher-ranked one. This is
+--- Mightie's rule, and it is what keeps the -16 cloak case a downgrade while
+--- letting `+64 Armor / +2 Sta` at equal Strength read as a (flagged) upgrade.
+--- The Ret table's numbers are the ones researched for WoW: Forever in card
+--- t_f758a377 (vault: wiki/addons/touchstone-ret-stat-weights.md §2):
+---   Strength 4, SpellPower 4 (= 1.00 x Str against a sourced 1.04 median),
+---   Agility 2.5 (= 0.625 x Str for a 0.64 median), Intellect 2,
+---   Armor > Stamina as ranked tiebreakers (25 Armor ~= 1 Sta of effective HP).
+--- Holy and Protection keep their own rows: the same research card says their
+--- numbers need separate evidence, and none of it is used here.
++-- <wowhead-priorities-start>
++-- THE WEIGHTS. One order-only profile per class AND talent spec, keyed
++-- by the same short keys the Gear-for picker uses (ret, arms, fury, …).
++-- Wowhead is the SOLE source for every shipped profile (Mightie,
++-- 2026-11-11). ForeverDB numeric tables are not shipped.
++--
++-- Generated by tools/gen_wowhead_priorities.py from
++-- data/wowhead_stat_priorities.json (28 Wowhead Forever pages, fetched
++-- 2026-11-11) and optional data/wowhead_profile_caveats.json. Re-run
++-- the generator after updating either file; do not hand-edit this
++-- region. A profile.caveat is a one-line note appended to verdicts;
++-- it does not change the published order. Remove the entry when the
++-- Wowhead page catches up.
++--
++-- Each profile is kind = "order": walk the published tiers
++-- lexicographically, first differing tier decides. Intra-tier bundles
++-- use the source-free rule (same direction decides, a conflict is
++-- TRADE_OFF, no unit conversion). Caps come from the page itself
++-- (melee hit is 8% or 9% depending on the list; several specs have a
++-- second cap on the same stat). Leveling-only tagged tiers apply only
++-- when the player is below 60. Tanks default to Wowhead's Balanced
++-- list (Protection) or Defensive (Feral Bear; that page has no
++-- Balanced list). Variants are also in the picker.
++--
++-- Feral Bear Offensive lists Strength twice (verbatim items 6 and 8);
++-- that is a typo, and only the first occurrence is used.
+ Verdict.WEIGHTS = {
+ 	WARRIOR = {
+-		melee = { name = "Arms/Fury", w = { Strength = 4, Stamina = 1 } },
+-		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Strength = 1, Block = 1 } },
++		arms = {
++			name = "Arms",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warrior/arms/stat-priority-pve-dps",
++			updated = "2026-11-04",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Hit", stats = { "Hit" }, afterPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warrior/arms/stat-priority-pve-dps (updated 2026-11-04, fetched 2026-11-11). Wowhead Arms Warrior Stat Priority in WoW Forever, by shoop. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		fury = {
++			name = "Fury",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warrior/fury/stat-priority-pve-dps",
++			updated = "2026-10-29",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 305, capUnit = "raw" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warrior/fury/stat-priority-pve-dps (updated 2026-10-29, fetched 2026-11-11). Wowhead Fury Warrior Stat Priority in WoW Forever, by Babyhoof. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		prot_defensive = {
++			name = "Protection (Defensive)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			variant = "Defensive",
++			tiers = {
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++				{ name = "Parry", stats = { "Parry" } },
++				{ name = "Dodge", stats = { "Dodge" } },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Block Chance", stats = { "BlockChance" } },
++				{ name = "Strength & Attack Power", stats = { "AttackPower", "Strength" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
++				{ name = "Haste", stats = { "Haste" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank (updated 2026-11-03, fetched 2026-11-11). Wowhead Protection Warrior Stat Priority in WoW Forever — Defensive Priority, by Riyani. Order-only; no invented numeric weights.",
++		},
++		prot = {
++			name = "Protection (Balanced)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			variant = "Balanced",
++			tiers = {
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Strength & Attack Power", stats = { "AttackPower", "Strength" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++				{ name = "Parry", stats = { "Parry" } },
++				{ name = "Dodge", stats = { "Dodge" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Block Chance", stats = { "BlockChance" } },
++				{ name = "Haste", stats = { "Haste" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank (updated 2026-11-03, fetched 2026-11-11). Wowhead Protection Warrior Stat Priority in WoW Forever — Balanced Priority, by Riyani. Order-only; no invented numeric weights.",
++		},
++		prot_offensive = {
++			name = "Protection (Offensive)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			variant = "Offensive",
++			tiers = {
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Strength & Attack Power", stats = { "AttackPower", "Strength" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++				{ name = "Parry", stats = { "Parry" } },
++				{ name = "Dodge", stats = { "Dodge" } },
++				{ name = "Block Chance", stats = { "BlockChance" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warrior/protection/stat-priority-pve-tank (updated 2026-11-03, fetched 2026-11-11). Wowhead Protection Warrior Stat Priority in WoW Forever — Offensive Priority, by Riyani. Order-only; no invented numeric weights.",
++		},
+ 	},
+ 	PALADIN = {
+-		-- DAMAGER -> melee. Card t_c4911603 (research t_f758a377): the damage
+-		-- tier is Strength + SpellPower (the Forever sim's top Ret stat, 1.04 x
+-		-- Strength) + Agility (0.64 x Strength, carried as 2.5) + Intellect; the
+-		-- ranked tiebreakers are Armor then Stamina. Stamina and Armor appear
+-		-- ONLY in `tiebreak`, never in `w` — see the block above.
+-		melee = {
++		holy = {
++			name = "Holy",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/paladin/holy/stat-priority-pve-healer",
++			updated = "2026-10-29",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Healing Power", stats = { "HealingPower" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/paladin/holy/stat-priority-pve-healer (updated 2026-10-29, fetched 2026-11-11). Wowhead Holy Paladin Stat Priority in WoW Forever, by Harreks. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		prot_defensive = {
++			name = "Protection (Defensive)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/paladin/protection/stat-priority-pve-tank",
++			updated = "2026-10-28",
++			fetched = "2026-11-11",
++			variant = "Defensive",
++			tiers = {
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Block Chance", stats = { "BlockChance" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
++				{ name = "Parry", stats = { "Parry" } },
++				{ name = "Dodge", stats = { "Dodge" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/paladin/protection/stat-priority-pve-tank (updated 2026-10-28, fetched 2026-11-11). Wowhead Protection Paladin Stat Priority in WoW Forever — Defensive Priority, by Riyani. Order-only; no invented numeric weights.",
++		},
++		prot = {
++			name = "Protection (Balanced)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/paladin/protection/stat-priority-pve-tank",
++			updated = "2026-10-28",
++			fetched = "2026-11-11",
++			variant = "Balanced",
++			tiers = {
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Block Chance", stats = { "BlockChance" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++				{ name = "Parry", stats = { "Parry" } },
++				{ name = "Dodge", stats = { "Dodge" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/paladin/protection/stat-priority-pve-tank (updated 2026-10-28, fetched 2026-11-11). Wowhead Protection Paladin Stat Priority in WoW Forever — Balanced Priority, by Riyani. Order-only; no invented numeric weights.",
++		},
++		prot_offensive = {
++			name = "Protection (Offensive)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/paladin/protection/stat-priority-pve-tank",
++			updated = "2026-10-28",
++			fetched = "2026-11-11",
++			variant = "Offensive",
++			tiers = {
++				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 14, afterPercent = 6.5, valueUnit = "percent" },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Block Chance", stats = { "BlockChance" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++				{ name = "Parry", stats = { "Parry" } },
++				{ name = "Dodge", stats = { "Dodge" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/paladin/protection/stat-priority-pve-tank (updated 2026-10-28, fetched 2026-11-11). Wowhead Protection Paladin Stat Priority in WoW Forever — Offensive Priority, by Riyani. Order-only; no invented numeric weights.",
++		},
++		ret = {
+ 			name = "Retribution",
+-			w = { Strength = 4, SpellPower = 4, Agility = 2.5, Intellect = 2 },
+-			tiebreak = { "Armor", "Stamina" },
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/paladin/retribution/stat-priority-pve-dps",
++			updated = "2026-10-31",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Weapon Skill", stats = { "WeaponSkill" } },
++				{ name = "Weapon DPS & Speed", stats = { "WeaponDps", "WeaponSpeed" }, special = "dps_then_speed" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower", "HolyDamage" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Strength & Attack Power", stats = { "Strength", "AttackPower" } },
++				{ name = "Agility & Critical Strike Chance", stats = { "Agility", "Crit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/paladin/retribution/stat-priority-pve-dps (updated 2026-10-31, fetched 2026-11-11). Wowhead Retribution Paladin Stat Priority in WoW Forever, by Surveillant. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
+ 		},
+-		spell = { name = "Holy", w = { Intellect = 4, Stamina = 1 } },
+-		tank  = { name = "Protection", w = { Stamina = 4, Armor = 2, Intellect = 1, Strength = 1, Block = 1 } },
+ 	},
+-	ROGUE = {
+-		melee = { name = "Combat", w = { Agility = 4, Strength = 1 } },
+-	},
+-	HUNTER = {
+-		melee = { name = "Hunter", w = { Agility = 4, Stamina = 1 } },
++	DRUID = {
++		balance = {
++			name = "Balance",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/druid/balance/stat-priority-pve-dps",
++			updated = "2026-10-30",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/druid/balance/stat-priority-pve-dps (updated 2026-10-30, fetched 2026-11-11). Wowhead Balance Druid Stat Priority in WoW Forever, by DrWonder. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		feral_cat = {
++			name = "Feral (Cat)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/druid/feral/stat-priority-pve-dps",
++			updated = "2026-10-29",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Weapon DPS", stats = { "WeaponDps" } },
++				{ name = "Agility & Strength", stats = { "Agility", "Strength" } },
++				{ name = "Attack Power", stats = { "AttackPower" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/druid/feral/stat-priority-pve-dps (updated 2026-10-29, fetched 2026-11-11). Wowhead Feral Druid Stat Priority in WoW Forever, by Lexolas. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		feral_bear = {
++			name = "Feral (Bear, Defensive)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/druid/feral/stat-priority-pve-tank",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			variant = "Defensive",
++			-- The page body cites an Armor cap of 17265, but the numbered list is just 'Armor' with no 'until' wording, so no armor cap is applied.
++			tiers = {
++				{ name = "Stamina", stats = { "Stamina" } },
++				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
++				{ name = "Armor", stats = { "Armor" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Avoidance", stats = { "Dodge", "Parry" } },
++				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/druid/feral/stat-priority-pve-tank (updated 2026-11-03, fetched 2026-11-11). Wowhead Feral Druid Tank Stat Priority in WoW Forever — Defensive Priority, by L0uki. Order-only; no invented numeric weights.",
++		},
++		feral_bear_offensive = {
++			name = "Feral (Bear, Offensive)",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/druid/feral/stat-priority-pve-tank",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			variant = "Offensive",
++			-- Wowhead typo: the Offensive list prints Strength as both item 6 and item 8. The second occurrence is dropped; the first is kept.
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 }, -- numbered list omits the cap wording; the same page states this cap (8%)
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Weapon DPS", stats = { "WeaponDps" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Agility", stats = { "Agility" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/druid/feral/stat-priority-pve-tank (updated 2026-11-03, fetched 2026-11-11). Wowhead Feral Druid Tank Stat Priority in WoW Forever — Offensive Priority, by L0uki. Order-only; no invented numeric weights.",
++		},
++		resto = {
++			name = "Restoration",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/druid/restoration/stat-priority-pve-healer",
++			updated = "2026-11-01",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Healing Power", stats = { "HealingPower" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "MP5", stats = { "MP5" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/druid/restoration/stat-priority-pve-healer (updated 2026-11-01, fetched 2026-11-11). Wowhead Restoration Druid Stat Priority in WoW Forever, by Frankensteak. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
+ 	},
+-	MAGE = {
+-		spell = { name = "Mage", w = { Intellect = 4, Spirit = 1 } },
++	SHAMAN = {
++		elemental = {
++			name = "Elemental",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/shaman/elemental/stat-priority-pve-dps",
++			updated = "2026-11-04",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Nature Damage & Fire Damage", stats = { "NatureDamage", "FireDamage" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Strength", stats = { "Strength" }, levelingOnly = true },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/shaman/elemental/stat-priority-pve-dps (updated 2026-11-04, fetched 2026-11-11). Wowhead Elemental Shaman Stat Priority in WoW Forever, by Lucenia. Order-only; no invented numeric weights.",
++		},
++		enhancement = {
++			name = "Enhancement",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/shaman/enhancement/stat-priority-pve-dps",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			caveat = "Wowhead list predates the Nov 10 Mental Dexterity hotfix; Intellect may be overrated. Hit past the listed 8% melee minimum is not scored.",
++			-- caveat source: https://news.blizzard.com/en-us/article/24315281/wow-forever-hotfixes-november-10-2026
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/shaman/enhancement/stat-priority-pve-dps (updated 2026-11-03, fetched 2026-11-11). Wowhead Enhancement Shaman Stat Priority in WoW Forever, by Yebb. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		resto = {
++			name = "Restoration",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/shaman/restoration/stat-priority-pve-healer",
++			updated = "2026-11-01",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Healing Power", stats = { "HealingPower" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "MP5", stats = { "MP5" } },
++				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" }, levelingOnly = true },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/shaman/restoration/stat-priority-pve-healer (updated 2026-11-01, fetched 2026-11-11). Wowhead Restoration Shaman Stat Priority in WoW Forever, by Woah. Order-only; no invented numeric weights.",
++		},
+ 	},
+ 	PRIEST = {
+-		spell = { name = "Priest", w = { Intellect = 4, Spirit = 1 } },
++		disc = {
++			name = "Discipline",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/priest/discipline/stat-priority-pve-healer",
++			updated = "2026-10-30",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Healing Power", stats = { "HealingPower" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/priest/discipline/stat-priority-pve-healer (updated 2026-10-30, fetched 2026-11-11). Wowhead Discipline Priest Stat Priority in WoW Forever, by Voulk. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		holy = {
++			name = "Holy",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/priest/holy/stat-priority-pve-healer",
++			updated = "2026-10-31",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Healing Power", stats = { "HealingPower" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "MP5", stats = { "MP5" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/priest/holy/stat-priority-pve-healer (updated 2026-10-31, fetched 2026-11-11). Wowhead Holy Priest Stat Priority in WoW Forever, by Spanklord. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		shadow = {
++			name = "Shadow",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/priest/shadow/stat-priority-pve-dps",
++			updated = "2026-10-30",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Spell Damage & Shadow Damage", stats = { "SpellDamage", "SpellPower", "ShadowDamage" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/priest/shadow/stat-priority-pve-dps (updated 2026-10-30, fetched 2026-11-11). Wowhead Shadow Priest Stat Priority in WoW Forever, by Jereico. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++	},
++	MAGE = {
++		arcane = {
++			name = "Arcane",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/mage/arcane/stat-priority-pve-dps",
++			updated = "2026-10-28",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Spell Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "ArcaneDamage" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/mage/arcane/stat-priority-pve-dps (updated 2026-10-28, fetched 2026-11-11). Wowhead Arcane Mage Stat Priority in WoW Forever, by Foolipe. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		fire = {
++			name = "Fire",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/mage/fire/stat-priority-pve-dps",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Spell Damage & Fire Damage", stats = { "SpellDamage", "SpellPower", "FireDamage" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/mage/fire/stat-priority-pve-dps (updated 2026-11-03, fetched 2026-11-11). Wowhead Fire Mage Stat Priority in WoW Forever, by Foolipe. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		frost = {
++			name = "Frost",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/mage/frost/stat-priority-pve-dps",
++			updated = "2026-10-29",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Spell Damage, Frost Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "FrostDamage", "ArcaneDamage" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/mage/frost/stat-priority-pve-dps (updated 2026-10-29, fetched 2026-11-11). Wowhead Frost Mage Stat Priority in WoW Forever, by Porom. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
+ 	},
+ 	WARLOCK = {
+-		spell = { name = "Warlock", w = { Intellect = 4, Spirit = 1 } },
++		affliction = {
++			name = "Affliction",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warlock/affliction/stat-priority-pve-dps",
++			updated = "2026-11-11",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Spell Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "ShadowDamage" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warlock/affliction/stat-priority-pve-dps (updated 2026-11-11, fetched 2026-11-11). Wowhead Affliction Warlock Stat Priority in WoW: Forever, by Zephan. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		demonology = {
++			name = "Demonology",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warlock/demonology/stat-priority-pve-dps",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Spell Damage, Fire Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "FireDamage", "ShadowDamage" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warlock/demonology/stat-priority-pve-dps (updated 2026-11-03, fetched 2026-11-11). Wowhead Demonology Warlock Stat Priority in WoW: Forever, by Zephan. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		destruction = {
++			name = "Destruction",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/warlock/destruction/stat-priority-pve-dps",
++			updated = "2026-11-03",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Spell Damage & Fire Damage", stats = { "SpellPower", "SpellDamage", "FireDamage" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/warlock/destruction/stat-priority-pve-dps (updated 2026-11-03, fetched 2026-11-11). Wowhead Destruction Warlock Stat Priority in WoW: Forever, by Zephan. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
+ 	},
+-	-- C1b (t_03a1196c): a feral Druid has no documented order, so it also has no
+-	-- weights. Its rows already stop at "no stat order resolved" before the
+-	-- comparator, and a caller that reaches the comparator gets the unavailable
+-	-- verdict below — never a guessed feral model.
+-	DRUID = {
+-		spell = { name = "Balance", w = { Intellect = 4, Agility = 1 } },
++	ROGUE = {
++		assassination = {
++			name = "Assassination",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/rogue/assassination/stat-priority-pve-dps",
++			updated = "2026-11-09",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 308, capUnit = "raw" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Attack Power", stats = { "AttackPower" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/rogue/assassination/stat-priority-pve-dps (updated 2026-11-09, fetched 2026-11-11). Wowhead Assassination Rogue Stat Priority in WoW Forever, by warstry. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		combat = {
++			name = "Combat",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/rogue/combat/stat-priority-pve-dps",
++			updated = "2026-10-30",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 308, capUnit = "raw" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Attack Power", stats = { "AttackPower" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/rogue/combat/stat-priority-pve-dps (updated 2026-10-30, fetched 2026-11-11). Wowhead Combat Rogue Stat Priority in WoW Forever, by warstry. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		subtlety = {
++			name = "Subtlety",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/rogue/subtlety/stat-priority-pve-dps",
++			updated = "2026-10-30",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
++				{ name = "Weapon Skill", stats = { "WeaponSkill" }, capValue = 308, capUnit = "raw" },
++				{ name = "Hit", stats = { "Hit" }, capPercent = 17, afterPercent = 8, hitKind = "spell", ratingPerPercent = 10 },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Haste", stats = { "Haste" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Attack Power", stats = { "AttackPower" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/rogue/subtlety/stat-priority-pve-dps (updated 2026-10-30, fetched 2026-11-11). Wowhead Subtlety Rogue Stat Priority in WoW Forever, by warstry. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
+ 	},
+-	SHAMAN = {
+-		melee = { name = "Enhancement", w = { Strength = 4, Intellect = 1 } },
+-		spell = { name = "Elemental", w = { Intellect = 4, Strength = 1 } },
++	HUNTER = {
++		beast_mastery = {
++			name = "Beast Mastery",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/hunter/beast-mastery/stat-priority-pve-dps",
++			updated = "2026-11-04",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Ranged Attack Power", stats = { "RangedAttackPower" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/hunter/beast-mastery/stat-priority-pve-dps (updated 2026-11-04, fetched 2026-11-11). Wowhead Beast Mastery Hunter Stat Priority in WoW Forever, by Docoda. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		marksmanship = {
++			name = "Marksmanship",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/hunter/marksmanship/stat-priority-pve-dps",
++			updated = "2026-11-04",
++			fetched = "2026-11-11",
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Ranged Attack Power", stats = { "RangedAttackPower" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/hunter/marksmanship/stat-priority-pve-dps (updated 2026-11-04, fetched 2026-11-11). Wowhead Marksmanship Hunter Stat Priority in WoW Forever, by Docoda. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
++		survival = {
++			name = "Survival",
++			kind = "order",
++			url = "https://www.wowhead.com/forever/guide/classes/hunter/survival/stat-priority-pve-dps",
++			updated = "2026-11-04",
++			fetched = "2026-11-11",
++			-- The numbered list is '% Hit Chance' with no 'until 9%'; the same page states the 9% yellow-hit cap in the body, and that cap is applied.
++			tiers = {
++				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
++				{ name = "Crit", stats = { "Crit" } },
++				{ name = "Agility", stats = { "Agility" } },
++				{ name = "Strength", stats = { "Strength" } },
++				{ name = "Ranged Attack Power", stats = { "AttackPower", "RangedAttackPower" } },
++				{ name = "Intellect", stats = { "Intellect" } },
++				{ name = "Spirit", stats = { "Spirit" } },
++				{ name = "Stamina", stats = { "Stamina" } },
++			},
++			source = "https://www.wowhead.com/forever/guide/classes/hunter/survival/stat-priority-pve-dps (updated 2026-11-04, fetched 2026-11-11). Wowhead Survival Hunter Stat Priority in WoW Forever, by Docoda. The page is built from beta data and says the priority will shift once level 60 dungeon and raid gear is available. Order-only; no invented numeric weights.",
++		},
+ 	},
+ }
++-- <wowhead-priorities-end>
+ 
+--- The noise floor. Weights are points per point of stat; the Ret table
+--- (t_c4911603) carries the fractional 2.5, so the band must be smaller than the
+--- smallest NON-zero total that table can produce. Every weight is a multiple of
+--- 0.5 (4, 2.5, 2), so 0.25 sits strictly between a true zero and the smallest
+--- real difference and no genuine 0.5 gain is swallowed — the reason
+--- t_f758a377 pinned epsilon <= 0.25. With the old whole-point `1` a pair such as
+--- +1 Agility / -1 Intellect would net 0.5 and read "no change".
+--- The constant exists so the band has ONE definition that only the totals table
+--- can move. The tiebreaker tier below is gated on this same band, which is safe
+--- for exactly the reason above: no total these tables can produce lands inside
+--- it, so "inside the band" IS a true tie.
+-Verdict.WEIGHT_EPSILON = 0.25
+-
+--- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a weights
+--- role key. This is NOT ROLE_ALIAS (the stat-order alias, whose conservative
+--- TANK -> spell proxy for a paladin is a separate ruling): here it only picks
+--- which weight table scores the row. A class absent from this table resolves
+--- from its own role word alone, so a pure class is unaffected.
++-- The noise floor for any leftover numeric fixture pack (shipped profiles
++-- are order-only and do not use it). 0.005 sits well under a one-point
++-- armor gain and well above ordinary floating-point dust.
++Verdict.WEIGHT_EPSILON = 0.005
++
++-- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a
++-- weights key, used only when that role maps to exactly one sourced pack.
++-- A class/role with two packs (Warrior DAMAGER is Arms or Fury; Priest
++-- HEALER is Holy or Discipline) is ABSENT: Auto must see a talent name or
++-- a gearFor override, never guess.
+ Verdict.PROFILE_ROLE = {
+-	PALADIN = { TANK = "tank", HEALER = "spell", DAMAGER = "melee" },
+-	WARRIOR = { TANK = "tank", DAMAGER = "melee" },
++	PALADIN = { TANK = "prot", HEALER = "holy", DAMAGER = "ret" },
++	WARRIOR = { TANK = "prot" },
++	DRUID   = { TANK = "feral_bear", HEALER = "resto" },
++	SHAMAN  = { HEALER = "resto" },
++	PRIEST  = { DAMAGER = "shadow" },
++}
++
++-- Folded order words (melee|spell) and the historical "tank" word, used by
++-- tests and by `/up role`, onto a unique sourced pack when one exists.
++Verdict.ROLE_WEIGHT_ALIAS = {
++	PALADIN = { melee = "ret", spell = "holy", tank = "prot" },
++	WARRIOR = { tank = "prot" },
++	DRUID   = { spell = "balance", tank = "feral_bear" },
++	SHAMAN  = { melee = "enhancement", spell = "elemental" },
+ }
+ 
+ -- The active profile for a spec, or nil.
+ --
+ --   spec — { class = <CLASS token>, role = <melee|spell|nil>,
+---            clientRole = <TANK|HEALER|DAMAGER|nil> (optional) }
++--            clientRole = <TANK|HEALER|DAMAGER|nil> (optional),
++--            weightsKey = <registry key> (optional) }
+ --
+--- Resolution order: the CLIENT's role word when this class maps it, then the
+--- addon's own role word, then — for a class with exactly ONE profile — that
+--- profile (a pure class ignores the role argument, exactly as classRoleOrder
+--- does). A hybrid with no resolved role returns nil: no profile, no guess.
++-- Resolution order: a named weightsKey (chosen / talent-matched) when a
++-- table exists — a key with no table is silence, never a fallback into
++-- another pack (Feral Cat must not score as Bear or Balance). Then the
++-- CLIENT's role word when this class uniquely maps it, then a folded
++-- melee/spell/tank alias when that alias is unique, then a direct key
++-- match on spec.role. There is no "pure class, pick the only pack"
++-- fallback: Mage/Rogue/Hunter/Warlock now have three packs each, and
++-- guessing one would be a guessed weight.
+ function Verdict.profileFor(spec)
+ 	if type(spec) ~= "table" then return nil end
+ 	local class = spec.class
+ 	local byRole = (type(class) == "string") and Verdict.WEIGHTS[class] or nil
+ 	if type(byRole) ~= "table" then return nil end
++	if type(spec.weightsKey) == "string" then
++		local pack = byRole[spec.weightsKey]
++		if type(pack) == "table" then return pack end
++		return nil
++	end
+ 	local alias = (type(class) == "string") and Verdict.PROFILE_ROLE[class] or nil
+ 	local client = type(spec.clientRole) == "string" and spec.clientRole or nil
+ 	if client ~= nil and type(alias) == "table" then
+@@ -3462,23 +4365,16 @@
+ 			return byRole[word]
+ 		end
+ 	end
++	local folded = (type(class) == "string") and Verdict.ROLE_WEIGHT_ALIAS[class] or nil
++	if type(spec.role) == "string" and type(folded) == "table" then
++		local word = folded[spec.role]
++		if type(word) == "string" and type(byRole[word]) == "table" then
++			return byRole[word]
++		end
++	end
+ 	if type(spec.role) == "string" and type(byRole[spec.role]) == "table" then
+ 		return byRole[spec.role]
+ 	end
+-	-- A PURE class ignores the role argument (exactly as classRoleOrder does) and
+-	-- resolves the profile keyed by its one documented order word. A HYBRID must
+-	-- name a role: "no role resolved" is nil here too, never a default profile —
+-	-- which is why a feral Druid (a documented role with no documented order, and
+-	-- therefore no weights) resolves to nothing instead of silently scoring as
+-	-- Balance.
+-	if not isHybrid(class) then
+-		local orders = Verdict.ORDERS[class]
+-		if type(orders) == "table" then
+-			for word in pairs(orders) do
+-				if type(byRole[word]) == "table" then return byRole[word] end
+-			end
+-		end
+-	end
+ 	return nil
+ end
+ 
+@@ -3507,6 +4403,588 @@
+ -- nothing; a stat one side carries is a KNOWN absence (the parse zero-fills it,
+ -- gates 5 and 8 having already refused anything unclassifiable), so it weighs in
+ -- at its full delta.
++
++-- ── ORDER-ONLY PROFILES ─────────────────────────────────────────────────────
++--
++-- A profile with `kind = "order"` (and a `tiers` list) has no invented
++-- numeric weights. Every shipped Wowhead profile uses this path. The
++-- comparator walks the published priority in order and the first tier
++-- whose sides differ decides.
++--
++-- Intra-tier rule (source-free, no unit conversion): if every differing
++-- stat in the tier moves the same way, that direction decides; if two
++-- stats in the tier conflict, the verdict is TRADE_OFF and names them.
++--
++-- Caps come from each Wowhead page (Hit is 8% or 9% depending on the
++-- list; several specs then have a later cap on the same stat, e.g.
++-- Rogue Hit 8% then 17% poison). The player's current value is read
++-- from the 1.60.1 client — GetCombatRatingBonus + GetHitModifier for
++-- Hit, GetExpertise() (a percent on forever + 1.60.1) or
++-- GetCombatRatingBonus(CR_EXPERTISE) for Expertise, UnitDefense for
++-- Defense skill, and a pcall'd weapon-skill read — each call pcall'd.
++-- Tests inject spec.playerHitPercent / playerExpertisePercent /
++-- playerDefense / playerWeaponSkill; the value `false` forces
++-- "cap status unknown". If the read fails, the raw delta still ranks
++-- the tier. A stat already at/over cap counts only up to the cap:
++-- gains past cap do not count, losses that drop below cap do. A
++-- later "after X" / second-cap tier only counts the window between
++-- the previous cap and the new cap (or with no upper bound).
++-- Defense 440 and Weapon Skill 305/308 are raw totals, not percents.
++--
++-- Leveling-only tagged tiers (Elemental Strength, Resto Shaman Spell
++-- Damage) apply only when the player level is below 60. If the level
++-- is unknown, the tier is included (we do not invent a level).
++--
++-- Weapon DPS & Speed: compare DPS first (higher is better). Speed alone
++-- is only considered when DPS is equal, and is REPORTED but not ranked
++-- (the Ret source prefers slow weapons for Twist and fast for Shockadin,
++-- and does not pick one).
++
++function Verdict.isOrderProfile(profile)
++	return type(profile) == "table"
++		and (profile.kind == "order" or type(profile.tiers) == "table")
++		and type(profile.tiers) == "table" and #profile.tiers > 0
++end
++
++-- Secret numbers still have type() == "number". Arithmetic or comparison
++-- on one raises ("attempt to perform arithmetic on a secret number value
++-- (execution tainted by 'MightiePack')") — the live crash at
++-- Verdict.playerHitPercent (GetHitModifier / GetCombatRatingBonus) when
++-- ChestAdvisor.scan ran from the character-sheet refresh. pcall of the
++-- API does not help: the call succeeds and returns the secret. The
++-- client's issecretvalue (and canaccessvalue, when present) is the only
++-- safe test; a missing predicate is treated as "not secret" so older
++-- clients still work.
++local function isSecretNumber(v)
++	if type(issecretvalue) == "function" then
++		local ok, r = pcall(issecretvalue, v)
++		if ok and r then return true end
++	end
++	if type(canaccessvalue) == "function" then
++		local ok, r = pcall(canaccessvalue, v)
++		if ok and r == false then return true end
++	end
++	return false
++end
++
++local function usableNumber(v)
++	if type(v) ~= "number" or isSecretNumber(v) then return nil end
++	return v
++end
++
++-- Second return is true when the client handed back a secret, so a
++-- caller that would add this to another number can refuse the whole
++-- sum instead of silently dropping the secret half.
++local function pcallNumber(fn, ...)
++	if type(fn) ~= "function" then return nil, false end
++	local ok, a = pcall(fn, ...)
++	if not ok then return nil, false end
++	if isSecretNumber(a) then return nil, true end
++	if type(a) ~= "number" then return nil, false end
++	return a, false
++end
++
++-- Combat-rating bonus for a named CR_* global. The index is only used
++-- when the client actually exposes it; we do not invent 6, 24, or any
++-- other fallback index.
++local function combatRatingBonus(crName)
++	local idx = rawget(_G, crName)
++	if idx == nil then return nil, false end
++	return pcallNumber(GetCombatRatingBonus, idx)
++end
++
++-- First readable named combat-rating bonus. A secret result stops the
++-- search: we must not substitute a different CR_* for one the client
++-- hid, and we must not add a later readable modifier to a secret rating.
++local function firstRatingBonus(...)
++	for i = 1, select("#", ...) do
++		local n, secret = combatRatingBonus((select(i, ...)))
++		if secret then return nil, true end
++		if n ~= nil then return n, false end
++	end
++	return nil, false
++end
++
++-- The player's current Hit chance, in percent, or nil when unreadable.
++-- `kind` is "spell" for a spell (or poison) 17% cap, or "melee" (default)
++-- for an 8% / 9% ability cap. Spell caps use GetSpellHitModifier, never
++-- GetHitModifier. The rating half prefers CR_HIT_SPELL, then the unified
++-- CR_HIT, then (on clients that only expose one hit rating) CR_HIT_MELEE,
++-- and only when that global is present.
++function Verdict.playerHitPercent(kind)
++	if kind == "spell" then
++		local bonus, bSec = firstRatingBonus("CR_HIT_SPELL", "CR_HIT", "CR_HIT_MELEE")
++		local mod, mSec = pcallNumber(GetSpellHitModifier)
++		if bSec or mSec then return nil end
++		if bonus == nil and mod == nil then return nil end
++		return (bonus or 0) + (mod or 0)
++	end
++	local bonus, bSec = firstRatingBonus("CR_HIT_MELEE", "CR_HIT")
++	local mod, mSec = pcallNumber(GetHitModifier)
++	if bSec or mSec then return nil end
++	if bonus == nil and mod == nil then return nil end
++	return (bonus or 0) + (mod or 0)
++end
++
++-- The player's current Expertise, in percent, or nil when unreadable.
++-- Only APIs that are documented to return a percent are trusted:
++-- GetExpertisePercent, then GetCombatRatingBonus(CR_EXPERTISE) (the
++-- client's own percent bonus) when CR_EXPERTISE is present. GetExpertise
++-- is not used: its unit is not verified on Forever, and assuming it is
++-- a percent would invent a conversion.
++function Verdict.playerExpertisePercent()
++	if type(GetExpertisePercent) == "function" then
++		local ok, mh = pcall(GetExpertisePercent)
++		if ok then
++			local n = usableNumber(mh)
++			if n ~= nil then return n end
++			if isSecretNumber(mh) then return nil end
++		end
++	end
++	local idx = rawget(_G, "CR_EXPERTISE")
++	if idx == nil then return nil end
++	return pcallNumber(GetCombatRatingBonus, idx)
++end
++
++-- Defense skill total, or nil when unreadable. Classic UnitDefense
++-- returns base, armorBonus; both are required (Wowhead's cap is 440
++-- skill, not a rating). pcallNumber would keep only the first return.
++function Verdict.playerDefenseSkill()
++	local ok, base, mod = pcall(UnitDefense, "player")
++	if not ok then return nil end
++	if isSecretNumber(base) or isSecretNumber(mod) then return nil end
++	if type(base) ~= "number" then return nil end
++	return base + (usableNumber(mod) or 0)
++end
++
++-- True when the player has an off-hand weapon equipped. Classic
++-- UnitAttackBothHands returns the UNARMED skill in the off-hand slots
++-- when the character is not dual-wielding (a 2H or a shield), so a
++-- positive off-hand total is not enough to decide. Prefer
++-- OffhandHasWeapon when the client exposes it; otherwise inspect slot
++-- 17 with GetInventoryItemLink and C_Item.GetItemInfoInstant (or
++-- GetItemInfoInstant) and accept only INVTYPE_WEAPON /
++-- INVTYPE_WEAPONOFFHAND. A shield, held-in-off-hand, or empty slot is
++-- not a weapon, and the main-hand total is used.
++local function offhandWeaponEquipped()
++	if type(OffhandHasWeapon) == "function" then
++		local ok, has = pcall(OffhandHasWeapon)
++		if ok then return has and true or false end
++	end
++	if type(GetInventoryItemLink) ~= "function" then return false end
++	local okLink, link = pcall(GetInventoryItemLink, "player", 17)
++	if not okLink or type(link) ~= "string" or link == "" then return false end
++	local loc
++	if type(C_Item) == "table" and type(C_Item.GetItemInfoInstant) == "function" then
++		local ok, _, _, _, equipLoc = pcall(C_Item.GetItemInfoInstant, link)
++		if ok then loc = equipLoc end
++	end
++	if loc == nil and type(GetItemInfoInstant) == "function" then
++		local ok, _, _, _, equipLoc = pcall(GetItemInfoInstant, link)
++		if ok then loc = equipLoc end
++	end
++	return loc == "INVTYPE_WEAPON" or loc == "INVTYPE_WEAPONOFFHAND"
++end
++
++-- Weapon skill total, or nil when unreadable. UnitAttackBothHands
++-- returns main-hand base, main-hand modifier, off-hand base, off-hand
++-- modifier — skill totals, not a combat rating. GetCombatRating
++-- (CR_WEAPON_SKILL) is a rating and must not be compared to the 305 /
++-- 308 skill caps. When an off-hand weapon is equipped, the lower of
++-- the two totals is used, because a cap of 305/308 is only met when
++-- the weaker hand reaches it. The unarmed skill Classic reports in
++-- the off-hand slots for a 2H or a shield is ignored. Tests inject
++-- spec.playerWeaponSkill.
++function Verdict.playerWeaponSkill()
++	if type(UnitAttackBothHands) == "function" then
++		local ok, mainBase, mainMod, offBase, offMod = pcall(UnitAttackBothHands, "player")
++		if not ok then return nil end
++		if isSecretNumber(mainBase) or isSecretNumber(mainMod)
++			or isSecretNumber(offBase) or isSecretNumber(offMod) then
++			return nil
++		end
++		if type(mainBase) == "number" then
++			local main = mainBase + (usableNumber(mainMod) or 0)
++			if offhandWeaponEquipped() and type(offBase) == "number" then
++				local off = offBase + (usableNumber(offMod) or 0)
++				if off < main then return off end
++			end
++			return main
++		end
++	end
++	return nil
++end
++
++function Verdict.playerLevel(spec)
++	if type(spec) == "table" and type(spec.level) == "number" then
++		return spec.level
++	end
++	return pcallNumber(UnitLevel, "player")
++end
++
++-- Resolve the current percent for a capped stat. `spec.playerHitPercent`
++-- / `spec.playerExpertisePercent` override the client read so a test can
++-- inject a value; the value `false` forces "cap status unknown".
++function Verdict.currentCapPercent(word, spec, hitKind)
++	if type(spec) == "table" then
++		if word == "Hit" then
++			if hitKind == "spell" then
++				if spec.playerSpellHitPercent == false then return nil end
++				if type(spec.playerSpellHitPercent) == "number" then
++					return spec.playerSpellHitPercent
++				end
++				-- Fall back to a generic injected hit percent when the
++				-- test (or a unified-rating client) supplies only one.
++				if spec.playerHitPercent == false then return nil end
++				if type(spec.playerHitPercent) == "number" then return spec.playerHitPercent end
++			else
++				if spec.playerHitPercent == false then return nil end
++				if type(spec.playerHitPercent) == "number" then return spec.playerHitPercent end
++			end
++		elseif word == "Expertise" then
++			if spec.playerExpertisePercent == false then return nil end
++			if type(spec.playerExpertisePercent) == "number" then return spec.playerExpertisePercent end
++		end
++	end
++	if word == "Hit" then return Verdict.playerHitPercent(hitKind) end
++	if word == "Expertise" then return Verdict.playerExpertisePercent() end
++	return nil
++end
++
++-- Current value in the cap's unit ("percent" or "raw").
++function Verdict.currentCapValue(word, spec, unit)
++	if unit == "raw" then
++		if type(spec) == "table" then
++			if word == "Defense" then
++				if spec.playerDefense == false then return nil end
++				if type(spec.playerDefense) == "number" then return spec.playerDefense end
++			elseif word == "WeaponSkill" then
++				if spec.playerWeaponSkill == false then return nil end
++				if type(spec.playerWeaponSkill) == "number" then return spec.playerWeaponSkill end
++			end
++		end
++		if word == "Defense" then return Verdict.playerDefenseSkill() end
++		if word == "WeaponSkill" then return Verdict.playerWeaponSkill() end
++		return nil
++	end
++	return Verdict.currentCapPercent(word, spec)
++end
++
++-- Clamp a contribution into the window [after, cap] (either bound
++-- optional). `current` is the player's total INCLUDING the worn item,
++-- in the same unit as cap/after (percent, or raw skill/rating).
++-- When unit is "percent", cand/worn values are ratings and are divided
++-- by ratingPerPercent. When ratingPerPercent is 1 (or valueUnit is
++-- "percent"), the stored values are already percent and are used as-is.
++-- When unit is "raw", cand/worn are used as-is. A missing or zero
++-- ratingPerPercent is not invented: the raw values are ranked and cap
++-- status is "unknown".
++-- Returns (effective_delta, capStatus) where capStatus is "unknown",
++-- "below", or "at".
++function Verdict.clampedWindowDelta(candRating, wornRating, current, cap, after, ratingPerPercent, unit)
++	local candVal, wornVal
++	local scaleUnknown = false
++	if unit == "raw" then
++		candVal = tonumber(candRating) or 0
++		wornVal = tonumber(wornRating) or 0
++	else
++		local scale = tonumber(ratingPerPercent)
++		if type(scale) ~= "number" or scale == 0 then
++			-- No sourced conversion. Rank the raw values and report
++			-- cap status unknown; do not invent a factor.
++			candVal = tonumber(candRating) or 0
++			wornVal = tonumber(wornRating) or 0
++			scaleUnknown = true
++		else
++			candVal = (tonumber(candRating) or 0) / scale
++			wornVal = (tonumber(wornRating) or 0) / scale
++		end
++	end
++	if scaleUnknown or type(current) ~= "number" then
++		return candVal - wornVal, "unknown"
++	end
++	local wornTotal = current
++	local candTotal = current - wornVal + candVal
++	local lo = (type(after) == "number") and after or 0
++	local hi = (type(cap) == "number") and cap or math.huge
++	local function effective(x)
++		if x > hi then x = hi end
++		if x < lo then x = lo end
++		return x
++	end
++	local status
++	if type(cap) == "number" then
++		status = (current >= cap and "at") or "below"
++		if effective(candTotal) < cap or effective(wornTotal) < cap then
++			status = "below"
++		end
++	else
++		-- After-only window (e.g. Hit after 8% with no upper cap).
++		status = "below"
++	end
++	return effective(candTotal) - effective(wornTotal), status
++end
++
++-- Back-compat wrapper used by existing Ret cap tests: one upper percent
++-- cap, no floor, rating-to-percent conversion.
++function Verdict.clampedPercentDelta(candRating, wornRating, current, cap, ratingPerPercent)
++	return Verdict.clampedWindowDelta(candRating, wornRating, current, cap, 0, ratingPerPercent, "percent")
++end
++
++local function orderProfileLabel(profile, src)
++	local pname = type(profile) == "table" and profile.name or "no profile"
++	if src == "chosen" or src == "talents" then
++		pname = tostring(pname) .. " (" .. src .. ")"
++	end
++	return pname
++end
++
++-- A one-line caveat from profile.caveat, or nil. Easy to drop when
++-- the Wowhead page is updated: remove the data entry and regenerate.
++function Verdict.profileCaveat(profile)
++	if type(profile) == "table" and type(profile.caveat) == "string" and profile.caveat ~= "" then
++		return profile.caveat
++	end
++	return nil
++end
++
++function Verdict.appendCaveat(profile, text)
++	local c = Verdict.profileCaveat(profile)
++	if c and type(text) == "string" then
++		return text .. " — " .. c
++	end
++	return text
++end
++
++function Verdict.orderReason(profile, kind, decidedBy, profileSource, extra)
++	local pname = orderProfileLabel(profile, profileSource)
++	local text
++	if kind == "trade-off" then
++		local named = type(decidedBy) == "string" and decidedBy or "stats in the same tier"
++		text = "decided by " .. named .. " [" .. pname .. "] — " .. (extra or "those stats conflict")
++	elseif kind == "no change" then
++		local head = "no change [" .. pname .. "]"
++		if type(extra) == "string" and extra ~= "" then
++			text = head .. " — " .. extra
++		else
++			text = head
++		end
++	elseif type(decidedBy) == "string" and decidedBy ~= "" then
++		text = "decided by " .. decidedBy .. " [" .. pname .. "]"
++	else
++		text = "[" .. pname .. "]"
++	end
++	return Verdict.appendCaveat(profile, text)
++end
++
++local function formatBound(value, unit)
++	if type(value) ~= "number" then return nil end
++	local isPct = (unit ~= "raw")
++	if value == math.floor(value) then
++		if isPct then return string.format("%d%%", value) end
++		return string.format("%d", value)
++	end
++	if isPct then return tostring(value) .. "%" end
++	return tostring(value)
++end
++
++-- Walk one order-only profile. Returns the same (verdict, reason, detail)
++-- contract as weightedVerdict.
++function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
++	if type(allow) ~= "function" then
++		allow = function(verdict, reason) return verdict, reason end
++	end
++	profile = profile or (type(spec) == "table" and Verdict.profileFor(spec) or nil)
++	if not Verdict.isOrderProfile(profile) then
++		return "UNKNOWN", "verdict unavailable: the profile is not an order-only pack"
++	end
++	local cand = (type(candStats) == "table") and candStats or {}
++	local eq   = (type(eqStats)   == "table") and eqStats   or {}
++	local src  = type(spec) == "table" and spec.profileSource or nil
++	local pname = orderProfileLabel(profile, src)
++	local speedNote = nil
++	local level = Verdict.playerLevel(spec)
++
++	local function finish(verdict, reason, decidedBy, kind)
++		local detail = {
++			profile = pname,
++			decidedBy = decidedBy,
++			orderOutcome = kind,
++			speedNote = speedNote,
++			caveat = Verdict.profileCaveat(profile),
++		}
++		if verdict == "UPGRADE" then
++			local v, r = allow(verdict, reason)
++			if v ~= "UPGRADE" then return v, r end
++			return v, r, detail
++		end
++		if verdict == "TRADE_OFF" or verdict == TRADE_OFF then
++			local v, r = allow(TRADE_OFF, reason)
++			if v ~= TRADE_OFF then return v, r end
++			return v, r, detail
++		end
++		return verdict, reason, detail
++	end
++
++	local function capLabel(tier, status)
++		if status == "unknown" then
++			return tier.name .. " (cap status unknown)"
++		end
++		local unit = tier.capUnit
++		local cap = tier.capPercent or tier.capValue
++		local after = tier.afterPercent or tier.afterValue
++		local capText = formatBound(cap, unit)
++		if capText == nil then
++			local afterText = formatBound(after, unit)
++			if afterText then
++				return tier.name .. " (after " .. afterText .. ")"
++			end
++			return tier.name
++		end
++		if status == "at" then
++			return tier.name .. " (at " .. capText .. " cap)"
++		end
++		return tier.name .. " (below " .. capText .. " cap)"
++	end
++
++	local function signedDelta(word)
++		return (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
++	end
++
++	local function isCapped(tier)
++		return type(tier.capPercent) == "number"
++			or type(tier.afterPercent) == "number"
++			or type(tier.capValue) == "number"
++			or type(tier.afterValue) == "number"
++	end
++
++	for _, tier in ipairs(profile.tiers) do
++		if type(tier) == "table" and type(tier.stats) == "table" then
++			-- Leveling-only tags apply below 60 only. Unknown level
++			-- includes the tier; we do not invent a level.
++			if tier.levelingOnly and type(level) == "number" and level >= 60 then
++				-- skip
++			elseif tier.special == "dps_then_speed" then
++				local dpsDelta = signedDelta("WeaponDps")
++				if dpsDelta ~= 0 then
++					local kind = (dpsDelta > 0) and "upgrade" or "downgrade"
++					local v = (dpsDelta > 0) and "UPGRADE" or "NOT_UPGRADE"
++					return finish(v, Verdict.orderReason(profile, kind, "Weapon DPS", src),
++						"Weapon DPS", kind)
++				end
++				local spdDelta = signedDelta("WeaponSpeed")
++				if spdDelta ~= 0 then
++					-- DPS is equal; speed differs. The source does not say
++					-- whether fast or slow is better, so do not rank it.
++					-- Fall through and remember the note.
++					speedNote = "weapon speed differs (not ranked; the source does not prefer fast or slow)"
++				end
++			elseif isCapped(tier) then
++				-- One capped rating or raw total. Use the first stat.
++				-- A second occurrence of the same stat (Hit 8% then 17%)
++				-- only counts the window after the previous cap.
++				local word = tier.stats[1]
++				local unit = (tier.capUnit == "raw") and "raw" or "percent"
++				local cap = (unit == "raw") and tier.capValue or tier.capPercent
++				local after = (unit == "raw") and tier.afterValue or tier.afterPercent
++				local candStat, wornStat = cand[word], eq[word]
++				local scale = tonumber(tier.ratingPerPercent)
++				if type(scale) ~= "number" or scale == 0 then
++					if tier.valueUnit == "percent" then
++						scale = 1
++					else
++						scale = nil
++					end
++				end
++				-- Expertise percent text is stored on Expertise and
++				-- compared directly (scale 1). A rating-only line lives
++				-- on ExpertiseRating and cannot be converted, so cap
++				-- status is unknown and the raw rating is ranked.
++				-- Mixed units (percent on one side, rating-only on the
++				-- other) cannot be compared: TRADE_OFF, cap unknown.
++				if word == "Expertise" then
++					local candUnit, wornUnit
++					if cand.Expertise ~= nil then
++						candUnit = "percent"
++					elseif cand.ExpertiseRating ~= nil then
++						candUnit = "rating"
++					end
++					if eq.Expertise ~= nil then
++						wornUnit = "percent"
++					elseif eq.ExpertiseRating ~= nil then
++						wornUnit = "rating"
++					end
++					if candUnit and wornUnit and candUnit ~= wornUnit then
++						local label = "Expertise (cap status unknown)"
++						return finish(TRADE_OFF,
++							Verdict.orderReason(profile, "trade-off", label, src,
++								"percent and rating cannot be compared"),
++							label, "trade-off")
++					elseif candUnit == "rating" or wornUnit == "rating" then
++						candStat = cand.ExpertiseRating
++						wornStat = eq.ExpertiseRating
++						scale = nil
++					else
++						if type(scale) ~= "number" or scale == 0 then
++							scale = 1
++						end
++					end
++				end
++				local current
++				if word == "Hit" and unit ~= "raw" then
++					current = Verdict.currentCapPercent("Hit", spec, tier.hitKind)
++				else
++					current = Verdict.currentCapValue(word, spec, unit)
++				end
++				local delta, status = Verdict.clampedWindowDelta(
++					candStat, wornStat, current, cap, after,
++					scale, unit)
++				if delta ~= 0 then
++					local kind = (delta > 0) and "upgrade" or "downgrade"
++					local v = (delta > 0) and "UPGRADE" or "NOT_UPGRADE"
++					local label = capLabel(tier, status)
++					return finish(v, Verdict.orderReason(profile, kind, label, src),
++						label, kind)
++				end
++			else
++				-- Ordinary or bundled tier. Collect signed deltas; do not
++				-- convert units or invent a combined score.
++				local up, down, parts = {}, {}, {}
++				for _, word in ipairs(tier.stats) do
++					local delta = signedDelta(word)
++					if delta ~= 0 then
++						parts[#parts + 1] = word
++						if delta > 0 then
++							up[#up + 1] = word
++						else
++							down[#down + 1] = word
++						end
++					end
++				end
++				if #up > 0 and #down > 0 then
++					local named = table.concat(parts, " and ")
++					local extra = named .. " conflict"
++					return finish(TRADE_OFF,
++						Verdict.orderReason(profile, "trade-off", tier.name, src, extra),
++						tier.name, "trade-off")
++				end
++				if #parts > 0 then
++					local kind = (#up > 0) and "upgrade" or "downgrade"
++					local v = (#up > 0) and "UPGRADE" or "NOT_UPGRADE"
++					return finish(v, Verdict.orderReason(profile, kind, tier.name, src),
++						tier.name, kind)
++				end
++			end
++		end
++	end
++
++	-- No ranked tier decided. An unranked speed difference is reported
++	-- but does not become an upgrade or a downgrade.
++	return finish("NOT_UPGRADE",
++		Verdict.orderReason(profile, "no change", nil, src, speedNote),
++		nil, "no change")
++end
++
+ function Verdict.weightedTotal(candStats, eqStats, profile)
+ 	local weights = (type(profile) == "table") and profile.w or nil
+ 	if type(weights) ~= "table" then return nil end
+@@ -3590,9 +5068,15 @@
+ -- The stored reason: the number the verdict came from, and the profile it came
+ -- from, so a wrong profile is visible in the Upgrades tab and in /up diag
+ -- instead of silent. `kind` adds the words for the two non-obvious outcomes.
+-function Verdict.weightedReason(w, profile, kind, tiebreakText)
++function Verdict.weightedReason(w, profile, kind, tiebreakText, profileSource)
++	local pname = type(profile) == "table" and profile.name or "no profile"
++	-- Existing "[Retribution]" tests stay byte-identical when the source
++	-- is absent. "(chosen)" / "(talents)" are appended only when set.
++	if profileSource == "chosen" or profileSource == "talents" then
++		pname = tostring(pname) .. " (" .. profileSource .. ")"
++	end
+ 	local head = "weighted " .. Verdict.numText(w.total)
+-		.. " [" .. tostring(type(profile) == "table" and profile.name or "no profile") .. "]"
++		.. " [" .. tostring(pname) .. "]"
+ 	if kind == "trade-off" then
+ 		return head .. " — better on some stats, worse on others"
+ 	elseif kind == "no change" then
+@@ -3624,6 +5108,12 @@
+ 	end
+ 	local profile = Verdict.profileFor(spec)
+ 	if profile == nil then
++		-- A named spec with no sourced table must not be guessed as another
++		-- pack. The verdict names the spec and stays silent (UNKNOWN).
++		local label = type(spec) == "table" and (spec.profileLabel or spec.weightsKey) or nil
++		if type(label) == "string" and label ~= "" then
++			return "UNKNOWN", "no sourced weights for " .. label .. " yet"
++		end
+ 		-- Requirement 5: NO WEIGHTS IS NOT A TRADE-OFF. Fall through to direction
+ 		-- counting and the player gets an amber "your call" for a pair nothing
+ 		-- weighed — the exact silence-with-an-answer this card removes.
+@@ -3632,20 +5122,31 @@
+ 		return "UNKNOWN", "verdict unavailable: no stat weights for this character (class "
+ 			.. tostring(class or "unknown") .. ", role " .. tostring(role or "unresolved") .. ")"
+ 	end
++	-- Order-only packs (Retribution today; other specs later) never invent
++	-- a numeric total. They share this entry point so evaluate(), the
++	-- tooltip, and the tests stay on one call.
++	if Verdict.isOrderProfile(profile) then
++		return Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
++	end
+ 	local w = Verdict.weightedTotal(candStats, eqStats, profile)
+ 	if w == nil then
+ 		return "UNKNOWN", "verdict unavailable: the " .. tostring(profile.name)
+ 			.. " profile carries no weights"
+ 	end
+-	local detail = { total = w.total, profile = profile.name }
++	local src = type(spec) == "table" and spec.profileSource or nil
++	local pname = profile.name
++	if src == "chosen" or src == "talents" then
++		pname = tostring(pname) .. " (" .. src .. ")"
++	end
++	local detail = { total = w.total, profile = pname }
+ 	local eps = Verdict.WEIGHT_EPSILON
+ 	if w.total >= eps then
+-		local verdict, reason = allow("UPGRADE", Verdict.weightedReason(w, profile, "upgrade"))
++		local verdict, reason = allow("UPGRADE", Verdict.weightedReason(w, profile, "upgrade", nil, src))
+ 		if verdict ~= "UPGRADE" then return verdict, reason end
+ 		return verdict, reason, detail
+ 	end
+ 	if w.total <= -eps then
+-		return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade"), detail
++		return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "downgrade", nil, src), detail
+ 	end
+ 	-- DAMAGE IS TIED. Only now may the profile's ranked tiebreakers speak (card
+ 	-- t_c4911603): a profile without a `tiebreak` list — every profile but Ret —
+@@ -3656,7 +5157,7 @@
+ 	local tb = Verdict.tiebreakTotal(candStats, eqStats, profile)
+ 	if tb ~= nil then
+ 		local kind = (tb.dir > 0) and "tiebreaker upgrade" or "tiebreaker downgrade"
+-		local reason = Verdict.weightedReason(w, profile, kind, tb.text)
++		local reason = Verdict.weightedReason(w, profile, kind, tb.text, src)
+ 		detail.tiebreak = tb.text
+ 		detail.tiebreakDir = tb.dir
+ 		if tb.dir > 0 then
+@@ -3670,11 +5171,11 @@
+ 		return "NOT_UPGRADE", reason, detail
+ 	end
+ 	if w.up > 0 and w.down > 0 then
+-		local verdict, reason = allow(TRADE_OFF, Verdict.weightedReason(w, profile, "trade-off"))
++		local verdict, reason = allow(TRADE_OFF, Verdict.weightedReason(w, profile, "trade-off", nil, src))
+ 		if verdict ~= TRADE_OFF then return verdict, reason end
+ 		return verdict, reason, detail
+ 	end
+-	return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "no change"), detail
++	return "NOT_UPGRADE", Verdict.weightedReason(w, profile, "no change", nil, src), detail
+ end
+ 
+ -- ⚠ TEST INSTRUMENTATION ONLY, exactly like Verdict.LEGACY_ORDER_DECIDES above.
+@@ -4716,10 +6217,12 @@
+ 		end
+ 	end
+ 
+-	-- SPEED: "Speed 1.90" — a decimal in 0.5..10 (the reference's own window,
+-	-- Weapon.lua:161). Read the number after the word "speed"; if the line is
+-	-- the "Speed" word on the left column with the value on the right (the
+-	-- reader joins columns), the search still finds it.
++	-- SPEED: "Speed 1.90". The 0.5–10 window is a parse disambiguator,
++	-- not a scoring weight: Classic weapon tooltips print 1.00–4.00, and
++	-- a number outside that window is not a weapon speed. Read the number
++	-- after the word "speed"; if the line is the "Speed" word on the left
++	-- column with the value on the right (the reader joins columns), the
++	-- search still finds it.
+ 	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
+ 	if sp then
+ 		local v = tonumber((sp:gsub(",", ".")))
+@@ -5145,6 +6648,42 @@
+ 	local candNumbers = weaponNumbers(candLines)
+ 	local wornNumbers = weaponNumbers(wornLines)
+ 
++	-- An order-only profile (Retribution today) judges a weapon on the
++	-- same published tiers as armour: Weapon Skill, then Weapon DPS,
++	-- then the rest. DPS-only compareDPS would skip Weapon Skill and
++	-- invent a ranking the source does not give for speed.
++	local orderProfile = type(spec) == "table" and Verdict.profileFor(spec) or nil
++	if Verdict.isOrderProfile(orderProfile) then
++		if type(wornLines) ~= "table" then
++			if wornSlotFilled then
++				return "UNKNOWN", "the equipped weapon could not be read"
++			end
++			return "UPGRADE", "upgrade: fills the weapon slot"
++		end
++		local api = type(apiBySide) == "table" and apiBySide or nil
++		local candWords = api and select(1, apiSideResolve(rawget(api, "candidate"))) or nil
++		local wornWords = api and select(1, apiSideResolve(rawget(api, "worn"))) or nil
++		-- Strip damage-range chrome so "19 - 36 Damage" does not suppress,
++		-- then fold the printed DPS / speed back in.
++		local candStats, candProc, candUnknown = parseSide(weaponStatLines(candLines), "candidate", candWords)
++		local eqStats,   eqProc,   eqUnknown   = parseSide(weaponStatLines(wornLines), "worn",      wornWords)
++		if candProc or candUnknown then
++			return "UNKNOWN", "cannot classify: " .. tostring(candUnknown or candProc)
++		end
++		if eqProc or eqUnknown then
++			return "UNKNOWN", "cannot classify: " .. tostring(eqUnknown or eqProc)
++		end
++		if type(candNumbers) == "table" then
++			if candNumbers.dps then candStats.WeaponDps = candNumbers.dps end
++			if candNumbers.speed then candStats.WeaponSpeed = candNumbers.speed end
++		end
++		if type(wornNumbers) == "table" then
++			if wornNumbers.dps then eqStats.WeaponDps = wornNumbers.dps end
++			if wornNumbers.speed then eqStats.WeaponSpeed = wornNumbers.speed end
++		end
++		return Verdict.orderVerdict(candStats, eqStats, spec, nil, orderProfile)
++	end
++
+ 	local statLed = type(spec) == "table"
+ 		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
+ 		and type(spec.order) == "table"
