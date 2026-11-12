@@ -139,7 +139,12 @@ function ns.PrintStatus()
   printL("STATUS_SOURCE", source == "gm2" and "gm2 (GatherMate2 nodes)" or "density (your recorded herbs)")
   local mapID = ns.GetPlayerMapID and ns.GetPlayerMapID()
   local herbs = ns.GetHerbDB and ns.GetHerbDB()
-  local here = (mapID and herbs and herbs.maps and herbs.maps[mapID]) and #herbs.maps[mapID] or 0
+  local here = 0
+  if type(ns.HerbMapTotal) == "function" then
+    here = ns.HerbMapTotal(mapID, herbs)
+  elseif mapID and herbs and herbs.maps and herbs.maps[mapID] then
+    here = #herbs.maps[mapID]
+  end
   printL("STATUS_HERBS", mapID and tostring(mapID) or "unknown", here, (herbs and herbs.total) or 0)
   printL("STATUS_ROUTE", ns.activeRoute and (#(ns.activeRoute.path or {}) .. " points, " .. (ns.activeRoute.source or "?")) or "none")
   -- t_2bc15917: the persisted intent and the last rebuild, so /nt status

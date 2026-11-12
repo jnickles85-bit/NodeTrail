@@ -404,6 +404,21 @@ end
 -- shape), so seeding from them would invent history for creatures we cannot
 -- name. What the records prove is what the totals get.
 local function seedTotals(b)
+  -- Clear leftover contribution stamps in a dedicated first pass. If a
+  -- previous attempt crashed mid-seed, some records may already carry
+  -- rec.skinContribution; applySkinItems would then treat those as
+  -- "already added" against a freshly reset creatures table and
+  -- under-seed per-item counts (Part B wart). Clearing first means a
+  -- retry starts from zero stamps and cannot under-count. A crash
+  -- during this pass leaves some stamps nil and some still set; the
+  -- next retry clears the rest, then reseeds.
+  if type(b.records) == "table" then
+    for _, rec in pairs(b.records) do
+      if type(rec) == "table" then
+        rec.skinContribution = nil
+      end
+    end
+  end
   b.creatures = {}
   for guid, rec in pairs(b.records) do
     if type(rec) == "table" then

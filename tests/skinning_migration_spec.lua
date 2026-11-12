@@ -347,6 +347,48 @@ onlyIf(type(R3) == "table",
       "3: the panel says there is nothing yet, instead of zeros dressed as data")
   end)
 
+-- ════════════════════════════════════════════════════════════════════════
+-- 4. A mid-seed crash must not under-seed on retry (Part B wart)
+-- ════════════════════════════════════════════════════════════════════════
+-- If seedTotals is interrupted after stamping rec.skinContribution on a
+-- record but before the schema marker, a retry used to treat that stamp as
+-- "already added" against a freshly reset creatures table and drop those
+-- items from the totals. The first pass now clears leftover stamps.
+local crashed = fixture()
+crashed.records[GUIDS.w1].skinContribution = {
+  [2934] = { count = 1, seen = 1, name = "Ruined Leather Scraps" },
+}
+crashed.creatures = {
+  [3124] = {
+    corpses = 1, kills = 1, skinned = 1, skinWindows = 1,
+    skin = { [2934] = { itemID = 2934, count = 1, seen = 1, name = "Ruined Leather Scraps" } },
+  },
+}
+crashed.schema = 1
+NodeTrailDB = { skinning = { enabled = true, schema = 1, chars = { [KEY] = crashed } } }
+local _, H4, R4 = boot()
+
+onlyIf(type(R4) == "table" and type(H4) == "table",
+  "4: the recorder did not load — the mid-seed retry section is skipped",
+  function()
+    local agg = H4.Aggregate(3124)
+    check(type(agg) == "table" and agg.records == 4,
+      "4: retry seeds all 4 Scorpid Worker corpses (got "
+        .. tostring(type(agg) == "table" and agg.records) .. ")")
+    local hides = skinItem(agg, 2934) or {}
+    check(hides.count == 4,
+      "4: leftover skinContribution on w1 does not drop its 2934 from the totals (count="
+        .. tostring(hides.count) .. ")")
+    check(hides.seen == 3,
+      "4: 2934 seen on all 3 skinned corpses (got " .. tostring(hides.seen) .. ")")
+    local agg2 = H4.Aggregate(3125)
+    local leather = skinItem(agg2, 2319) or {}
+    check(leather.count == 3 and leather.seen == 2,
+      "4: the unstamped 3125 records still seed in full (count="
+        .. tostring(leather.count) .. " seen=" .. tostring(leather.seen) .. ")")
+    check(crashed.schema == 2, "4: the retry stamps schema 2")
+  end)
+
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
   os.exit(1)

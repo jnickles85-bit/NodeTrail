@@ -178,8 +178,9 @@ local function isBeastType(creatureType)
   return ok and type(lower) == "string" and BEAST_TYPES[lower] == true
 end
 
---- Where the picks count comes from: NodeTrailDB.herbs.maps is ONE saved table
---- for every character on the account (Recorder.lua keys nothing by character),
+--- Where the picks count comes from: the account-wide herb aggregates
+--- (db.stats / lifetime totals in NodeTrailDB.herbs, not a count of the
+--- capped raw lists in herbs.maps). Recorder.lua keys nothing by character,
 --- so the wording says so. Calling it "your picks" on a character that never
 --- gathered a single herb is the lie this card exists to remove.
 local function picksLine(gathers)

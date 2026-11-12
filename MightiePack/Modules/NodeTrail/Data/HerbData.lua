@@ -182,6 +182,29 @@ H.PERSONAL_MIN = 10
 -- label; a record written before names were stored simply has none.
 function H.GetPersonalStats(primaryItem)
   local db = ns.GetHerbDB()
+  -- Schema 2 keeps these numbers in db.stats so a capped raw list cannot
+  -- shrink a player's personal drop rates. GetHerbDB has already migrated
+  -- a schema 1 save before we get here.
+  if type(db) == "table" and type(db.stats) == "table" and type(db.stats.gathers) == "table" then
+    local gathers = db.stats.gathers[primaryItem] or 0
+    local perItem = {}
+    local co = db.stats.co and db.stats.co[primaryItem]
+    if type(co) == "table" then
+      for id, n in pairs(co) do
+        perItem[id] = n
+      end
+    end
+    local nameByID = {}
+    if type(db.stats.names) == "table" then
+      for id, name in pairs(db.stats.names) do
+        local stored = H.StoredName(name)
+        if stored then
+          nameByID[id] = stored
+        end
+      end
+    end
+    return gathers, perItem, nameByID
+  end
   local gathers = 0
   local perItem, nameByID = {}, {}
   if db and db.maps then
@@ -307,6 +330,19 @@ local function unresolvedDropIDs(stored)
             end
           end
         end
+      end
+    end
+  end
+  -- Lifetime item ids/names live in db.stats after a cap trims old raw picks.
+  if type(db) == "table" and type(db.stats) == "table" then
+    if type(db.stats.names) == "table" then
+      for id, name in pairs(db.stats.names) do
+        add(id, name)
+      end
+    end
+    if type(db.stats.gathers) == "table" then
+      for id in pairs(db.stats.gathers) do
+        add(id)
       end
     end
   end
