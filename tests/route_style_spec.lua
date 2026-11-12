@@ -211,6 +211,47 @@ for i = 1, cnR do
 end
 check(not shortcut, "7: no chevron sits on the line between the two runs")
 
+-- A gap at the first or last vertex must not crash PlaceMarkers / IsClosed,
+-- must never count as a closed loop, and must take markers from the first
+-- and last usable vertices. Chevrons still run on the visible span.
+local firstGap = G.PackProjected({
+  { why = "unprojected start" },
+  { x = 0, y = 0 },
+  { x = 100, y = 0 },
+})
+check(firstGap[1] and firstGap[1].gap, "7: a missing start becomes a gap sentinel")
+check(G.IsClosed(firstGap) == false, "7: a first-gap path is not a closed loop")
+firstGap[#firstGap].close = true
+check(G.IsClosed(firstGap) == false, "7: a first-gap path is not a loop even with close=true")
+firstGap[#firstGap].close = nil
+local mk, mn = G.PlaceMarkers(firstGap)
+check(mn == 2, "7: first-gap PlaceMarkers still writes start and end (got " .. tostring(mn) .. ")")
+check(mk[1].kind == "start" and mk[1].x == 0 and mk[1].y == 0,
+  "7: start marker sits on the first usable vertex")
+check(mk[2].kind == "end" and mk[2].x == 100 and mk[2].y == 0,
+  "7: end marker sits on the last usable vertex")
+local _, cnFirst = G.PlaceChevrons(firstGap, 20)
+check(cnFirst == 5, "7: first-gap chevrons follow the 0-to-100 run (got " .. tostring(cnFirst) .. ")")
+
+local lastGap = G.PackProjected({
+  { x = 0, y = 0 },
+  { x = 100, y = 0 },
+  { why = "unprojected end" },
+})
+check(lastGap[#lastGap] and lastGap[#lastGap].gap, "7: a missing end becomes a gap sentinel")
+check(G.IsClosed(lastGap) == false, "7: a last-gap path is not a closed loop")
+lastGap[#lastGap].close = true
+check(G.IsClosed(lastGap) == false, "7: a last-gap path is not a loop even with close=true")
+lastGap[#lastGap].close = nil
+mk, mn = G.PlaceMarkers(lastGap)
+check(mn == 2, "7: last-gap PlaceMarkers still writes start and end (got " .. tostring(mn) .. ")")
+check(mk[1].kind == "start" and mk[1].x == 0 and mk[1].y == 0,
+  "7: last-gap start marker sits on the first usable vertex")
+check(mk[2].kind == "end" and mk[2].x == 100 and mk[2].y == 0,
+  "7: last-gap end marker sits on the last usable vertex")
+local _, cnLast = G.PlaceChevrons(lastGap, 20)
+check(cnLast == 5, "7: last-gap chevrons follow the 0-to-100 run (got " .. tostring(cnLast) .. ")")
+
 if failed > 0 then
   io.stderr:write(failed .. " route-style check(s) failed\n")
   os.exit(1)

@@ -477,11 +477,56 @@ if mini[1] then
   check(x2 > 5, "east end is to the right, got " .. tostring(x2))
 end
 local keptProj = ns.MinimapPath._proj
-local keptKey = ns.MinimapPath._projKey
 ns.MinimapPath:_redraw()
 check(ns.MinimapPath._proj == keptProj,
   "unchanged route, zoom, rotation and position reuse the minimap projection")
-check(ns.MinimapPath._projKey == keptKey, "the projection key is stable when nothing moved")
+
+-- Shape, instance, colour, and width are part of the cache identity, so a
+-- change to any one of them forces a rebuild. Flip each field on its own
+-- without SetRoute (SetRoute would reindex the points table and rebuild
+-- anyway).
+local shapeBefore = ns.MinimapPath._proj
+MINIMAP_SHAPE = "SQUARE"
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= shapeBefore,
+  "changing minimap shape rebuilds the projection")
+local afterSquare = ns.MinimapPath._proj
+MINIMAP_SHAPE = "ROUND"
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= afterSquare,
+  "changing back to a ROUND minimap rebuilds the projection")
+
+local instBefore = ns.MinimapPath._proj
+local savedWorldPlayer = GatherMate2.HBD.GetPlayerWorldPosition
+GatherMate2.HBD.GetPlayerWorldPosition = function()
+  local x, y = savedWorldPlayer()
+  return x, y, 7
+end
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= instBefore,
+  "changing the player instance rebuilds the projection")
+local instAfter = ns.MinimapPath._proj
+GatherMate2.HBD.GetPlayerWorldPosition = savedWorldPlayer
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= instAfter,
+  "restoring the previous instance rebuilds the projection")
+
+local db = ns.GetDB()
+local savedColor = db.pathColor
+local savedWidth = db.pathWidth
+local colorBefore = ns.MinimapPath._proj
+db.pathColor = { 1, 0, 0, 1 }
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= colorBefore,
+  "changing pathColor rebuilds the projection")
+local widthBefore = ns.MinimapPath._proj
+db.pathWidth = (tonumber(savedWidth) or 2) + 2
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= widthBefore,
+  "changing pathWidth rebuilds the projection")
+db.pathColor = savedColor
+db.pathWidth = savedWidth
+ns.MinimapPath:_redraw()
 
 local farRoute = {
   mapID = 12,

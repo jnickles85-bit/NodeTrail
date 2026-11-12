@@ -431,13 +431,21 @@ local function toPixel(xDist, yDist, sample)
   return px, py
 end
 
-local function clipToMinimap(x1, y1, x2, y2, halfW, halfH)
-  local shape = "ROUND"
+local function minimapShape()
   if type(GetMinimapShape) == "function" then
     local ok, value = pcall(GetMinimapShape)
     if ok and type(value) == "string" then
-      shape = value
+      return value
     end
+  end
+  return "ROUND"
+end
+
+-- shape is the value sampleFor already stored, so a cached redraw and a
+-- fresh clip cannot disagree about ROUND vs everything else.
+local function clipToMinimap(x1, y1, x2, y2, halfW, halfH, shape)
+  if type(shape) ~= "string" then
+    shape = minimapShape()
   end
   if shape == "ROUND" then
     return ns.PathGeom.ClipCircle(x1, y1, x2, y2, math.min(halfW, halfH) * ROUND_INSET)
@@ -466,6 +474,8 @@ function M:ReleaseVisuals()
     ns.LineDraw.Clear(self.styleDrawer)
   end
   self._projKey = nil
+  self._projSample = nil
+  self._projPoints = nil
   if self.host then
     pcall(self.host.Hide, self.host)
   end
@@ -557,6 +567,8 @@ function M:ReleaseSkinVisuals(why)
     end
   end
   self._skinProjKey = nil
+  self._skinProjSample = nil
+  self._skinProjPoints = nil
   if self.skinHost then
     pcall(self.skinHost.Hide, self.skinHost)
   end
@@ -662,7 +674,34 @@ end
 --- One projection sample for one route. The herb route calls it through
 --- `_sample` (which records the reason on self._sampleWhy); the skinning circle
 --- passes its own map/space so the two can be on different maps at once.
-local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
+local function clearSample(out)
+  out.mode = nil
+  out.px, out.py, out.pinst = nil, nil, nil
+  out.mx, out.my = nil, nil
+  out.zoneW, out.zoneH = nil, nil
+  out.radius, out.radiusUnit = nil, nil
+  out.sinF, out.cosF = nil, nil
+  out.halfW, out.halfH = nil, nil
+  out.shape = nil
+  out.r, out.g, out.b, out.a, out.width = nil, nil, nil, nil, nil
+  return out
+end
+
+local function scratchOf(self, field)
+  local t = self[field]
+  if type(t) ~= "table" then
+    t = {}
+    self[field] = t
+  end
+  return t
+end
+
+--- One projection sample for one route. The herb route calls it through
+--- `_sample` (which records the reason on self._sampleWhy); the skinning circle
+--- passes its own map/space so the two can be on different maps at once.
+--- `out` is a reused scratch table so a cache hit does not allocate.
+local function sampleFor(self, mapID, useWorld, zoneW, zoneH, out)
+  out = clearSample(out or {})
   local halfW, halfH = minimapHalf()
   if not halfW then
     return nil, "the minimap has no measurable size"
@@ -673,6 +712,7 @@ local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
   end
   local radiusYards = viewRadiusYards()
   local HBD = getHBD()
+  local shape = minimapShape()
 
   if useWorld and HBD and type(HBD.GetPlayerWorldPosition) == "function" and radiusYards then
     local ok, x, y, inst = pcall(HBD.GetPlayerWorldPosition, HBD)
@@ -682,15 +722,15 @@ local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
       -- with "the fraction the draw was built from", and in world mode that
       -- stamp read `frac=(absent,absent)` (review round 3).
       local mx, my = playerMapPosition(mapID, HBD)
-      return {
-        mode = "world",
-        px = x, py = y, pinst = inst,
-        mx = mx, my = my,
-        radius = radiusYards,
-        radiusUnit = "yards",
-        sinF = sinF, cosF = cosF,
-        halfW = halfW, halfH = halfH,
-      }, nil
+      out.mode = "world"
+      out.px, out.py, out.pinst = x, y, inst
+      out.mx, out.my = mx, my
+      out.radius = radiusYards
+      out.radiusUnit = "yards"
+      out.sinF, out.cosF = sinF, cosF
+      out.halfW, out.halfH = halfW, halfH
+      out.shape = shape
+      return out, nil
     end
   end
 
@@ -699,46 +739,79 @@ local function sampleFor(self, mapID, useWorld, zoneW, zoneH)
     return nil, ("no player position on map %s"):format(tostring(mapID))
   end
   if zoneW and zoneH and radiusYards then
-    return {
-      mode = "zone",
-      mx = mx, my = my,
-      zoneW = zoneW, zoneH = zoneH,
-      radius = radiusYards,
-      radiusUnit = "yards",
-      sinF = sinF, cosF = cosF,
-      halfW = halfW, halfH = halfH,
-    }, nil
+    out.mode = "zone"
+    out.mx, out.my = mx, my
+    out.zoneW, out.zoneH = zoneW, zoneH
+    out.radius = radiusYards
+    out.radiusUnit = "yards"
+    out.sinF, out.cosF = sinF, cosF
+    out.halfW, out.halfH = halfW, halfH
+    out.shape = shape
+    return out, nil
   end
   local fraction = fallbackViewFraction()
-  return {
-    mode = "frac",
-    mx = mx, my = my,
-    radius = fraction,
-    radiusUnit = "map fractions (fallback: no yard radius for this zone)",
-    sinF = sinF, cosF = cosF,
-    halfW = halfW, halfH = halfH,
-  }, nil
+  out.mode = "frac"
+  out.mx, out.my = mx, my
+  out.radius = fraction
+  out.radiusUnit = "map fractions (fallback: no yard radius for this zone)"
+  out.sinF, out.cosF = sinF, cosF
+  out.halfW, out.halfH = halfW, halfH
+  out.shape = shape
+  return out, nil
 end
 
 function M:_sample()
-  local sample, why = sampleFor(self, self.mapID, self.useWorld, self.zoneW, self.zoneH)
+  local sample, why = sampleFor(self, self.mapID, self.useWorld, self.zoneW, self.zoneH,
+    scratchOf(self, "_sampleScratch"))
   self._sampleWhy = why
   return sample
 end
 
---- A projection can be reused when the route, the zoom (radius and
---- minimap size), the rotation, and the player position have not moved.
-local function projectionKey(points, sample)
-  if type(points) ~= "table" or type(sample) ~= "table" then
-    return nil
+local function sameNum(a, b)
+  a, b = tonumber(a), tonumber(b)
+  if a == nil or b == nil then
+    return a == nil and b == nil
   end
-  return string.format("%s:%d:%s:%.4f:%.2f:%.2f:%.6f:%.6f:%.4f:%.4f",
-    tostring(points), #points, tostring(sample.mode or ""),
-    tonumber(sample.radius) or 0,
-    tonumber(sample.halfW) or 0, tonumber(sample.halfH) or 0,
-    tonumber(sample.sinF) or 0, tonumber(sample.cosF) or 0,
-    tonumber(sample.px) or tonumber(sample.mx) or 0,
-    tonumber(sample.py) or tonumber(sample.my) or 0)
+  return a == b
+end
+
+--- Compare the current sample (and the route table) to the one the last
+--- projection was built from. No key string is allocated.
+local function sameView(points, prevPoints, sample, prev)
+  if type(points) ~= "table" or points ~= prevPoints then
+    return false
+  end
+  if type(sample) ~= "table" or type(prev) ~= "table" then
+    return false
+  end
+  return sample.mode == prev.mode
+    and sample.shape == prev.shape
+    and sameNum(sample.radius, prev.radius)
+    and sameNum(sample.halfW, prev.halfW)
+    and sameNum(sample.halfH, prev.halfH)
+    and sameNum(sample.sinF, prev.sinF)
+    and sameNum(sample.cosF, prev.cosF)
+    and sameNum(sample.px or sample.mx, prev.px or prev.mx)
+    and sameNum(sample.py or sample.my, prev.py or prev.my)
+    and sameNum(sample.pinst, prev.pinst)
+    and sameNum(sample.zoneW, prev.zoneW)
+    and sameNum(sample.zoneH, prev.zoneH)
+    and sameNum(sample.r, prev.r)
+    and sameNum(sample.g, prev.g)
+    and sameNum(sample.b, prev.b)
+    and sameNum(sample.a, prev.a)
+    and sameNum(sample.width, prev.width)
+end
+
+-- After a miss, keep this tick's sample as the accepted view and recycle
+-- the previous accepted table as the next scratch so neither a hit nor a
+-- miss allocates a new sample table after the first pair is built.
+local function adoptSample(self, scratchField, acceptedField, scratch)
+  self[scratchField] = self[acceptedField]
+  self[acceptedField] = scratch
+  if type(self[scratchField]) ~= "table" then
+    self[scratchField] = {}
+  end
 end
 
 function M:_redraw()
@@ -784,8 +857,9 @@ function M:_redraw()
     self:ReleaseVisuals()
     return
   end
-  local key = projectionKey(self.points, sample)
-  if key and key == self._projKey and self._proj then
+  local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
+  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, a, thickness
+  if sameView(self.points, self._projPoints, sample, self._projSample) and self._proj then
     -- Reuse the pixels, but keep the stamp's clock in step with this tick
     -- so a still redraw is still dated.
     local tnow = nowTime()
@@ -797,6 +871,8 @@ function M:_redraw()
     end
     return
   end
+  adoptSample(self, "_sampleScratch", "_projSample", sample)
+  self._projPoints = self.points
 
   self._lastQueued = 0
   self._proj = nil
@@ -838,7 +914,7 @@ function M:_redraw()
     local a, b = proj.points[i], proj.points[i + 1]
     local entry = { index = i }
     if a and b and a.x and b.x then
-      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
+      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH, sample.shape)
       local raw = math.sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))
       if cx1 then
         count = count + 1
@@ -881,7 +957,6 @@ function M:_redraw()
     proj.segs[i] = entry
   end
 
-  local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
   -- Same treatment as the world map: the dot is a screen measurement, divided
   -- by whatever scale this host is drawn at, so both surfaces agree in px.
   local hostScale = 1
@@ -902,7 +977,6 @@ function M:_redraw()
   end
   self._lastQueued = count
   self._proj = proj
-  self._projKey = key
 
   -- ── t_86583cf2: THE STAMP. Captured here, once, at draw time ──────────────
   -- Every value below is what THIS draw used. The diag prints the stamp back
@@ -1079,7 +1153,8 @@ function M:_redrawSkin()
     end
   end
 
-  local sample, why = sampleFor(self, self.skinMapID, self.skinUseWorld, self.skinZoneW, self.skinZoneH)
+  local sample, why = sampleFor(self, self.skinMapID, self.skinUseWorld, self.skinZoneW, self.skinZoneH,
+    scratchOf(self, "_skinSampleScratch"))
   if not sample or not sample.radius or sample.radius <= 0 then
     self._skinWhy = "no projection: " .. tostring(why or "the sample is unusable")
     self:ReleaseSkinVisuals(self._skinWhy)
@@ -1091,14 +1166,24 @@ function M:_redrawSkin()
     self:ReleaseSkinVisuals(self._skinWhy)
     return
   end
-  local skinKey = projectionKey(self.skinPoints, sample)
-  if skinKey and skinKey == self._skinProjKey and self._skinProj then
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.78, 0.38, 0.16, 0.85 }
+  local r = tonumber(c[1]) or 0.78
+  local g = tonumber(c[2]) or 0.38
+  local bCol = tonumber(c[3]) or 0.16
+  local a = tonumber(c[4]) or 0.85
+  local thickness = tonumber((self.skinRoute and self.skinRoute.width)
+    or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
+  if thickness <= 0 then thickness = 2 end
+  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, a, thickness
+  if sameView(self.skinPoints, self._skinProjPoints, sample, self._skinProjSample) and self._skinProj then
     local tnow = nowTime()
     if type(self.skinDrawer) == "table" and type(self.skinDrawer.lastApplied) == "table" then
       self.skinDrawer.lastApplied.time = tnow
     end
     return
   end
+  adoptSample(self, "_skinSampleScratch", "_skinProjSample", sample)
+  self._skinProjPoints = self.skinPoints
 
   self._skinQueued = 0
   self._skinProj = nil
@@ -1126,7 +1211,7 @@ function M:_redrawSkin()
     local a, b = proj.points[i], proj.points[i + 1]
     local entry = { index = i }
     if a and b and a.x and b.x then
-      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH)
+      local cx1, cy1, cx2, cy2 = clipToMinimap(a.x, a.y, b.x, b.y, sample.halfW, sample.halfH, sample.shape)
       if cx1 then
         count = count + 1
         local seg = buf[count]
@@ -1141,14 +1226,6 @@ function M:_redrawSkin()
     proj.segs[i] = entry
   end
 
-  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.78, 0.38, 0.16, 0.85 }
-  local r = tonumber(c[1]) or 0.78
-  local g = tonumber(c[2]) or 0.38
-  local bCol = tonumber(c[3]) or 0.16
-  local a = tonumber(c[4]) or 0.85
-  local thickness = tonumber((self.skinRoute and self.skinRoute.width)
-    or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
-  if thickness <= 0 then thickness = 2 end
   local hostScale = 1
   if host and type(host.GetScale) == "function" then
     local okS, s = pcall(host.GetScale, host)
@@ -1167,7 +1244,6 @@ function M:_redrawSkin()
   end
   self._skinQueued = count
   self._skinProj = proj
-  self._skinProjKey = skinKey
   self._skinSample = sample
   if type(self.skinDrawer.lastApplied) == "table" then
     self.skinDrawer.lastApplied.time = nowTime()

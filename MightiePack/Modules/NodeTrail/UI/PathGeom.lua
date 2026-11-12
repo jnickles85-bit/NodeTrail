@@ -233,13 +233,24 @@ local function copyPoint(p, stop)
   return { x = p.x, y = p.y, stop = stop and true or p.stop, close = p.close }
 end
 
+local function hasXY(p)
+  return type(p) == "table" and type(p.x) == "number" and type(p.y) == "number"
+end
+
 local function almostSame(a, b, eps)
+  if not hasXY(a) or not hasXY(b) then
+    return false
+  end
   eps = eps or 1e-6
   return math.abs(a.x - b.x) <= eps and math.abs(a.y - b.y) <= eps
 end
 
 function G.IsClosed(pts)
   if type(pts) ~= "table" or #pts < 2 then
+    return false
+  end
+  -- A gap at either end means the visible path is not a closed loop.
+  if not hasXY(pts[1]) or not hasXY(pts[#pts]) then
     return false
   end
   if pts[#pts].close == true then
@@ -540,23 +551,42 @@ end
 --- loop marker at the first point (the line already returns there). An
 --- open path gets a start marker on the first point and an end marker on
 --- the last. Entries reuse `out` slots.
+local function firstUsable(pts)
+  for i = 1, #pts do
+    if hasXY(pts[i]) then
+      return pts[i]
+    end
+  end
+end
+
+local function lastUsable(pts)
+  for i = #pts, 1, -1 do
+    if hasXY(pts[i]) then
+      return pts[i]
+    end
+  end
+end
+
 function G.PlaceMarkers(pts, out)
   out = out or {}
   local n = 0
-  if type(pts) == "table" and #pts >= 1 and type(pts[1]) == "table" then
+  local first = type(pts) == "table" and firstUsable(pts) or nil
+  local last = first and lastUsable(pts) or nil
+  if first and last then
     local start = out[1]
     if type(start) ~= "table" then start = {}; out[1] = start end
     start.kind = "start"
-    start.x, start.y = pts[1].x, pts[1].y
+    start.x, start.y = first.x, first.y
     start.dx, start.dy = 0, 0
+    -- IsClosed is false when either end of the array is a gap, so a
+    -- path that is missing a projected endpoint is never a loop.
     local closed = G.IsClosed(pts)
     n = 2
-    local last = pts[#pts]
     local mark = out[2]
     if type(mark) ~= "table" then mark = {}; out[2] = mark end
     if closed then
       mark.kind = "loop"
-      mark.x, mark.y = pts[1].x, pts[1].y
+      mark.x, mark.y = first.x, first.y
     else
       mark.kind = "end"
       mark.x, mark.y = last.x, last.y
