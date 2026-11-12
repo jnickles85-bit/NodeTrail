@@ -647,11 +647,13 @@ end
 check(herbPxSame, "7: every herb fraction and projected pixel is unchanged")
 
 -- The two layers are drawn with different colours (the herb drawer keeps the
--- profile's white; the circle's drawer gets the skinning green).
+-- profile's teal; the circle's drawer gets the skinning rust).
 local herbApplied = ns.LineDraw.Applied(M.drawer) or {}
 local skinApplied = ns.LineDraw.Applied(M.skinDrawer) or {}
-check(herbApplied.r == 1 and herbApplied.g == 1 and herbApplied.b == 1,
-  "7: the herb drawer is still drawn in the profile's white (got "
+check(math.abs((herbApplied.r or 0) - 0.400) < 1e-9
+    and math.abs((herbApplied.g or 0) - 0.988) < 1e-9
+    and math.abs((herbApplied.b or 0) - 0.945) < 1e-9,
+  "7: the herb drawer is still drawn in the profile's teal (got "
   .. tostring(herbApplied.r) .. "," .. tostring(herbApplied.g) .. "," .. tostring(herbApplied.b) .. ")")
 check(skinApplied.r == S.COLOR[1] and skinApplied.g == S.COLOR[2] and skinApplied.b == S.COLOR[3],
   "7: the circle has its own colour (got " .. tostring(skinApplied.r) .. ","
@@ -721,8 +723,56 @@ check(miniApplied.r == S.COLOR[1] and miniApplied.g == S.COLOR[2],
   "8: the minimap circle is drawn in the circle's colour (got " .. tostring(miniApplied.r)
   .. "," .. tostring(miniApplied.g) .. ")")
 local herbMini = ns.LineDraw.Applied(MP.drawer) or {}
-check(herbMini.r == 1 and herbMini.g == 1 and herbMini.b == 1,
-  "8: the minimap herb route is still white")
+check(math.abs((herbMini.r or 0) - 0.400) < 1e-9 and math.abs((herbMini.g or 0) - 0.988) < 1e-9,
+  "8: the minimap herb route is still teal")
+
+
+-- ════════════════════════════════════════════════════════════════════════
+-- 9. A "can't draw" release must hide decor regions, not leave them
+-- ════════════════════════════════════════════════════════════════════════
+local function shownDecor(drawer)
+  local n = 0
+  if not drawer or type(drawer.pool) ~= "table" then
+    return 0
+  end
+  local high = drawer.poolHigh or #drawer.pool
+  for i = 1, high do
+    local o = drawer.pool[i]
+    if o then
+      local shown = false
+      if type(o.IsShown) == "function" then
+        shown = o:IsShown() and true or false
+      else
+        shown = o.shown and true or false
+      end
+      if shown then
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+check((shownDecor(M.styleDrawer) or 0) > 0,
+  "9: the world herb route has visible decor before release (got "
+  .. tostring(shownDecor(M.styleDrawer)) .. ")")
+M:ReleaseVisuals("can't draw")
+check(shownDecor(M.styleDrawer) == 0,
+  "9: ReleaseVisuals(reason) hides every world herb decor region (got "
+  .. tostring(shownDecor(M.styleDrawer)) .. " shown)")
+check((shownDecor(M.skinStyleDrawer) or 0) > 0,
+  "9: the world skinning circle has visible decor before release (got "
+  .. tostring(shownDecor(M.skinStyleDrawer)) .. ")")
+M:ReleaseSkin("can't draw")
+check(shownDecor(M.skinStyleDrawer) == 0,
+  "9: ReleaseSkin(reason) hides every world skinning decor region (got "
+  .. tostring(shownDecor(M.skinStyleDrawer)) .. " shown)")
+check((shownDecor(MP.skinStyleDrawer) or 0) > 0,
+  "9: the minimap skinning circle has visible decor before release (got "
+  .. tostring(shownDecor(MP.skinStyleDrawer)) .. ")")
+MP:ReleaseSkinVisuals("can't draw")
+check(shownDecor(MP.skinStyleDrawer) == 0,
+  "9: ReleaseSkinVisuals(reason) hides every minimap skinning decor region (got "
+  .. tostring(shownDecor(MP.skinStyleDrawer)) .. " shown)")
 
 -- ════════════════════════════════════════════════════════════════════════
 if failed > 0 then

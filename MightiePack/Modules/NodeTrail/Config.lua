@@ -11,7 +11,9 @@ ns.defaults = {
     nodeFilter = {},
     clusterCell = 0.03,      -- ~3% of map → merge nearby nodes
     maxStops = 40,           -- cap loop size in dense zones
-    pathColor = { 1, 1, 1, 0.9 }, -- Zygor-style white
+    -- Touchstone accent teal. Existing saves still holding the old white
+    -- default are migrated once in GetDB (pathColorMigration).
+    pathColor = { 0.400, 0.988, 0.945, 0.85 },
     pathWidth = 2,
     showWorldMap = true,
     showMinimap = true,
@@ -107,6 +109,21 @@ local function fillMissing(target, defaults)
   end
 end
 
+-- Semantic route colours (audit §2.2). Herb routes use pathColor (teal
+-- by default). Skinning uses SkinRoute.COLOR (rust). Mining is reserved
+-- for a later gather type and is not drawn yet.
+ns.RoutePalette = {
+  herb     = { 0.400, 0.988, 0.945, 0.85 }, -- Touchstone accent #66FCF1
+  skinning = { 0.78, 0.38, 0.16, 0.85 },    -- rust / warm leather
+  mining   = { 0.55, 0.64, 0.74, 0.85 },    -- steel; unused until mining routes exist
+}
+
+local function isOldWhiteDefault(c)
+  if type(c) ~= "table" then return false end
+  local r, g, b, a = tonumber(c[1]), tonumber(c[2]), tonumber(c[3]), tonumber(c[4])
+  return r == 1 and g == 1 and b == 1 and (a == 0.9 or a == nil)
+end
+
 function ns.GetDB()
   if type(NodeTrailDB) ~= "table" then
     NodeTrailDB = CopyTable(ns.defaults)
@@ -114,7 +131,21 @@ function ns.GetDB()
   if type(NodeTrailDB.profile) ~= "table" then
     NodeTrailDB.profile = CopyTable(ns.defaults.profile)
   end
+  -- Read the saved colour BEFORE fillMissing: a partial {1,1,1} would
+  -- otherwise pick up the new teal alpha (0.85) and stop looking like
+  -- the old white default ({1,1,1} or {1,1,1,0.9}).
+  local wasOldWhite = isOldWhiteDefault(NodeTrailDB.profile.pathColor)
   fillMissing(NodeTrailDB, ns.defaults)
+  -- One-time swap of the previous white default to teal. A colour the
+  -- player did not pick (the old shipped default) is replaced; any other
+  -- stored table is left alone and the marker is still stamped so this
+  -- does not run again.
+  if NodeTrailDB.profile.pathColorMigration ~= 1 then
+    if wasOldWhite then
+      NodeTrailDB.profile.pathColor = { 0.400, 0.988, 0.945, 0.85 }
+    end
+    NodeTrailDB.profile.pathColorMigration = 1
+  end
   -- The waypoint arrow shipped default-ON by mistake before it was parked, so a
   -- profile written by that build stored `showNavArrow = true`. Changing the
   -- default cannot undo a stored value, and that is exactly what happened: the

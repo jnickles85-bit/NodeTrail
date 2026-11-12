@@ -101,6 +101,45 @@ do
   check(not G.IsMapPoint(nil), "nil point")
 end
 
+-- Decor containment: every kept item sits inside the clip region.
+do
+  check(G.InCircle(0, 0, 0, 0, 5), "origin is inside a radius-5 circle")
+  check(G.InCircle(3, 4, 0, 0, 5), "a point on the circle is inside")
+  check(not G.InCircle(3, 4.1, 0, 0, 5), "a point just outside is rejected")
+  check(not G.InCircle(nil, 0, 0, 0, 5), "a missing coordinate is outside")
+  check(G.InRect(1, 1, 0, 0, 10, 10), "a point inside a y-down rect")
+  check(G.InRect(0, 5, -10, 10, 10, -10), "min/max swap still contains the point")
+  check(not G.InRect(11, 1, 0, 0, 10, 10), "a point past the right edge is outside")
+  check(G.InsideClip(0, 0, nil), "a missing clip admits a usable point")
+  check(not G.InsideClip(nil, 0, nil), "a missing clip still rejects a bad point")
+  check(G.InsideClip(0, 0, { shape = "circle", x = 0, y = 0, r = 5 }), "circle clip admits the origin")
+  check(not G.InsideClip(20, 0, { shape = "circle", x = 0, y = 0, r = 5 }), "circle clip rejects a far point")
+
+  local items = {
+    { kind = "start", x = 0, y = 0 },
+    { kind = "chevron", x = 2, y = 0 },
+    { kind = "chevron", x = 20, y = 0 },
+    { kind = "end", x = 40, y = 0 },
+  }
+  local clip = { shape = "circle", x = 0, y = 0, r = 5 }
+  local kept, kn = G.ClipItems(items, #items, clip)
+  check(kn == 2, "7: only the items inside the circle are kept (got " .. tostring(kn) .. ")")
+  for i = 1, kn do
+    check(G.InsideClip(kept[i].x, kept[i].y, clip),
+      "7: kept decor item " .. i .. " is inside the circle")
+  end
+  check(kept[1].kind == "start" and kept[2].kind == "chevron" and kept[2].x == 2,
+    "7: the in-circle start and chevron stay, in order")
+
+  local rect = { shape = "rect", left = -1, top = -1, right = 3, bottom = 1 }
+  kept, kn = G.ClipItems(items, #items, rect)
+  check(kn == 2, "7: a rect clip also drops the far chevron and the end (got " .. tostring(kn) .. ")")
+  for i = 1, kn do
+    check(G.InsideClip(kept[i].x, kept[i].y, rect),
+      "7: kept decor item " .. i .. " is inside the rect")
+  end
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " geometry check(s) failed\n")
   os.exit(1)

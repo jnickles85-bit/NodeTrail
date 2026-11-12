@@ -285,6 +285,52 @@ local function shown(frame, kind)
   return list
 end
 
+-- Stroke drawers now paint a dark under-stroke then the colour stroke
+-- (two regions per segment). Chevrons and markers live on a separate
+-- style drawer that shares the same host, so count a drawer's own pool
+-- and ignore the dark outline when asserting the coloured route.
+local function colorOf(o)
+  if not o then
+    return nil
+  end
+  -- The region stub starts with color = {}, so an empty table is not a paint.
+  local c = o.colorTexture or o.color
+  if type(c) == "table" and (c[1] or c[2] or c[3]) then
+    return c
+  end
+  return o.vertexColor or c
+end
+
+local function isDarkColor(c)
+  return type(c) == "table" and (tonumber(c[1]) or 0) < 0.2
+    and (tonumber(c[2]) or 0) < 0.2 and (tonumber(c[3]) or 0) < 0.2
+end
+
+local function shownIn(drawer, kind)
+  local list = {}
+  if not drawer or type(drawer.pool) ~= "table" then
+    return list
+  end
+  for i = 1, #drawer.pool do
+    local o = drawer.pool[i]
+    if o and o.shown and (not kind or o.kind == kind) then
+      list[#list + 1] = o
+    end
+  end
+  return list
+end
+
+local function colorIn(drawer, kind)
+  local list = {}
+  for _, o in ipairs(shownIn(drawer, kind)) do
+    local c = colorOf(o)
+    if not isDarkColor(c) then
+      list[#list + 1] = o
+    end
+  end
+  return list
+end
+
 local function pointXY(point)
   -- SetStartPoint("CENTER"/"TOPLEFT", parent, rel, x, y)
   return point[4], point[5]
@@ -306,8 +352,8 @@ check(ns.MapOverlay._drawError == nil, "world draw error " .. tostring(ns.MapOve
 check(ns.MapOverlay._providerHooked, "data provider hooked")
 check(ns.MapOverlay.drawer.mode == "line", "world uses CreateLine")
 check(ns.MapOverlay.host and ns.MapOverlay.host.shown, "world host shown")
-local worldLines = shown(ns.MapOverlay.host, "line")
-check(#worldLines == 1, "one world segment, got " .. #worldLines)
+local worldLines = colorIn(ns.MapOverlay.drawer, "line")
+check(#worldLines == 1, "one world colour stroke, got " .. #worldLines)
 if worldLines[1] then
   local x1, y1 = pointXY(worldLines[1].startPoint)
   local x2, y2 = pointXY(worldLines[1].endPoint)
@@ -317,8 +363,10 @@ if worldLines[1] then
   near(y2, -300, "world y2")
   near(worldLines[1].thickness, 1, "thickness divided by canvas scale")
   local color = worldLines[1].colorTexture
-  check(color and color[1] == 1 and color[2] == 1 and color[3] == 1, "white line")
-  near(color and color[4] or -1, 0.9, "alpha")
+  near(color and color[1] or -1, 0.400, "teal R")
+  near(color and color[2] or -1, 0.988, "teal G")
+  near(color and color[3] or -1, 0.945, "teal B")
+  near(color and color[4] or -1, 0.85, "alpha")
 end
 
 WorldMapFrame.mapID = 99
@@ -328,7 +376,7 @@ check(#shown(ns.MapOverlay.host, "line") == 0, "no segments on a different map")
 
 WorldMapFrame.mapID = 12
 ns.MapOverlay:Redraw()
-check(#shown(ns.MapOverlay.host, "line") == 1, "restored on the route map")
+check(#colorIn(ns.MapOverlay.drawer, "line") == 1, "restored on the route map")
 
 ns.GetDB().showWorldMap = false
 ns.MapOverlay:SetRoute(route)
@@ -336,7 +384,7 @@ check(ns.MapOverlay.path == nil, "showWorldMap false clears")
 check(#shown(ns.MapOverlay.host, "line") == 0, "no world lines when disabled")
 ns.GetDB().showWorldMap = true
 ns.MapOverlay:SetRoute(route)
-check(#shown(ns.MapOverlay.host, "line") == 1, "world lines return")
+check(#colorIn(ns.MapOverlay.drawer, "line") == 1, "world lines return")
 
 -- Texture fallbacks on the same host. The ladder is now
 --   line (endpoints proven) -> dots (two-corner anchors) -> rotate -> texcoord,
@@ -348,25 +396,25 @@ ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "dots", "anchored-dots fallback, got "
   .. tostring(ns.MapOverlay.drawer.mode))
-local dots = shown(ns.MapOverlay.host, "texture")
+local dots = shownIn(ns.MapOverlay.drawer, "texture")
 check(#dots > 50, "a chain of dots covers the segment, got " .. #dots)
--- t_7f6fdae4: the dot is sized in SCREEN px (3px floor) and divided by the
--- surface scale, and every dot is drawn twice (outline, then white). On this
--- canvas (scale 2) the white dot is 1.5 canvas px wide = 3 screen px.
-local function isWhite(o)
+-- t_7f6fdae4: the dot is sized in SCREEN px (4px floor) and divided by the
+-- surface scale, and every dot is drawn twice (outline, then the teal core).
+-- On this canvas (scale 2) the core is 2 canvas px wide = 4 screen px.
+local function isCore(o)
   local c = o and (o.colorTexture or o.color)
-  return type(c) == "table" and c[1] == 1 and c[2] == 1 and c[3] == 1
+  return type(c) == "table" and not isDarkColor(c)
 end
-local whites = {}
+local cores = {}
 for i = 1, #dots do
-  if isWhite(dots[i]) then
-    whites[#whites + 1] = dots[i]
+  if isCore(dots[i]) then
+    cores[#cores + 1] = dots[i]
   end
 end
-check(#whites > 20, "a chain of white dots covers the segment, got " .. #whites)
-check(#dots == 2 * #whites, "each dot is drawn twice (outline + white), got "
-  .. #dots .. " objects for " .. #whites .. " dots")
-local firstDot, lastDot = whites[1], whites[#whites]
+check(#cores > 20, "a chain of coloured cores covers the segment, got " .. #cores)
+check(#dots == 2 * #cores, "each dot is drawn twice (outline + core), got "
+  .. #dots .. " objects for " .. #cores .. " dots")
+local firstDot, lastDot = cores[1], cores[#cores]
 if firstDot and lastDot and type(firstDot.points) == "table"
   and #firstDot.points >= 2 and #lastDot.points >= 2 then
   -- 800x600 canvas shown at scale 2, segment (200,300) -> (600,300): the white
@@ -389,8 +437,8 @@ ns.MapOverlay.drawer.disableDots = true
 ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "rotate", "SetRotation fallback")
-check(#shown(ns.MapOverlay.host, "texture") == 1, "rotated texture segment")
-local rot = shown(ns.MapOverlay.host, "texture")[1]
+check(#shownIn(ns.MapOverlay.drawer, "texture") == 2, "rotated outline + colour stroke")
+local rot = colorIn(ns.MapOverlay.drawer, "texture")[1]
 check(rot and rot.texture == "Interface\\Buttons\\WHITE8X8", "solid white texture")
 check(rot and rot.rotation == 0, "horizontal segment rotation")
 
@@ -399,8 +447,8 @@ ns.MapOverlay.drawer.disableLine = true
 ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "texcoord", "SetTexCoord fallback")
-local taxi = shown(ns.MapOverlay.host, "texture")
-check(#taxi >= 1, "texcoord segment visible")
+local taxi = colorIn(ns.MapOverlay.drawer, "texture")
+check(#taxi >= 1, "texcoord colour stroke visible")
 check(taxi[1] and taxi[1].texture == "Interface\\TaxiFrame\\UI-Taxi-Line", "taxi line texture")
 check(taxi[1] and taxi[1].texcoord and #taxi[1].texcoord == 8, "eight texcoords")
 WOW_NO_ROTATION = false
@@ -417,8 +465,8 @@ local nearRoute = {
 ns.MinimapPath:SetRoute(nearRoute)
 check(ns.MinimapPath._drawError == nil, "minimap error " .. tostring(ns.MinimapPath._drawError))
 check(ns.MinimapPath.host and ns.MinimapPath.host.shown, "minimap host shown")
-local mini = shown(ns.MinimapPath.host, "line")
-check(#mini == 1, "nearby minimap segment, got " .. #mini)
+local mini = colorIn(ns.MinimapPath.drawer, "line")
+check(#mini == 1, "nearby minimap colour stroke, got " .. #mini)
 if mini[1] then
   near(mini[1].thickness, 2, "minimap stroke uses pathWidth")
   local x1, y1 = pointXY(mini[1].startPoint)
@@ -428,6 +476,57 @@ if mini[1] then
   near(y2, 0, "east end y")
   check(x2 > 5, "east end is to the right, got " .. tostring(x2))
 end
+local keptProj = ns.MinimapPath._proj
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj == keptProj,
+  "unchanged route, zoom, rotation and position reuse the minimap projection")
+
+-- Shape, instance, colour, and width are part of the cache identity, so a
+-- change to any one of them forces a rebuild. Flip each field on its own
+-- without SetRoute (SetRoute would reindex the points table and rebuild
+-- anyway).
+local shapeBefore = ns.MinimapPath._proj
+MINIMAP_SHAPE = "SQUARE"
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= shapeBefore,
+  "changing minimap shape rebuilds the projection")
+local afterSquare = ns.MinimapPath._proj
+MINIMAP_SHAPE = "ROUND"
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= afterSquare,
+  "changing back to a ROUND minimap rebuilds the projection")
+
+local instBefore = ns.MinimapPath._proj
+local savedWorldPlayer = GatherMate2.HBD.GetPlayerWorldPosition
+GatherMate2.HBD.GetPlayerWorldPosition = function()
+  local x, y = savedWorldPlayer()
+  return x, y, 7
+end
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= instBefore,
+  "changing the player instance rebuilds the projection")
+local instAfter = ns.MinimapPath._proj
+GatherMate2.HBD.GetPlayerWorldPosition = savedWorldPlayer
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= instAfter,
+  "restoring the previous instance rebuilds the projection")
+
+local db = ns.GetDB()
+local savedColor = db.pathColor
+local savedWidth = db.pathWidth
+local colorBefore = ns.MinimapPath._proj
+db.pathColor = { 1, 0, 0, 1 }
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= colorBefore,
+  "changing pathColor rebuilds the projection")
+local widthBefore = ns.MinimapPath._proj
+db.pathWidth = (tonumber(savedWidth) or 2) + 2
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj ~= widthBefore,
+  "changing pathWidth rebuilds the projection")
+db.pathColor = savedColor
+db.pathWidth = savedWidth
+ns.MinimapPath:_redraw()
 
 local farRoute = {
   mapID = 12,
@@ -448,7 +547,7 @@ local crossRoute = {
   },
 }
 ns.MinimapPath:SetRoute(crossRoute)
-local crossed = shown(ns.MinimapPath.host, "line")
+local crossed = colorIn(ns.MinimapPath.drawer, "line")
 check(#crossed == 1, "crossing segment is clipped onto the minimap")
 if crossed[1] then
   local x1 = pointXY(crossed[1].startPoint)
@@ -467,7 +566,7 @@ local squareRoute = {
   },
 }
 ns.MinimapPath:SetRoute(squareRoute)
-local squareLine = shown(ns.MinimapPath.host, "line")[1]
+local squareLine = colorIn(ns.MinimapPath.drawer, "line")[1]
 check(squareLine ~= nil, "square minimap draws the segment")
 if squareLine then
   local x2 = squareLine.endPoint[4]
@@ -478,7 +577,7 @@ MINIMAP_SHAPE = "ROUND"
 cvars.rotateMinimap = "1"
 PLAYER_FACING = math.pi / 2
 ns.MinimapPath:SetRoute(nearRoute)
-local turned = shown(ns.MinimapPath.host, "line")[1]
+local turned = colorIn(ns.MinimapPath.drawer, "line")[1]
 check(turned ~= nil, "rotated minimap still draws")
 if turned then
   near(turned.endPoint[4], 0, "facing west puts east behind, x")
@@ -515,12 +614,12 @@ GatherMate2.HBD.GetWorldCoordinatesFromZone = nil
 GatherMate2.HBD.GetPlayerWorldPosition = nil
 ns.MinimapPath:SetRoute(nearRoute)
 check(ns.MinimapPath._drawError == nil, "zone fallback error " .. tostring(ns.MinimapPath._drawError))
-check(#shown(ns.MinimapPath.host, "line") == 1, "zone-size fallback draws")
+check(#colorIn(ns.MinimapPath.drawer, "line") == 1, "zone-size fallback draws")
 check(not ns.MinimapPath.useWorld, "fallback is not world mode")
 
 GatherMate2.HBD.GetZoneSize = nil
 ns.MinimapPath:SetRoute(nearRoute)
-check(#shown(ns.MinimapPath.host, "line") == 1, "fraction fallback draws")
+check(#colorIn(ns.MinimapPath.drawer, "line") == 1, "fraction fallback draws")
 GatherMate2.HBD.GetZoneSize = function() return 2000, 2000 end
 GatherMate2.HBD.GetWorldCoordinatesFromZone = savedWorld
 GatherMate2.HBD.GetPlayerWorldPosition = savedPlayer
@@ -600,6 +699,188 @@ SlashCmdList.NODETRAIL("reload")
 check(ns.activeRoute and ns.activeRoute.source == "density", "reload rebuilds density route")
 SlashCmdList.NODETRAIL("stop")
 check(ns.MapOverlay.path == nil and ns.MinimapPath.path == nil, "stop clears density route")
+
+-- Rotate is the confirmed default when the probe keeps it; texcoord
+-- is never chosen automatically, even if that proof also took.
+local L = ns.LineDraw
+check(L.PickStrokeMode({
+  rotate = { took = true },
+  texcoord = { took = true },
+  line = { took = false },
+}) == "rotate", "proved rotate is the default even when texcoord also took")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  texcoord = { took = true },
+  line = { took = false },
+}) == "dots", "texcoord is not the automatic default")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  texcoord = { took = true },
+  line = { took = false },
+}, "texcoord") == "texcoord", "texcoord can still be pinned")
+check(L.PickStrokeMode({
+  rotate = { took = true },
+  line = { took = true },
+}) == "rotate", "proved rotate wins over a proved CreateLine")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  line = { took = true },
+}) == "line", "a proved CreateLine is used when rotate did not take")
+
+-- Decor cores must use the same texture, colour path, and OVERLAY/7
+-- layer as the rotate stroke, and must sit above their rim (sublevel 6).
+-- Sublevel 8 is outside the client's -8..7 range; a core painted there
+-- is dropped and only the black rim remains visible.
+local WHITE8X8 = "Interface\\Buttons\\WHITE8X8"
+local decoParent = makeFrame(nil)
+decoParent._seq = 0
+function decoParent:CreateTexture()
+  local t = makeRegion()
+  t.kind = "texture"
+  t.parent = self
+  function t:SetRotation(angle) self.rotation = angle end
+  function t:GetRotation() return self.rotation or 0 end
+  function t:SetDrawLayer(layer, sub)
+    self.layer = layer
+    self.sublevel = sub
+  end
+  function t:GetDrawLayer()
+    return self.layer, self.sublevel
+  end
+  function t:SetVertexColor(cr, cg, cb, ca)
+    self.vertexColor = { cr, cg, cb, ca }
+  end
+  function t:SetTexture(path)
+    self.texture = path
+  end
+  function t:Show()
+    self.shown = true
+    decoParent._seq = decoParent._seq + 1
+    self.shownAt = decoParent._seq
+  end
+  self.children[#self.children + 1] = t
+  return t
+end
+local rust = { 0.78, 0.38, 0.16, 0.85 }
+local cream = { 0.98, 0.92, 0.78, 1 }
+local decoDrawer = L.Create()
+L.DrawDecor(decoDrawer, decoParent, {
+  { kind = "start", x = 10, y = 20 },
+  { kind = "end", x = 80, y = 20 },
+  { kind = "chevron", x = 40, y = 20, dx = 1, dy = 0 },
+}, 3, rust[1], rust[2], rust[3], rust[4], "ydown", { scale = 1 })
+
+local function shownKids()
+  local out = {}
+  for _, t in ipairs(decoParent.children) do
+    if t.kind == "texture" and t.shown and type(t.vertexColor) == "table" then
+      out[#out + 1] = t
+    end
+  end
+  return out
+end
+local kids = shownKids()
+check(#kids >= 4, "decor paints marker rims, marker cores, and chevron arms (got " .. tostring(#kids) .. ")")
+
+local function isBlack(c)
+  return c and c[1] == 0 and c[2] == 0 and c[3] == 0
+end
+local function isCream(c)
+  return c and math.abs(c[1] - cream[1]) < 0.02
+    and math.abs(c[2] - cream[2]) < 0.02
+    and math.abs(c[3] - cream[3]) < 0.02
+end
+local function isRust(c)
+  return c and math.abs(c[1] - rust[1]) < 0.02
+    and math.abs(c[2] - rust[2]) < 0.02
+    and math.abs(c[3] - rust[3]) < 0.02
+end
+
+local cores, rims, chevs = {}, {}, {}
+for _, t in ipairs(kids) do
+  if isBlack(t.vertexColor) then
+    rims[#rims + 1] = t
+  elseif isCream(t.vertexColor) then
+    cores[#cores + 1] = t
+  elseif isRust(t.vertexColor) then
+    chevs[#chevs + 1] = t
+  end
+end
+check(#cores == 2, "start and end cores use the cream fill (got " .. tostring(#cores) .. ")")
+check(#rims == 2, "start and end markers keep a thin dark rim (got " .. tostring(#rims) .. ")")
+check(#chevs == 2, "a chevron is two rust arms (got " .. tostring(#chevs) .. ")")
+for i, t in ipairs(cores) do
+  check(type(t.width) == "number" and math.abs(t.width - 3.5) < 0.05,
+    "marker core " .. i .. " is 3.5 screen px (got " .. tostring(t.width) .. ")")
+end
+for i, t in ipairs(rims) do
+  check(type(t.width) == "number" and math.abs(t.width - 4.0) < 0.05,
+    "marker rim " .. i .. " is 4.0 screen px (core 3.5 plus a 0.5 px rim, got "
+      .. tostring(t.width) .. ")")
+end
+
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+-- the constant above is written with escaped backslashes in this generator;
+-- compare against what Lua stored.
+local function hasWhite(t)
+  return type(t.texture) == "string" and t.texture:find("WHITE8X8", 1, true) ~= nil
+end
+for i, t in ipairs(cores) do
+  check(hasWhite(t), "marker core " .. i .. " uses WHITE8X8 (got " .. tostring(t.texture) .. ")")
+  check(t.layer == "OVERLAY", "marker core " .. i .. " is on OVERLAY (got " .. tostring(t.layer) .. ")")
+  check(t.sublevel == 7, "marker core " .. i .. " uses stroke sublevel 7 (got " .. tostring(t.sublevel) .. ")")
+end
+for i, t in ipairs(chevs) do
+  check(hasWhite(t), "chevron arm " .. i .. " uses WHITE8X8 (got " .. tostring(t.texture) .. ")")
+  check(t.layer == "OVERLAY", "chevron arm " .. i .. " is on OVERLAY (got " .. tostring(t.layer) .. ")")
+  check(t.sublevel == 7, "chevron arm " .. i .. " uses stroke sublevel 7 (got " .. tostring(t.sublevel) .. ")")
+  check(isRust(t.vertexColor), "chevron arm " .. i .. " is rust, not black")
+end
+for i, t in ipairs(rims) do
+  check(t.layer == "OVERLAY", "marker rim " .. i .. " is on OVERLAY")
+  check(t.sublevel == 6, "marker rim " .. i .. " uses stroke rim sublevel 6 (got " .. tostring(t.sublevel) .. ")")
+end
+-- Each cream core sits above its black rim: higher sublevel, and painted later.
+local function nearestRim(core)
+  local best, bestD
+  for _, rim in ipairs(rims) do
+    local d = math.abs((core.width or 0) - (rim.width or 0))
+    -- same centre: compare shownAt / size; pick unused later. Use size: rim is larger.
+    if (rim.width or 0) >= (core.width or 0) then
+      if not bestD or d < bestD then
+        best, bestD = rim, d
+      end
+    end
+  end
+  return best
+end
+-- Pair by closeness of centres. paintSolid SetPoint CENTER, parent TOPLEFT, cx, -cy.
+local function cxOf(t)
+  local p = t.points and t.points[1]
+  return p and p[4]
+end
+for _, core in ipairs(cores) do
+  local pair
+  local best
+  for _, rim in ipairs(rims) do
+    local dc, dr = cxOf(core), cxOf(rim)
+    if dc and dr then
+      local d = math.abs(dc - dr)
+      if not best or d < best then
+        best, pair = d, rim
+      end
+    end
+  end
+  check(pair ~= nil, "each marker core has a rim at the same centre")
+  if pair then
+    check((pair.sublevel or 0) < (core.sublevel or 0),
+      "decor core sublevel sits above its rim")
+    check(type(core.shownAt) == "number" and type(pair.shownAt) == "number"
+      and core.shownAt > pair.shownAt,
+      "decor core is painted after its rim (core " .. tostring(core.shownAt)
+        .. " rim " .. tostring(pair.shownAt) .. ")")
+  end
+end
 
 if failed > 0 then
   io.stderr:write(failed .. " draw smoke check(s) failed\n")

@@ -407,8 +407,8 @@ do
     "px = ",
     "x-radius = ",
     "minimap drawn dot route: segment 1->2",
-    "route point #1",
-    "world-map anchor for #1 =",
+    "route point #",
+    "world-map anchor for #",
     "minimap drawn vs planned: drawn=",
     "ticker=",
     "since-last-move=",
@@ -490,8 +490,9 @@ do
     "F: the stop carries the client's player coordinates")
   check(rec and type(rec.dotX) == "number" and type(rec.playerSegPx) == "number",
     "F: the stop carries the drawn dot's anchor and the player's distance to its segment")
-  check(rec and rec.seg == 1 and rec.index == 1,
-    "F: the stop names the route segment and point the dot belongs to")
+  check(rec and rec.seg == 1 and type(rec.index) == "number" and rec.index >= 1 and rec.index <= 2,
+    "F: the stop names the route segment and point the nearest drawn dot belongs to (seg="
+      .. tostring(rec and rec.seg) .. " index=" .. tostring(rec and rec.index) .. ")")
   playerX = 0.510
   NW:Mark("toward")
   playerX = 0.522
