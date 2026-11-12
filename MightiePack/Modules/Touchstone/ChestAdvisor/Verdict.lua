@@ -4446,11 +4446,42 @@ function Verdict.isOrderProfile(profile)
 		and type(profile.tiers) == "table" and #profile.tiers > 0
 end
 
+-- Secret numbers still have type() == "number". Arithmetic or comparison
+-- on one raises ("attempt to perform arithmetic on a secret number value
+-- (execution tainted by 'MightiePack')") — the live crash at
+-- Verdict.playerHitPercent (GetHitModifier / GetCombatRatingBonus) when
+-- ChestAdvisor.scan ran from the character-sheet refresh. pcall of the
+-- API does not help: the call succeeds and returns the secret. The
+-- client's issecretvalue (and canaccessvalue, when present) is the only
+-- safe test; a missing predicate is treated as "not secret" so older
+-- clients still work.
+local function isSecretNumber(v)
+	if type(issecretvalue) == "function" then
+		local ok, r = pcall(issecretvalue, v)
+		if ok and r then return true end
+	end
+	if type(canaccessvalue) == "function" then
+		local ok, r = pcall(canaccessvalue, v)
+		if ok and r == false then return true end
+	end
+	return false
+end
+
+local function usableNumber(v)
+	if type(v) ~= "number" or isSecretNumber(v) then return nil end
+	return v
+end
+
+-- Second return is true when the client handed back a secret, so a
+-- caller that would add this to another number can refuse the whole
+-- sum instead of silently dropping the secret half.
 local function pcallNumber(fn, ...)
-	if type(fn) ~= "function" then return nil end
+	if type(fn) ~= "function" then return nil, false end
 	local ok, a = pcall(fn, ...)
-	if ok and type(a) == "number" then return a end
-	return nil
+	if not ok then return nil, false end
+	if isSecretNumber(a) then return nil, true end
+	if type(a) ~= "number" then return nil, false end
+	return a, false
 end
 
 -- Combat-rating bonus for a named CR_* global. The index is only used
@@ -4458,8 +4489,20 @@ end
 -- other fallback index.
 local function combatRatingBonus(crName)
 	local idx = rawget(_G, crName)
-	if idx == nil then return nil end
+	if idx == nil then return nil, false end
 	return pcallNumber(GetCombatRatingBonus, idx)
+end
+
+-- First readable named combat-rating bonus. A secret result stops the
+-- search: we must not substitute a different CR_* for one the client
+-- hid, and we must not add a later readable modifier to a secret rating.
+local function firstRatingBonus(...)
+	for i = 1, select("#", ...) do
+		local n, secret = combatRatingBonus((select(i, ...)))
+		if secret then return nil, true end
+		if n ~= nil then return n, false end
+	end
+	return nil, false
 end
 
 -- The player's current Hit chance, in percent, or nil when unreadable.
@@ -4470,16 +4513,15 @@ end
 -- and only when that global is present.
 function Verdict.playerHitPercent(kind)
 	if kind == "spell" then
-		local bonus = combatRatingBonus("CR_HIT_SPELL")
-			or combatRatingBonus("CR_HIT")
-			or combatRatingBonus("CR_HIT_MELEE")
-		local mod = pcallNumber(GetSpellHitModifier)
+		local bonus, bSec = firstRatingBonus("CR_HIT_SPELL", "CR_HIT", "CR_HIT_MELEE")
+		local mod, mSec = pcallNumber(GetSpellHitModifier)
+		if bSec or mSec then return nil end
 		if bonus == nil and mod == nil then return nil end
 		return (bonus or 0) + (mod or 0)
 	end
-	local bonus = combatRatingBonus("CR_HIT_MELEE")
-		or combatRatingBonus("CR_HIT")
-	local mod = pcallNumber(GetHitModifier)
+	local bonus, bSec = firstRatingBonus("CR_HIT_MELEE", "CR_HIT")
+	local mod, mSec = pcallNumber(GetHitModifier)
+	if bSec or mSec then return nil end
 	if bonus == nil and mod == nil then return nil end
 	return (bonus or 0) + (mod or 0)
 end
@@ -4493,7 +4535,11 @@ end
 function Verdict.playerExpertisePercent()
 	if type(GetExpertisePercent) == "function" then
 		local ok, mh = pcall(GetExpertisePercent)
-		if ok and type(mh) == "number" then return mh end
+		if ok then
+			local n = usableNumber(mh)
+			if n ~= nil then return n end
+			if isSecretNumber(mh) then return nil end
+		end
 	end
 	local idx = rawget(_G, "CR_EXPERTISE")
 	if idx == nil then return nil end
@@ -4505,10 +4551,10 @@ end
 -- skill, not a rating). pcallNumber would keep only the first return.
 function Verdict.playerDefenseSkill()
 	local ok, base, mod = pcall(UnitDefense, "player")
-	if ok and type(base) == "number" then
-		return base + (tonumber(mod) or 0)
-	end
-	return nil
+	if not ok then return nil end
+	if isSecretNumber(base) or isSecretNumber(mod) then return nil end
+	if type(base) ~= "number" then return nil end
+	return base + (usableNumber(mod) or 0)
 end
 
 -- True when the player has an off-hand weapon equipped. Classic
@@ -4552,10 +4598,15 @@ end
 function Verdict.playerWeaponSkill()
 	if type(UnitAttackBothHands) == "function" then
 		local ok, mainBase, mainMod, offBase, offMod = pcall(UnitAttackBothHands, "player")
-		if ok and type(mainBase) == "number" then
-			local main = mainBase + (tonumber(mainMod) or 0)
+		if not ok then return nil end
+		if isSecretNumber(mainBase) or isSecretNumber(mainMod)
+			or isSecretNumber(offBase) or isSecretNumber(offMod) then
+			return nil
+		end
+		if type(mainBase) == "number" then
+			local main = mainBase + (usableNumber(mainMod) or 0)
 			if offhandWeaponEquipped() and type(offBase) == "number" then
-				local off = offBase + (tonumber(offMod) or 0)
+				local off = offBase + (usableNumber(offMod) or 0)
 				if off < main then return off end
 			end
 			return main

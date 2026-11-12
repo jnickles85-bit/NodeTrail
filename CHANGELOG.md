@@ -6,6 +6,9 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+### Fixed
+- ChestAdvisor no longer errors when the Forever client returns a secret number from combat-stat APIs (`GetHitModifier`, `GetSpellHitModifier`, `GetCombatRatingBonus`, `GetExpertisePercent`, `UnitDefense`, `UnitAttackBothHands`). Those values still have type `number`, so adding them in `Verdict.playerHitPercent` raised `attempt to perform arithmetic on a secret number value (execution tainted by 'MightiePack')` — live, while opening the character sheet (`ChestAdvisor.scan` from the paper-doll refresh). Secret returns are now skipped (the cap is treated as unreadable) and a scan requested in combat is deferred until `PLAYER_REGEN_ENABLED`, checking `UnitAffectingCombat` as well as `InCombatLockdown`.
+
 ## [0.3.4-beta] - 2026-11-11
 
 ### Changed
