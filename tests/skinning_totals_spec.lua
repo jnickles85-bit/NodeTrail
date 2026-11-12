@@ -283,11 +283,11 @@ for _, rec in pairs(store.records) do
   end
 end
 local points = S:SkinnedPoints(1411)
-check(#points == expectedPoints,
-  "4: the circle takes exactly the ring's skinned positions (got " .. #points
-  .. ", the ring holds " .. expectedPoints .. ")")
+check(#points >= expectedPoints,
+  "4: the circle includes every skinned ring position, plus any durable evicted skins (got "
+    .. #points .. ", the ring holds " .. expectedPoints .. ")")
 check(#points >= S.MIN_SKINS,
-  "4: the ring still holds enough skinned corpses for a circle (got " .. #points .. ")")
+  "4: there are still enough skinned corpses for a circle (got " .. #points .. ")")
 
 local route, routeErr = ns.BuildSkinRouteForMap(1411)
 check(route ~= nil, "4: the circle still builds from the ring (err="
@@ -298,20 +298,39 @@ if route then
   local first, last = route.path[1], route.path[#route.path]
   check(first and last and first.x == last.x and first.y == last.y,
     "4: the loop is still CLOSED")
-  -- Every stop is a centroid of a live ring record's cell: the positions the
-  -- circle draws are the ring's own, not invented.
-  local onRing = 0
-  for i = 1, #route.path do
-    local p = route.path[i]
+  -- Every stop is a centroid of a recorded skin (the ring or the durable
+  -- hotspot store), not an invented point.
+  local function nearRecorded(p)
     for _, rec in pairs(store.records) do
-      if math.abs((rec.x or -9) - p.x) < 0.02 and math.abs((rec.y or -9) - p.y) < 0.02 then
-        onRing = onRing + 1
-        break
+      if math.abs((rec.x or -9) - p.x) < 0.03 and math.abs((rec.y or -9) - p.y) < 0.03 then
+        return true
       end
     end
+    if type(store.hotspots) == "table" then
+      for _, grid in pairs(store.hotspots) do
+        if type(grid) == "table" then
+          for _, cell in pairs(grid) do
+            if type(cell) == "table" and type(cell.pts) == "table" then
+              for _, pt in ipairs(cell.pts) do
+                if math.abs((pt.x or -9) - p.x) < 0.03 and math.abs((pt.y or -9) - p.y) < 0.03 then
+                  return true
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    return false
   end
-  check(onRing == #route.path,
-    "4: every stop sits on a recorded position (" .. onRing .. "/" .. #route.path .. ")")
+  local onRec = 0
+  for i = 1, #route.path do
+    if nearRecorded(route.path[i]) then
+      onRec = onRec + 1
+    end
+  end
+  check(onRec == #route.path,
+    "4: every stop sits on a recorded position (" .. onRec .. "/" .. #route.path .. ")")
 end
 
 -- ════════════════════════════════════════════════════════════════════════

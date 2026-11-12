@@ -82,8 +82,14 @@ local function isValidFraction(v)
 end
 
 --- The skinned positions this character recorded on ONE map.
---- Only records with a confirmed Skinning cast (rec.skinned == true) and a
---- stored map position count. The store is READ; no bucket is created here.
+--- The current ring (rec.skinned == true, with a map position) is unioned
+--- with the durable per-map hotspot store, deduped by guid, so MIN_SKINS
+--- counts both. The store is READ; no bucket is created here.
+--- A cell keeps at most HOTSPOT_MAX_PTS (32) position samples; further
+--- skins still increment cell.n (and are remembered in cell.seen) but
+--- do not add another path point. SkinnedPoints therefore yields at
+--- most 32 points from one cell's store (plus any of those guids still
+--- on the ring, which are already counted from the ring).
 --- @param mapID number|nil
 --- @return { {x=,y=,guid=} }, why|nil
 function S:SkinnedPoints(mapID)
@@ -103,14 +109,50 @@ function S:SkinnedPoints(mapID)
   end
   local records = type(store.records) == "table" and store.records or {}
   local order = type(store.order) == "table" and store.order or {}
+  local seen = {}
+  local function add(x, y, guid)
+    if not isValidFraction(x) or not isValidFraction(y) then
+      return
+    end
+    if type(guid) == "string" and guid ~= "" then
+      if seen[guid] then
+        return
+      end
+      seen[guid] = true
+    end
+    pts[#pts + 1] = { x = x, y = y, guid = guid }
+  end
   for i = 1, #order do
     local rec = records[order[i]]
-    if type(rec) == "table"
-      and rec.skinned == true
-      and rec.map == mapID
-      and isValidFraction(rec.x)
-      and isValidFraction(rec.y) then
-      pts[#pts + 1] = { x = rec.x, y = rec.y, guid = rec.guid }
+    if type(rec) == "table" and rec.skinned == true and rec.map == mapID then
+      add(rec.x, rec.y, rec.guid)
+    end
+  end
+  -- Durable store: skinned positions folded out of the ring (and the
+  -- one-time ring migration). MIN_SKINS counts these as well as the ring.
+  local grid = type(store.hotspots) == "table" and store.hotspots[mapID]
+  if type(grid) == "table" then
+    for key, cell in pairs(grid) do
+      if type(cell) == "table" then
+        local usedPts = false
+        if type(cell.pts) == "table" then
+          for i = 1, #cell.pts do
+            local p = cell.pts[i]
+            if type(p) == "table" then
+              add(p.x, p.y, p.guid)
+              usedPts = true
+            end
+          end
+        end
+        if not usedPts then
+          local cx, cy = tostring(key):match("^(%d+):(%d+)$")
+          local recR = recorder()
+          if cx and recR and type(recR.SkinCellCenter) == "function" then
+            local x, y = recR.SkinCellCenter(tonumber(cx), tonumber(cy))
+            add(x, y, nil)
+          end
+        end
+      end
     end
   end
   return pts

@@ -31,10 +31,12 @@
 --
 -- TWO KINDS OF MEMORY (schema 2, t_e3ea3698):
 --
---   * the RING — `records`/`order`, the newest R.MAX_RECORDS corpses. It is
---     ROUTE DATA: Route/SkinRoute draws the farming circle from the map
---     positions it holds. It evicts, by design, and its positions are what the
---     player's own kills on this map look like.
+--   * the RING — `records`/`order`, the newest R.MAX_RECORDS corpses. It
+--     evicts, by design. Unskinned kills are evicted first. A skinned
+--     record with a map position is folded into the durable per-map
+--     hotspot grid (store.hotspots) before it leaves the ring, so a
+--     farming circle cannot be wiped by a hundred unskinnable kills.
+--     Route/SkinRoute draws from the grid plus the ring.
 --   * the TOTALS — `creatures[creatureID]`, every number a player is shown.
 --     They accumulate for as long as the character exists and are NEVER
 --     evicted. Before them every aggregate was a ring-walk, so a beast skinned
@@ -57,8 +59,21 @@ ns.Recorder = R
 -- per-creature totals that never evict (see the totals section below); a
 -- schema 1 bucket is upgraded in place, exactly once, by R:Upgrade.
 R.SCHEMA = 2
-R.MAX_RECORDS = 100       -- ring: the newest 100 corpses are kept (route data)
+R.MAX_RECORDS = 100       -- ring: the newest 100 corpses are kept
 R.MAX_UNCLASSIFIED = 20   -- ring: windows we could not honestly classify
+-- Durable skinning hotspots (same cell size as the herb-history grid):
+-- 2% of normalized map width, a 50x50 bound, never evicted by unskinned
+-- kills. Exact positions are kept per cell so the farming circle can be
+-- rebuilt after the ring turns over.
+R.HOTSPOT_CELL = 0.02
+R.HOTSPOT_BINS = 50
+R.HOTSPOT_MAX_CELLS = 50 * 50
+R.HOTSPOT_MAX_NODES = 32
+R.HOTSPOT_MAX_PTS = 32
+-- cell.seen and store.unpositionedEvictedGuids grow without a bound,
+-- at about 38 bytes per unique skinned corpse (the guid string plus a
+-- table entry). They are never trimmed: a re-fold must not increment
+-- n, and an unpositioned eviction must not be counted twice.
 R.SKIN_WINDOW = 60        -- a successful cast attributes a window within this
 R.SKIN_SPELL_ID = 8613    -- live-confirmed on this client (dump sk 20)
 
@@ -563,6 +578,8 @@ local function shapeStore(b)
   if type(b.records) ~= "table" then b.records = {} end
   if type(b.order) ~= "table" then b.order = {} end
   if type(b.unclassified) ~= "table" then b.unclassified = {} end
+  if type(b.hotspots) ~= "table" then b.hotspots = {} end
+  if type(b.unpositionedEvicted) ~= "table" then b.unpositionedEvicted = {} end
   if type(b.counts) ~= "table" then b.counts = {} end
   for i = 1, #STORE_COUNTS do
     if type(b.counts[STORE_COUNTS[i]]) ~= "number" then b.counts[STORE_COUNTS[i]] = 0 end
@@ -596,6 +613,9 @@ function R:Upgrade(b)
     b.schema = R.SCHEMA
   end
   if type(b.creatures) ~= "table" then b.creatures = {} end
+  -- Fold the current ring's skinned positions into the durable grid
+  -- once. The ring and the totals are kept; this never discards data.
+  R.SeedSkinHotspots(b)
   return b
 end
 
@@ -641,6 +661,273 @@ function R:Disable()
   return true
 end
 
+
+local function isValidFraction(v)
+  return type(v) == "number" and v == v and v >= 0 and v <= 1
+end
+
+--- A record the farming circle can use: confirmed skin, with a map position.
+function R.HasSkinPosition(rec)
+  return type(rec) == "table"
+    and rec.skinned == true
+    and type(rec.map) == "number"
+    and isValidFraction(rec.x)
+    and isValidFraction(rec.y)
+end
+
+--- Cell key for a normalized map position. Clamped to the 50x50 grid.
+function R.SkinCellKey(x, y)
+  x = tonumber(x) or 0
+  y = tonumber(y) or 0
+  if x < 0 then x = 0 elseif x > 1 then x = 1 end
+  if y < 0 then y = 0 elseif y > 1 then y = 1 end
+  local bins = R.HOTSPOT_BINS
+  local cell = R.HOTSPOT_CELL
+  local cx = math.floor(x / cell)
+  local cy = math.floor(y / cell)
+  if cx >= bins then cx = bins - 1 end
+  if cy >= bins then cy = bins - 1 end
+  if cx < 0 then cx = 0 end
+  if cy < 0 then cy = 0 end
+  return cx .. ":" .. cy, cx, cy
+end
+
+function R.SkinCellCenter(cx, cy)
+  local cell = R.HOTSPOT_CELL
+  return (cx + 0.5) * cell, (cy + 0.5) * cell
+end
+
+local function gridCellCount(grid)
+  local n = 0
+  if type(grid) ~= "table" then return n end
+  for _ in pairs(grid) do
+    n = n + 1
+  end
+  return n
+end
+
+--- Fold one skinned, positioned record into the per-map hotspot grid.
+--- Idempotent on guid: a record already in the cell is not counted twice.
+function R.FoldSkinIntoHotspots(store, rec)
+  if type(store) ~= "table" or not R.HasSkinPosition(rec) then
+    return false
+  end
+  if type(store.hotspots) ~= "table" then
+    store.hotspots = {}
+  end
+  local grid = store.hotspots[rec.map]
+  if type(grid) ~= "table" then
+    grid = {}
+    store.hotspots[rec.map] = grid
+  end
+  local key = R.SkinCellKey(rec.x, rec.y)
+  local cell = grid[key]
+  if type(cell) ~= "table" then
+    if gridCellCount(grid) >= R.HOTSPOT_MAX_CELLS then
+      key = "_"
+      cell = grid[key]
+      if type(cell) ~= "table" then
+        cell = { n = 0, nodes = {}, last = 0, pts = {} }
+        grid[key] = cell
+      end
+    else
+      cell = { n = 0, nodes = {}, last = 0, pts = {} }
+      grid[key] = cell
+    end
+  end
+  if type(cell.pts) ~= "table" then cell.pts = {} end
+  if type(cell.nodes) ~= "table" then cell.nodes = {} end
+  if type(cell.seen) ~= "table" then cell.seen = {} end
+  -- Idempotency lives in seen, not in the capped pts list. seen grows
+  -- with cell.n (one guid per counted fold) and is never trimmed by
+  -- HOTSPOT_MAX_PTS, so a re-fold of a guid that missed the pts cap
+  -- cannot increment n. Only the position samples are capped.
+  -- seen is stamped after n is incremented so a crash between the
+  -- check and the increment cannot leave a "seen but not counted"
+  -- hole that a retry would skip.
+  if type(rec.guid) == "string" and rec.guid ~= "" then
+    if cell.seen[rec.guid] then
+      return false
+    end
+  end
+  cell.n = (cell.n or 0) + 1
+  if type(rec.guid) == "string" and rec.guid ~= "" then
+    cell.seen[rec.guid] = true
+  end
+  local ts = tonumber(rec.skinCastAt) or tonumber(rec.diedAt) or tonumber(rec.firstSeenAt)
+  if ts and ts > (tonumber(cell.last) or 0) then
+    cell.last = ts
+  end
+  local nk = rec.creatureID or rec.name
+  if nk ~= nil then
+    if cell.nodes[nk] ~= nil then
+      cell.nodes[nk] = cell.nodes[nk] + 1
+    else
+      local nKeys = 0
+      for _ in pairs(cell.nodes) do
+        nKeys = nKeys + 1
+      end
+      if nKeys < R.HOTSPOT_MAX_NODES then
+        cell.nodes[nk] = 1
+      end
+    end
+  end
+  if #cell.pts < R.HOTSPOT_MAX_PTS then
+    cell.pts[#cell.pts + 1] = { x = rec.x, y = rec.y, guid = rec.guid }
+  end
+  return true
+end
+
+--- Copy guids already stored in cell.pts into cell.seen, without
+--- incrementing n. A save written before seen existed (the 398752f
+--- head) can have pts and hotspotsSeeded but an empty seen; a re-fold
+--- of those guids would otherwise double-count.
+function R.BackfillSkinSeen(store)
+  if type(store) ~= "table" or type(store.hotspots) ~= "table" then
+    return store
+  end
+  for _, grid in pairs(store.hotspots) do
+    if type(grid) == "table" then
+      for _, cell in pairs(grid) do
+        if type(cell) == "table" and type(cell.pts) == "table" then
+          if type(cell.seen) ~= "table" then
+            cell.seen = {}
+          end
+          for i = 1, #cell.pts do
+            local pt = cell.pts[i]
+            if type(pt) == "table" and type(pt.guid) == "string" and pt.guid ~= "" then
+              cell.seen[pt.guid] = true
+            end
+          end
+        end
+      end
+    end
+  end
+  return store
+end
+
+--- One-time migration: fold every skinned, positioned record still in the
+--- ring into the durable grid. Never discards the ring or the totals.
+--- Guarded by store.hotspotsSeeded so a second load cannot double-count.
+--- Even when already seeded, seen is backfilled from pts so a pre-seen
+--- save cannot be double-counted on a later fold.
+function R.SeedSkinHotspots(store)
+  if type(store) ~= "table" then
+    return store
+  end
+  if type(store.hotspots) ~= "table" then
+    store.hotspots = {}
+  end
+  if store.hotspotsSeeded == true then
+    R.BackfillSkinSeen(store)
+    return store
+  end
+  local records = type(store.records) == "table" and store.records or {}
+  local order = type(store.order) == "table" and store.order or {}
+  for i = 1, #order do
+    R.FoldSkinIntoHotspots(store, records[order[i]])
+  end
+  -- Also walk records not in order, so nothing skinned is left behind.
+  local inOrder = {}
+  for i = 1, #order do
+    inOrder[order[i]] = true
+  end
+  for guid, rec in pairs(records) do
+    if not inOrder[guid] then
+      R.FoldSkinIntoHotspots(store, rec)
+    end
+  end
+  store.hotspotsSeeded = true
+  R.BackfillSkinSeen(store)
+  return store
+end
+
+--- Count a skinned record that left the ring without a map position
+--- (it cannot be folded). Per-map (`unpositionedEvicted[mapID]`; a
+--- missing map uses the key `"_"`). Idempotent on guid so a crash
+--- retry cannot increment the same record twice.
+function R.CountUnpositionedEviction(store, rec)
+  if type(store) ~= "table" or type(rec) ~= "table" or rec.skinned ~= true then
+    return false
+  end
+  if R.HasSkinPosition(rec) then
+    return false
+  end
+  if type(store.unpositionedEvictedGuids) ~= "table" then
+    store.unpositionedEvictedGuids = {}
+  end
+  if type(store.unpositionedEvicted) ~= "table" then
+    store.unpositionedEvicted = {}
+  end
+  local g = rec.guid
+  if type(g) == "string" and g ~= "" then
+    if store.unpositionedEvictedGuids[g] then
+      return false
+    end
+    store.unpositionedEvictedGuids[g] = true
+  end
+  local mk = rec.map
+  if type(mk) ~= "number" then
+    mk = "_"
+  end
+  store.unpositionedEvicted[mk] = (store.unpositionedEvicted[mk] or 0) + 1
+  return true
+end
+
+--- Evict until the ring is at MAX_RECORDS. Unskinned records (and
+--- skinned records with no map position) go first. A skinned, positioned
+--- record is folded into the hotspot grid before it is dropped.
+function R.EvictRing(store, keepGuid)
+  if type(store) ~= "table" or type(store.order) ~= "table" then
+    return
+  end
+  if type(store.records) ~= "table" then store.records = {} end
+  while #store.order > R.MAX_RECORDS do
+    local evictAt = nil
+    local last = #store.order
+    for i = 1, last do
+      local guid = store.order[i]
+      if guid ~= keepGuid then
+        local rec = store.records[guid]
+        if not R.HasSkinPosition(rec) then
+          evictAt = i
+          break
+        end
+      end
+    end
+    if evictAt == nil then
+      -- The ring is all durable skins; evict the oldest that is not the
+      -- record we just wrote.
+      for i = 1, last do
+        if store.order[i] ~= keepGuid then
+          evictAt = i
+          break
+        end
+      end
+    end
+    if evictAt == nil then
+      break
+    end
+    local old = store.order[evictAt]
+    if not old then
+      break
+    end
+    local rec = store.records[old]
+    -- Fold (or count) first, then drop the ring entry, so a crash
+    -- after the fold still leaves the record in order/records for a
+    -- retry. The fold is idempotent on guid.
+    if R.HasSkinPosition(rec) then
+      R.FoldSkinIntoHotspots(store, rec)
+    elseif type(rec) == "table" and rec.skinned == true then
+      R.CountUnpositionedEviction(store, rec)
+    end
+    table.remove(store.order, evictAt)
+    if old ~= keepGuid then
+      store.records[old] = nil
+    end
+  end
+end
+
 -- ── the record ───────────────────────────────────────────────────────
 local function place(rec, ev)
   -- position at DEATH is what the model wants; a record created from a loot
@@ -672,12 +959,9 @@ function R:RecordFor(guid, t)
   -- one more corpse of this creature, counted where it can never be evicted
   local row = R:CreatureRow(store, rec.creatureID, true)
   if row then row.corpses = row.corpses + 1 end
-  while #store.order > R.MAX_RECORDS do
-    -- Eviction drops the RECORD only. What the corpse contributed to the
-    -- creature's totals stays: that is the whole point of the totals table.
-    local old = table.remove(store.order, 1)
-    if old and old ~= guid then store.records[old] = nil end
-  end
+  -- Eviction drops the RECORD only. Totals stay. Skinned positions are
+  -- folded into the durable hotspot grid first; unskinned kills go first.
+  R.EvictRing(store, guid)
   return rec
 end
 
