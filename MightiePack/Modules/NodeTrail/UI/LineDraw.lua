@@ -1141,7 +1141,8 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     end
     drawer.dotOutside, drawer.dotBox = nil, nil
     local function paint(plans)
-      local index, painted, missing = 1, 0, 0
+      local index
+      local painted, missing = 0, 0
       local first
       -- A retry repaints the pool, so the sample must describe the LAST paint:
       -- keeping the first paint's read-back would print a plan that is no longer

@@ -480,7 +480,6 @@ function G.PlaceChevrons(pts, spacing, out)
             local ux, uy = dx / segLen, dy / segLen
             while target <= walked + segLen + 1e-9 and target <= total - margin + 1e-9 do
               if target >= margin then
-                local t = (target - walked) / segLen
                 n = n + 1
                 local item = out[n]
                 if type(item) ~= "table" then
@@ -515,7 +514,6 @@ function G.PlaceMarkers(pts, out)
   out = out or {}
   local n = 0
   if type(pts) == "table" and #pts >= 1 and type(pts[1]) == "table" then
-    n = 1
     local start = out[1]
     if type(start) ~= "table" then start = {}; out[1] = start end
     start.kind = "start"
