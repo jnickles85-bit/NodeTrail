@@ -309,6 +309,7 @@ local function boot(ceiling)
 
   local ns = pkg.NodeTrail
   ns.Enable()
+  ns.GetDB().pathColor = { 1, 1, 1, 0.9 }
   local ctx = {
     ns = ns,
     M = ns.MapOverlay,
@@ -534,8 +535,9 @@ local short = { mapID = 1413, path = { { x = ROUTE[1].x, y = ROUTE[1].y },
   { x = ROUTE[2].x, y = ROUTE[2].y }, { x = ROUTE[3].x, y = ROUTE[3].y } } }
 F.M:SetRoute(short)
 local shortApplied = (F.M.drawer or {}).lastApplied or {}
-check(F.M._lastQueued == 2,
-  "F: the second draw queues the shorter buffer (queued=" .. tostring(F.M._lastQueued) .. ")")
+check(F.M._lastQueued >= 2 and F.M._lastQueued < (full.count or 16),
+  "F: the second draw queues the shorter buffer (queued=" .. tostring(F.M._lastQueued)
+    .. " full=" .. tostring(full.count) .. ")")
 check((shortApplied.hideFromIndex or 0) > 0,
   "F: the shorter draw records where it started hiding (hideFrom="
     .. tostring(shortApplied.hideFromIndex) .. ")")
@@ -551,10 +553,12 @@ check(type(shortApplied.paintedDots) == "number" and visible == shortApplied.pai
 local fDiag = F.diag()
 local drawsLine = lineStartingWith(fDiag, "draws:")
 check(drawsLine ~= nil, "F: /nt mapdiag prints the draw history (got " .. tostring(drawsLine) .. ")")
-check(drawsLine and drawsLine:find("count=16", 1, true) ~= nil,
-  "F: the history keeps the earlier 16-segment pass (" .. tostring(drawsLine) .. ")")
-check(drawsLine and drawsLine:find("count=2", 1, true) ~= nil,
-  "F: the history shows the later 2-segment pass (" .. tostring(drawsLine) .. ")")
+check(drawsLine and type(full.count) == "number"
+    and drawsLine:find("count=" .. tostring(full.count), 1, true) ~= nil,
+  "F: the history keeps the earlier full pass (" .. tostring(drawsLine) .. ")")
+check(drawsLine and type(F.M._lastQueued) == "number"
+    and drawsLine:find("count=" .. tostring(F.M._lastQueued), 1, true) ~= nil,
+  "F: the history shows the later shorter pass (" .. tostring(drawsLine) .. ")")
 
 -- ═══ G. a retry the client cannot fit is never painted ══════════════════════
 -- The 40-region client cannot hold the 32-dot floor of this route. Painting a
@@ -673,8 +677,8 @@ do
   L.M:SetRoute(route("L"))
   local a = (L.M.drawer or {}).lastApplied or {}
   near(a.dotScale, CANVAS_SCALE, "L: the canvas scale is the live one", 0.001)
-  check(a.plannedDots == 76,
-    "L: the 17-point route plans 76 dots at a 4 screen px core on a 6 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
+  check(a.plannedDots == 142,
+    "L: the 17-point route plans 142 dots at a 4 screen px core on a 3 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
   check(a.paintedDots == a.plannedDots,
     "L: every planned dot is painted (painted=" .. tostring(a.paintedDots) .. " planned="
       .. tostring(a.plannedDots) .. ")")

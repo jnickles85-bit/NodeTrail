@@ -285,6 +285,52 @@ local function shown(frame, kind)
   return list
 end
 
+-- Stroke drawers now paint a dark under-stroke then the colour stroke
+-- (two regions per segment). Chevrons and markers live on a separate
+-- style drawer that shares the same host, so count a drawer's own pool
+-- and ignore the dark outline when asserting the coloured route.
+local function colorOf(o)
+  if not o then
+    return nil
+  end
+  -- The region stub starts with color = {}, so an empty table is not a paint.
+  local c = o.colorTexture or o.color
+  if type(c) == "table" and (c[1] or c[2] or c[3]) then
+    return c
+  end
+  return o.vertexColor or c
+end
+
+local function isDarkColor(c)
+  return type(c) == "table" and (tonumber(c[1]) or 0) < 0.2
+    and (tonumber(c[2]) or 0) < 0.2 and (tonumber(c[3]) or 0) < 0.2
+end
+
+local function shownIn(drawer, kind)
+  local list = {}
+  if not drawer or type(drawer.pool) ~= "table" then
+    return list
+  end
+  for i = 1, #drawer.pool do
+    local o = drawer.pool[i]
+    if o and o.shown and (not kind or o.kind == kind) then
+      list[#list + 1] = o
+    end
+  end
+  return list
+end
+
+local function colorIn(drawer, kind)
+  local list = {}
+  for _, o in ipairs(shownIn(drawer, kind)) do
+    local c = colorOf(o)
+    if not isDarkColor(c) then
+      list[#list + 1] = o
+    end
+  end
+  return list
+end
+
 local function pointXY(point)
   -- SetStartPoint("CENTER"/"TOPLEFT", parent, rel, x, y)
   return point[4], point[5]
@@ -306,8 +352,8 @@ check(ns.MapOverlay._drawError == nil, "world draw error " .. tostring(ns.MapOve
 check(ns.MapOverlay._providerHooked, "data provider hooked")
 check(ns.MapOverlay.drawer.mode == "line", "world uses CreateLine")
 check(ns.MapOverlay.host and ns.MapOverlay.host.shown, "world host shown")
-local worldLines = shown(ns.MapOverlay.host, "line")
-check(#worldLines == 1, "one world segment, got " .. #worldLines)
+local worldLines = colorIn(ns.MapOverlay.drawer, "line")
+check(#worldLines == 1, "one world colour stroke, got " .. #worldLines)
 if worldLines[1] then
   local x1, y1 = pointXY(worldLines[1].startPoint)
   local x2, y2 = pointXY(worldLines[1].endPoint)
@@ -317,8 +363,10 @@ if worldLines[1] then
   near(y2, -300, "world y2")
   near(worldLines[1].thickness, 1, "thickness divided by canvas scale")
   local color = worldLines[1].colorTexture
-  check(color and color[1] == 1 and color[2] == 1 and color[3] == 1, "white line")
-  near(color and color[4] or -1, 0.9, "alpha")
+  near(color and color[1] or -1, 0.400, "teal R")
+  near(color and color[2] or -1, 0.988, "teal G")
+  near(color and color[3] or -1, 0.945, "teal B")
+  near(color and color[4] or -1, 0.85, "alpha")
 end
 
 WorldMapFrame.mapID = 99
@@ -328,7 +376,7 @@ check(#shown(ns.MapOverlay.host, "line") == 0, "no segments on a different map")
 
 WorldMapFrame.mapID = 12
 ns.MapOverlay:Redraw()
-check(#shown(ns.MapOverlay.host, "line") == 1, "restored on the route map")
+check(#colorIn(ns.MapOverlay.drawer, "line") == 1, "restored on the route map")
 
 ns.GetDB().showWorldMap = false
 ns.MapOverlay:SetRoute(route)
@@ -336,7 +384,7 @@ check(ns.MapOverlay.path == nil, "showWorldMap false clears")
 check(#shown(ns.MapOverlay.host, "line") == 0, "no world lines when disabled")
 ns.GetDB().showWorldMap = true
 ns.MapOverlay:SetRoute(route)
-check(#shown(ns.MapOverlay.host, "line") == 1, "world lines return")
+check(#colorIn(ns.MapOverlay.drawer, "line") == 1, "world lines return")
 
 -- Texture fallbacks on the same host. The ladder is now
 --   line (endpoints proven) -> dots (two-corner anchors) -> rotate -> texcoord,
@@ -348,25 +396,25 @@ ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "dots", "anchored-dots fallback, got "
   .. tostring(ns.MapOverlay.drawer.mode))
-local dots = shown(ns.MapOverlay.host, "texture")
+local dots = shownIn(ns.MapOverlay.drawer, "texture")
 check(#dots > 50, "a chain of dots covers the segment, got " .. #dots)
--- t_7f6fdae4: the dot is sized in SCREEN px (3px floor) and divided by the
--- surface scale, and every dot is drawn twice (outline, then white). On this
--- canvas (scale 2) the white dot is 1.5 canvas px wide = 3 screen px.
-local function isWhite(o)
+-- t_7f6fdae4: the dot is sized in SCREEN px (4px floor) and divided by the
+-- surface scale, and every dot is drawn twice (outline, then the teal core).
+-- On this canvas (scale 2) the core is 2 canvas px wide = 4 screen px.
+local function isCore(o)
   local c = o and (o.colorTexture or o.color)
-  return type(c) == "table" and c[1] == 1 and c[2] == 1 and c[3] == 1
+  return type(c) == "table" and not isDarkColor(c)
 end
-local whites = {}
+local cores = {}
 for i = 1, #dots do
-  if isWhite(dots[i]) then
-    whites[#whites + 1] = dots[i]
+  if isCore(dots[i]) then
+    cores[#cores + 1] = dots[i]
   end
 end
-check(#whites > 20, "a chain of white dots covers the segment, got " .. #whites)
-check(#dots == 2 * #whites, "each dot is drawn twice (outline + white), got "
-  .. #dots .. " objects for " .. #whites .. " dots")
-local firstDot, lastDot = whites[1], whites[#whites]
+check(#cores > 20, "a chain of coloured cores covers the segment, got " .. #cores)
+check(#dots == 2 * #cores, "each dot is drawn twice (outline + core), got "
+  .. #dots .. " objects for " .. #cores .. " dots")
+local firstDot, lastDot = cores[1], cores[#cores]
 if firstDot and lastDot and type(firstDot.points) == "table"
   and #firstDot.points >= 2 and #lastDot.points >= 2 then
   -- 800x600 canvas shown at scale 2, segment (200,300) -> (600,300): the white
@@ -389,8 +437,8 @@ ns.MapOverlay.drawer.disableDots = true
 ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "rotate", "SetRotation fallback")
-check(#shown(ns.MapOverlay.host, "texture") == 1, "rotated texture segment")
-local rot = shown(ns.MapOverlay.host, "texture")[1]
+check(#shownIn(ns.MapOverlay.drawer, "texture") == 2, "rotated outline + colour stroke")
+local rot = colorIn(ns.MapOverlay.drawer, "texture")[1]
 check(rot and rot.texture == "Interface\\Buttons\\WHITE8X8", "solid white texture")
 check(rot and rot.rotation == 0, "horizontal segment rotation")
 
@@ -399,8 +447,8 @@ ns.MapOverlay.drawer.disableLine = true
 ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
 ns.MapOverlay:Redraw()
 check(ns.MapOverlay.drawer.mode == "texcoord", "SetTexCoord fallback")
-local taxi = shown(ns.MapOverlay.host, "texture")
-check(#taxi >= 1, "texcoord segment visible")
+local taxi = colorIn(ns.MapOverlay.drawer, "texture")
+check(#taxi >= 1, "texcoord colour stroke visible")
 check(taxi[1] and taxi[1].texture == "Interface\\TaxiFrame\\UI-Taxi-Line", "taxi line texture")
 check(taxi[1] and taxi[1].texcoord and #taxi[1].texcoord == 8, "eight texcoords")
 WOW_NO_ROTATION = false
@@ -417,8 +465,8 @@ local nearRoute = {
 ns.MinimapPath:SetRoute(nearRoute)
 check(ns.MinimapPath._drawError == nil, "minimap error " .. tostring(ns.MinimapPath._drawError))
 check(ns.MinimapPath.host and ns.MinimapPath.host.shown, "minimap host shown")
-local mini = shown(ns.MinimapPath.host, "line")
-check(#mini == 1, "nearby minimap segment, got " .. #mini)
+local mini = colorIn(ns.MinimapPath.drawer, "line")
+check(#mini == 1, "nearby minimap colour stroke, got " .. #mini)
 if mini[1] then
   near(mini[1].thickness, 2, "minimap stroke uses pathWidth")
   local x1, y1 = pointXY(mini[1].startPoint)
@@ -448,7 +496,7 @@ local crossRoute = {
   },
 }
 ns.MinimapPath:SetRoute(crossRoute)
-local crossed = shown(ns.MinimapPath.host, "line")
+local crossed = colorIn(ns.MinimapPath.drawer, "line")
 check(#crossed == 1, "crossing segment is clipped onto the minimap")
 if crossed[1] then
   local x1 = pointXY(crossed[1].startPoint)
@@ -467,7 +515,7 @@ local squareRoute = {
   },
 }
 ns.MinimapPath:SetRoute(squareRoute)
-local squareLine = shown(ns.MinimapPath.host, "line")[1]
+local squareLine = colorIn(ns.MinimapPath.drawer, "line")[1]
 check(squareLine ~= nil, "square minimap draws the segment")
 if squareLine then
   local x2 = squareLine.endPoint[4]
@@ -478,7 +526,7 @@ MINIMAP_SHAPE = "ROUND"
 cvars.rotateMinimap = "1"
 PLAYER_FACING = math.pi / 2
 ns.MinimapPath:SetRoute(nearRoute)
-local turned = shown(ns.MinimapPath.host, "line")[1]
+local turned = colorIn(ns.MinimapPath.drawer, "line")[1]
 check(turned ~= nil, "rotated minimap still draws")
 if turned then
   near(turned.endPoint[4], 0, "facing west puts east behind, x")
@@ -515,12 +563,12 @@ GatherMate2.HBD.GetWorldCoordinatesFromZone = nil
 GatherMate2.HBD.GetPlayerWorldPosition = nil
 ns.MinimapPath:SetRoute(nearRoute)
 check(ns.MinimapPath._drawError == nil, "zone fallback error " .. tostring(ns.MinimapPath._drawError))
-check(#shown(ns.MinimapPath.host, "line") == 1, "zone-size fallback draws")
+check(#colorIn(ns.MinimapPath.drawer, "line") == 1, "zone-size fallback draws")
 check(not ns.MinimapPath.useWorld, "fallback is not world mode")
 
 GatherMate2.HBD.GetZoneSize = nil
 ns.MinimapPath:SetRoute(nearRoute)
-check(#shown(ns.MinimapPath.host, "line") == 1, "fraction fallback draws")
+check(#colorIn(ns.MinimapPath.drawer, "line") == 1, "fraction fallback draws")
 GatherMate2.HBD.GetZoneSize = function() return 2000, 2000 end
 GatherMate2.HBD.GetWorldCoordinatesFromZone = savedWorld
 GatherMate2.HBD.GetPlayerWorldPosition = savedPlayer

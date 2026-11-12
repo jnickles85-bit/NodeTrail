@@ -847,7 +847,7 @@ end
 if type(pkg.RegisterModule) == "function" then
   pkg.RegisterModule("NodeTrail", {
     title = "NodeTrail",
-    notes = "Herb routes from your own gathers (white path on world map + minimap), herb tooltip. /nt start | stop | reload | status",
+    notes = "Herb routes from your own gathers (teal path on world map + minimap), herb tooltip. /nt start | stop | reload | status",
     Enable = function() ns.Enable() end,
   })
 end

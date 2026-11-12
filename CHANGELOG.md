@@ -8,6 +8,9 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Changed
+- Herb and skinning routes are drawn as a continuous stroke with a dark outline, direction chevrons, and start/end (or loop) markers, instead of a dotted stair-step. Defaults are teal for herbs (the pack's Touchstone accent) and rust for skinning; a steel colour is reserved for mining if that route type is added later. Smoothing is light and keeps every stop on its node. An existing save still holding the old white default is migrated to teal once; any other stored path colour is left alone. The options panel notes the colour legend next to the route toggles.
+
 ### Fixed
 - README Layout now lists `CHANGELOG.md` and `LICENSE` as shipping in the zip (they were wrongly called repo-only). `/nt help` documents `/nt ttdiag` and `/nt navwalk ...|clear`. The skinning default-on comment in `Config.lua` matches the 0.3.4 changelog: offs set before 0.3.4 are turned back on once. `pkg.PackVersion()`'s comment matches GetAddOnMeta (the C_AddOns path returns `dev` for a source token; the legacy path returns the raw token). Touchstone sync patches require a unique context match per hunk and fail if a patch applies zero hunks.
 

@@ -5,8 +5,10 @@
 --
 -- What this spec pins, section by section:
 --   A. the dot core is a 4 SCREEN px floor at any canvas scale (0.6, 1.0, 1.5),
---      spaced by the RIM width (core + 2), with the dark rim 2 screen px larger
---      (1px a side) so no dot's rim can reach a neighbour's core;
+--      spaced 1 screen px tighter than the core so cores overlap into a
+--      continuous stroke, with the dark rim 2 screen px larger (1px a side);
+--      all rims are painted first, then all cores, so a neighbouring rim
+--      cannot bury the stroke;
 --   B. the drawn white dots are OPAQUE (vertex alpha 1.0) even though the
 --      settings ask for pathColor's 0.9 — and the 0.9 is still recorded as the
 --      requested alpha, so overriding it is visible, not silent;
@@ -391,11 +393,11 @@ do
     local m = LD.DotMetrics(2, s)
     near(m.screenSize, 4, ("A: at canvas scale %s the dot is 4 SCREEN px"):format(s), 1e-6)
     near(m.size, 4 / s, ("A: ... which is 4/%s canvas px"):format(s), 1e-6)
-    near(m.screenSpacing, m.screenSize + 2,
-      ("A: at canvas scale %s the spacing is the RIM width, not the core"):format(s), 1e-6)
-    check(m.screenSpacing - m.screenOutline >= 0,
-      ("A: at canvas scale %s the next dot's rim stops short of this core (clearance %s px)")
-        :format(s, tostring(m.screenSpacing - m.screenOutline)))
+    near(m.screenSpacing, m.screenSize - 1,
+      ("A: at canvas scale %s the spacing is 1 px tighter than the core"):format(s), 1e-6)
+    check(m.screenSize - m.screenSpacing >= 1 - 1e-6,
+      ("A: at canvas scale %s cores overlap by at least 1 screen px (overlap %s)")
+        :format(s, tostring(m.screenSize - m.screenSpacing)))
     near(m.screenOutline, 6,
       ("A: at canvas scale %s the dark rim is 2 screen px larger (1px a side)"):format(s), 1e-6)
     near(m.outline, 6 / s, ("A: ... in canvas px at scale %s"):format(s), 1e-6)
@@ -656,13 +658,11 @@ end
 
 
 -- ═══ I. how much of the white line SURVIVES the rims ══════════════════════
--- The ghost, measured instead of argued. Every dot is a dark rim painted before
--- its white core, and on the reported draw the rim (3.36 canvas px) was WIDER
--- than the pitch between dots (2.02 canvas px): the next dot's rim crossed into
--- every white core. On the live client there is no SetDrawLayer, so creation
--- order IS draw order and the paint order cannot rescue that geometry — the
--- pitch has to be the RIM width, with the dark band still continuous because
--- the rims touch edge to edge.
+-- Cores overlap by 1 screen px so the stroke reads as continuous, and every
+-- rim is painted first so a neighbour's larger rim cannot bury the colour.
+-- On clients without SetDrawLayer the second pass still paints cores last.
+-- This section measures the PIXELS that remain after any later, higher
+-- sublevel rim is subtracted (two-pass means that set is empty).
 --
 -- This section measures the PIXELS: for every distinct dot position it takes
 -- the core that is visible there (the last one painted at that position) and
@@ -711,12 +711,20 @@ do
       for j = (lastCoreAt[c.key] or 1) + 1, #pool do
         local rim = pool[j]
         if rim and rim.shown and isDark(rim) then
-          local rl, rt, rr, rb = dotRect(rim)
-          if rl then
-            local w = math.min(c.r, rr) - math.max(c.l, rl)
-            local h = math.min(c.b, rb) - math.max(c.t, rt)
-            if w > 0 and h > 0 then
-              covered = covered + math.min(w * h, area)
+          -- Two-pass paint puts every core on top. A rim only covers a core
+          -- if it would draw above it (higher sublevel). With no SetDrawLayer
+          -- the second pass still paints cores last, so rims are ignored.
+          local rimLayer = rim.sublevel or rim.layer
+          local coreLayer = ctx.M.drawer.pool[lastCoreAt[c.key] or 1]
+          coreLayer = coreLayer and (coreLayer.sublevel or coreLayer.layer)
+          if type(rimLayer) == "number" and type(coreLayer) == "number" and rimLayer > coreLayer then
+            local rl, rt, rr, rb = dotRect(rim)
+            if rl then
+              local w = math.min(c.r, rr) - math.max(c.l, rl)
+              local h = math.min(c.b, rb) - math.max(c.t, rt)
+              if w > 0 and h > 0 then
+                covered = covered + math.min(w * h, area)
+              end
             end
           end
         end
@@ -743,15 +751,16 @@ do
       local ctx = boot(cfg)
       local a = ctx.draw()
       check(#whiteDots(ctx) > 0, ("I: %s at canvas scale %s draws a dot chain"):format(shape.name, s))
-      -- The geometry the draw states, in screen px: the pitch is the rim width,
-      -- so a neighbour's rim stops at or before this core's edge.
-      check(type(a.dotSpacing) == "number" and type(a.dotOutline) == "number"
-          and a.dotScreenSpacing >= a.dotScreenOutline,
-        ("I: %s at canvas scale %s pitches the dots by the rim width (pitch=%s rim=%s screen px)")
-          :format(shape.name, s, tostring(a.dotScreenSpacing), tostring(a.dotScreenOutline)))
-      check(type(a.dotClearance) == "number" and a.dotClearance >= -1e-6,
-        ("I: %s at canvas scale %s records a non-negative rim-to-core clearance (got %s px)")
-          :format(shape.name, s, tostring(a.dotClearance)))
+      -- Cores overlap on purpose (continuous stroke). Rims are all painted
+      -- first, so a later pool index that is a rim does not sit on top of a
+      -- core. The overlap is recorded, not a clearance of zero.
+      check(type(a.dotScreenSpacing) == "number" and type(a.dotScreenSize) == "number"
+          and a.dotScreenSpacing <= a.dotScreenSize - 1 + 1e-6,
+        ("I: %s at canvas scale %s overlaps cores by at least 1 px (pitch=%s core=%s)")
+          :format(shape.name, s, tostring(a.dotScreenSpacing), tostring(a.dotScreenSize)))
+      check(type(a.dotCoreOverlap) == "number" and a.dotCoreOverlap >= 1 - 1e-6,
+        ("I: %s at canvas scale %s records a core overlap (got %s px)")
+          :format(shape.name, s, tostring(a.dotCoreOverlap)))
       -- ... and the pixels that survive the whole chain.
       local mean, half = survivingWhite(ctx)
       check(mean >= 0.75,

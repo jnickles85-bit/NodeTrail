@@ -154,7 +154,7 @@ Repo-only (not shipped): `README.md`, `tests/`,
 ## NodeTrail details
 - Herb routes come from your own recorded herb gathers, drawn as a density corridor.
 - GatherMate2 is optional (`routeSource = "gm2"` fallback).
-- White polyline pathColor `{1,1,1,0.9}`, pathWidth 2 on world map and minimap.
+- Teal polyline for herb routes (Touchstone accent, pathColor `{0.400, 0.988, 0.945, 0.85}`), rust for skinning; dark outline, direction chevrons, and start/end or loop markers. pathWidth 2 on world map and minimap.
 - `/nt stop` releases both overlays.
 - `/nt skinroute` draws the skinning farming circle once a zone has enough skinned corpses and the character has Skinning. `/nt skin` toggles the recorder.
 
@@ -216,7 +216,7 @@ are de-duplicated before recording. `/mp skindiag` toggles the capture,
 compact dump in a copyable popup.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 69 specs:
 
 - `tests/alchemy_skill_gate_spec.lua`
 - `tests/beast_profession_gate_spec.lua`
@@ -252,6 +252,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
 - `tests/recorder_spec.lua`
 - `tests/route_auto_spec.lua`
 - `tests/route_stability_spec.lua`
+- `tests/route_style_spec.lua`
 - `tests/skin_tooltip_skinned_spec.lua`
 - `tests/skin_tooltip_spec.lua`
 - `tests/skindiag_copy_spec.lua`

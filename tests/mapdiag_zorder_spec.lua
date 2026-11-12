@@ -250,11 +250,17 @@ check(M._zorder and M._zorder.raisedEarlier == true,
 check(M._drawError == nil, "no draw error after repeated redraws: " .. tostring(M._drawError))
 
 -- The line itself: real region contract, real pixels.
-local line = M.drawer and M.drawer.pool and M.drawer.pool[1]
+-- pool[1] is the dark under-stroke; the colour stroke is pool[2].
+local line = M.drawer and M.drawer.pool and M.drawer.pool[2]
 check(line ~= nil, "a line object exists")
 check(line and line:IsShown(), "the line object is shown")
-check(line and line.color and line.color[4] == 0.9,
+local applied = M.drawer and M.drawer.lastApplied
+check(line and line.color and math.abs((line.color[4] or 0) - 0.85) < 1e-9,
   "the line carries pathColor's alpha (got " .. tostring(line and line.color and line.color[4]) .. ")")
+check(applied and math.abs((applied.r or 0) - 0.400) < 1e-9
+    and math.abs((applied.g or 0) - 0.988) < 1e-9
+    and math.abs((applied.b or 0) - 0.945) < 1e-9,
+  "the last draw recorded the teal herb default")
 if line and line.start and line.stop then
   near(line.start[4], 0.720 * 1002, "first point x lands at the projected pixel")
   near(line.start[5], -0.350 * 668, "first point y lands at the projected pixel (from TOPLEFT)")
@@ -282,10 +288,10 @@ for _, needle in ipairs({
   "above the art",
   "RAISED from",
   -- what the draw applied (alpha / colour / thickness)
-  "colour applied by the last draw: r=1.00 g=1.00 b=1.00 a=0.90",
+  "colour applied by the last draw: r=0.40 g=0.99 b=0.94 a=0.85",
   -- the first two line objects, live state
   "line 1: kind=line shown=true",
-  "line 2: absent",
+  "line 2: kind=line shown=true",
   -- every projected point, with pixels
   "points: 2 of 2 projected",
   "#1 (0.720,0.350)->(721.4,233.8)",

@@ -593,6 +593,7 @@ function M:ReleaseVisuals(why)
       ns.LineDraw.MarkIdle(self.drawer, why)
     else
       ns.LineDraw.Clear(self.drawer)
+      if self.styleDrawer then ns.LineDraw.Clear(self.styleDrawer) end
     end
   end
   if self.host then
@@ -775,6 +776,7 @@ function M:ReleaseSkin(why)
       ns.LineDraw.MarkIdle(self.skinDrawer, why)
     else
       ns.LineDraw.Clear(self.skinDrawer)
+      if self.skinStyleDrawer then ns.LineDraw.Clear(self.skinStyleDrawer) end
     end
   end
   if self.skinHost then
@@ -1192,8 +1194,9 @@ function M:_redraw()
     return x >= win.left - 0.01 and x <= win.left + win.width + 0.01
       and y >= win.top - 0.01 and y <= win.top + win.height + 0.01
   end
-  for i = 1, #self.path do
-    local p = self.path[i]
+  local path = self.drawPath or self.path
+  for i = 1, #path do
+    local p = path[i]
     if geom.IsMapPoint(p) then
       local x, y = geom.FractionToPixel(p.x, p.y, rect)
       px[i] = {
@@ -1205,8 +1208,8 @@ function M:_redraw()
       skipped[#skipped + 1] = "point " .. i .. " not a map point"
     end
   end
-  for i = 1, #self.path - 1 do
-    local a, b = self.path[i], self.path[i + 1]
+  for i = 1, #path - 1 do
+    local a, b = path[i], path[i + 1]
     if geom.IsMapPoint(a) and geom.IsMapPoint(b) then
       local x1, y1 = geom.FractionToPixel(a.x, a.y, rect)
       local x2, y2 = geom.FractionToPixel(b.x, b.y, rect)
@@ -1277,6 +1280,20 @@ function M:_redraw()
   local metrics = ns.LineDraw.DotMetrics(stroke, unitScale, self._screenFloor)
   self._dotMetrics = metrics
   ns.LineDraw.Draw(self.drawer, host, buf, count, stroke / unitScale, r, g, b, a, "ydown", metrics)
+  do
+    local dpts = self._decorPts or {}
+    self._decorPts = dpts
+    local dn = 0
+    for i = 1, #px do
+      local p = px[i]
+      if p and type(p.x) == "number" and type(p.y) == "number" then
+        dn = dn + 1
+        dpts[dn] = p
+      end
+    end
+    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, b, a, "ydown", metrics)
+  end
   -- Why it might still not READ, measured next to the draw: the alpha the whole
   -- parent chain multiplies us down to, and any frame that outranks the host
   -- over the map. Both are read here, on every redraw, because both change
@@ -1451,6 +1468,11 @@ function M:SetRoute(route)
   end
   self.mapID = route.mapID
   self.path = route.path
+  if ns.PathGeom and type(ns.PathGeom.BuildDrawPath) == "function" then
+    self.drawPath = ns.PathGeom.BuildDrawPath(route) or route.path
+  else
+    self.drawPath = route.path
+  end
   self._retries = 0
   self:TryHookMap()
   self:Redraw()
@@ -1467,6 +1489,11 @@ function M:SetSkinRoute(route)
     return
   end
   self.skinPath = route.path
+  if ns.PathGeom and type(ns.PathGeom.BuildDrawPath) == "function" then
+    self.skinDrawPath = ns.PathGeom.BuildDrawPath(route) or route.path
+  else
+    self.skinDrawPath = route.path
+  end
   self.skinMapID = route.mapID
   self.skinColor = route.color
   self.skinRoute = route
@@ -1477,6 +1504,7 @@ end
 
 function M:ClearSkinRoute()
   self.skinPath = nil
+  self.skinDrawPath = nil
   self.skinMapID = nil
   self.skinColor = nil
   self.skinRoute = nil
@@ -1581,8 +1609,9 @@ function M:_redrawSkin()
     return x >= win.left - 0.01 and x <= win.left + win.width + 0.01
       and y >= win.top - 0.01 and y <= win.top + win.height + 0.01
   end
-  for i = 1, #self.skinPath do
-    local p = self.skinPath[i]
+  local skinPath = self.skinDrawPath or self.skinPath
+  for i = 1, #skinPath do
+    local p = skinPath[i]
     if geom.IsMapPoint(p) then
       local x, y = geom.FractionToPixel(p.x, p.y, rect)
       px[i] = {
@@ -1594,8 +1623,8 @@ function M:_redrawSkin()
       skipped[#skipped + 1] = "point " .. i .. " not a map point"
     end
   end
-  for i = 1, #self.skinPath - 1 do
-    local a, b = self.skinPath[i], self.skinPath[i + 1]
+  for i = 1, #skinPath - 1 do
+    local a, b = skinPath[i], skinPath[i + 1]
     if geom.IsMapPoint(a) and geom.IsMapPoint(b) then
       local x1, y1 = geom.FractionToPixel(a.x, a.y, rect)
       local x2, y2 = geom.FractionToPixel(b.x, b.y, rect)
@@ -1659,6 +1688,23 @@ function M:_redrawSkin()
   self._skinDotMetrics = metrics
   ns.LineDraw.Draw(self.skinDrawer, host, buf, count, widthFrac / unitScale,
     r, g, b, a, "ydown", metrics)
+  do
+    local src = self._skinPx or px
+    local dpts = self._skinDecorPts or {}
+    self._skinDecorPts = dpts
+    local dn = 0
+    if type(src) == "table" then
+      for i = 1, #src do
+        local p = src[i]
+        if p and type(p.x) == "number" and type(p.y) == "number" then
+          dn = dn + 1
+          dpts[dn] = p
+        end
+      end
+    end
+    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, b, a, "ydown", metrics)
+  end
   self._skinQueued = count
   if count > 0 then
     pcall(host.Show, host)

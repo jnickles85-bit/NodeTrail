@@ -462,6 +462,9 @@ function M:ReleaseVisuals()
   if self.drawer then
     ns.LineDraw.Clear(self.drawer)
   end
+  if self.styleDrawer then
+    ns.LineDraw.Clear(self.styleDrawer)
+  end
   if self.host then
     pcall(self.host.Hide, self.host)
   end
@@ -476,6 +479,7 @@ end
 
 function M:Clear()
   self.path = nil
+  self.drawPath = nil
   self.points = nil
   self.mapID = nil
   self.useWorld = nil
@@ -542,6 +546,9 @@ function M:ReleaseSkinVisuals(why)
       ns.LineDraw.MarkIdle(self.skinDrawer, why)
     else
       ns.LineDraw.Clear(self.skinDrawer)
+      if self.skinStyleDrawer then
+        ns.LineDraw.Clear(self.skinStyleDrawer)
+      end
     end
   end
   if self.skinHost then
@@ -615,8 +622,19 @@ local function indexRoute(route)
   return out
 end
 
+local function withDrawPath(route)
+  if not route or type(ns.PathGeom) ~= "table" or type(ns.PathGeom.BuildDrawPath) ~= "function" then
+    return route
+  end
+  local path = ns.PathGeom.BuildDrawPath(route)
+  if type(path) ~= "table" or #path < 2 then
+    return route
+  end
+  return { path = path, mapID = route.mapID, color = route.color, anchors = route.anchors }
+end
+
 function M:_indexPoints(route)
-  local r = indexRoute(route)
+  local r = indexRoute(withDrawPath(route))
   self.points = r.points
   self.useWorld = r.useWorld
   self._worldPoints = r.worldPoints
@@ -627,7 +645,7 @@ end
 --- The same indexing for the skinning circle, kept in its own fields so neither
 --- layer can overwrite the other's projection.
 function M:_indexSkinPoints(route)
-  local r = indexRoute(route)
+  local r = indexRoute(withDrawPath(route))
   self.skinPoints = r.points
   self.skinUseWorld = r.useWorld
   self._skinWorldPoints = r.worldPoints
@@ -832,6 +850,23 @@ function M:_redraw()
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._dotMetrics = metrics
   ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  do
+    local dpts = self._decorPts or {}
+    self._decorPts = dpts
+    local dn = 0
+    local src = proj and proj.points
+    if type(src) == "table" then
+      for i = 1, #src do
+        local p = src[i]
+        if p and type(p.x) == "number" and type(p.y) == "number" then
+          dn = dn + 1
+          dpts[dn] = p
+        end
+      end
+    end
+    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, a, "yup", metrics)
+  end
   self._lastQueued = count
   self._proj = proj
 
@@ -1080,6 +1115,23 @@ function M:_redrawSkin()
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._skinDotMetrics = metrics
   ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  do
+    local dpts = self._skinDecorPts or {}
+    self._skinDecorPts = dpts
+    local dn = 0
+    local src = proj and proj.points
+    if type(src) == "table" then
+      for i = 1, #src do
+        local p = src[i]
+        if p and type(p.x) == "number" and type(p.y) == "number" then
+          dn = dn + 1
+          dpts[dn] = p
+        end
+      end
+    end
+    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, a, "yup", metrics)
+  end
   self._skinQueued = count
   self._skinProj = proj
   self._skinSample = sample

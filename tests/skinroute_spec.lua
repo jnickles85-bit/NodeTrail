@@ -647,11 +647,13 @@ end
 check(herbPxSame, "7: every herb fraction and projected pixel is unchanged")
 
 -- The two layers are drawn with different colours (the herb drawer keeps the
--- profile's white; the circle's drawer gets the skinning green).
+-- profile's teal; the circle's drawer gets the skinning rust).
 local herbApplied = ns.LineDraw.Applied(M.drawer) or {}
 local skinApplied = ns.LineDraw.Applied(M.skinDrawer) or {}
-check(herbApplied.r == 1 and herbApplied.g == 1 and herbApplied.b == 1,
-  "7: the herb drawer is still drawn in the profile's white (got "
+check(math.abs((herbApplied.r or 0) - 0.400) < 1e-9
+    and math.abs((herbApplied.g or 0) - 0.988) < 1e-9
+    and math.abs((herbApplied.b or 0) - 0.945) < 1e-9,
+  "7: the herb drawer is still drawn in the profile's teal (got "
   .. tostring(herbApplied.r) .. "," .. tostring(herbApplied.g) .. "," .. tostring(herbApplied.b) .. ")")
 check(skinApplied.r == S.COLOR[1] and skinApplied.g == S.COLOR[2] and skinApplied.b == S.COLOR[3],
   "7: the circle has its own colour (got " .. tostring(skinApplied.r) .. ","
@@ -721,8 +723,8 @@ check(miniApplied.r == S.COLOR[1] and miniApplied.g == S.COLOR[2],
   "8: the minimap circle is drawn in the circle's colour (got " .. tostring(miniApplied.r)
   .. "," .. tostring(miniApplied.g) .. ")")
 local herbMini = ns.LineDraw.Applied(MP.drawer) or {}
-check(herbMini.r == 1 and herbMini.g == 1 and herbMini.b == 1,
-  "8: the minimap herb route is still white")
+check(math.abs((herbMini.r or 0) - 0.400) < 1e-9 and math.abs((herbMini.g or 0) - 0.988) < 1e-9,
+  "8: the minimap herb route is still teal")
 
 -- ════════════════════════════════════════════════════════════════════════
 if failed > 0 then

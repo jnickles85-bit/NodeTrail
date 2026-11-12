@@ -678,21 +678,16 @@ function D.DotMetrics(pathWidth, canvasScale, screenFloor)
   if screenSize < floor then
     screenSize = floor
   end
-  -- ── The pitch is the RIM WIDTH, not the dot width ──────────────────────
-  -- Each dot is painted twice (a dark rim, then the white core). The rim is
-  -- bigger than the core by DOT_OUTLINE_GROW, so a pitch equal to the CORE
-  -- leaves the neighbouring rim reaching half a grow — 1 px — into this core.
-  -- That is not a theoretical worry: on the reported draw (2.02 canvas px core,
-  -- 2.02 pitch, 3.36 rim) the next dot's rim buried 33% of every white core on
-  -- a straight run and 39% on a 45° one, and the route — correct, opaque,
-  -- above the art — read as "extremely transparent". Spacing the dots by the
-  -- RIM width puts the neighbouring rim exactly one pixel clear of the core,
-  -- so no paint order, no sublevel and no region-creation order can bury a
-  -- white dot ever again. The chain stays continuous: the rims touch edge to
-  -- edge, which is the dark outline of the stroke.
-  local screenSpacing = screenSize + DOT_OUTLINE_GROW
-  if screenSpacing < DOT_SPACING_MIN then
-    screenSpacing = DOT_SPACING_MIN
+  -- ── The pitch is slightly tighter than the CORE, so cores overlap ─────
+  -- A 1 screen-px overlap turns the chain into a continuous coloured stroke
+  -- instead of a dotted stair-step (audit §2.2). Neighbouring rims now
+  -- overlap the next core geometrically; that is safe because every rim is
+  -- painted first, then every core (see D.Draw), so a rim cannot bury a
+  -- core the way interleaved rim-core paint did when the pitch equalled
+  -- the core. The rims still overlap each other and form the dark outline.
+  local screenSpacing = screenSize - 1
+  if screenSpacing < 2 then
+    screenSpacing = 2
   end
   local screenOutline = screenSize + DOT_OUTLINE_GROW
   return {
@@ -1153,66 +1148,73 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
       -- on screen.
       drawer.lastApplied.sampleDot, drawer.lastApplied.sampleRim = nil, nil
       outside, box = 0, {}
-      for i = 1, count do
-        local seg, plan = buf[i], plans[i]
-        if seg and plan and plan.steps > 0 then
-          first = first or plan
-          local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
-          for k = 0, plan.steps do
-            local t = k / plan.steps
-            local cx, cy = seg[1] + dx * t, seg[2] + dy * t
-            -- Each dot is drawn TWICE: a dark rim, then the white core on top.
-            -- The rim is one screen px wider on each side, and the dots are
-            -- spaced by the RIM's width (DotMetrics), so the rim of the next
-            -- dot stops one pixel short of this core — the paint order, the
-            -- region-creation order and the client's sublevel support no longer
-            -- decide whether a white dot survives. Measured on the previous
-            -- geometry (pitch == core) the neighbouring rim buried a third of
-            -- every core, which is the ghost this card is about.
-            local under = acquire(drawer, index, parent)
-            local rimVia
-            if under then
-              rimVia = paintDot(under, parent, cx, cy, plan.size * rimRatio,
-                DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
-              if not drawer.lastApplied.sampleRim then
-                drawer.lastApplied.sampleRim = D.ReadBack(under, {
-                  requested = { DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A },
-                  via = rimVia,
-                  planned = plan.size * rimRatio,
-                  screen = (plan.size * rimRatio) * (m.scale > 0 and m.scale or 1),
-                })
-              end
+      -- Two passes over the same plan: every rim first (sublevel 6), then
+      -- every core (sublevel 7). Pool layout is unchanged (odd = rim, even
+      -- = core) so existing diag pairing still holds. Cores may overlap
+      -- neighbouring rims geometrically; because every core is painted
+      -- after every rim, those rims cannot bury the stroke.
+      local function eachDot(fn)
+        for i = 1, count do
+          local seg, plan = buf[i], plans[i]
+          if seg and plan and plan.steps > 0 then
+            first = first or plan
+            local dx, dy = seg[3] - seg[1], seg[4] - seg[2]
+            for k = 0, plan.steps do
+              local tt = k / plan.steps
+              fn(seg[1] + dx * tt, seg[2] + dy * tt, plan)
             end
-            index = index + 1
-            local obj = acquire(drawer, index, parent)
-            if obj then
-              local dotVia = paintDot(obj, parent, cx, cy, plan.size, r, g, b, dotAlpha, space, 7)
-              painted = painted + 1
-              measured(cx, cy)
-              -- ONE sampled dot, read back from the client at draw time. The
-              -- acceptance asks for the requested colour next to GetVertexColor:
-              -- a dot whose vertex alpha is not what the draw passed means the
-              -- alpha never reached the texture, which is a different bug from
-              -- a dot that is simply too small or under something.
-              if not drawer.lastApplied.sampleDot then
-                drawer.lastApplied.sampleDot = D.ReadBack(obj, {
-                  requested = { r, g, b, dotAlpha },
-                  via = dotVia,
-                  requestedAlpha = dotRequested,
-                  planned = plan.size,
-                  screen = plan.size * (m.scale > 0 and m.scale or 1),
-                })
-              end
-            else
-              -- No region for this dot: it is NOT painted, whatever the plan
-              -- says. Counting it as painted is what made a route that stopped
-              -- after its opening leg report "painted == planned".
-              missing = missing + 1
-            end
-            index = index + 1
           end
         end
       end
+      -- Acquire rim+core interleaved so a region ceiling is spent on
+      -- complete dots, not on a first pass of rims only. Then paint
+      -- every rim, then every core, so the stroke sits on top even
+      -- when the client has no SetDrawLayer.
+      local n = 0
+      eachDot(function()
+        n = n + 1
+        acquire(drawer, n * 2 - 1, parent)
+        acquire(drawer, n * 2, parent)
+      end)
+      n = 0
+      eachDot(function(cx, cy, plan)
+        n = n + 1
+        local under = acquire(drawer, n * 2 - 1, parent)
+        if under then
+          local rimVia = paintDot(under, parent, cx, cy, plan.size * rimRatio,
+            DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, 6)
+          if not drawer.lastApplied.sampleRim then
+            drawer.lastApplied.sampleRim = D.ReadBack(under, {
+              requested = { DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A },
+              via = rimVia,
+              planned = plan.size * rimRatio,
+              screen = (plan.size * rimRatio) * (m.scale > 0 and m.scale or 1),
+            })
+          end
+        end
+      end)
+      n = 0
+      eachDot(function(cx, cy, plan)
+        n = n + 1
+        local obj = acquire(drawer, n * 2, parent)
+        if obj then
+          local dotVia = paintDot(obj, parent, cx, cy, plan.size, r, g, b, dotAlpha, space, 7)
+          painted = painted + 1
+          measured(cx, cy)
+          if not drawer.lastApplied.sampleDot then
+            drawer.lastApplied.sampleDot = D.ReadBack(obj, {
+              requested = { r, g, b, dotAlpha },
+              via = dotVia,
+              requestedAlpha = dotRequested,
+              planned = plan.size,
+              screen = plan.size * (m.scale > 0 and m.scale or 1),
+            })
+          end
+        else
+          missing = missing + 1
+        end
+      end)
+      index = n * 2 + 1
       return index, painted, missing, first
     end
 
@@ -1377,30 +1379,182 @@ function D.Draw(drawer, parent, buf, count, thickness, r, g, b, a, space, metric
     drawer.lastApplied.dotScreenSize = m.screenSize
     drawer.lastApplied.dotScreenSpacing = m.screenSpacing
     drawer.lastApplied.dotScreenOutline = m.screenOutline
-    -- The legibility invariant, as one number: the gap between the edge of the
-    -- NEIGHBOURING dot's rim and the edge of this core. Negative means that rim
-    -- crosses into the white dot (the ghost, whatever the paint order); zero or
-    -- more means no draw order and no sublevel support can bury a dot.
+    -- Geometric clearance between a neighbouring rim and this core. With
+    -- overlapping cores this is negative; the two-pass paint (rims, then
+    -- cores) is what keeps the stroke from being buried, not the gap.
     drawer.lastApplied.dotClearance =
       m.screenSpacing - (m.screenOutline + m.screenSize) * 0.5
+    drawer.lastApplied.dotCoreOverlap = m.screenSize - m.screenSpacing
     drawer.lastApplied.dotFloor = m.screenFloor
     drawer.lastApplied.dotPathWidth = m.pathWidth
     return
   end
+  -- A dark under-stroke, then the coloured stroke, two regions per segment.
+  local outlineW = (tonumber(thickness) or 2) + 2
+  if outlineW < 3 then outlineW = 3 end
+  local function paintSeg(obj, x1, y1, x2, y2, w, cr, cg, cb, ca)
+    if drawer.mode == "line" then
+      paintLine(obj, parent, x1, y1, x2, y2, w, cr, cg, cb, ca, space)
+    elseif drawer.mode == "rotate" then
+      paintRotate(obj, parent, x1, y1, x2, y2, w, cr, cg, cb, ca, space)
+    else
+      local sx, sy, ex, ey = toBottomLeft(parent, x1, y1, x2, y2, space)
+      paintTexCoord(obj, parent, sx, sy, ex, ey, w, cr, cg, cb, ca)
+    end
+  end
   for i = 1, count do
     local seg = buf[i]
-    local obj = acquire(drawer, i, parent)
-    if obj and seg then
+    if seg then
       local x1, y1, x2, y2 = seg[1], seg[2], seg[3], seg[4]
-      if drawer.mode == "line" then
-        paintLine(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
-      elseif drawer.mode == "rotate" then
-        paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
-      else
-        local sx, sy, ex, ey = toBottomLeft(parent, x1, y1, x2, y2, space)
-        paintTexCoord(obj, parent, sx, sy, ex, ey, thickness, r, g, b, a)
+      local under = acquire(drawer, i * 2 - 1, parent)
+      if under then
+        paintSeg(under, x1, y1, x2, y2, outlineW, DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A)
+      end
+      local obj = acquire(drawer, i * 2, parent)
+      if obj then
+        paintSeg(obj, x1, y1, x2, y2, thickness, r, g, b, a)
       end
     end
   end
-  hideFrom(drawer, count + 1, false)
+  hideFrom(drawer, count * 2 + 1, false)
+end
+
+
+-- ── Direction chevrons and start/end/loop markers ─────────────────────
+-- Drawn from a SEPARATE drawer so the stroke pool's rim/core pairing
+-- (and every mapdiag / capacity spec that reads it) stays unchanged.
+-- All decorations use the same two-corner-anchor primitive the live
+-- client already proved it accepts: no SetRotation, no CreateLine.
+-- A chevron is three small squares in a triangle that points along the
+-- path; a start/end marker is one larger filled square; a loop marker
+-- is one larger outline square.
+
+local DECOR_CHEVRON = 5   -- screen px of each chevron square
+local DECOR_MARK = 9      -- screen px of a start/end/loop marker
+local DECOR_LOOP_GROW = 2
+
+local function decorSize(screen, scale)
+  scale = (tonumber(scale) and scale > 0) and scale or 1
+  return screen / scale
+end
+
+function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
+  if not drawer or not parent then
+    return
+  end
+  if drawer.parent ~= parent then
+    D.Invalidate(drawer)
+    drawer.parent = parent
+  end
+  if not drawer.mode then
+    -- Decorations always use the two-corner-anchor path; if detect would
+    -- pick line/rotate we still paint dots, which is the proven primitive.
+    drawer.disableLine = true
+    detect(drawer, parent)
+    if drawer.mode ~= "dots" and type(parent.CreateTexture) == "function" then
+      drawer.mode = "dots"
+    end
+  end
+  count = count or 0
+  if drawer.mode == "none" or count < 1 then
+    D.Clear(drawer)
+    drawer.lastApplied = drawer.lastApplied or {}
+    drawer.lastApplied.paintedDots = 0
+    drawer.lastApplied.plannedDots = 0
+    drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+    return
+  end
+  local scale = 1
+  if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
+    scale = metrics.scale
+  end
+  local chev = decorSize(DECOR_CHEVRON, scale)
+  local mark = decorSize(DECOR_MARK, scale)
+  local loop = decorSize(DECOR_MARK + DECOR_LOOP_GROW, scale)
+  local index, painted = 1, 0
+  local function paintOne(cx, cy, size, cr, cg, cb, ca, sub)
+    local obj = acquire(drawer, index, parent)
+    index = index + 1
+    if obj then
+      paintDot(obj, parent, cx, cy, size, cr, cg, cb, ca, space, sub or 8)
+      painted = painted + 1
+    end
+  end
+  for i = 1, count do
+    local it = items[i]
+    if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number" then
+      if it.kind == "chevron" then
+        local dx, dy = tonumber(it.dx) or 0, tonumber(it.dy) or 0
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len < 1e-8 then
+          dx, dy, len = 1, 0, 1
+        end
+        dx, dy = dx / len, dy / len
+        local px, py = -dy, dx
+        local tip = chev * 0.9
+        local back = chev * 0.45
+        local wing = chev * 0.55
+        paintOne(it.x + dx * tip, it.y + dy * tip, chev, r, g, b, a, 8)
+        paintOne(it.x - dx * back + px * wing, it.y - dy * back + py * wing, chev, r, g, b, a, 8)
+        paintOne(it.x - dx * back - px * wing, it.y - dy * back - py * wing, chev, r, g, b, a, 8)
+      elseif it.kind == "loop" then
+        paintOne(it.x, it.y, loop, DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, 8)
+      elseif it.kind == "end" then
+        paintOne(it.x, it.y, mark, r, g, b, a, 8)
+      else
+        -- start (default)
+        paintOne(it.x, it.y, mark, r, g, b, a, 8)
+      end
+    end
+  end
+  hideFrom(drawer, index, false)
+  drawer.lastApplied = drawer.lastApplied or {}
+  drawer.lastApplied.paintedDots = painted
+  drawer.lastApplied.plannedDots = painted
+  drawer.lastApplied.poolHigh = drawer.poolHigh or 0
+  drawer.lastApplied.mode = drawer.mode
+end
+
+
+--- Plan and paint decorations onto a holder-owned drawer (`field`).
+--- `pts` is a list of already-projected {x,y} points (host units).
+--- Scratch arrays live on the holder so a redraw allocates nothing new.
+function D.ApplyDecor(holder, field, host, pts, r, g, b, a, space, metrics)
+  if type(holder) ~= "table" or type(ns.PathGeom) ~= "table" then
+    return
+  end
+  local G = ns.PathGeom
+  local drawer = holder[field]
+  if not drawer then
+    drawer = D.Create()
+    holder[field] = drawer
+  end
+  if type(pts) ~= "table" or #pts < 1 or not host then
+    D.Clear(drawer)
+    return
+  end
+  local scale = 1
+  if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
+    scale = metrics.scale
+  end
+  -- About 48 screen px between chevrons, in this surface's units.
+  local spacing = 48 / scale
+  holder._chevBuf = holder._chevBuf or {}
+  holder._markBuf = holder._markBuf or {}
+  holder._decorBuf = holder._decorBuf or {}
+  local chevs, cn = G.PlaceChevrons(pts, spacing, holder._chevBuf)
+  local marks, mn = G.PlaceMarkers(pts, holder._markBuf)
+  local buf, n = holder._decorBuf, 0
+  for i = 1, mn do
+    n = n + 1
+    buf[n] = marks[i]
+  end
+  for i = 1, cn do
+    n = n + 1
+    buf[n] = chevs[i]
+  end
+  for i = #buf, n + 1, -1 do
+    buf[i] = nil
+  end
+  D.DrawDecor(drawer, host, buf, n, r, g, b, a, space, metrics)
 end
