@@ -7,14 +7,22 @@ ns.Recorder = R
 
 R.HERB_SPELL_IDS = { [2366] = true, [2368] = true, [3570] = true, [11993] = true }
 R.PENDING_WINDOW = 5
-R.SCHEMA = 1
+R.SCHEMA = 2
 
 function ns.GetHerbDB()
   if type(NodeTrailDB) ~= "table" then
     ns.GetDB()
   end
   if type(NodeTrailDB.herbs) ~= "table" then
-    NodeTrailDB.herbs = { schema = R.SCHEMA, total = 0, maps = {} }
+    NodeTrailDB.herbs = {
+      schema = R.SCHEMA,
+      total = 0,
+      maps = {},
+      mapTotals = {},
+      stats = { gathers = {}, co = {}, names = {} },
+      hotspots = {},
+      folded = {},
+    }
   end
   if type(NodeTrailDB.herbs.maps) ~= "table" then
     NodeTrailDB.herbs.maps = {}
@@ -22,7 +30,630 @@ function ns.GetHerbDB()
   if type(NodeTrailDB.herbs.total) ~= "number" then
     NodeTrailDB.herbs.total = 0
   end
+  ns.UpgradeHerbDB(NodeTrailDB.herbs)
   return NodeTrailDB.herbs
+end
+
+
+-- ── schema 2: bounded raw samples, unbounded aggregates ───────────────
+-- NodeTrailDB.herbs.maps[mapID] stays an array of raw picks (x, y, t,
+-- items, optional node) so route/density and an open herb PR that does
+-- not touch this store can keep reading the same shape. What changes is
+-- how far back the array reaches.
+--
+-- MAX_SAMPLES_PER_MAP is the per-map cap on those raw picks. Newest
+-- samples are kept; older ones leave the array and are folded into a
+-- compact per-map hotspot grid (db.hotspots). The number is 2,000
+-- because that is the bound the audit recommended for this list
+-- (~2,000 newest per map). Density routes are built from that newest
+-- raw window only; they do not yet read hotspot cells (that is left
+-- for a later "Find a resource" / density improvement). The cap is
+-- well above the 40 stops a density route already uses. It is not a
+-- claim about node spawn counts or respawn timers.
+--
+-- Lifetime history is not wiped. db.total, db.mapTotals[mapID], and
+-- db.stats (the personal drop-rate numbers the tooltip walks) grow
+-- with every pick and are never evicted. The hotspot grid is never
+-- evicted either, like those aggregates; only its shape is bounded
+-- (a fixed cell size, a hard cap on cells per map and node keys per
+-- cell). A schema 1 save is migrated in place: aggregates are
+-- recomputed from every raw record that is still in the file, trimmed
+-- picks are folded into hotspots, a per-map folded marker is written,
+-- the schema marker is stamped last, and only then are oversized lists
+-- replaced. A crash before the stamp leaves schema < 2 and the raw
+-- lists intact, so a retry recomputes from the same records (replace,
+-- not increment — no per-record contribution stamp). A second load
+-- after the stamp does not re-seed from the (now shorter) raw lists.
+-- A newer (numeric) schema is never downgraded and is not trimmed by
+-- this build, which cannot know that shape. A non-numeric schema is
+-- treated as unknown and left alone.
+--
+-- The per-map folded marker (db.folded[mapID] = {aggT, hsT, n}) is
+-- the downgrade round-trip guard. An older build may reset the schema
+-- stamp, re-attach previously trimmed raw picks, or append new ones
+-- without updating mapTotals/stats. On the next upgrade, picks with
+-- t <= aggT are not applied to aggregates again. Fold idempotency is
+-- a per-record mark (rec.hsFolded = true), set as soon as a pick is
+-- folded, so a crash mid-loop, a second live trim, or two picks that
+-- share a timestamp cannot skip or double-count. hsT is only a
+-- fallback when the evicted prefix has no hsFolded marks, which
+-- is a downgrade that re-attached the trimmed prefix without the
+-- mark (unmarked picks with t <= hsT were already folded). A
+-- mid-loop retry has at least one mark, so remaining same-second
+-- siblings are still folded. noTN is not consulted. Nothing is
+-- double-counted or dropped from lifetime totals.
+R.MAX_SAMPLES_PER_MAP = 2000
+-- 2% of normalized map width (0..1). A map is at most 50×50 cells,
+-- so HOTSPOT_MAX_CELLS is the natural bound of the grid, not a trim.
+R.HOTSPOT_CELL = 0.02
+R.HOTSPOT_BINS = 50
+R.HOTSPOT_MAX_CELLS = 50 * 50
+R.HOTSPOT_MAX_NODES = 32
+
+local function emptyHerbStats()
+  return { gathers = {}, co = {}, names = {} }
+end
+
+-- Fold one raw pick into the tooltip aggregates. Mirrors GetPersonalStats'
+-- walk of a single record: a gather of primary P is a record that carried
+-- P, and each unique item id on that record increments the co-count for P.
+-- The first stored name for an id wins. Items without a numeric id are
+-- skipped, matching the existing walk.
+function R.ApplyRecordToHerbStats(stats, rec)
+  if type(stats) ~= "table" or type(rec) ~= "table" then return end
+  if type(stats.gathers) ~= "table" then stats.gathers = {} end
+  if type(stats.co) ~= "table" then stats.co = {} end
+  if type(stats.names) ~= "table" then stats.names = {} end
+  local items = rec.items
+  if type(items) ~= "table" then return end
+  local ids, seen = {}, {}
+  for i = 1, #items do
+    local it = items[i]
+    if type(it) == "table" and type(it.id) == "number" then
+      local id = it.id
+      if not seen[id] then
+        seen[id] = true
+        ids[#ids + 1] = id
+      end
+      if stats.names[id] == nil and type(it.name) == "string" and it.name ~= "" then
+        stats.names[id] = it.name
+      end
+    end
+  end
+  for i = 1, #ids do
+    local p = ids[i]
+    stats.gathers[p] = (stats.gathers[p] or 0) + 1
+    local co = stats.co[p]
+    if type(co) ~= "table" then
+      co = {}
+      stats.co[p] = co
+    end
+    for j = 1, #ids do
+      local q = ids[j]
+      co[q] = (co[q] or 0) + 1
+    end
+  end
+end
+
+local function sortedMapIDs(maps)
+  local keys = {}
+  if type(maps) ~= "table" then return keys end
+  for id in pairs(maps) do
+    keys[#keys + 1] = id
+  end
+  table.sort(keys, function(a, b)
+    local ta, tb = type(a), type(b)
+    if ta == tb then
+      return a < b
+    end
+    return ta < tb
+  end)
+  return keys
+end
+
+local function seedHerbStats(maps)
+  local stats = emptyHerbStats()
+  for _, mapID in ipairs(sortedMapIDs(maps)) do
+    local list = maps[mapID]
+    if type(list) == "table" then
+      for i = 1, #list do
+        R.ApplyRecordToHerbStats(stats, list[i])
+      end
+    end
+  end
+  return stats
+end
+
+local function seedMapTotals(maps)
+  local totals = {}
+  for _, mapID in ipairs(sortedMapIDs(maps)) do
+    local list = maps[mapID]
+    if type(list) == "table" then
+      totals[mapID] = #list
+    end
+  end
+  return totals
+end
+
+local function rawPickCount(maps)
+  local n = 0
+  if type(maps) ~= "table" then return n end
+  for _, list in pairs(maps) do
+    if type(list) == "table" then
+      n = n + #list
+    end
+  end
+  return n
+end
+
+-- Keep the newest maxN entries; older ones are dropped from the array only.
+-- Built as a new array and assigned by the caller so a mid-loop
+-- table.remove cannot leave a half-trimmed list if a crash hits.
+function R.TrimHerbList(list, maxN)
+  if type(list) ~= "table" then return list end
+  if type(maxN) ~= "number" or maxN < 0 then return list end
+  local n = #list
+  if n <= maxN then return list end
+  local start = n - maxN + 1
+  local kept = {}
+  for i = start, n do
+    kept[#kept + 1] = list[i]
+  end
+  return kept
+end
+
+local function recTime(rec)
+  if type(rec) ~= "table" then return nil end
+  return tonumber(rec.t)
+end
+
+local function maxListTime(list)
+  local m = 0
+  if type(list) ~= "table" then return m end
+  for i = 1, #list do
+    local t = recTime(list[i])
+    if t and t > m then
+      m = t
+    end
+  end
+  return m
+end
+
+local function sumMapTotals(db)
+  local n = 0
+  if type(db) ~= "table" or type(db.mapTotals) ~= "table" then return n end
+  for _, v in pairs(db.mapTotals) do
+    if type(v) == "number" then
+      n = n + v
+    end
+  end
+  return n
+end
+
+local function foldedOf(db, mapID)
+  if type(db.folded) ~= "table" then
+    db.folded = {}
+  end
+  local f = db.folded[mapID]
+  if type(f) ~= "table" then
+    f = { aggT = 0, hsT = 0, n = 0 }
+    db.folded[mapID] = f
+  end
+  if type(f.aggT) ~= "number" then f.aggT = 0 end
+  if type(f.hsT) ~= "number" then f.hsT = 0 end
+  if type(f.noTN) ~= "number" then f.noTN = 0 end
+  if type(f.n) ~= "number" then f.n = 0 end
+  return f
+end
+
+local function hasFoldedMarkers(db)
+  if type(db) ~= "table" or type(db.folded) ~= "table" then
+    return false
+  end
+  for _, f in pairs(db.folded) do
+    if type(f) == "table" and ((type(f.n) == "number" and f.n > 0)
+      or (type(f.aggT) == "number" and f.aggT > 0)
+      or (type(f.hsT) == "number" and f.hsT > 0)
+      or (type(f.noTN) == "number" and f.noTN > 0)) then
+      return true
+    end
+  end
+  return false
+end
+
+-- Re-seed only when aggregates cannot already be the lifetime totals
+-- (first migration, or a crash before the stamp with a partial write).
+-- If mapTotals already cover every current raw list and stats exist,
+-- or a folded marker is present, an older build likely just reset the
+-- schema stamp: replacing aggregates from the (possibly short) raw
+-- lists would drop history.
+local function shouldReseedAggregates(db)
+  if hasFoldedMarkers(db) then
+    return false
+  end
+  if type(db.mapTotals) ~= "table" or type(db.stats) ~= "table"
+    or type(db.stats.gathers) ~= "table" then
+    return true
+  end
+  local any = false
+  if type(db.maps) == "table" then
+    for mapID, list in pairs(db.maps) do
+      if type(list) == "table" then
+        local mt = db.mapTotals[mapID]
+        if type(mt) ~= "number" or mt < #list then
+          return true
+        end
+        any = true
+      end
+    end
+  end
+  if not any then
+    return true
+  end
+  if next(db.stats.gathers) == nil then
+    return true
+  end
+  return false
+end
+
+--- Cell key for a normalized map position. Positions are clamped to
+--- [0, 1] so a pick cannot mint a cell outside the 50×50 bound.
+--- Coordinates may be client SECRET values; those must be recognised
+--- before any conversion, and tonumber is reached only through pcall.
+local function safeTonumber(v)
+  if type(issecretvalue) == "function" then
+    local ok, secret = pcall(issecretvalue, v)
+    if ok and secret == true then
+      return nil
+    end
+  end
+  local ok, n = pcall(tonumber, v)
+  if ok and type(n) == "number" then
+    return n
+  end
+  return nil
+end
+
+function R.HerbCellKey(x, y)
+  x = safeTonumber(x) or 0
+  y = safeTonumber(y) or 0
+  if x < 0 then x = 0 elseif x > 1 then x = 1 end
+  if y < 0 then y = 0 elseif y > 1 then y = 1 end
+  local bins = R.HOTSPOT_BINS
+  local cell = R.HOTSPOT_CELL
+  local cx = math.floor(x / cell)
+  local cy = math.floor(y / cell)
+  if cx >= bins then cx = bins - 1 end
+  if cy >= bins then cy = bins - 1 end
+  if cx < 0 then cx = 0 end
+  if cy < 0 then cy = 0 end
+  return cx .. ":" .. cy, cx, cy
+end
+
+function R.HerbCellCenter(cx, cy)
+  local cell = R.HOTSPOT_CELL
+  return (cx + 0.5) * cell, (cy + 0.5) * cell
+end
+
+-- Keys a later "Find a resource" query can use: the GameObject node id
+-- (when present) and every item id (or name, if there is no id) on the
+-- pick, so a co-loot like Swiftthistle is findable in the same cell.
+local function hotspotNodeKeys(rec)
+  local keys, seen = {}, {}
+  local function add(k)
+    if k == nil or seen[k] then
+      return
+    end
+    seen[k] = true
+    keys[#keys + 1] = k
+  end
+  if type(rec) ~= "table" then
+    return keys
+  end
+  if type(rec.node) == "number" then
+    add(rec.node)
+  elseif type(rec.node) == "string" and rec.node ~= "" then
+    add(rec.node)
+  end
+  local items = rec.items
+  if type(items) == "table" then
+    for i = 1, #items do
+      local it = items[i]
+      if type(it) == "table" then
+        if type(it.id) == "number" then
+          add(it.id)
+        elseif type(it.name) == "string" and it.name ~= "" then
+          add(it.name)
+        end
+      end
+    end
+  end
+  return keys
+end
+
+local function gridCellCount(grid)
+  local n = 0
+  if type(grid) ~= "table" then return n end
+  for _ in pairs(grid) do
+    n = n + 1
+  end
+  return n
+end
+
+--- Fold one evicted raw pick into the per-map hotspot grid. The grid
+--- itself is never evicted; only new cells / node keys are refused
+--- once the bounds are hit (n and last still grow).
+function R.FoldHerbIntoHotspots(db, mapID, rec)
+  if type(db) ~= "table" or mapID == nil or type(rec) ~= "table" then
+    return
+  end
+  if type(db.hotspots) ~= "table" then
+    db.hotspots = {}
+  end
+  local grid = db.hotspots[mapID]
+  if type(grid) ~= "table" then
+    grid = {}
+    db.hotspots[mapID] = grid
+  end
+  local key = R.HerbCellKey(rec.x, rec.y)
+  local cell = grid[key]
+  if type(cell) ~= "table" then
+    if gridCellCount(grid) >= R.HOTSPOT_MAX_CELLS then
+      key = "_"
+      cell = grid[key]
+      if type(cell) ~= "table" then
+        cell = { n = 0, nodes = {}, last = 0 }
+        grid[key] = cell
+      end
+    else
+      cell = { n = 0, nodes = {}, last = 0 }
+      grid[key] = cell
+    end
+  end
+  cell.n = (cell.n or 0) + 1
+  local ts = recTime(rec)
+  if ts and ts > (tonumber(cell.last) or 0) then
+    cell.last = ts
+  end
+  if type(cell.nodes) ~= "table" then
+    cell.nodes = {}
+  end
+  local nks = hotspotNodeKeys(rec)
+  for i = 1, #nks do
+    local nk = nks[i]
+    if cell.nodes[nk] ~= nil then
+      cell.nodes[nk] = cell.nodes[nk] + 1
+    else
+      local nKeys = 0
+      for _ in pairs(cell.nodes) do
+        nKeys = nKeys + 1
+      end
+      if nKeys < R.HOTSPOT_MAX_NODES then
+        cell.nodes[nk] = 1
+      end
+    end
+  end
+end
+
+-- Apply raw picks newer than aggT to lifetime aggregates. An older
+-- build may already have incremented db.total for the same picks, so
+-- total is raised only when it falls behind the sum of mapTotals.
+local function foldNewRawIntoAggregates(db, mapID, list)
+  if type(list) ~= "table" then return end
+  if type(db.stats) ~= "table" then db.stats = emptyHerbStats() end
+  if type(db.mapTotals) ~= "table" then db.mapTotals = {} end
+  local f = foldedOf(db, mapID)
+  local added = 0
+  for i = 1, #list do
+    local rec = list[i]
+    local t = recTime(rec)
+    if t and t > f.aggT then
+      R.ApplyRecordToHerbStats(db.stats, rec)
+      db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
+      added = added + 1
+      f.aggT = t
+    end
+  end
+  if added > 0 then
+    local sum = sumMapTotals(db)
+    if type(db.total) ~= "number" or db.total < sum then
+      db.total = sum
+    end
+  end
+end
+
+-- Fold evicted picks into hotspots, then replace the list. Returns
+-- the (possibly new) list. Idempotency is rec.hsFolded, set as soon
+-- as a pick is folded, so a crash mid-loop cannot re-fold it. The
+-- raw list is only replaced after the loop. hsT is a downgrade
+-- fallback for unmarked re-attached picks, not the first-pass rule.
+local function foldEvictedAndTrim(db, mapID, list)
+  if type(list) ~= "table" then return list end
+  local maxN = R.MAX_SAMPLES_PER_MAP
+  if #list <= maxN then
+    return list
+  end
+  local f = foldedOf(db, mapID)
+  local drop = #list - maxN
+  -- hsT is a downgrade fallback only when this prefix has no marks
+  -- (re-attached copies). A mid-loop crash leaves at least one
+  -- hsFolded record, so remaining same-second siblings are folded
+  -- instead of being treated as already done.
+  local anyMarked = false
+  local hsT0 = f.hsT
+  for i = 1, drop do
+    local rec = list[i]
+    if type(rec) == "table" and rec.hsFolded == true then
+      anyMarked = true
+      break
+    end
+  end
+  for i = 1, drop do
+    local rec = list[i]
+    -- Already-folded records (a mid-loop crash left the mark on this
+    -- still-untrimmed record, or a re-attached pick kept it) are skipped.
+    if type(rec) == "table" and rec.hsFolded ~= true then
+      local t = recTime(rec)
+      if (not anyMarked) and t and t <= hsT0 then
+        rec.hsFolded = true
+      else
+        R.FoldHerbIntoHotspots(db, mapID, rec)
+        rec.hsFolded = true
+        f.n = f.n + 1
+        if t and t > f.hsT then
+          f.hsT = t
+        end
+      end
+    end
+  end
+  return R.TrimHerbList(list, maxN)
+end
+
+local function foldAndPruneHerbMaps(db)
+  local maps = db.maps
+  if type(maps) ~= "table" then return end
+  for _, mapID in ipairs(sortedMapIDs(maps)) do
+    local list = maps[mapID]
+    if type(list) == "table" then
+      foldNewRawIntoAggregates(db, mapID, list)
+      maps[mapID] = foldEvictedAndTrim(db, mapID, list)
+    end
+  end
+end
+
+function ns.UpgradeHerbDB(db)
+  if type(db) ~= "table" then return db end
+  local prior = db.schema
+  -- A non-numeric (and present) schema is an unknown shape. Do not
+  -- migrate, trim, or stamp it.
+  if prior ~= nil and type(prior) ~= "number" then
+    return db
+  end
+  if type(prior) == "number" and prior > R.SCHEMA then
+    return db
+  end
+  if type(db.stats) ~= "table" then
+    db.stats = emptyHerbStats()
+  end
+  if type(db.mapTotals) ~= "table" then
+    db.mapTotals = {}
+  end
+  if type(db.hotspots) ~= "table" then
+    db.hotspots = {}
+  end
+  if type(db.folded) ~= "table" then
+    db.folded = {}
+  end
+  if type(prior) ~= "number" or prior < 2 then
+    if shouldReseedAggregates(db) then
+      db.stats = seedHerbStats(db.maps)
+      db.mapTotals = seedMapTotals(db.maps)
+      local raw = rawPickCount(db.maps)
+      if type(db.total) ~= "number" or db.total < raw then
+        db.total = raw
+      end
+      if type(db.maps) == "table" then
+        for _, mapID in ipairs(sortedMapIDs(db.maps)) do
+          local f = foldedOf(db, mapID)
+          f.aggT = maxListTime(db.maps[mapID])
+        end
+      end
+    end
+    -- Stamp last, after folds and markers are written, so a crash
+    -- retries from the intact raw lists.
+    foldAndPruneHerbMaps(db)
+    db.schema = 2
+    return db
+  end
+  foldAndPruneHerbMaps(db)
+  return db
+end
+
+-- Lifetime picks on one map. Falls back to the raw list length when
+-- mapTotals is missing (a schema 1 table that has not been upgraded).
+function ns.HerbMapTotal(mapID, db)
+  db = db or (type(NodeTrailDB) == "table" and NodeTrailDB.herbs) or nil
+  if mapID == nil or type(db) ~= "table" then return 0 end
+  if type(db.mapTotals) == "table" and type(db.mapTotals[mapID]) == "number" then
+    return db.mapTotals[mapID]
+  end
+  local list = db.maps and db.maps[mapID]
+  if type(list) == "table" then return #list end
+  return 0
+end
+
+local function nodeFilterMatch(nodes, nodeFilter)
+  if nodeFilter == nil then
+    return true, nil
+  end
+  if type(nodes) ~= "table" then
+    return false, 0
+  end
+  local n = nodes[nodeFilter]
+  if type(n) == "number" and n > 0 then
+    return true, n
+  end
+  -- A string filter also matches tostring(id) so a caller can query
+  -- "2452" the same way as 2452.
+  if type(nodeFilter) == "string" or type(nodeFilter) == "number" then
+    local alt = nodes[tonumber(nodeFilter) or nodeFilter] or nodes[tostring(nodeFilter)]
+    if type(alt) == "number" and alt > 0 then
+      return true, alt
+    end
+  end
+  return false, 0
+end
+
+--- Read API for a later "Find a resource" feature. Returns cells on
+--- mapID as {x, y, n, last, nodes, key}, sorted by count (highest
+--- first). `nodes` is a shallow copy of the cell's node table, so a
+--- caller cannot mutate the store. When nodeFilter (a node id, item
+--- id, or name) is given, only cells that recorded that node are
+--- returned and `n` is that node's count in the cell. Density routes
+--- do not use this yet.
+function ns.Hotspots(mapID, nodeFilter)
+  local db = ns.GetHerbDB()
+  local out = {}
+  if mapID == nil or type(db) ~= "table" or type(db.hotspots) ~= "table" then
+    return out
+  end
+  local grid = db.hotspots[mapID]
+  if type(grid) ~= "table" then
+    return out
+  end
+  for key, cell in pairs(grid) do
+    if type(cell) == "table" then
+      local ok, filtered = nodeFilterMatch(cell.nodes, nodeFilter)
+      if ok then
+        local cx, cy = tostring(key):match("^(%d+):(%d+)$")
+        local x, y
+        if cx then
+          x, y = R.HerbCellCenter(tonumber(cx), tonumber(cy))
+        end
+        local n = cell.n or 0
+        if filtered ~= nil then
+          n = filtered
+        end
+        local nodesCopy = {}
+        if type(cell.nodes) == "table" then
+          for nk, nv in pairs(cell.nodes) do
+            nodesCopy[nk] = nv
+          end
+        end
+        out[#out + 1] = {
+          x = x, y = y, n = n,
+          last = cell.last, nodes = nodesCopy, key = key,
+        }
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.n == b.n then
+      return tostring(a.key) < tostring(b.key)
+    end
+    return a.n > b.n
+  end)
+  return out
 end
 
 local function round4(v)
@@ -167,6 +798,20 @@ function ns.RecordHerb(mapID, x, y, items, nodeID)
   end
   list[#list + 1] = entry
   db.total = db.total + 1
+  if type(db.mapTotals) ~= "table" then db.mapTotals = {} end
+  db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
+  if type(db.stats) ~= "table" then
+    db.stats = { gathers = {}, co = {}, names = {} }
+  end
+  R.ApplyRecordToHerbStats(db.stats, entry)
+  local f = foldedOf(db, mapID)
+  local ts = recTime(entry)
+  if ts and ts > f.aggT then
+    f.aggT = ts
+  end
+  if #list > R.MAX_SAMPLES_PER_MAP then
+    db.maps[mapID] = foldEvictedAndTrim(db, mapID, list)
+  end
   -- t_2bc15917: a pick on the active route's map makes the line stale. This
   -- only moves a due time — the rebuild happens later, on the frame's
   -- OnUpdate, never synchronously inside the loot/gather event.

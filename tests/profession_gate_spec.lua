@@ -261,7 +261,11 @@ check(picks5 == "Picks: 9 (all characters)",
   "5: a gather on another map raises the account-wide count (got " .. tostring(picks5) .. ")")
 
 -- ── 6. an herbalist with nothing recorded says so, still account-wide ─────
-NodeTrailDB.herbs.maps = {}
+-- A schema 2 store keeps lifetime stats beside the raw lists, so emptying
+-- maps alone would still show the earlier picks. Replace the store with a
+-- fresh empty schema 1 table; GetHerbDB/GetPersonalStats migrate it to
+-- empty aggregates.
+NodeTrailDB.herbs = { schema = 1, total = 0, maps = {} }
 reset()
 hover("Peacebloom")
 local _, picks6 = hasRow("Picks: ")

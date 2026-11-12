@@ -229,6 +229,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 71 specs:
 - `tests/draw_smoke.lua`
 - `tests/event_gate_spec.lua`
 - `tests/gear_for_spec.lua`
+- `tests/herb_history_cap_spec.lua`
 - `tests/idea_spec.lua`
 - `tests/item_name_capture_spec.lua`
 - `tests/mapdiag_spec.lua`
