@@ -490,21 +490,18 @@ local function foldEvictedAndTrim(db, mapID, list)
   end
   for i = 1, drop do
     local rec = list[i]
-    if type(rec) == "table" then
-      if rec.hsFolded == true then
-        -- Already folded: a mid-loop crash left the mark on this
-        -- still-untrimmed record, or a re-attached pick kept it.
+    -- Already-folded records (a mid-loop crash left the mark on this
+    -- still-untrimmed record, or a re-attached pick kept it) are skipped.
+    if type(rec) == "table" and rec.hsFolded ~= true then
+      local t = recTime(rec)
+      if (not anyMarked) and t and t <= hsT0 then
+        rec.hsFolded = true
       else
-        local t = recTime(rec)
-        if (not anyMarked) and t and t <= hsT0 then
-          rec.hsFolded = true
-        else
-          R.FoldHerbIntoHotspots(db, mapID, rec)
-          rec.hsFolded = true
-          f.n = f.n + 1
-          if t and t > f.hsT then
-            f.hsT = t
-          end
+        R.FoldHerbIntoHotspots(db, mapID, rec)
+        rec.hsFolded = true
+        f.n = f.n + 1
+        if t and t > f.hsT then
+          f.hsT = t
         end
       end
     end
