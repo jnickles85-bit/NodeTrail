@@ -27,6 +27,7 @@ Usage:
     python3 tools/sync_touchstone.py --ref 80accdd       # …or pin a commit
     python3 tools/sync_touchstone.py --src /mnt/c/.../touchstone-deploy
     python3 tools/sync_touchstone.py --verify-only
+    python3 tools/sync_touchstone.py --src /path --verify-shipped
 """
 
 from __future__ import annotations
@@ -42,6 +43,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEST_ROOT = REPO_ROOT / "MightiePack" / "Modules" / "Touchstone"
 TOC_PATH = REPO_ROOT / "MightiePack" / "MightiePack.toc"
+# Residual NodeTrail-local edits that the fold editors above do not yet
+# reproduce (PR #22 secret-values guard, Gear-for-spec work, pack-version
+# header, Reset description wrap, …). Applied after the editors, as
+# unified diffs. A missing or stale hunk fails the sync loudly.
+PATCH_DIR = REPO_ROOT / "tools" / "touchstone-patches"
 
 # The fold is generated from StatForge, not from a hand-kept local folder: the
 # default source is the repository's own main, cloned at run time, and the
@@ -2481,6 +2487,92 @@ def scrub_personal(text: str) -> str:
     return text
 
 
+
+def _patch_path(name: str) -> Path:
+    return PATCH_DIR / (name.replace("/", "__") + ".patch")
+
+
+def apply_unified_patch(text: str, patch_text: str, name: str) -> str:
+    """Apply a unified diff with exact context, or fail loudly.
+
+    Idempotent at the sync-run level: each run starts from freshly generated
+    (unpatched) text and applies the patch once. A hunk whose context is
+    missing — upstream moved — raises SyncError and writes nothing.
+    """
+    lines = patch_text.splitlines()
+    hunks = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("@@"):
+            hunk_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].startswith("@@"):
+                if lines[i].startswith("\\"):  # "\ No newline at end of file"
+                    i += 1
+                    continue
+                hunk_lines.append(lines[i])
+                i += 1
+            hunks.append(hunk_lines)
+            continue
+        i += 1
+    if not hunks:
+        raise SyncError("{}: patch has no hunks".format(name))
+
+    # Work line-wise without preserving a missing final newline until the end.
+    ends_nl = text.endswith("\n")
+    body = text.splitlines()
+    cursor = 0
+    out = []
+    for hunk in hunks:
+        old_block = []
+        new_block = []
+        for hl in hunk:
+            # Inside a hunk, "--- comment" is a deleted Lua comment, not a
+            # file header (headers appear only before the first @@).
+            if hl.startswith("+"):
+                new_block.append(hl[1:])
+            elif hl.startswith("-"):
+                old_block.append(hl[1:])
+            elif hl.startswith(" "):
+                old_block.append(hl[1:])
+                new_block.append(hl[1:])
+            elif hl == "" or hl.startswith("\\"):
+                # Some diffs emit a completely blank context line.
+                old_block.append("")
+                new_block.append("")
+            else:
+                raise SyncError("{}: unreadable patch line: {!r}".format(name, hl[:80]))
+        # find old_block in body at or after cursor
+        found = -1
+        last = len(body) - len(old_block)
+        for pos in range(cursor, last + 1):
+            if body[pos : pos + len(old_block)] == old_block:
+                found = pos
+                break
+        if found < 0:
+            raise SyncError(
+                "{}: patch hunk not found (anchor drifted). "
+                "Re-cut tools/touchstone-patches/{}.patch against the current "
+                "generated file.".format(name, name.replace("/", "__"))
+            )
+        out.extend(body[cursor:found])
+        out.extend(new_block)
+        cursor = found + len(old_block)
+    out.extend(body[cursor:])
+    result = "\n".join(out)
+    if ends_nl or text == "":
+        result += "\n"
+    return result
+
+
+def apply_named_patch(name: str, text: str) -> str:
+    path = _patch_path(name)
+    if not path.is_file():
+        return text
+    return apply_unified_patch(text, path.read_text(), name)
+
+
 def generate(src_root: Path) -> dict:
     """Return {relative dest path: text} for every vendored file."""
     if not src_root.is_dir():
@@ -2492,7 +2584,9 @@ def generate(src_root: Path) -> dict:
         if editor is not None:
             text = editor(text)
         text = retarget_assets(text, name)
-        outputs[name] = scrub_personal(text)
+        text = scrub_personal(text)
+        text = apply_named_patch(name, text)
+        outputs[name] = text
     return outputs
 
 
@@ -2602,6 +2696,28 @@ def audit_outputs(outputs: dict) -> list:
             "ChestAdvisor.lua's duplicate guard still searches for the tooltip "
             "prefix (empty since t_c2e67619 — it would match every line)"
         )
+
+    # PR #22: the secret-values guard must survive a re-sync. playerHitPercent
+    # must refuse a secret number rather than adding it.
+    verdict = outputs.get("ChestAdvisor/Verdict.lua", "")
+    start = verdict.find("function Verdict.playerHitPercent")
+    if start < 0:
+        problems.append("Verdict.lua has no Verdict.playerHitPercent")
+    else:
+        nxt = verdict.find("\nfunction ", start + 1)
+        # Helpers (isSecretNumber, pcallNumber) sit immediately above the
+        # function; include that preface so the check sees the real guard.
+        preface = verdict[max(0, start - 2500) : start]
+        body = preface + verdict[start: nxt if nxt > 0 else None]
+        if "local function isSecretNumber" not in body or "issecretvalue" not in body:
+            problems.append(
+                "Verdict.playerHitPercent has no issecretvalue / isSecretNumber "
+                "guard; the ChestAdvisor secret-values patch is missing"
+            )
+        if "if bSec or mSec then return nil end" not in verdict[start: nxt if nxt > 0 else None]:
+            problems.append(
+                "Verdict.playerHitPercent does not refuse a secret half before adding"
+            )
     return problems
 
 
@@ -2683,6 +2799,11 @@ def main(argv=None) -> int:
         action="store_true",
         help="regenerate in memory and audit everything, but write nothing",
     )
+    parser.add_argument(
+        "--verify-shipped",
+        action="store_true",
+        help="like --verify-only, and require generate+patches to match the vendored tree",
+    )
     args = parser.parse_args(argv)
 
     temp_clone = None
@@ -2690,17 +2811,30 @@ def main(argv=None) -> int:
         src_root, source, temp_clone = resolve_source(args.src, args.ref)
         outputs = generate(src_root)
         problems = audit_toc() + audit_outputs(outputs)
+        if args.verify_shipped:
+            for name, text in outputs.items():
+                dest = DEST_ROOT / name
+                if not dest.is_file():
+                    problems.append("shipped file missing: {}".format(name))
+                elif dest.read_text() != text:
+                    problems.append(
+                        "shipped {} does not match generate+patches; "
+                        "re-cut tools/touchstone-patches or re-run the sync".format(name)
+                    )
         if problems:
             for problem in problems:
                 print("TOC/AUDIT: " + problem, file=sys.stderr)
             return 2
-        if not args.verify_only:
+        if not args.verify_only and not args.verify_shipped:
             write_outputs(src_root, outputs)
         print("sync_touchstone: source {}".format(source))
+        mode = "written"
+        if args.verify_shipped:
+            mode = "matched shipped"
+        elif args.verify_only:
+            mode = "verified"
         print(
-            "sync_touchstone: {} lua files {}; toc ok".format(
-                len(outputs), "verified" if args.verify_only else "written"
-            )
+            "sync_touchstone: {} lua files {}; toc ok".format(len(outputs), mode)
         )
         return 0
     except SyncError as exc:

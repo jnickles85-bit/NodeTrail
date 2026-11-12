@@ -8,28 +8,49 @@ on:
 jobs:
   lua:
     runs-on: ubuntu-24.04
+    # A stalled apt/luarocks install used to sit for 9–21 minutes and then fail
+    # the whole job, looking the same as a lint failure. Cap the job, and cap
+    # the toolchain steps tighter, so an install hang dies on the install step.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Lua 5.1 and luacheck
+      - name: Install Lua 5.1
+        timeout-minutes: 4
+        uses: leafo/gh-actions-lua@32909a2dea0a48c433aec79e7fcd31b4cd55800f # v13.1.0
+        with:
+          luaVersion: "5.1.5"
+
+      - name: Install LuaRocks
+        timeout-minutes: 4
+        uses: leafo/gh-actions-luarocks@35d062def313a7699a0d513e996bcf4352f05389 # v6.1.0
+
+      - name: Cache luacheck
+        uses: actions/cache@v4
+        with:
+          path: .luarocks
+          key: ${{ runner.os }}-lua5.1.5-luacheck-1.2.0
+
+      - name: Install luacheck
+        timeout-minutes: 4
         run: |
-          sudo apt-get update
-          # luarocks is not part of the runner image, and luacheck must build
-          # against the 5.1 that the client uses.
-          sudo apt-get install -y lua5.1 luarocks
-          sudo luarocks --lua-version=5.1 install luacheck
+          lua -v
+          luarocks install luacheck 1.2.0
 
       - name: Syntax check every shipping file
+        timeout-minutes: 3
         # luac -p parses without running: a module that does not compile never
         # reaches a player, and this is the cheapest possible gate for that.
+        # leafo/gh-actions-lua puts this Lua 5.1's luac on PATH as `luac`.
         run: |
           set -e
           mapfile -t files < <(find MightiePack -name '*.lua' -print)
           echo "checking ${#files[@]} file(s)"
-          printf '%s\0' "${files[@]}" | xargs -0 -n 20 luac5.1 -p
+          printf '%s\0' "${files[@]}" | xargs -0 -n 20 luac -p
 
       - name: Specs
-        # Each spec is a standalone lua5.1 program: it prints FAIL lines and exits
+        timeout-minutes: 5
+        # Each spec is a standalone lua 5.1 program: it prints FAIL lines and exits
         # non-zero on failure. Run them all and report the failing ones rather than
         # stopping at the first.
         run: |
@@ -38,7 +59,7 @@ jobs:
           for f in tests/*.lua; do
             count=$((count + 1))
             echo "::group::$f"
-            if ! lua5.1 "$f"; then
+            if ! lua "$f"; then
               echo "::error file=$f::spec failed"
               fails=$((fails + 1))
             fi
@@ -48,4 +69,5 @@ jobs:
           exit $fails
 
       - name: Luacheck
+        timeout-minutes: 3
         run: luacheck MightiePack

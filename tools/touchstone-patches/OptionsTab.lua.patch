@@ -1,0 +1,39 @@
+--- a/OptionsTab.lua
++++ b/OptionsTab.lua
+@@ -345,9 +345,17 @@
+     advisorSlash("reset")
+     syncShown(host)
+   end)
+-  local resetHint = SF.UI_CreateLabel(host, "Tooltip, toast, and marker glyphs. Does not clear role or the log.",
++  local resetHint = SF.UI_CreateLabel(host, "Tooltip, toast, and marker glyphs. Also clears a chosen Gear-for spec (back to Auto). Does not clear /up role or the log.",
+     "GameFontHighlight")
+   resetHint:SetPoint("LEFT", resetBtn, "RIGHT", 10, 0)
++  resetHint:SetPoint("RIGHT", host, "RIGHT", -16, 0)
++  resetHint:SetJustifyH("LEFT")
++  if type(resetHint.SetJustifyV) == "function" then
++    resetHint:SetJustifyV("MIDDLE")
++  end
++  if type(resetHint.SetWordWrap) == "function" then
++    resetHint:SetWordWrap(true)
++  end
+   resetHint:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+   host.resetButton = resetBtn
+ 
+@@ -417,7 +425,16 @@
+   about:SetJustifyH("LEFT")
+   about:SetText(
+     SF.Accent("About") .. "\n\n" ..
+-    "Touchstone v" .. SF.VERSION .. "  ·  Classic Era item advisor\n" ..
++    (function()
++      local packVer
++      local pkg = rawget(_G, "MightiePack")
++      if type(pkg) == "table" and type(pkg.PackVersion) == "function" then
++        local ok, v = pcall(pkg.PackVersion)
++        if ok and type(v) == "string" and v ~= "" then packVer = v end
++      end
++      local pack = packVer and ("MightiePack v" .. packVer) or "MightiePack"
++      return pack .. "  ·  Touchstone module v" .. SF.VERSION .. "  ·  Classic Era item advisor\n"
++    end)() ..
+     "Hover a piece of gear in your bags. A green arrow marks an upgrade;\n" ..
+     "an amber square marks a trade-off (better on some stats, worse on others).\n" ..
+     "On the character sheet, the green arrow means a bag item is an upgrade for that slot.\n" ..

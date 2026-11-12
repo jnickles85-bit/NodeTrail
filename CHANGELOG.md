@@ -1,10 +1,23 @@
 # Changelog
 
 All notable changes to MightiePack. The format follows Keep a Changelog, and the
-project uses semantic-ish versioning: the pack version in `MightiePack.toc` is the
-one CurseForge shows, and the bundled modules report the same number.
+project uses semantic-ish versioning: the pack version in `MightiePack.toc`
+(substituted from the git tag by the packager) is the one CurseForge shows.
+Touchstone still carries its own upstream module version, which may appear in
+About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
+
+### Changed
+- The Touchstone window header shows the pack version from the TOC, not Touchstone's upstream module version. The module version remains on the Settings About line and in diagnostic output.
+- Pack options no longer show a raw Alchemy scan error under Alchemy Recipes. The line now reads "Alchemy scan isn't available on this client yet"; `/nt recipediag` and the Scan-now chat line still carry the technical text.
+- README slash table covers `/mp` (including `bug`, `idea`, and `skindiag` / `skindiag copy`), the `/nt` family, and the Touchstone family (`/touchstone`, `/ts`, `/sf`, `/up`, and aliases). Diagnostic commands are marked as such. Layout and Tests are regenerated from the tree. `HANDOFF.md` is archived under `docs/archive/`.
+- CI pins Lua 5.1 and LuaRocks (leafo actions by SHA), caches luacheck, and times out a stalled toolchain install separately from lint.
+
+### Fixed
+- The vendored Touchstone secret-values guard (and other NodeTrail-local Touchstone edits) is reproduced by an anchored post-copy patch in `tools/sync_touchstone.py`, so a re-sync cannot silently drop the ChestAdvisor crash fix.
+- `pkg.version` is no longer a hardcoded `"0.3.0"`. The pack version is read from the TOC via `pkg.PackVersion()` (nil-safe).
+- The Touchstone Settings "Reset to defaults" description wraps within the frame instead of running off the right edge.
 
 ## [0.3.5-beta] - 2026-11-11
 
@@ -22,7 +35,7 @@ one CurseForge shows, and the bundled modules report the same number.
 ## [0.3.4-beta] - 2026-11-11
 
 ### Changed
-- The skinning recorder is on by default: a fresh install records from the first corpse with no setup. A one-time migration switches the previous default on for an existing install, and an explicit off — un-ticking Skinning (experimental) in settings or `/nt skin off` — is stored as the player's own choice (`NodeTrailDB.skinning.skinUserSet`), so it survives `/reload` and later updates and the migration never overrides it. `/nt skin status` reports the current state.
+- The skinning recorder is on by default: a fresh install records from the first corpse with no setup. A one-time migration switches the previous default on for an existing install, and an explicit off — un-ticking Skinning (experimental) in settings or `/nt skin off` — is stored as the player's own choice (`NodeTrailDB.skinning.skinUserSet`), so it survives `/reload` and later updates and the migration never overrides it. `/nt skin status` reports the current state. Correction: that last claim is only true for offs recorded on 0.3.4 or later, when `skinUserSet` exists. An explicit off set under 0.3.3 or earlier is indistinguishable from a player who never touched the setting, so the one-time migration turns those older offs back on once.
 
 ### Fixed
 - Skinning counts every skin once again, whichever way the recorder saw it. A successful skin is normally reported as a cast with no corpse pinned to it followed by the skin loot window, and only the pinned path incremented the per-creature total — so the window marked the corpse skinned (its items were recorded and its loot was correct) while the skinned count the beast panel prints stayed behind. Live: 5 Plainstriders skinned, the panel said `kills seen: 18 · skinned: 3`. The window now counts the corpse it marks, and a corpse already counted — by the cast path, by a re-opened window, or by the schema 1 → 2 seeding — is never counted twice. A skin window with no successful cast behind it still marks and counts nothing.
@@ -61,12 +74,12 @@ one CurseForge shows, and the bundled modules report the same number.
 - The MightiePack options page uses a vertical flow so the skinning-circle status no longer overlaps its checkbox, Alchemy's Scan now sits under its status, and Feedback has Report a bug and Suggest an idea side by side.
 - The skinning tooltip no longer hides known skin/leather details when the unit is not a Beast (for example Cursed Darkhound, a Demon). Known records are shown regardless of creature type; the empty "no observations" hint stays Beast-only when we have no data for that NPC.
 
-## [0.3.1] - 2026-11-11
+## [0.3.1-beta] - 2026-11-11
 
 ### Added
 - `/mp bug` (also `/mpack bug`, and a Report a bug button) opens a movable popup with a pre-filled, already-selected report to copy into #mightiepack-bugs. Addon version, client version, enabled modules, class and level, zone/map, and the last MightiePack Lua error are filled in; character names and realms are left out. WoW cannot write the clipboard, so the player presses Ctrl+C.
 
-## [0.3.0]
+## [0.3.0-beta]
 
 ### Added
 - Skinning farming circles: closed routes built from the character's own recorded

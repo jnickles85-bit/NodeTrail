@@ -22,7 +22,6 @@
 local _, pkg = ...
 pkg.Skinning = pkg.Skinning or {}
 local ns = pkg.Skinning
-ns.version = "0.3.0"
 
 function ns.Enable()
   if ns.enabled then return end
