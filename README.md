@@ -60,6 +60,7 @@ registers `/touchstone`, `/sf`, and `/statforge` on one handler, and `/ts`,
 | `/nt skinroute [on\|off\|status]` | Green closed loop through skinned corpses on this zone's map |
 | `/nt skin [on\|off\|status]` | Corpse-skinning recorder (on by default); an explicit off survives `/reload` |
 | `/nt ttdiag` **(diag)** | Item-name resolver failures (ids that could not be named, and which lookups failed) |
+| `/nt linetest [use auto\|line\|rotate\|texcoord\|dots]` **(diag)** | Measure which line primitive this client actually keeps, pin it, and redraw |
 | `/touchstone` (aliases `/sf`, `/statforge`) | Toggle the Touchstone window |
 | `/touchstone options` | Open Touchstone on the Settings tab |
 | `/touchstone diag` or `diagnostics` **(diag)** | Open the Touchstone diagnostics panel |

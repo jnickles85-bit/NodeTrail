@@ -254,6 +254,7 @@ do
   local help2 = run("help")
   check(help2:find("/nt minimap", 1, true) ~= nil, "help lists /nt minimap")
   check(help2:find("/nt navwalk", 1, true) ~= nil, "help lists /nt navwalk")
+  check(help2:find("/nt linetest", 1, true) ~= nil, "help lists /nt linetest")
 end
 
 if failed == 0 then

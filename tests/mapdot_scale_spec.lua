@@ -278,8 +278,8 @@ else
       .. " vs " .. tostring(m.size) .. ")")
   near(m.screenOutline - m.screenSize, 2,
     "A: the outline adds 2 screen px (a 1px rim on each side)", 1e-9)
-  near(m.screenSpacing, m.screenSize - 1,
-    "A: dots overlap by 1 screen px so the coloured cores form a continuous stroke", METRIC_TOL)
+  near(m.screenSpacing, m.screenSize * 0.4,
+    "A: cores overlap by more than half their width so a diagonal of squares blends", METRIC_TOL)
 
   -- The floor holds on any surface: a zoomed-in canvas (scale > 1) still gets 4
   -- screen px, which means a SMALLER canvas dot.
@@ -290,7 +290,7 @@ else
   -- A pathWidth above the floor is honoured in screen px, not overridden.
   local wide = LD.DotMetrics(8, 1)
   near(wide.size, 8, "A: a wide stroke is not shrunk to the floor", 1e-9)
-  near(wide.screenSpacing, 7, "A: a wide 8px stroke spaces at 7 px (1 px core overlap)", 1e-9)
+  near(wide.screenSpacing, 8 * 0.4, "A: a wide 8px stroke spaces at 40% of the core (heavy overlap)", 1e-9)
 
   -- Unusable scales degrade to 1 (and never divide by zero).
   near(LD.DotMetrics(2, nil).size, 4, "A: no scale reads as 1", 1e-9)

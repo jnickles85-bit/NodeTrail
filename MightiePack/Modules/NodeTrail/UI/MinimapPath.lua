@@ -462,6 +462,21 @@ end
 --- use the same scale as the line it sits on top of — two projections of the
 --- same minimap that disagree by a few percent would put the arrow on the
 --- wrong bearing (t_d17939c1).
+local function decorClip(sample)
+  if type(sample) ~= "table" then
+    return nil
+  end
+  if (sample.shape or "ROUND") == "ROUND" then
+    return {
+      shape = "circle", x = 0, y = 0,
+      r = math.min(sample.halfW or 0, sample.halfH or 0) * ROUND_INSET,
+    }
+  end
+  local hw = (sample.halfW or 0) * SQUARE_INSET
+  local hh = (sample.halfH or 0) * SQUARE_INSET
+  return { shape = "rect", left = -hw, top = -hh, right = hw, bottom = hh }
+end
+
 function M:ViewRadiusYards()
   return viewRadiusYards()
 end
@@ -525,7 +540,7 @@ function M:EnsureHost()
   if not ok or not host then
     return nil
   end
-  ns.LineDraw.BindOverlay(host, Minimap)
+  ns.LineDraw.BindOverlay(host, Minimap, true)
   self.host = host
   self.drawer = ns.LineDraw.Create()
   return host
@@ -544,7 +559,7 @@ function M:EnsureSkinHost()
   if not ok or not host then
     return nil
   end
-  ns.LineDraw.BindOverlay(host, Minimap)
+  ns.LineDraw.BindOverlay(host, Minimap, true)
   self.skinHost = host
   self.skinDrawer = ns.LineDraw.Create()
   return host
@@ -973,7 +988,7 @@ function M:_redraw()
     local dpts = self._decorPts or {}
     self._decorPts = dpts
     dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
-    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics)
+    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics, decorClip(sample))
   end
   self._lastQueued = count
   self._proj = proj
@@ -1240,7 +1255,7 @@ function M:_redrawSkin()
     local dpts = self._skinDecorPts or {}
     self._skinDecorPts = dpts
     dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
-    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics)
+    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics, decorClip(sample))
   end
   self._skinQueued = count
   self._skinProj = proj

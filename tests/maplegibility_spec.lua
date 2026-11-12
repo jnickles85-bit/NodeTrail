@@ -5,7 +5,7 @@
 --
 -- What this spec pins, section by section:
 --   A. the dot core is a 4 SCREEN px floor at any canvas scale (0.6, 1.0, 1.5),
---      spaced 1 screen px tighter than the core so cores overlap into a
+--      spaced at 40% of the core so a diagonal of squares blends into a
 --      continuous stroke, with the dark rim 2 screen px larger (1px a side);
 --      all rims are painted first, then all cores, so a neighbouring rim
 --      cannot bury the stroke;
@@ -393,10 +393,10 @@ do
     local m = LD.DotMetrics(2, s)
     near(m.screenSize, 4, ("A: at canvas scale %s the dot is 4 SCREEN px"):format(s), 1e-6)
     near(m.size, 4 / s, ("A: ... which is 4/%s canvas px"):format(s), 1e-6)
-    near(m.screenSpacing, m.screenSize - 1,
-      ("A: at canvas scale %s the spacing is 1 px tighter than the core"):format(s), 1e-6)
-    check(m.screenSize - m.screenSpacing >= 1 - 1e-6,
-      ("A: at canvas scale %s cores overlap by at least 1 screen px (overlap %s)")
+    near(m.screenSpacing, m.screenSize * 0.4,
+      ("A: at canvas scale %s the spacing is 40%% of the core"):format(s), 1e-6)
+    check(m.screenSize - m.screenSpacing >= 2 - 1e-6,
+      ("A: at canvas scale %s cores overlap by more than half their width (overlap %s)")
         :format(s, tostring(m.screenSize - m.screenSpacing)))
     near(m.screenOutline, 6,
       ("A: at canvas scale %s the dark rim is 2 screen px larger (1px a side)"):format(s), 1e-6)

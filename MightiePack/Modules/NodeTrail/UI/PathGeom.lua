@@ -661,3 +661,64 @@ function G.BuildDrawPath(route)
   -- so a straight run does not spend extra segments. Stops stay.
   return G.Decimate(G.SmoothPreserve(pts, 1), 0.0005)
 end
+
+function G.InCircle(x, y, cx, cy, radius)
+  if type(x) ~= "number" or type(y) ~= "number" or type(radius) ~= "number" or radius < 0 then
+    return false
+  end
+  local dx = x - (tonumber(cx) or 0)
+  local dy = y - (tonumber(cy) or 0)
+  return dx * dx + dy * dy <= radius * radius
+end
+
+function G.InRect(x, y, left, top, right, bottom)
+  if type(x) ~= "number" or type(y) ~= "number" then
+    return false
+  end
+  left, top, right, bottom = tonumber(left), tonumber(top), tonumber(right), tonumber(bottom)
+  if not left or not top or not right or not bottom then
+    return false
+  end
+  local x0, x1 = math.min(left, right), math.max(left, right)
+  local y0, y1 = math.min(top, bottom), math.max(top, bottom)
+  return x >= x0 and x <= x1 and y >= y0 and y <= y1
+end
+
+--- clip = { shape = "circle", x, y, r } or { shape = "rect", left, top, right, bottom }.
+--- A missing or unknown clip admits every point, so a caller that has no
+--- viewport does not silently drop decorations.
+function G.InsideClip(x, y, clip)
+  if type(clip) ~= "table" then
+    return type(x) == "number" and type(y) == "number"
+  end
+  if clip.shape == "circle" then
+    return G.InCircle(x, y, clip.x, clip.y, clip.r)
+  end
+  return G.InRect(x, y, clip.left, clip.top, clip.right, clip.bottom)
+end
+
+--- Keep items whose centre is inside the clip. Reuses `out`.
+function G.ClipItems(items, n, clip, out)
+  out = out or {}
+  n = n or (type(items) == "table" and #items or 0)
+  local kept = 0
+  if type(items) ~= "table" then
+    for i = #out, 1, -1 do
+      out[i] = nil
+    end
+    return out, 0
+  end
+  for i = 1, n do
+    local it = items[i]
+    if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number"
+      and G.InsideClip(it.x, it.y, clip) then
+      kept = kept + 1
+      out[kept] = it
+    end
+  end
+  for i = #out, kept + 1, -1 do
+    out[i] = nil
+  end
+  return out, kept
+end
+

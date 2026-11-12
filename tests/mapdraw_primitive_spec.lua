@@ -267,7 +267,7 @@ else
   local m = LD.DotMetrics(2, 1)
   local cover = LD.DotPlan(400, m.size, m.spacing)
   check(cover.count == cover.steps + 1, "0b: both endpoints of the segment are drawn")
-  near(cover.spacing, 3, "0b: a 2px stroke is spaced 3px — cores overlap by 1 px into a continuous stroke")
+  near(cover.spacing, 1.6, "0b: a 2px stroke is spaced 1.6px — cores overlap by more than half their width")
   near(cover.size, 4, "0b: the dot is 4 screen px, so the spacing leaves no hole")
   check(cover.steps * cover.spacing >= 400, "0b: the chain spans the segment")
   check((cover.steps - 1) * cover.spacing < 400, "0b: no more dots than the length needs")
@@ -364,7 +364,7 @@ if first then
 end
 
 -- The chain still starts on the first route point and ends on the last, and
--- consecutive cores overlap by 1 px (pitch ~3) so the stroke is continuous.
+-- consecutive cores overlap by more than half their width (pitch ~1.6) so the stroke is continuous.
 -- Light smoothing may lift mid-span samples slightly off a straight chord,
 -- so we measure along the painted chain rather than along the original y.
 local last = whiteDots[#whiteDots]
@@ -380,8 +380,8 @@ if #whiteDots >= 2 and whiteDots[1].points[1] and whiteDots[2].points[1] then
   local bx = (b.points[1][4] + b.points[2][4]) * 0.5
   local by = (b.points[1][5] + b.points[2][5]) * 0.5
   local gap = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
-  check(gap > 2.4 and gap <= 3.2,
-    "B: cores overlap by ~1 px (pitch ~3), got " .. tostring(gap))
+  check(gap > 1.2 and gap <= 1.8,
+    "B: cores overlap by more than half their width (pitch ~1.6), got " .. tostring(gap))
 end
 
 -- A dot is drawn without any size setter: the stub only has anchors.
@@ -432,7 +432,7 @@ check(verdict and verdict:find("verdict: PRIMITIVE", 1, true) ~= nil,
     .. tostring(verdict) .. ")")
 check(verdict and verdict:find("kept no geometry (reads start=TOPLEFT(0.0,absent) end=TOPLEFT(0.0,absent))", 1, true) ~= nil,
   "C: the verdict quotes the endpoint read-back (got " .. tostring(verdict) .. ")")
-check(verdict and verdict:find("anchored dots (size=4.00 spacing=3.00)", 1, true) ~= nil,
+check(verdict and verdict:find("anchored dots (size=4.00 spacing=1.60)", 1, true) ~= nil,
   "C: the verdict says how the route is drawn instead (got " .. tostring(verdict) .. ")")
 check(joined:find("error:", 1, true) == nil, "C: the diag printed no error line")
 

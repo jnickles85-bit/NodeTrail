@@ -598,7 +598,7 @@ do
   check((narrow.missingDots or 0) > 0,
     "H: the narrow client reports the shortfall first (missing=" .. tostring(narrow.missingDots) .. ")")
   check(type(narrow.capacity) == "number", "H: the ceiling is recorded (capacity=" .. tostring(narrow.capacity) .. ")")
-  H.setCeiling(400)
+  H.setCeiling(1000)
   H.M:SetRoute(route("H2"))
   local wide = (H.M.drawer or {}).lastApplied or {}
   check(wide.paintedDots == wide.plannedDots,
@@ -611,7 +611,7 @@ do
   check(wide.capacity == nil and wide.capacityStale == true,
     "H: the stale ceiling is cleared and the diag says so (capacity=" .. tostring(wide.capacity)
       .. " stale=" .. tostring(wide.capacityStale) .. ")")
-  check(H.created() <= 400, "H: the wider plan still respects the new ceiling (asked=" .. H.created() .. ")")
+  check(H.created() <= 1000, "H: the wider plan still respects the new ceiling (asked=" .. H.created() .. ")")
 end
 
 -- ═══ I. the middle-dot diag prints MEASURED size next to the planned size ══
@@ -647,7 +647,7 @@ end
 -- edge sat above the bottom edge, so the height was 0. That reading sent three
 -- rounds of work after a geometry bug that was only in the probe.
 do
-  local K = boot(400)
+  local K = boot(1000)
   K.M:SetRoute(route("K"))
   local probeTex = K.M:_probeTexture(K.M.host)
   check(probeTex ~= nil, "K: the probe texture is created on the host")
@@ -677,8 +677,8 @@ do
   L.M:SetRoute(route("L"))
   local a = (L.M.drawer or {}).lastApplied or {}
   near(a.dotScale, CANVAS_SCALE, "L: the canvas scale is the live one", 0.001)
-  check(a.plannedDots == 142,
-    "L: the 17-point route plans 142 dots at a 4 screen px core on a 3 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
+  check(a.plannedDots == 236,
+    "L: the 17-point route plans 236 dots at a 4 screen px core on a 1.6 px pitch (planned=" .. tostring(a.plannedDots) .. ")")
   check(a.paintedDots == a.plannedDots,
     "L: every planned dot is painted (painted=" .. tostring(a.paintedDots) .. " planned="
       .. tostring(a.plannedDots) .. ")")

@@ -56,6 +56,8 @@ local function printHelp()
     "  /nt skin [on|off|status] - the corpse-skinning recorder (on by default); off stops recording now and the choice survives /reload")
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt ttdiag - item-name resolver failures (ids that could not be named, and which lookups failed)")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt linetest [use auto|line|rotate|texcoord|dots] - measure which line primitive this client actually keeps, pin it, and redraw")
   printL("HELP_NOTES")
 end
 
@@ -228,6 +230,108 @@ function ns.PrintStatus()
   printL("STATUS_MODULE", on and "on" or "off")
 end
 
+function ns.LineTestCommand(arg)
+  local say = function(text)
+    DEFAULT_CHAT_FRAME:AddMessage("NodeTrail linetest: " .. tostring(text))
+  end
+  if type(ns.LineDraw) ~= "table" or type(ns.LineDraw.RunLineTest) ~= "function" then
+    say("LineDraw is not loaded")
+    return
+  end
+  arg = tostring(arg or ""):match("^%s*(.-)%s*$") or ""
+  local want = arg:match("^use%s+(%S+)")
+  if want then
+    want = want:lower()
+    if want ~= "auto" and want ~= "line" and want ~= "rotate"
+      and want ~= "texcoord" and want ~= "dots" then
+      say("unknown mode '" .. want .. "' (auto | line | rotate | texcoord | dots)")
+      return
+    end
+    ns.LineDraw._forceMode = (want == "auto") and nil or want
+    say("pinned mode=" .. want .. "; invalidating drawers and redrawing")
+    if ns.MapOverlay then
+      if ns.MapOverlay.drawer then
+        ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
+      end
+      if ns.MapOverlay.skinDrawer then
+        ns.LineDraw.Invalidate(ns.MapOverlay.skinDrawer)
+      end
+      if type(ns.MapOverlay.Redraw) == "function" then
+        ns.MapOverlay:Redraw()
+      end
+    end
+    if ns.MinimapPath then
+      if ns.MinimapPath.drawer then
+        ns.LineDraw.Invalidate(ns.MinimapPath.drawer)
+      end
+      if ns.MinimapPath.skinDrawer then
+        ns.LineDraw.Invalidate(ns.MinimapPath.skinDrawer)
+      end
+      if type(ns.MinimapPath.Redraw) == "function" then
+        ns.MinimapPath:Redraw()
+      end
+    end
+    return
+  end
+  local mapFrame = _G.WorldMapFrame
+  local parent = nil
+  if mapFrame and type(mapFrame.GetCanvas) == "function" then
+    local ok, canvas = pcall(mapFrame.GetCanvas, mapFrame)
+    if ok and canvas then
+      parent = canvas
+    end
+  end
+  parent = parent or mapFrame or _G.Minimap or _G.UIParent
+  if not parent then
+    say("no parent frame to create a test region on (open the world map and try again)")
+    return
+  end
+  local report = ns.LineDraw.RunLineTest(parent)
+  local function status(p)
+    if type(p) ~= "table" then
+      return "not measured"
+    end
+    if p.took then
+      return "KEPT — " .. tostring(p.why or "ok")
+    end
+    if p.canAnchor then
+      return "anchors kept — " .. tostring(p.why or "ok")
+    end
+    return "DROPPED or unproven — " .. tostring(p.why or "no reason")
+  end
+  say("CreateLine: " .. status(report.line))
+  say("SetRotation: " .. status(report.rotate))
+  say("SetTexCoord: " .. status(report.texcoord))
+  say("two-corner dots: " .. status(report.dots))
+  say("recommended: " .. tostring(report.recommended)
+    .. " (this is used automatically when a method proves it kept its geometry)")
+  if report.recommended == "dots" then
+    say("no continuous primitive could be proved; the denser overlapping-dot stroke is in use. If a diagonal looks continuous after '/nt linetest use rotate' or 'use texcoord', pin that.")
+  else
+    ns.LineDraw._forceMode = nil
+    -- Apply the proved method by re-detecting (no pin needed; detect picks it).
+    say("applying " .. report.recommended .. " and redrawing")
+    if ns.MapOverlay and ns.MapOverlay.drawer then
+      ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
+    end
+    if ns.MapOverlay and ns.MapOverlay.skinDrawer then
+      ns.LineDraw.Invalidate(ns.MapOverlay.skinDrawer)
+    end
+    if ns.MinimapPath and ns.MinimapPath.drawer then
+      ns.LineDraw.Invalidate(ns.MinimapPath.drawer)
+    end
+    if ns.MinimapPath and ns.MinimapPath.skinDrawer then
+      ns.LineDraw.Invalidate(ns.MinimapPath.skinDrawer)
+    end
+    if ns.MapOverlay and type(ns.MapOverlay.Redraw) == "function" then
+      ns.MapOverlay:Redraw()
+    end
+    if ns.MinimapPath and type(ns.MinimapPath.Redraw) == "function" then
+      ns.MinimapPath:Redraw()
+    end
+  end
+end
+
 local function handleSlash(msg)
   msg = (msg or ""):match("^%s*(.-)%s*$") or ""
   msg = msg:lower()
@@ -275,6 +379,8 @@ local function handleSlash(msg)
     -- setter the Options checkbox uses, so an off here is a player choice the
     -- migration will never override.
     ns.SkinCommand(msg:match("^skin%s+(.*)$"))
+  elseif msg == "linetest" or msg:match("^linetest%s") then
+    ns.LineTestCommand(msg:match("^linetest%s+(.*)$"))
   elseif msg == "ttdiag" then
     if type(ns.Tooltip) == "table" and type(ns.Tooltip.Diag) == "function" then
       ns.Tooltip:Diag()
