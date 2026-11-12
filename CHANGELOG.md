@@ -6,6 +6,8 @@ one CurseForge shows, and the bundled modules report the same number.
 
 ## [Unreleased]
 
+## [0.3.5-beta] - 2026-11-11
+
 ### Fixed
 - Skinning a pack more than 10 seconds after the kills, when the skin loot window has no loot-source GUID (common on this client — corpse windows already fell back to `UNIT_DIED`), now marks those corpses skinned. A GUID-less window may be attributed to the dead target only within a short bound after `UNIT_SPELLCAST_SUCCEEDED` (`TARGET_ATTRIB_WINDOW`, 3s starting value, to be live-measured), and only while that target is still the cast's corpse if known. The pending pin's GUID is never invented onto a GUID-less window, and target-change or an unclaimed `LOOT_CLOSED` clears that attribution, so a later herb, chest, or fishing window cannot be filed as skin loot. Live on v0.3.4-beta: 11 beasts killed and skinned on a map, the tooltip said `kills seen: 11 · skinned: 0` with no materials, and `/nt skinroute` said `0 of 8 skinned corpses` because no ring record had `skinned = true`.
 - Skinning spell detection includes classic ranks `8613`, `8617`, `8618`, `10768` and Forever 1.60.1.70532 IDs `1240952`, `1240963`, `1240974`, `1240987`. The 4th `UNIT_SPELLCAST_*` argument on this client is a CastBar frame name and is not required to contain "skin".
