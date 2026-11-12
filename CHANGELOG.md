@@ -8,6 +8,9 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Added
+- Skinning farming circles survive ring turnover: unskinned kills are evicted from the 100-corpse ring first, and a skinned record with a map position is folded into a durable per-map hotspot grid (2% map-width cells, the same cell size and `{n, nodes, last}` shape as the herb-history grid, plus stored positions for the circle) before it leaves the ring. The circle is built from that store plus the ring, so `MIN_SKINS` counts both. A one-time migration folds the current ring's skinned positions into the store and never discards data.
+
 ### Changed
 - Herb and skinning routes are drawn as a continuous stroke with a dark outline, direction chevrons, and start/end (or loop) markers, instead of a dotted stair-step. Defaults are teal for herbs (the pack's Touchstone accent) and rust for skinning; a steel colour is reserved for mining if that route type is added later. Smoothing is light and keeps every stop on its node. An existing save still holding the old white default is migrated to teal once; any other stored path colour is left alone. The options panel notes the colour legend next to the route toggles.
 
