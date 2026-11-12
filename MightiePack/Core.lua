@@ -35,10 +35,12 @@ function pkg.GetAddOnMeta(addon, field)
   return nil
 end
 
--- Pack version from the TOC (C_AddOns.GetAddOnMetadata, then the legacy
--- GetAddOnMetadata). Nil-safe: a missing provider or empty/token value
--- returns nil rather than a stale hardcoded string. /mp status already
--- uses this path; the Touchstone window header does too.
+-- Pack version from the TOC, via GetAddOnMeta. Nil-safe: a missing provider
+-- or an empty string returns nil rather than a stale hardcoded string.
+-- A source-checkout token (@project-version@) follows GetAddOnMeta's own
+-- split: the C_AddOns path returns "dev", the legacy GetAddOnMetadata path
+-- returns the raw token. /mp status already uses this path; the Touchstone
+-- window header does too.
 function pkg.PackVersion()
   if type(pkg.GetAddOnMeta) ~= "function" then
     return nil

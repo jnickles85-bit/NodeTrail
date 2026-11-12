@@ -8,6 +8,9 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Fixed
+- README Layout now lists `CHANGELOG.md` and `LICENSE` as shipping in the zip (they were wrongly called repo-only). `/nt help` documents `/nt ttdiag` and `/nt navwalk ...|clear`. The skinning default-on comment in `Config.lua` matches the 0.3.4 changelog: offs set before 0.3.4 are turned back on once. `pkg.PackVersion()`'s comment matches GetAddOnMeta (the C_AddOns path returns `dev` for a source token; the legacy path returns the raw token). Touchstone sync patches require a unique context match per hunk and fail if a patch applies zero hunks.
+
 ### Changed
 - The Touchstone window header shows the pack version from the TOC, not Touchstone's upstream module version. The module version remains on the Settings About line and in diagnostic output.
 - Pack options no longer show a raw Alchemy scan error under Alchemy Recipes. The line now reads "Alchemy scan isn't available on this client yet"; `/nt recipediag` and the Scan-now chat line still carry the technical text.

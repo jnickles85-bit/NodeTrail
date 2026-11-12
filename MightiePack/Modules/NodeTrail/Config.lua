@@ -148,10 +148,13 @@ function ns.GetSkinDB()
   -- value it owns. The recorder shipped default-OFF, so a bucket written by
   -- that build stored `false`. Changing the default cannot undo a stored
   -- value, so an install that carries the old default is flipped ON once.
-  -- Only an explicit switch (the Options checkbox or /nt skin, both of which
-  -- go through ns.SetSkinningEnabled) sets skinUserSet, so a player's own
-  -- "off" is never overridden — not by this migration, by a later one, or by
-  -- a /reload. The marker is written either way, so this runs exactly once.
+  -- An explicit switch (the Options checkbox or /nt skin, both of which go
+  -- through ns.SetSkinningEnabled) sets skinUserSet, so an off recorded on
+  -- 0.3.4 or later is never overridden — not by this migration, by a later
+  -- one, or by a /reload. An off stored under 0.3.3 or earlier is
+  -- indistinguishable from a player who never touched the setting (the flag
+  -- did not exist yet), so this one-time migration turns those older offs
+  -- back on. The marker is written either way, so this runs exactly once.
   local db = NodeTrailDB.skinning
   if db.skinMigration ~= 1 then
     if db.skinUserSet ~= true then
