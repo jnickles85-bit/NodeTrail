@@ -85,6 +85,11 @@ end
 --- The current ring (rec.skinned == true, with a map position) is unioned
 --- with the durable per-map hotspot store, deduped by guid, so MIN_SKINS
 --- counts both. The store is READ; no bucket is created here.
+--- A cell keeps at most HOTSPOT_MAX_PTS (32) position samples; further
+--- skins still increment cell.n (and are remembered in cell.seen) but
+--- do not add another path point. SkinnedPoints therefore yields at
+--- most 32 points from one cell's store (plus any of those guids still
+--- on the ring, which are already counted from the ring).
 --- @param mapID number|nil
 --- @return { {x=,y=,guid=} }, why|nil
 function S:SkinnedPoints(mapID)

@@ -13,7 +13,14 @@
 --      of skins evicted by a later camp of 100 skins still builds from
 --      the durable store;
 --   4. a one-time migration folds the current ring's skinned positions
---      into the store without discarding the ring or double-counting.
+--      into the store without discarding the ring or double-counting;
+--   5. more than 32 unique folds in one cell cap only the position
+--      samples: a re-fold of #33 does not increment n, and
+--      SkinnedPoints yields at most 32 points from that cell;
+--   6. a crash after the fold but before the ring removal retries
+--      without double-counting (fold first, then drop);
+--   7. a skinned record evicted with no map position is counted per
+--      map in unpositionedEvicted and is not folded.
 --
 -- Not loaded by the addon TOC.
 local src = debug.getinfo(1, "S").source:gsub("^@", "")
@@ -311,6 +318,98 @@ check(hotspotPts(viaGet, MAP) == 9, "4: GetDB does not fold a second time")
 local pts4 = S:SkinnedPoints(MAP)
 -- 9 skins from store + ring, deduped.
 check(#pts4 == 9, "4: SkinnedPoints is 9 unique skins after migration (got " .. #pts4 .. ")")
+
+-- ── 5. pts cap does not break guid idempotency ────────────────────────
+local overflow = {
+  schema = 2, records = {}, order = {}, unclassified = {},
+  creatures = {}, counts = {}, hotspots = {}, hotspotsSeeded = true,
+}
+local overflowGuids = {}
+for i = 1, 37 do
+  overflowGuids[i] = "Creature-0-1-1-1-2966-" .. string.format("%012X", 200 + i)
+  R.FoldSkinIntoHotspots(overflow, {
+    guid = overflowGuids[i], creatureID = 2966, skinned = true,
+    map = MAP, x = 0.30, y = 0.30,
+  })
+end
+local oKey = R.SkinCellKey(0.30, 0.30)
+local oCell = overflow.hotspots[MAP][oKey]
+check(oCell and oCell.n == 37,
+  "5: n counts every unique fold past the pts cap (n=" .. tostring(oCell and oCell.n) .. ")")
+check(oCell and #oCell.pts == R.HOTSPOT_MAX_PTS,
+  "5: pts is capped at " .. R.HOTSPOT_MAX_PTS .. " (got " .. tostring(oCell and #oCell.pts) .. ")")
+check(oCell and oCell.seen and oCell.seen[overflowGuids[33]] == true,
+  "5: guid 33 is in seen even though it missed the pts cap")
+local nBefore, ptsBefore = oCell.n, #oCell.pts
+R.FoldSkinIntoHotspots(overflow, {
+  guid = overflowGuids[33], creatureID = 2966, skinned = true,
+  map = MAP, x = 0.30, y = 0.30,
+})
+check(oCell.n == nBefore, "5: a re-fold of #33 does not increment n (got " .. tostring(oCell.n) .. ")")
+check(#oCell.pts == ptsBefore, "5: a re-fold of #33 does not grow pts")
+NodeTrailDB = { skinning = { enabled = true, chars = { ["Mightie-Forever"] = overflow } } }
+local pts5 = S:SkinnedPoints(MAP)
+check(#pts5 == R.HOTSPOT_MAX_PTS,
+  "5: SkinnedPoints yields at most 32 points from one overfull cell (got " .. #pts5 .. ")")
+local late = 0
+for _, p in ipairs(pts5) do
+  for i = 33, 37 do
+    if p.guid == overflowGuids[i] then late = late + 1 end
+  end
+end
+check(late == 0, "5: skins past the pts cap are not extra path points (got " .. late .. ")")
+
+-- ── 6. crash after fold, before ring removal ─────────────────────────
+local crashStore = {
+  schema = 2, records = {}, order = {}, unclassified = {},
+  creatures = {}, counts = {}, hotspots = {}, hotspotsSeeded = true,
+}
+for i = 1, R.MAX_RECORDS + 1 do
+  local g = "Creature-0-9-1-1-2966-" .. string.format("%012X", i)
+  crashStore.order[i] = g
+  crashStore.records[g] = {
+    guid = g, creatureID = 2966, skinned = true,
+    map = MAP, x = 0.11, y = 0.12,
+  }
+end
+local first = crashStore.order[1]
+R.FoldSkinIntoHotspots(crashStore, crashStore.records[first])
+check(hotspotPts(crashStore, MAP) == 1, "6: the pre-crash fold stored the first skin")
+check(crashStore.records[first] ~= nil and #crashStore.order == R.MAX_RECORDS + 1,
+  "6: the crash leftover still has the record in the ring")
+R.EvictRing(crashStore)
+check(#crashStore.order == R.MAX_RECORDS, "6: EvictRing trims the ring")
+check(crashStore.records[first] == nil, "6: the already-folded record then leaves the ring")
+check(hotspotPts(crashStore, MAP) == 1,
+  "6: retry does not increment n (got " .. tostring(hotspotPts(crashStore, MAP)) .. ")")
+
+-- ── 7. unpositioned skinned evictions are counted, not folded ─────────
+local up = {
+  schema = 2, records = {}, order = {}, unclassified = {},
+  creatures = {}, counts = {}, hotspots = {}, hotspotsSeeded = true,
+}
+for i = 1, 99 do
+  local g = "Creature-0-8-1-1-2966-" .. string.format("%012X", i)
+  up.order[i] = g
+  up.records[g] = { guid = g, skinned = true, map = MAP, x = 0.2, y = 0.2 }
+end
+local upg = "Creature-0-8-1-1-2966-00000000DEAD"
+up.order[100] = upg
+up.records[upg] = { guid = upg, skinned = true, map = MAP } -- no x, y
+local extra = "Creature-0-8-1-1-2952-00000000NEW1"
+up.order[101] = extra
+up.records[extra] = { guid = extra, skinned = false, map = MAP, x = 0.4, y = 0.4 }
+R.EvictRing(up)
+check(up.records[upg] == nil, "7: the unpositioned skin left the ring")
+check(#up.order == R.MAX_RECORDS, "7: the ring stays at the cap")
+check(up.unpositionedEvicted and up.unpositionedEvicted[MAP] == 1,
+  "7: unpositionedEvicted[map] is 1 (got "
+    .. tostring(up.unpositionedEvicted and up.unpositionedEvicted[MAP]) .. ")")
+check(hotspotPts(up, MAP) == 0, "7: the unpositioned skin was not folded into the grid")
+R.CountUnpositionedEviction(up, { guid = upg, skinned = true, map = MAP })
+check(up.unpositionedEvicted[MAP] == 1, "7: recounting the same guid does not increment")
+R.CountUnpositionedEviction(up, { guid = "Creature-0-8-1-1-2966-00000000NONE", skinned = true })
+check(up.unpositionedEvicted["_"] == 1, "7: a missing map is counted under _")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")

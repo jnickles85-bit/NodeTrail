@@ -560,6 +560,7 @@ local function shapeStore(b)
   if type(b.order) ~= "table" then b.order = {} end
   if type(b.unclassified) ~= "table" then b.unclassified = {} end
   if type(b.hotspots) ~= "table" then b.hotspots = {} end
+  if type(b.unpositionedEvicted) ~= "table" then b.unpositionedEvicted = {} end
   if type(b.counts) ~= "table" then b.counts = {} end
   for i = 1, #STORE_COUNTS do
     if type(b.counts[STORE_COUNTS[i]]) ~= "number" then b.counts[STORE_COUNTS[i]] = 0 end
@@ -717,13 +718,16 @@ function R.FoldSkinIntoHotspots(store, rec)
   end
   if type(cell.pts) ~= "table" then cell.pts = {} end
   if type(cell.nodes) ~= "table" then cell.nodes = {} end
+  if type(cell.seen) ~= "table" then cell.seen = {} end
+  -- Idempotency lives in seen, not in the capped pts list. seen grows
+  -- with cell.n (one guid per counted fold) and is never trimmed by
+  -- HOTSPOT_MAX_PTS, so a re-fold of a guid that missed the pts cap
+  -- cannot increment n. Only the position samples are capped.
   if type(rec.guid) == "string" and rec.guid ~= "" then
-    for i = 1, #cell.pts do
-      local p = cell.pts[i]
-      if type(p) == "table" and p.guid == rec.guid then
-        return false
-      end
+    if cell.seen[rec.guid] then
+      return false
     end
+    cell.seen[rec.guid] = true
   end
   cell.n = (cell.n or 0) + 1
   local ts = tonumber(rec.skinCastAt) or tonumber(rec.diedAt) or tonumber(rec.firstSeenAt)
@@ -782,6 +786,38 @@ function R.SeedSkinHotspots(store)
   return store
 end
 
+--- Count a skinned record that left the ring without a map position
+--- (it cannot be folded). Per-map (`unpositionedEvicted[mapID]`; a
+--- missing map uses the key `"_"`). Idempotent on guid so a crash
+--- retry cannot increment the same record twice.
+function R.CountUnpositionedEviction(store, rec)
+  if type(store) ~= "table" or type(rec) ~= "table" or rec.skinned ~= true then
+    return false
+  end
+  if R.HasSkinPosition(rec) then
+    return false
+  end
+  if type(store.unpositionedEvictedGuids) ~= "table" then
+    store.unpositionedEvictedGuids = {}
+  end
+  if type(store.unpositionedEvicted) ~= "table" then
+    store.unpositionedEvicted = {}
+  end
+  local g = rec.guid
+  if type(g) == "string" and g ~= "" then
+    if store.unpositionedEvictedGuids[g] then
+      return false
+    end
+    store.unpositionedEvictedGuids[g] = true
+  end
+  local mk = rec.map
+  if type(mk) ~= "number" then
+    mk = "_"
+  end
+  store.unpositionedEvicted[mk] = (store.unpositionedEvicted[mk] or 0) + 1
+  return true
+end
+
 --- Evict until the ring is at MAX_RECORDS. Unskinned records (and
 --- skinned records with no map position) go first. A skinned, positioned
 --- record is folded into the hotspot grid before it is dropped.
@@ -816,15 +852,22 @@ function R.EvictRing(store, keepGuid)
     if evictAt == nil then
       break
     end
-    local old = table.remove(store.order, evictAt)
-    if old then
-      local rec = store.records[old]
-      if R.HasSkinPosition(rec) then
-        R.FoldSkinIntoHotspots(store, rec)
-      end
-      if old ~= keepGuid then
-        store.records[old] = nil
-      end
+    local old = store.order[evictAt]
+    if not old then
+      break
+    end
+    local rec = store.records[old]
+    -- Fold (or count) first, then drop the ring entry, so a crash
+    -- after the fold still leaves the record in order/records for a
+    -- retry. The fold is idempotent on guid.
+    if R.HasSkinPosition(rec) then
+      R.FoldSkinIntoHotspots(store, rec)
+    elseif type(rec) == "table" and rec.skinned == true then
+      R.CountUnpositionedEviction(store, rec)
+    end
+    table.remove(store.order, evictAt)
+    if old ~= keepGuid then
+      store.records[old] = nil
     end
   end
 end
