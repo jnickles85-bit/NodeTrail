@@ -2524,6 +2524,7 @@ def apply_unified_patch(text: str, patch_text: str, name: str) -> str:
     body = text.splitlines()
     cursor = 0
     out = []
+    applied = 0
     for hunk in hunks:
         old_block = []
         new_block = []
@@ -2543,22 +2544,41 @@ def apply_unified_patch(text: str, patch_text: str, name: str) -> str:
                 new_block.append("")
             else:
                 raise SyncError("{}: unreadable patch line: {!r}".format(name, hl[:80]))
-        # find old_block in body at or after cursor
-        found = -1
+        if not old_block and not new_block:
+            raise SyncError(
+                "{}: patch hunk is empty (no context, no change) and was dropped".format(name)
+            )
+        if not old_block:
+            raise SyncError(
+                "{}: patch hunk has no context and cannot be uniquely anchored".format(name)
+            )
+        # Unique context: every remaining occurrence must be considered.
+        # Applying at the first of two identical sites would silently drop
+        # the later one or edit the wrong copy.
         last = len(body) - len(old_block)
-        for pos in range(cursor, last + 1):
-            if body[pos : pos + len(old_block)] == old_block:
-                found = pos
-                break
-        if found < 0:
+        matches = [
+            pos
+            for pos in range(cursor, last + 1)
+            if body[pos : pos + len(old_block)] == old_block
+        ]
+        if not matches:
             raise SyncError(
                 "{}: patch hunk not found (anchor drifted). "
                 "Re-cut tools/touchstone-patches/{}.patch against the current "
                 "generated file.".format(name, name.replace("/", "__"))
             )
+        if len(matches) > 1:
+            raise SyncError(
+                "{}: patch hunk matched {} times, expected exactly 1 "
+                "(context is not unique)".format(name, len(matches))
+            )
+        found = matches[0]
         out.extend(body[cursor:found])
         out.extend(new_block)
         cursor = found + len(old_block)
+        applied += 1
+    if applied == 0:
+        raise SyncError("{}: patch applied zero hunks".format(name))
     out.extend(body[cursor:])
     result = "\n".join(out)
     if ends_nl or text == "":
@@ -2570,7 +2590,10 @@ def apply_named_patch(name: str, text: str) -> str:
     path = _patch_path(name)
     if not path.is_file():
         return text
-    return apply_unified_patch(text, path.read_text(), name)
+    patch_text = path.read_text()
+    if patch_text.strip() == "":
+        raise SyncError("{}: patch file is empty (zero hunks)".format(name))
+    return apply_unified_patch(text, patch_text, name)
 
 
 def generate(src_root: Path) -> dict:
@@ -2779,6 +2802,62 @@ def resolve_source(src: str | None, ref: str) -> tuple:
     return clone, "{}@{}".format(SOURCE_URL, sha), clone
 
 
+
+def _self_test_patches() -> int:
+    """Tiny fixture tests for apply_unified_patch; no StatForge checkout needed."""
+
+    def expect_error(label, fn, needle):
+        try:
+            fn()
+        except SyncError as exc:
+            msg = str(exc)
+            if needle not in msg:
+                raise AssertionError(
+                    "{}: error {!r} did not contain {!r}".format(label, msg, needle)
+                )
+            return
+        raise AssertionError("{}: expected SyncError containing {!r}".format(label, needle))
+
+    # Unique context applies once.
+    text = "a\nb\nc\n"
+    patch = "--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
+    out = apply_unified_patch(text, patch, "f")
+    if out != "a\nB\nc\n":
+        raise AssertionError("unique apply produced {!r}".format(out))
+
+    # The same context twice in the remaining text is not unique.
+    dup = "a\nb\nc\na\nb\nc\n"
+    expect_error(
+        "duplicate context",
+        lambda: apply_unified_patch(dup, patch, "f"),
+        "matched 2 times",
+    )
+
+    # A patch with no @@ hunks fails (zero hunks).
+    expect_error(
+        "zero hunks",
+        lambda: apply_unified_patch(text, "--- a/f\n+++ b/f\n", "f"),
+        "no hunks",
+    )
+
+    # A missing hunk fails loudly (not dropped).
+    expect_error(
+        "missing hunk",
+        lambda: apply_unified_patch("x\ny\n", patch, "f"),
+        "hunk not found",
+    )
+
+    # An empty hunk (@@ with no body) is a dropped hunk.
+    expect_error(
+        "empty hunk",
+        lambda: apply_unified_patch(text, "--- a/f\n+++ b/f\n@@ -1,0 +1,0 @@\n", "f"),
+        "hunk is empty",
+    )
+
+    print("sync_touchstone patch self-test: ok")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2804,7 +2883,14 @@ def main(argv=None) -> int:
         action="store_true",
         help="like --verify-only, and require generate+patches to match the vendored tree",
     )
+    parser.add_argument(
+        "--self-test-patches",
+        action="store_true",
+        help="run apply_unified_patch fixtures (no StatForge checkout) and exit",
+    )
     args = parser.parse_args(argv)
+    if args.self_test_patches:
+        return _self_test_patches()
 
     temp_clone = None
     try:

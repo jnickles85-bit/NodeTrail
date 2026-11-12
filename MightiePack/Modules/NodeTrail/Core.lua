@@ -47,13 +47,15 @@ local function printHelp()
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt minimap [on|off] - the route drawn on the minimap only (the world map is unaffected)")
   DEFAULT_CHAT_FRAME:AddMessage(
-    "  /nt navwalk [start|mark <label>] - record a walk: player coords, the draw-time stamp and the drawn dot's anchors at each stop (saved on /reload)")
+    "  /nt navwalk [start|mark <label>|clear] - record a walk: player coords, the draw-time stamp and the drawn dot's anchors at each stop (saved on /reload); clear drops the recorded stops")
   -- t_b46e5e87: the skinning farming circle.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt skinroute [on|off|status] - the green closed loop through where you have skinned on THIS zone's map; off clears it, the herb route is unaffected")
   -- t_ba64b076: the recorder itself, now on by default.
   DEFAULT_CHAT_FRAME:AddMessage(
     "  /nt skin [on|off|status] - the corpse-skinning recorder (on by default); off stops recording now and the choice survives /reload")
+  DEFAULT_CHAT_FRAME:AddMessage(
+    "  /nt ttdiag - item-name resolver failures (ids that could not be named, and which lookups failed)")
   printL("HELP_NOTES")
 end
 

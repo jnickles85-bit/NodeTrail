@@ -56,7 +56,7 @@ registers `/touchstone`, `/sf`, and `/statforge` on one handler, and `/ts`,
 | `/nt mapdiag probe [off]` **(diag)** | Draw a marker, a border, and one diagonal on the map overlay |
 | `/nt navdiag` **(diag)** | What this client can tell us about yards (C_Map, HereBeDragons, zone size, arrow) |
 | `/nt arrow [on\|off]` | Next-waypoint arrow with the distance counting down |
-| `/nt navwalk [start\|mark <label>\|clear]` **(diag)** | Record a walk of player coords and drawn-dot anchors |
+| `/nt navwalk [start\|mark <label>\|clear]` **(diag)** | Record a walk of player coords and drawn-dot anchors; `clear` drops the recorded stops |
 | `/nt skinroute [on\|off\|status]` | Green closed loop through skinned corpses on this zone's map |
 | `/nt skin [on\|off\|status]` | Corpse-skinning recorder (on by default); an explicit off survives `/reload` |
 | `/nt ttdiag` **(diag)** | Item-name resolver failures (ids that could not be named, and which lookups failed) |
@@ -144,7 +144,9 @@ MightiePack/Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/marker.tga
 ```
 
-Repo-only (not shipped): `README.md`, `CHANGELOG.md`, `LICENSE`, `tests/`,
+Also shipped in the zip (not listed above): `CHANGELOG.md` and `LICENSE`.
+
+Repo-only (not shipped): `README.md`, `tests/`,
 `tools/` (`sync_touchstone.py`, `touchstone-patches/`, `gen_wowhead_priorities.py`),
 `data/`, `evidence/`, `docs/archive/HANDOFF.md`, `.github/`, `.luacheckrc`,
 `.pkgmeta`.
@@ -214,7 +216,7 @@ are de-duplicated before recording. `/mp skindiag` toggles the capture,
 compact dump in a copyable popup.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 67 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
 
 - `tests/alchemy_skill_gate_spec.lua`
 - `tests/beast_profession_gate_spec.lua`
@@ -268,6 +270,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 67 specs:
 - `tests/skinroute_spec.lua`
 - `tests/slash_spec.lua`
 - `tests/status_meta_spec.lua`
+- `tests/sync_touchstone_patch_spec.lua`
 - `tests/toast_test_spec.lua`
 - `tests/toast_trace_spec.lua`
 - `tests/tooltip_no_gametooltip_writes_spec.lua`
