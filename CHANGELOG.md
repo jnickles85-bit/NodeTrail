@@ -8,7 +8,11 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Changed
+- Herb gathering history is now capped per map without wiping a player's totals. `NodeTrailDB.herbs.maps` still stores raw picks (position, time, items) in the same shape, but only the newest 2,000 per map are kept — the bound the audit recommended, and well above the 40 stops a density route already uses. Lifetime pick counts (`total` and per-map) and the personal drop-rate stats the tooltip shows are stored in aggregates and are never evicted. An existing schema 1 save is migrated in place once: aggregates are computed from every raw record still in the file, the schema marker is stamped, and only then are oversized lists trimmed. A crash before the stamp retries from the intact raw lists; a second load does not re-seed from the trimmed ones. A newer schema is never downgraded.
+
 ### Fixed
+- A mid-seed crash during the skinning schema 1→2 upgrade could leave `skinContribution` stamps on records and under-count per-item totals on retry. Seeding now clears those stamps first, then rebuilds the totals, so a retry cannot under-seed.
 - README Layout now lists `CHANGELOG.md` and `LICENSE` as shipping in the zip (they were wrongly called repo-only). `/nt help` documents `/nt ttdiag` and `/nt navwalk ...|clear`. The skinning default-on comment in `Config.lua` matches the 0.3.4 changelog: offs set before 0.3.4 are turned back on once. `pkg.PackVersion()`'s comment matches GetAddOnMeta (the C_AddOns path returns `dev` for a source token; the legacy path returns the raw token). Touchstone sync patches require a unique context match per hunk and fail if a patch applies zero hunks.
 
 ### Changed

@@ -216,7 +216,7 @@ are de-duplicated before recording. `/mp skindiag` toggles the capture,
 compact dump in a copyable popup.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 69 specs:
 
 - `tests/alchemy_skill_gate_spec.lua`
 - `tests/beast_profession_gate_spec.lua`
@@ -228,6 +228,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 68 specs:
 - `tests/draw_smoke.lua`
 - `tests/event_gate_spec.lua`
 - `tests/gear_for_spec.lua`
+- `tests/herb_history_cap_spec.lua`
 - `tests/idea_spec.lua`
 - `tests/item_name_capture_spec.lua`
 - `tests/mapdiag_spec.lua`

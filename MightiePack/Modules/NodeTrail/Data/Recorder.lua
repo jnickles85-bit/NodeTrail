@@ -7,14 +7,20 @@ ns.Recorder = R
 
 R.HERB_SPELL_IDS = { [2366] = true, [2368] = true, [3570] = true, [11993] = true }
 R.PENDING_WINDOW = 5
-R.SCHEMA = 1
+R.SCHEMA = 2
 
 function ns.GetHerbDB()
   if type(NodeTrailDB) ~= "table" then
     ns.GetDB()
   end
   if type(NodeTrailDB.herbs) ~= "table" then
-    NodeTrailDB.herbs = { schema = R.SCHEMA, total = 0, maps = {} }
+    NodeTrailDB.herbs = {
+      schema = R.SCHEMA,
+      total = 0,
+      maps = {},
+      mapTotals = {},
+      stats = { gathers = {}, co = {}, names = {} },
+    }
   end
   if type(NodeTrailDB.herbs.maps) ~= "table" then
     NodeTrailDB.herbs.maps = {}
@@ -22,7 +28,198 @@ function ns.GetHerbDB()
   if type(NodeTrailDB.herbs.total) ~= "number" then
     NodeTrailDB.herbs.total = 0
   end
+  ns.UpgradeHerbDB(NodeTrailDB.herbs)
   return NodeTrailDB.herbs
+end
+
+
+-- ── schema 2: bounded raw samples, unbounded aggregates ───────────────
+-- NodeTrailDB.herbs.maps[mapID] stays an array of raw picks (x, y, t,
+-- items, optional node) so route/density and an open herb PR that does
+-- not touch this store can keep reading the same shape. What changes is
+-- how far back the array reaches.
+--
+-- MAX_SAMPLES_PER_MAP is the per-map cap on those raw picks. Newest
+-- samples are kept; older ones are dropped from the array only. The
+-- number is 2,000 because that is the bound the audit recommended for
+-- this list (~2,000 newest per map). Density already reduces a map to
+-- at most 40 stops, so the cap is well above what a route consumes. It
+-- is not a claim about node spawn counts or respawn timers.
+--
+-- Lifetime history is not wiped. db.total, db.mapTotals[mapID], and
+-- db.stats (the personal drop-rate numbers the tooltip walks) grow
+-- with every pick and are never evicted. A schema 1 save is migrated
+-- in place: aggregates are recomputed from every raw record that is
+-- still in the file, then the schema marker is stamped, and only then
+-- are oversized lists trimmed. A crash before the stamp leaves schema
+-- < 2 and the raw lists intact, so a retry recomputes from the same
+-- records (replace, not increment — no per-record contribution stamp).
+-- A second load after the stamp does not re-seed from the (now shorter)
+-- raw lists. A newer schema is never downgraded and is not trimmed by
+-- this build, which cannot know that shape.
+R.MAX_SAMPLES_PER_MAP = 2000
+
+local function emptyHerbStats()
+  return { gathers = {}, co = {}, names = {} }
+end
+
+-- Fold one raw pick into the tooltip aggregates. Mirrors GetPersonalStats'
+-- walk of a single record: a gather of primary P is a record that carried
+-- P, and each unique item id on that record increments the co-count for P.
+-- The first stored name for an id wins. Items without a numeric id are
+-- skipped, matching the existing walk.
+function R.ApplyRecordToHerbStats(stats, rec)
+  if type(stats) ~= "table" or type(rec) ~= "table" then return end
+  if type(stats.gathers) ~= "table" then stats.gathers = {} end
+  if type(stats.co) ~= "table" then stats.co = {} end
+  if type(stats.names) ~= "table" then stats.names = {} end
+  local items = rec.items
+  if type(items) ~= "table" then return end
+  local ids, seen = {}, {}
+  for i = 1, #items do
+    local it = items[i]
+    if type(it) == "table" and type(it.id) == "number" then
+      local id = it.id
+      if not seen[id] then
+        seen[id] = true
+        ids[#ids + 1] = id
+      end
+      if stats.names[id] == nil and type(it.name) == "string" and it.name ~= "" then
+        stats.names[id] = it.name
+      end
+    end
+  end
+  for i = 1, #ids do
+    local p = ids[i]
+    stats.gathers[p] = (stats.gathers[p] or 0) + 1
+    local co = stats.co[p]
+    if type(co) ~= "table" then
+      co = {}
+      stats.co[p] = co
+    end
+    for j = 1, #ids do
+      local q = ids[j]
+      co[q] = (co[q] or 0) + 1
+    end
+  end
+end
+
+local function sortedMapIDs(maps)
+  local keys = {}
+  if type(maps) ~= "table" then return keys end
+  for id in pairs(maps) do
+    keys[#keys + 1] = id
+  end
+  table.sort(keys, function(a, b)
+    local ta, tb = type(a), type(b)
+    if ta == tb then
+      return a < b
+    end
+    return ta < tb
+  end)
+  return keys
+end
+
+local function seedHerbStats(maps)
+  local stats = emptyHerbStats()
+  for _, mapID in ipairs(sortedMapIDs(maps)) do
+    local list = maps[mapID]
+    if type(list) == "table" then
+      for i = 1, #list do
+        R.ApplyRecordToHerbStats(stats, list[i])
+      end
+    end
+  end
+  return stats
+end
+
+local function seedMapTotals(maps)
+  local totals = {}
+  for _, mapID in ipairs(sortedMapIDs(maps)) do
+    local list = maps[mapID]
+    if type(list) == "table" then
+      totals[mapID] = #list
+    end
+  end
+  return totals
+end
+
+local function rawPickCount(maps)
+  local n = 0
+  if type(maps) ~= "table" then return n end
+  for _, list in pairs(maps) do
+    if type(list) == "table" then
+      n = n + #list
+    end
+  end
+  return n
+end
+
+-- Keep the newest maxN entries; older ones are dropped from the array only.
+-- Built as a new array and assigned by the caller so a mid-loop
+-- table.remove cannot leave a half-trimmed list if a crash hits.
+function R.TrimHerbList(list, maxN)
+  if type(list) ~= "table" then return list end
+  if type(maxN) ~= "number" or maxN < 0 then return list end
+  local n = #list
+  if n <= maxN then return list end
+  local start = n - maxN + 1
+  local kept = {}
+  for i = start, n do
+    kept[#kept + 1] = list[i]
+  end
+  return kept
+end
+
+local function pruneHerbMaps(db)
+  local maxN = R.MAX_SAMPLES_PER_MAP
+  local maps = db.maps
+  if type(maps) ~= "table" then return end
+  for mapID, list in pairs(maps) do
+    if type(list) == "table" and #list > maxN then
+      maps[mapID] = R.TrimHerbList(list, maxN)
+    end
+  end
+end
+
+function ns.UpgradeHerbDB(db)
+  if type(db) ~= "table" then return db end
+  local prior = db.schema
+  if type(prior) == "number" and prior > R.SCHEMA then
+    return db
+  end
+  if type(prior) ~= "number" or prior < 2 then
+    -- Recompute aggregates from every raw record still in the file.
+    -- Stamp the marker only after both tables have been written.
+    db.stats = seedHerbStats(db.maps)
+    db.mapTotals = seedMapTotals(db.maps)
+    local raw = rawPickCount(db.maps)
+    if type(db.total) ~= "number" or db.total < raw then
+      db.total = raw
+    end
+    db.schema = 2
+  end
+  if type(db.stats) ~= "table" then
+    db.stats = emptyHerbStats()
+  end
+  if type(db.mapTotals) ~= "table" then
+    db.mapTotals = {}
+  end
+  pruneHerbMaps(db)
+  return db
+end
+
+-- Lifetime picks on one map. Falls back to the raw list length when
+-- mapTotals is missing (a schema 1 table that has not been upgraded).
+function ns.HerbMapTotal(mapID, db)
+  db = db or (type(NodeTrailDB) == "table" and NodeTrailDB.herbs) or nil
+  if mapID == nil or type(db) ~= "table" then return 0 end
+  if type(db.mapTotals) == "table" and type(db.mapTotals[mapID]) == "number" then
+    return db.mapTotals[mapID]
+  end
+  local list = db.maps and db.maps[mapID]
+  if type(list) == "table" then return #list end
+  return 0
 end
 
 local function round4(v)
@@ -167,6 +364,15 @@ function ns.RecordHerb(mapID, x, y, items, nodeID)
   end
   list[#list + 1] = entry
   db.total = db.total + 1
+  if type(db.mapTotals) ~= "table" then db.mapTotals = {} end
+  db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
+  if type(db.stats) ~= "table" then
+    db.stats = { gathers = {}, co = {}, names = {} }
+  end
+  R.ApplyRecordToHerbStats(db.stats, entry)
+  if #list > R.MAX_SAMPLES_PER_MAP then
+    db.maps[mapID] = R.TrimHerbList(list, R.MAX_SAMPLES_PER_MAP)
+  end
   -- t_2bc15917: a pick on the active route's map makes the line stale. This
   -- only moves a due time — the rebuild happens later, on the frame's
   -- OnUpdate, never synchronously inside the loot/gather event.
