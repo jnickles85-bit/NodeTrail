@@ -371,7 +371,7 @@ end
 -- TooltipPanel's row contract).
 --
 -- 1 creature name · 2 skinnable (only when known) · 3 skinning results ·
--- 4 kills/skins seen.
+-- 4 skinned count.
 --
 -- t_2c573dbf: there is no corpse-loot section. Mightie: "beast tooltip doesnt
 -- need the actual items the mob can drop. Just what we obtain from skinning."
@@ -386,6 +386,30 @@ local function pct(seen, total)
   return v
 end
 
+-- The beast panel keeps this short: name (or "item <id>") and a count.
+-- The longer "item %d (name unavailable)" form stays on /nt ttdiag.
+H.MAX_SKIN_ITEM_ROWS = 4
+
+local function panelItemName(it)
+  if type(it) ~= "table" then
+    return "item ?"
+  end
+  local stored = it.name
+  if type(stored) == "string" and stored ~= "" and not isSecret(stored) then
+    return stored
+  end
+  local label = H.ItemName(it)
+  if type(label) == "string" and label ~= "" and not isSecret(label)
+    and not label:find("unavailable", 1, true)
+    and not label:match("^item %d") then
+    return label
+  end
+  if type(it.itemID) == "number" then
+    return "item " .. tostring(it.itemID)
+  end
+  return "item ?"
+end
+
 local function itemRows(rows, list, samples, label)
   if #list == 0 then
     return
@@ -398,8 +422,11 @@ local function itemRows(rows, list, samples, label)
   -- recorded without counting as a skinned corpse, so it would otherwise print
   -- 110%). Below that the row is a count, which is a fact.
   local enough = samples >= min
-  for _, it in ipairs(list) do
-    local left = H.ItemName(it) .. " x" .. tostring(it.count)
+  local cap = H.MAX_SKIN_ITEM_ROWS or 4
+  local shown = math.min(#list, cap)
+  for i = 1, shown do
+    local it = list[i]
+    local left = panelItemName(it) .. " x" .. tostring(it.count)
     local right = nil
     if enough and it.seen <= samples then
       local p = pct(it.seen, samples)
@@ -408,6 +435,9 @@ local function itemRows(rows, list, samples, label)
       end
     end
     rows[#rows + 1] = { left = left, right = right }
+  end
+  if #list > shown then
+    rows[#rows + 1] = { left = "and " .. tostring(#list - shown) .. " more" }
   end
 end
 
@@ -446,9 +476,10 @@ function H.Rows(cid, creatureName, agg)
   -- the only item section: the corpse side is recorded but never rendered
   -- (t_2c573dbf).
   itemRows(rows, agg.skin, agg.skinned, "skinned")
-  -- 4) how thin the evidence is.
+  -- 4) how many of these corpses were skinned. Kills are still stored
+  -- and still appear on /mp skindiag; the panel only shows skins.
   rows[#rows + 1] = {
-    left = "kills seen: " .. tostring(agg.kills) .. " · skinned: " .. tostring(agg.skinned),
+    left = "skinned: " .. tostring(agg.skinned),
   }
   return rows, agg
 end

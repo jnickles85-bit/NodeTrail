@@ -100,6 +100,12 @@ P.EVENTS = {
 
 P.MAX_STEPS = 120     -- ring buffer: the dump stays short and screenshot-able
 P.SKIN_WINDOW = 60    -- a Skinning cast attributes a second loot window within this many seconds
+-- A GUID-less window may be attributed to the dead target only this long
+-- after UNIT_SPELLCAST_SUCCEEDED. Starting bound is 3 seconds; it should
+-- be live-measured on a real skin (the SUCCEEDED -> LOOT_OPENED gap). It
+-- must stay much shorter than SKIN_WINDOW so a later herb, chest, or
+-- fishing window cannot steal the pending cast.
+P.TARGET_ATTRIB_WINDOW = 3
 -- A loot window with NO source GUID is not the end of the chain: the client
 -- opens the corpse window a second or two after UNIT_DIED and hands back no
 -- GUID at all (live at Razor Hill, 759876.51 UNIT_DIED ..EF7D0D -> 759878.38
@@ -125,7 +131,19 @@ P.DUP_TICK = 0.1
 -- ("n=CastBar-1B595C.."), so the old name-only detector could not see it —
 -- which is why sk 23 was dumped as k=corpse. The ID is the primary detector;
 -- the name heuristic below stays for builds that do send the name.
-P.SKIN_SPELL_IDS = { [8613] = true }
+-- Classic ranks (1–4) plus the Forever 1.60.1.70532 IDs (foreverdiff).
+-- Detection is by ID: the 4th UNIT_SPELLCAST_* argument on this client is
+-- a CastBar frame name and must not be required to contain "skin".
+P.SKIN_SPELL_IDS = {
+  [8613] = true,    -- Skinning
+  [8617] = true,    -- Skinning
+  [8618] = true,    -- Skinning
+  [10768] = true,   -- Skinning
+  [1240952] = true, -- Forever
+  [1240963] = true, -- Forever
+  [1240974] = true, -- Forever
+  [1240987] = true, -- Forever
+}
 
 -- state (session-only; never written to any SavedVariable)
 P.capturing = false
@@ -506,18 +524,62 @@ end
 --      second time.
 -- A pinned cast still wins for its own corpse, and a window on a DIFFERENT
 -- corpse while a pinned cast is pending stays ordinary corpse loot.
+-- The corpse the player is pointing at. Used only as a short-lived fill
+-- for a GUID-less skin window (see TARGET_ATTRIB_WINDOW in P:Classify),
+-- never as a 60s hang off a pending pin.
+function P:DeadTargetGuid()
+  if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function"
+    or type(UnitGUID) ~= "function" then
+    return nil
+  end
+  local okE, exists = pcall(UnitExists, "target")
+  if not okE or not exists then return nil end
+  local okD, dead = pcall(UnitIsDead, "target")
+  if not okD or not dead then return nil end
+  local ok, g = pcall(UnitGUID, "target")
+  if not ok or g == nil then return nil end
+  if isSecret(g) then return g end
+  if isClientText(g) then return g end
+  return nil
+end
+
 function P:Classify(src, t)
   local guid, rule = nil, "none"
   if type(src) == "string" and src ~= "" then
     guid, rule = src, "loot-source"
-  else
+  end
+  local cast = self:PendingCast(t)
+  -- Death fallback is for a GUID-less window that is still on the corpse
+  -- (live: UNIT_DIED then a source-less LOOT_OPENED). After the player
+  -- retargets, that fallback must not name a herb or chest as the corpse
+  -- a pending Skinning cast is waiting on.
+  if guid == nil and not (type(cast) == "table" and cast.targetAttribExpired) then
     local d = self:RecentDeath(t)
     if d then
       guid, rule = d.guid, (d.source == "TARGET_DEAD" and "TARGET_DEAD" or "UNIT_DIED")
       d.usedAt = t
     end
   end
-  local cast = self:PendingCast(t)
+  -- A GUID-less window is never named from cast.guid (that filed herb and
+  -- chest loot under a pinned corpse). The dead target may name it only
+  -- inside TARGET_ATTRIB_WINDOW after SUCCEEDED, only if target-attribution
+  -- has not been cleared (retarget / an unclaimed LOOT_CLOSED), and only
+  -- when the current dead target is still the cast's corpse if we know it
+  -- (the pin, or the target snapshotted at SUCCEEDED).
+  if guid == nil and type(cast) == "table" and not cast.targetAttribExpired
+    and type(cast.at) == "number"
+    and (t - cast.at) <= (self.TARGET_ATTRIB_WINDOW or 3) then
+    local tgt = self:DeadTargetGuid()
+    local expected = nil
+    if type(cast.guid) == "string" then
+      expected = cast.guid
+    elseif type(cast.targetGuid) == "string" then
+      expected = cast.targetGuid
+    end
+    if tgt and (expected == nil or expected == tgt) then
+      guid, rule = tgt, "target"
+    end
+  end
   if cast then
     if guid == nil then
       -- a cast is pending and nothing at all identifies this window: saying
@@ -567,6 +629,21 @@ end
 -- here until a window CLAIMS it, and a cast nothing claims inside SKIN_WINDOW
 -- is a cast that produced no skin window — which the accounting line reports
 -- as a lost cast instead of being guessed onto somebody else's corpse.
+-- Drop target-based attribution for any unclaimed pending cast. A later
+-- loot window that carries its own source GUID can still claim the cast;
+-- only the GUID-less DeadTargetGuid fill is revoked (retarget, or a
+-- loot window that closed without claiming the skin).
+function P:ExpireTargetAttrib()
+  local casts = self._casts
+  if type(casts) ~= "table" then return end
+  for i = 1, #casts do
+    local c = casts[i]
+    if type(c) == "table" and not c.taken then
+      c.targetAttribExpired = true
+    end
+  end
+end
+
 function P:RememberCast(cast)
   if type(cast) ~= "table" then return nil end
   self._casts[#self._casts + 1] = cast
@@ -713,6 +790,7 @@ function P:OnCast(event, unit, castGUID, spellID, spellName)
     -- unpinned one for the window that names its corpse
     self:RememberCast({
       at = t, guid = guid, spellID = id, name = name, taken = false,
+      targetGuid = self:DeadTargetGuid(),
     })
     if id and not self._skinSpells[id] then
       self._skinSpells[id] = name or tostring(id)
@@ -981,6 +1059,12 @@ function P:OnLootClosed()
     zone = w.zone, sub = w.sub, map = w.map, x = w.x, y = w.y,
   })
   self._win = nil
+  -- A window that did not claim the pending skin must not leave target
+  -- attribution armed for the next GUID-less herb/chest/fishing open.
+  -- A skin window already set taken=true, so ExpireTargetAttrib skips it.
+  if not (self.lastLoot and self.lastLoot.kind == "skin") then
+    self:ExpireTargetAttrib()
+  end
   local R = self:Recorder()
   if R and type(R.OnLootClosed) == "function" then
     pcall(R.OnLootClosed, R, t)
@@ -1076,6 +1160,11 @@ end
 -- argument cannot provide on this client.
 function P:OnTargetChanged()
   if not self.capturing then return end
+  -- Any target change (including clearing the target, or selecting a herb
+  -- node) revokes GUID-less target attribution for unclaimed casts. The
+  -- existing dead-target kill fallback still runs below when the new
+  -- target is a corpse.
+  self:ExpireTargetAttrib()
   if type(UnitExists) ~= "function" or type(UnitIsDead) ~= "function" then return end
   local okE, exists = pcall(UnitExists, "target")
   if not okE or not exists then return end
@@ -1576,4 +1665,121 @@ function P:Diag()
         .. (cut(tostring(lineErr), 50) or "a secret value"))
     end
   end
+end
+
+
+-- Compact, copyable dump for the options button and `/mp skindiag copy`.
+-- Same facts as P:Diag (header, counts/accounting, last steps) but joined
+-- into one string for the bug-report EditBox, trimmed to the last ~20 steps
+-- so a paste usually fits Discord's 2000-character message limit. Nothing
+-- is printed to chat. No account name or filesystem paths.
+P.COMPACT_STEPS = 20
+P.DISCORD_CAP = 2000
+
+function P:DumpText(opts)
+  opts = type(opts) == "table" and opts or {}
+  local maxSteps = tonumber(opts.maxSteps) or self.COMPACT_STEPS or 20
+  if maxSteps < 1 then maxSteps = 1 end
+  local lines = {}
+  local function say(m)
+    if type(m) == "string" then lines[#lines + 1] = m end
+  end
+
+  local R = self:Recorder()
+  local db = false
+  if type(R) == "table" and type(R.IsEnabled) == "function" then
+    local okE, on = pcall(R.IsEnabled, R)
+    db = okE and on == true
+  end
+  say("capture " .. (self.capturing and "on" or "off")
+    .. "; sub-option " .. (db and "ON" or "off") .. " (NodeTrail)"
+    .. "; records: " .. (db
+      and "NodeTrailDB.skinning, saved"
+      or "session buffer only, nothing saved")
+    .. "; steps=" .. tostring(#self.steps) .. "/" .. tostring(self.MAX_STEPS))
+  if self._error then
+    local errText = cut(self._error, 60)
+    say("last error: " .. (errText or "(a secret value - not read)"))
+  end
+
+  if type(R) == "table" and type(R.Store) == "function" then
+    local okS, store = pcall(R.Store, R)
+    if okS and type(store) == "table" then
+      local c = store.counts or {}
+      say("counts kills=" .. tostring(c.kills or 0)
+        .. " corpse-windows=" .. tostring(c.corpseWindows or 0)
+        .. " skin-windows=" .. tostring(c.skinWindows or 0)
+        .. " skin-casts=" .. tostring(c.skinCasts or 0))
+      if type(R.AccountingLine) == "function" then
+        local okA, line = pcall(R.AccountingLine, R, store)
+        if okA and type(line) == "string" then
+          say(line)
+        end
+      end
+      local creatures = store.creatures
+      if type(creatures) == "table" then
+        local ids = {}
+        for cid in pairs(creatures) do
+          if type(cid) == "number" then ids[#ids + 1] = cid end
+        end
+        table.sort(ids)
+        local capC = 12
+        local shown = math.min(#ids, capC)
+        for i = 1, shown do
+          local row = creatures[ids[i]]
+          if type(row) == "table" then
+            say("cid " .. tostring(ids[i])
+              .. " corpses=" .. tostring(row.corpses or 0)
+              .. " kills=" .. tostring(row.kills or 0)
+              .. " skinned=" .. tostring(row.skinned or 0)
+              .. " skinWindows=" .. tostring(row.skinWindows or 0))
+          end
+        end
+        if #ids > capC then
+          say("... " .. tostring(#ids - capC) .. " more creature id(s)")
+        end
+      end
+    elseif not okS then
+      say("record: store failed: " .. (cut(tostring(store), 60) or "a secret value"))
+    end
+  else
+    say("record: the recorder (Record.lua) did not load — nothing stored")
+  end
+
+  local n = #self.steps
+  if n == 0 then
+    say("captured: none (kill a skinnable, loot it, cast Skinning, loot it again)")
+  else
+    local from = math.max(1, n - maxSteps + 1)
+    if from > 1 then
+      say("... " .. tostring(from - 1) .. " older step(s) held in the ring buffer")
+    end
+    say("steps: last " .. tostring(n - from + 1) .. " of " .. tostring(n))
+    for i = from, n do
+      local s = self.steps[i]
+      local okLine, lineOrErr = pcall(function()
+        local detail = s.detail or ""
+        if type(s.repeats) == "number" and s.repeats > 1 then
+          detail = detail .. " (x" .. tostring(s.repeats) .. ")"
+        end
+        local pre = string.format("sk %3d %.2f %s %s", s.n, s.t, s.event, detail)
+        if s.name ~= nil then
+          pre = pre .. (s.nameLabel or " n=") .. s.name
+        end
+        return pre
+      end)
+      if okLine and type(lineOrErr) == "string" then
+        say(lineOrErr)
+      else
+        say("step " .. tostring(s and s.n) .. " not printable")
+      end
+    end
+  end
+
+  local text = table.concat(lines, "\n")
+  if type(text) == "string" and #text > (self.DISCORD_CAP or 2000) then
+    text = "Note: this text is over Discord's 2000-character limit and may need splitting.\n"
+      .. text
+  end
+  return text
 end

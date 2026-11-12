@@ -508,6 +508,26 @@ local function syncCheckboxes()
     else
       sb:Disable()
     end
+
+    -- Copyable compact /mp skindiag dump, next to the Skinning sub-option.
+    -- Auto-refresh is re-anchored below this button so the vertical chain
+    -- stays a single column.
+    if not boxes.SkinDiagCopy then
+      local copyBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+      copyBtn:SetPoint("TOPLEFT", sb, "BOTTOMLEFT", 0, -SUB_GAP)
+      if type(copyBtn.SetSize) == "function" then pcall(copyBtn.SetSize, copyBtn, 240, 24) end
+      if type(copyBtn.SetWidth) == "function" then pcall(copyBtn.SetWidth, copyBtn, 240) end
+      if type(copyBtn.SetHeight) == "function" then pcall(copyBtn.SetHeight, copyBtn, 24) end
+      copyBtn:SetText("Copy skinning diagnostics")
+      copyBtn:SetScript("OnClick", function()
+        if type(pkg.ShowSkinDiagCopy) == "function" then
+          pkg.ShowSkinDiagCopy()
+        elseif type(pkg.Print) == "function" then
+          pkg.Print("skindiag: copy popup unavailable")
+        end
+      end)
+      boxes.SkinDiagCopy = copyBtn
+    end
   end
 
   -- ── Auto-refresh route sub-option (t_2bc15917, default flipped t_57550700)
@@ -524,7 +544,9 @@ local function syncCheckboxes()
     local ab = boxes.AutoRefresh
     if not ab then
       ab = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-      if boxes.Skinning then
+      if boxes.SkinDiagCopy then
+        ab:SetPoint("TOPLEFT", boxes.SkinDiagCopy, "BOTTOMLEFT", 0, -SUB_GAP)
+      elseif boxes.Skinning then
         ab:SetPoint("TOPLEFT", boxes.Skinning, "BOTTOMLEFT", 0, -SUB_GAP)
       else
         ab:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)

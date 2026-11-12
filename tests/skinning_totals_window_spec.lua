@@ -139,9 +139,9 @@ local aAgg = H.Aggregate(A_CID)
 check(type(aAgg) == "table" and aAgg.skinned == 1,
   "1: the panel's aggregate reports 1 skinned corpse (got "
   .. tostring(type(aAgg) == "table" and aAgg.skinned) .. ")")
-check(panelRow(A_CID, "Plainstrider", "kills seen: 1") == "kills seen: 1 · skinned: 1",
-  "1: the panel line reads kills seen: 1 · skinned: 1 (got: "
-  .. tostring(panelRow(A_CID, "Plainstrider", "kills seen")) .. ")")
+check(panelRow(A_CID, "Plainstrider", "skinned: 1") == "skinned: 1",
+  "1: the panel line reads skinned: 1 (got: "
+  .. tostring(panelRow(A_CID, "Plainstrider", "skinned:")) .. ")")
 
 -- ════════════════════════════════════════════════════════════════════════
 -- 2. Both paths, ONE corpse, one count
@@ -189,9 +189,9 @@ check(cRow.skinned == 0,
   .. tostring(cRow.skinned) .. ")")
 check(cRow.skinWindows == 1,
   "3: it is still a window (skinWindows, got " .. tostring(cRow.skinWindows) .. ")")
-check(panelRow(C_CID, "Clattering Scorpid", "kills seen: 1") == "kills seen: 1 · skinned: 0",
+check(panelRow(C_CID, "Clattering Scorpid", "skinned: 0") == "skinned: 0",
   "3: the panel line still reads skinned: 0 (got: "
-  .. tostring(panelRow(C_CID, "Clattering Scorpid", "kills seen")) .. ")")
+  .. tostring(panelRow(C_CID, "Clattering Scorpid", "skinned:")) .. ")")
 
 -- ════════════════════════════════════════════════════════════════════════
 -- 4. Schema 1 → 2 seeding counts N, and a skin after the upgrade makes N + 1
