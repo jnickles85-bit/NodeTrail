@@ -857,8 +857,8 @@ function M:_redraw()
     self:ReleaseVisuals()
     return
   end
-  local r, g, bCol, a, thickness = ns.LineDraw.ColorWidth()
-  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, a, thickness
+  local r, g, bCol, alpha, thickness = ns.LineDraw.ColorWidth()
+  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, alpha, thickness
   if sameView(self.points, self._projPoints, sample, self._projSample) and self._proj then
     -- Reuse the pixels, but keep the stamp's clock in step with this tick
     -- so a still redraw is still dated.
@@ -968,12 +968,12 @@ function M:_redraw()
   end
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._dotMetrics = metrics
-  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, alpha, "yup", metrics)
   do
     local dpts = self._decorPts or {}
     self._decorPts = dpts
     dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
-    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, a, "yup", metrics)
+    ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics)
   end
   self._lastQueued = count
   self._proj = proj
@@ -1170,11 +1170,11 @@ function M:_redrawSkin()
   local r = tonumber(c[1]) or 0.78
   local g = tonumber(c[2]) or 0.38
   local bCol = tonumber(c[3]) or 0.16
-  local a = tonumber(c[4]) or 0.85
+  local alpha = tonumber(c[4]) or 0.85
   local thickness = tonumber((self.skinRoute and self.skinRoute.width)
     or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
   if thickness <= 0 then thickness = 2 end
-  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, a, thickness
+  sample.r, sample.g, sample.b, sample.a, sample.width = r, g, bCol, alpha, thickness
   if sameView(self.skinPoints, self._skinProjPoints, sample, self._skinProjSample) and self._skinProj then
     local tnow = nowTime()
     if type(self.skinDrawer) == "table" and type(self.skinDrawer.lastApplied) == "table" then
@@ -1235,12 +1235,12 @@ function M:_redrawSkin()
   end
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._skinDotMetrics = metrics
-  ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, a, "yup", metrics)
+  ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, alpha, "yup", metrics)
   do
     local dpts = self._skinDecorPts or {}
     self._skinDecorPts = dpts
     dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
-    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, a, "yup", metrics)
+    ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, alpha, "yup", metrics)
   end
   self._skinQueued = count
   self._skinProj = proj
