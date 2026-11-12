@@ -54,7 +54,7 @@ globals = {
     UnitCreatureType = { other_fields = true }, UnitDefense = { other_fields = true }, UnitExists = { other_fields = true }, UnitGUID = { other_fields = true },
     UnitIsDead = { other_fields = true }, UnitLevel = { other_fields = true }, UnitName = { other_fields = true },
     UnitPosition = { other_fields = true }, WOW_PROJECT_ID = { other_fields = true }, WorldFrame = { other_fields = true },
-    date = { other_fields = true }, debugstack = { other_fields = true }, geterrorhandler = { other_fields = true }, hooksecurefunc = { other_fields = true }, issecretvalue = { other_fields = true }, seterrorhandler = { other_fields = true },
+    date = { other_fields = true }, debugstack = { other_fields = true }, geterrorhandler = { other_fields = true }, canaccessvalue = { other_fields = true }, hooksecurefunc = { other_fields = true }, issecretvalue = { other_fields = true }, seterrorhandler = { other_fields = true },
     time = { other_fields = true }, tinsert = { other_fields = true },
 }
 

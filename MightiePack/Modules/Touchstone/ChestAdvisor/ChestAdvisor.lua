@@ -5841,10 +5841,22 @@ ChestAdvisor.scan = function()
 	-- B17 (card t_6696b35a): defer the scan while the client is in combat.
 	-- type() == "function" (not a bare `and` call) so this guard cannot be
 	-- the same text as the toast hold below — that hold is a different
-	-- decision and its own test. A missing InCombatLockdown means "not in
-	-- combat": the scan runs. The flag is the whole record of the request;
-	-- PLAYER_REGEN_ENABLED (getFrame's OnEvent) is what runs it.
-	if type(InCombatLockdown) == "function" and InCombatLockdown() then
+	-- decision and its own test. InCombatLockdown is the original flag;
+	-- UnitAffectingCombat is also checked because Forever may still
+	-- return secret combat-stat numbers (GetHitModifier, GetCombatRatingBonus)
+	-- while lockdown is missing or false — the live character-sheet scan
+	-- raised at Verdict.playerHitPercent. The flag is the whole record of
+	-- the request; PLAYER_REGEN_ENABLED (getFrame's OnEvent) is what runs it.
+	local inCombat = false
+	if type(InCombatLockdown) == "function" then
+		local ok, v = pcall(InCombatLockdown)
+		if ok and v then inCombat = true end
+	end
+	if not inCombat and type(UnitAffectingCombat) == "function" then
+		local ok, v = pcall(UnitAffectingCombat, "player")
+		if ok and v then inCombat = true end
+	end
+	if inCombat then
 		ChestAdvisor._scanDeferred = true
 		return ChestAdvisor.__verdicts or {}
 	end
