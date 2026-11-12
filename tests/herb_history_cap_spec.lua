@@ -28,7 +28,11 @@
 --      does not double-count aggregates or hotspots, and new picks made
 --      on the older build are folded in;
 --   9. a non-numeric schema is left alone;
---  10. the hotspot grid stays within its cell and per-cell node bounds.
+--  10. the hotspot grid stays within its cell and per-cell node bounds;
+--  11. a crash-matrix for mid-loop folding: hsT / noTN already advanced
+--      on a still-untrimmed list does not re-fold on retry; NT.Hotspots
+--      returns a copy of cell.nodes; HerbCellKey survives a SECRET
+--      coordinate and a tonumber that raises.
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -451,6 +455,148 @@ check(k1 == "49:49", "10: x=y=1 clamps to the last bin, not a 50th (got " .. tos
 check(kOob == k1 or kOob == "49:0", "10: out-of-range positions clamp into the 50x50 grid (got " .. tostring(kOob) .. ")")
 -- -0.2, 1.5 -> x clamps to 1 -> 49, y clamps to 0 -> 0, so 49:0
 check(R.HerbCellKey(1.5, -0.2) == "49:0", "10: clamped oob key is 49:0")
+
+-- ── 11. crash matrix, Hotspots copies, HerbCellKey secrets ──────────
+local function gridN(db, mapID)
+  local n = 0
+  local grid = db.hotspots and db.hotspots[mapID]
+  if type(grid) ~= "table" then return 0 end
+  for _, cell in pairs(grid) do
+    if type(cell) == "table" then n = n + (cell.n or 0) end
+  end
+  return n
+end
+
+local function listOf(n, t0, opts)
+  opts = opts or {}
+  local list = {}
+  for i = 1, n do
+    local rec = {
+      x = 0.25, y = 0.25,
+      items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+    }
+    if opts.noT and i <= (opts.noT or 0) then
+      rec.t = nil
+    else
+      rec.t = t0 + i
+    end
+    list[i] = rec
+  end
+  return list
+end
+
+-- 11a. Mid-loop crash after some timed picks: hsT already advanced,
+-- list still over the cap, schema already 2 (a live trim / retry).
+local crashN = CAP + 20
+local crashDB = {
+  schema = 2, total = crashN,
+  maps = { [MAP_A] = listOf(crashN, 1700000000) },
+  mapTotals = { [MAP_A] = crashN },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = {},
+}
+-- Simulate 8 successful folds, then a crash before the rest and before trim.
+local partial = 8
+for i = 1, partial do
+  local rec = crashDB.maps[MAP_A][i]
+  R.FoldHerbIntoHotspots(crashDB, MAP_A, rec)
+end
+crashDB.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 1700000000 + partial, noTN = 0, n = partial }
+check(gridN(crashDB, MAP_A) == partial, "11a: pre-retry grid holds the 8 already-folded picks")
+check(#crashDB.maps[MAP_A] == crashN, "11a: the raw list is still untrimmed after the crash")
+NodeTrailDB = { herbs = crashDB }
+ns.GetHerbDB()
+check(#crashDB.maps[MAP_A] == CAP, "11a: retry trims the list to the cap")
+check(crashDB.folded[MAP_A].n == 20,
+  "11a: retry folds only the remaining 12 (n=" .. tostring(crashDB.folded[MAP_A].n) .. ")")
+check(crashDB.folded[MAP_A].hsT == 1700000000 + 20,
+  "11a: hsT advances to the last evicted timestamp (got "
+    .. tostring(crashDB.folded[MAP_A].hsT) .. ")")
+check(gridN(crashDB, MAP_A) == 20,
+  "11a: the grid is not double-counted (n=" .. tostring(gridN(crashDB, MAP_A)) .. ")")
+
+-- 11b. Mid-loop crash after some no-t folds: noTN already advanced.
+local noT = 5
+local crashNoT = {
+  schema = 2, total = crashN,
+  maps = { [MAP_A] = listOf(crashN, 1700000000, { noT = noT }) },
+  mapTotals = { [MAP_A] = crashN },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = {},
+}
+-- First 5 evicted picks have no t (listOf puts them at the front).
+local partialNoT = 3
+for i = 1, partialNoT do
+  R.FoldHerbIntoHotspots(crashNoT, MAP_A, crashNoT.maps[MAP_A][i])
+end
+crashNoT.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 0, noTN = partialNoT, n = partialNoT }
+NodeTrailDB = { herbs = crashNoT }
+ns.GetHerbDB()
+check(#crashNoT.maps[MAP_A] == CAP, "11b: retry trims the no-t store to the cap")
+check(crashNoT.folded[MAP_A].noTN == noT,
+  "11b: no-t picks are folded exactly once (noTN="
+    .. tostring(crashNoT.folded[MAP_A].noTN) .. ")")
+check(crashNoT.folded[MAP_A].n == 20,
+  "11b: n is 5 no-t + 15 timed, not re-folded (n="
+    .. tostring(crashNoT.folded[MAP_A].n) .. ")")
+check(gridN(crashNoT, MAP_A) == 20,
+  "11b: the grid is not double-counted for no-t picks (n="
+    .. tostring(gridN(crashNoT, MAP_A)) .. ")")
+
+-- 11c. Crash after every fold, before trim: retry must not re-fold.
+local done = {
+  schema = 2, total = crashN,
+  maps = { [MAP_A] = listOf(crashN, 1700000000) },
+  mapTotals = { [MAP_A] = crashN },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = {},
+}
+for i = 1, 20 do
+  R.FoldHerbIntoHotspots(done, MAP_A, done.maps[MAP_A][i])
+end
+done.folded[MAP_A] = { aggT = 1700000000 + crashN, hsT = 1700000000 + 20, noTN = 0, n = 20 }
+NodeTrailDB = { herbs = done }
+ns.GetHerbDB()
+check(#done.maps[MAP_A] == CAP, "11c: retry after a pre-trim crash still trims")
+check(done.folded[MAP_A].n == 20 and gridN(done, MAP_A) == 20,
+  "11c: a completed fold is not replayed (n=" .. tostring(done.folded[MAP_A].n)
+    .. " grid=" .. tostring(gridN(done, MAP_A)) .. ")")
+
+-- 11d. NT.Hotspots returns a copy of cell.nodes.
+NodeTrailDB = { herbs = schema1Store() }
+local copyDB = ns.GetHerbDB()
+local hsCopy = ns.Hotspots(MAP_A)
+check(#hsCopy >= 1 and type(hsCopy[1].nodes) == "table",
+  "11d: Hotspots returns a nodes table")
+local liveCell = copyDB.hotspots[MAP_A][hsCopy[1].key]
+check(type(liveCell) == "table" and type(liveCell.nodes) == "table",
+  "11d: the store cell is reachable by the returned key")
+check(hsCopy[1].nodes ~= liveCell.nodes,
+  "11d: the returned nodes table is not the live cell.nodes")
+hsCopy[1].nodes.__mutated = true
+check(liveCell.nodes.__mutated == nil,
+  "11d: mutating the returned nodes does not change the store")
+
+-- 11e. HerbCellKey: SECRET coordinates and a raising tonumber.
+local realTonumber, realSecret = tonumber, issecretvalue
+issecretvalue = function(v) return v == "SECRET" end
+tonumber = function(v)
+  if v == "SECRET" or v == "BOOM" then
+    error("secret-or-bad tonumber")
+  end
+  return realTonumber(v)
+end
+local okSecret, kSecret = pcall(R.HerbCellKey, "SECRET", 0.5)
+check(okSecret, "11e: HerbCellKey does not raise on a SECRET coordinate")
+check(kSecret == R.HerbCellKey(0, 0.5),
+  "11e: a SECRET x is treated as 0 (got " .. tostring(kSecret) .. ")")
+local okBoom, kBoom = pcall(R.HerbCellKey, "BOOM", 0)
+check(okBoom, "11e: HerbCellKey does not raise when tonumber raises")
+check(kBoom == "0:0", "11e: a failed tonumber falls back to 0 (got " .. tostring(kBoom) .. ")")
+local okNum, kNum = pcall(R.HerbCellKey, "0.5", "0.5")
+check(okNum and kNum == R.HerbCellKey(0.5, 0.5),
+  "11e: a numeric string still keys the same cell as a number")
+tonumber, issecretvalue = realTonumber, realSecret
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
