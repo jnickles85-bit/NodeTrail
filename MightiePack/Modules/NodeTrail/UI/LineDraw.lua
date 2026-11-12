@@ -259,6 +259,22 @@ local function readPoint(obj, method)
   if not ok or type(point) ~= "string" then
     return nil
   end
+  -- canaccessvalue, when present, is the client's "this value is safe to
+  -- read" check. A false answer means a secret or blocked field; drop
+  -- that field (or the whole point if the point name itself is blocked).
+  if type(canaccessvalue) == "function" then
+    local function access(v)
+      local aok, ar = pcall(canaccessvalue, v)
+      if aok and ar == false then
+        return nil
+      end
+      return v
+    end
+    if access(point) == nil then
+      return nil
+    end
+    rel, relPoint, x, y = access(rel), access(relPoint), access(x), access(y)
+  end
   return { point = point, relativeTo = rel, relativePoint = relPoint, x = x, y = y }
 end
 
@@ -512,10 +528,34 @@ end
 --- is never chosen automatically: it dropped on Forever, and the only way
 --- to use it is `/nt linetest use texcoord`.
 function D.PickStrokeMode(capability, pin)
+  capability = capability or {}
   if type(pin) == "string" and pin ~= "" and pin ~= "auto" then
+    -- A pin still has to prove it kept its geometry. A forced rotate or
+    -- texcoord that failed its proof would otherwise draw an invisible
+    -- stroke; fall back to the two-corner dots in that case.
+    if pin == "rotate" then
+      local rot = capability.rotate
+      if type(rot) == "table" and rot.took then
+        return "rotate"
+      end
+      return "dots"
+    end
+    if pin == "texcoord" then
+      local tc = capability.texcoord
+      if type(tc) == "table" and tc.took then
+        return "texcoord"
+      end
+      return "dots"
+    end
+    if pin == "line" then
+      local line = capability.line
+      if type(line) == "table" and line.took then
+        return "line"
+      end
+      return "dots"
+    end
     return pin
   end
-  capability = capability or {}
   local rot = capability.rotate
   if type(rot) == "table" and rot.took then
     return "rotate"

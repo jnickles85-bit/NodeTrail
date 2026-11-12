@@ -726,6 +726,16 @@ check(L.PickStrokeMode({
   rotate = { took = false },
   line = { took = true },
 }) == "line", "a proved CreateLine is used when rotate did not take")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  texcoord = { took = false },
+  line = { took = false },
+}, "rotate") == "dots", "a forced rotate pin falls back to dots when the proof failed")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  texcoord = { took = false },
+  line = { took = false },
+}, "texcoord") == "dots", "a forced texcoord pin falls back to dots when the proof failed")
 
 -- Decor cores must use the same texture, colour path, and OVERLAY/7
 -- layer as the rotate stroke, and must sit above their rim (sublevel 6).
@@ -818,6 +828,61 @@ for i, t in ipairs(rims) do
     "marker rim " .. i .. " is 4.5 screen px (core 3.5 plus a 1 px rim, got "
       .. tostring(t.width) .. ")")
 end
+
+-- Loop marker at scale 1: core 4.5, rim 5.5. A second draw at scale 0.5
+-- must scale both the start core (7) and its rim (9).
+local function decorate(items, scale)
+  local parent = makeFrame(nil)
+  parent._seq = 0
+  function parent:CreateTexture()
+    local t = makeRegion()
+    t.kind = "texture"
+    t.parent = self
+    function t:SetRotation(angle) self.rotation = angle end
+    function t:GetRotation() return self.rotation or 0 end
+    function t:SetDrawLayer(layer, sub)
+      self.layer = layer
+      self.sublevel = sub
+    end
+    function t:SetVertexColor(cr, cg, cb, ca)
+      self.vertexColor = { cr, cg, cb, ca }
+    end
+    function t:SetTexture(path) self.texture = path end
+    function t:Show()
+      self.shown = true
+    end
+    self.children[#self.children + 1] = t
+    return t
+  end
+  L.DrawDecor(L.Create(), parent, items, #items, rust[1], rust[2], rust[3], rust[4],
+    "ydown", { scale = scale })
+  local creamC, blackC = {}, {}
+  for _, t in ipairs(parent.children) do
+    if t.kind == "texture" and t.shown and type(t.vertexColor) == "table" then
+      if isCream(t.vertexColor) then
+        creamC[#creamC + 1] = t
+      elseif isBlack(t.vertexColor) then
+        blackC[#blackC + 1] = t
+      end
+    end
+  end
+  return creamC, blackC
+end
+local loopCores, loopRims = decorate({ { kind = "loop", x = 10, y = 10 } }, 1)
+check(#loopCores == 1 and #loopRims == 1, "a loop marker paints a cream core and a dark rim")
+check(loopCores[1] and math.abs(loopCores[1].width - 4.5) < 0.05,
+  "loop core is 4.5 screen px (got " .. tostring(loopCores[1] and loopCores[1].width) .. ")")
+check(loopRims[1] and math.abs(loopRims[1].width - 5.5) < 0.05,
+  "loop rim is 5.5 screen px (core 4.5 plus a 1 px rim, got "
+    .. tostring(loopRims[1] and loopRims[1].width) .. ")")
+local scCores, scRims = decorate({ { kind = "start", x = 10, y = 10 } }, 0.5)
+check(#scCores == 1 and #scRims == 1, "a start marker at scale 0.5 still paints a core and a rim")
+check(scCores[1] and math.abs(scCores[1].width - 7) < 0.05,
+  "at scale 0.5 the 3.5 screen-px core is 7 canvas px (got "
+    .. tostring(scCores[1] and scCores[1].width) .. ")")
+check(scRims[1] and math.abs(scRims[1].width - 9) < 0.05,
+  "at scale 0.5 the 1 screen-px rim grows the core to 9 canvas px (got "
+    .. tostring(scRims[1] and scRims[1].width) .. ")")
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 -- the constant above is written with escaped backslashes in this generator;

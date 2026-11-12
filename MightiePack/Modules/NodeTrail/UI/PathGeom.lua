@@ -726,6 +726,11 @@ function G.InsideClip(x, y, clip, pad)
   local x0, x1 = math.min(left, right), math.max(left, right)
   local y0, y1 = math.min(top, bottom), math.max(top, bottom)
   if contain then
+    -- A pad larger than half the width or height would invert the edges;
+    -- InRect's min/max swap would then EXPAND the rect. Treat that as empty.
+    if pad * 2 >= (x1 - x0) or pad * 2 >= (y1 - y0) then
+      return false
+    end
     return G.InRect(x, y, x0 + pad, y0 + pad, x1 - pad, y1 - pad)
   end
   return G.InRect(x, y, x0 - pad, y0 - pad, x1 + pad, y1 + pad)
