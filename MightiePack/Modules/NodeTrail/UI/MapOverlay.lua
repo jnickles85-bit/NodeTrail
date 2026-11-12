@@ -1601,10 +1601,10 @@ function M:TryHookMap()
   if not self._viewHooked then
     local scroll = mapFrame.ScrollContainer
     if scroll and isFn(scroll.HookScript) then
-      local events = { "OnSizeChanged", "OnScrollRangeChanged",
+      local scrollEvents = { "OnSizeChanged", "OnScrollRangeChanged",
         "OnVerticalScroll", "OnHorizontalScroll", "OnMouseWheel", "OnMouseUp" }
-      for j = 1, #events do
-        pcall(scroll.HookScript, scroll, events[j], function()
+      for j = 1, #scrollEvents do
+        pcall(scroll.HookScript, scroll, scrollEvents[j], function()
           M:Redraw()
         end)
       end
