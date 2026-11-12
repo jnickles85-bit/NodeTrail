@@ -100,6 +100,27 @@ SLASH_MIGHTIEPACK2 = "/mpack"
 -- too (the client matches the longest registered slash first, so /mpack
 -- is never shadowed by /mp).
 SLASH_MIGHTIEPACK3 = "/mp"
+-- Compact skinning dump in the shared copy popup. Used by `/mp skindiag copy`
+-- and the options-panel button; nothing is printed to chat.
+function pkg.ShowSkinDiagCopy()
+  local text = "skindiag: the skinning probe did not load"
+  local sk = pkg.Skinning
+  local P = type(sk) == "table" and sk.Probe or nil
+  if type(P) == "table" and type(P.DumpText) == "function" then
+    local ok, v = pcall(P.DumpText, P, { compact = true, maxSteps = 20 })
+    if ok and type(v) == "string" then
+      text = v
+    else
+      text = "skindiag: could not build the dump: " .. tostring(v)
+    end
+  end
+  if type(pkg.OpenSkinDiagCopy) == "function" then
+    pkg.OpenSkinDiagCopy(text)
+  elseif type(pkg.Print) == "function" then
+    pkg.Print("skindiag: copy popup unavailable (BugReport module did not load)")
+  end
+end
+
 SlashCmdList.MIGHTIEPACK = function(msg)
   local raw = (msg or ""):match("^%s*(.-)%s*$") or ""
   -- `rest` is the SECOND capture: `local x = s:match(...)` takes only
@@ -250,7 +271,7 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     -- sub-option governs is PERSISTENCE, so say that. It is printed for the
     -- TOGGLE command only: a dump states its own state on its first line
     -- (Probe:Diag), and two sentences saying it is one too many.
-    if not subOn and restL ~= "dump" then
+    if not subOn and restL ~= "dump" and restL ~= "copy" then
       pkg.Print("skindiag: sub-option is off (NodeTrail) — records go to the session buffer only")
     end
     if not P.enabled and type(P.Enable) == "function" then
@@ -281,9 +302,12 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       if not okD then
         pkg.Print("skindiag: dump failed: " .. tostring(errD))
       end
+    elseif restL == "copy" then
+      pkg.ShowSkinDiagCopy()
     else
       pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
       pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
+      pkg.Print("/mp skindiag copy - compact dump in a copyable popup (paste into Discord)")
     end
   else
     -- keep the historical usage line verbatim (existing callers/tests

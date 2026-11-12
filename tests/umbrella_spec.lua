@@ -355,9 +355,22 @@ if autoBox then
   local function point1b(box)
     return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
   end
+  local copyBtn = boxes.SkinDiagCopy
+  check(copyBtn ~= nil, "a Copy skinning diagnostics button sits under the skinning row")
+  local function pointRel(box)
+    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
+  end
+  local cp = pointRel(copyBtn)
+  if cp and skinBox then
+    check(cp[2] == skinBox, "diagnostics button is anchored under the skinning row")
+    check(cp[3] == "BOTTOMLEFT", "diagnostics button sits under the skinning row")
+  end
   local ap, sp = point1b(autoBox), point1b(skinBox)
   check(ap ~= nil, "the auto-refresh row was positioned")
-  if ap and sp then
+  if ap and copyBtn then
+    check(ap[2] == copyBtn, "auto-refresh row is anchored under the diagnostics button")
+    check(ap[3] == "BOTTOMLEFT", "auto-refresh row sits under the diagnostics button")
+  elseif ap and sp then
     check(ap[2] == skinBox, "auto-refresh row is anchored under the skinning row")
     check(ap[3] == "BOTTOMLEFT", "auto-refresh row sits under the skinning row")
   end

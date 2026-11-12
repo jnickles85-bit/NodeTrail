@@ -270,7 +270,7 @@ onlyIf(type(R1) == "table" and type(H1) == "table",
 
     -- The player-facing line, from the upgraded totals.
     local rows = H1.Rows(3124, "Scorpid Worker")
-    check(rowHas(rows, "kills seen: 4 · skinned: 3"),
+    check(rowHas(rows, "skinned: 3"),
       "1: the panel states the upgraded totals")
 
     -- The store-wide counts cover corpses the ring already dropped; they are

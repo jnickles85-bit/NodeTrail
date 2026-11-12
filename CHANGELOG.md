@@ -7,7 +7,15 @@ one CurseForge shows, and the bundled modules report the same number.
 ## [Unreleased]
 
 ### Fixed
+- Skinning a pack more than 10 seconds after the kills, when the skin loot window has no loot-source GUID (common on this client — corpse windows already fell back to `UNIT_DIED`), now marks those corpses skinned. A GUID-less window may be attributed to the dead target only within a short bound after `UNIT_SPELLCAST_SUCCEEDED` (`TARGET_ATTRIB_WINDOW`, 3s starting value, to be live-measured), and only while that target is still the cast's corpse if known. The pending pin's GUID is never invented onto a GUID-less window, and target-change or an unclaimed `LOOT_CLOSED` clears that attribution, so a later herb, chest, or fishing window cannot be filed as skin loot. Live on v0.3.4-beta: 11 beasts killed and skinned on a map, the tooltip said `kills seen: 11 · skinned: 0` with no materials, and `/nt skinroute` said `0 of 8 skinned corpses` because no ring record had `skinned = true`.
+- Skinning spell detection includes classic ranks `8613`, `8617`, `8618`, `10768` and Forever 1.60.1.70532 IDs `1240952`, `1240963`, `1240974`, `1240987`. The 4th `UNIT_SPELLCAST_*` argument on this client is a CastBar frame name and is not required to contain "skin".
 - ChestAdvisor no longer errors when the Forever client returns a secret number from combat-stat APIs (`GetHitModifier`, `GetSpellHitModifier`, `GetCombatRatingBonus`, `GetExpertisePercent`, `UnitDefense`, `UnitAttackBothHands`). Those values still have type `number`, so adding them in `Verdict.playerHitPercent` raised `attempt to perform arithmetic on a secret number value (execution tainted by 'MightiePack')` — live, while opening the character sheet (`ChestAdvisor.scan` from the paper-doll refresh). Secret returns are now skipped (the cap is treated as unreadable) and a scan requested in combat is deferred until `PLAYER_REGEN_ENABLED`, checking `UnitAffectingCombat` as well as `InCombatLockdown`.
+
+### Changed
+- The beast tooltip no longer prints `kills seen`. It shows `skinned: N` and the top 4 skin materials for that creature as `Name xN`, using the name stored at loot time, with fallback `item <id>`. Kills remain in `/mp skindiag` and the saved totals.
+
+### Added
+- `/mp skindiag copy` and a **Copy skinning diagnostics** button next to Skinning (experimental) open a compact dump (header, counts/accounting, last ~20 steps) in the same copyable popup as the bug report, so it can be Ctrl+A / Ctrl+C pasted into Discord. The popup path does not print the dump to chat. It still opens when the collector is off and says so in the text.
 
 ## [0.3.4-beta] - 2026-11-11
 

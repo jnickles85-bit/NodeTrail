@@ -19,7 +19,7 @@
 --      player's own observation. The corpse side is still RECORDED — the
 --      records keep `corpseItems` — but nothing from the loot window is
 --      rendered, and /nt ttdiag is where an item id is resolved to a name;
---   4. "kills seen: N · skinned: M" says how thin the evidence is;
+--   4. "skinned: N" says how many of these corpses were skinned;
 --   5. a creature we have never seen says "no observations here yet" — never
 --      zeros dressed as data — but only as a Beast fallback; an unknown
 --      non-beast with no data draws nothing;
@@ -275,7 +275,7 @@ check(findRow("skinned"), "1: the skinning section is labelled")
 check(findRow("Medium Leather x20 | 100% (yours)"),
   "1: skin rows carry count + a percentage of the corpses that were skinned (got:\n"
   .. joined() .. ")")
-check(findRow("kills seen: 12 · skinned: 10"),
+check(findRow("skinned: 10"),
   "1: the totals line states how thin the evidence is (got:\n" .. joined() .. ")")
 
 -- ═══ 1b. t_2c573dbf: THE CORPSE LOOT IS NOT THIS PANEL'S SUBJECT ═════════
@@ -297,7 +297,7 @@ local EXPECTED_BLOCK = {
   "skinnable · skin windows recorded: 10",
   "skinned",
   "Medium Leather x20 | 100% (yours)",
-  "kills seen: 12 · skinned: 10",
+  "skinned: 10",
 }
 local blockOK = #r == #EXPECTED_BLOCK
 if blockOK then
@@ -313,8 +313,8 @@ for i, line in ipairs(r) do at[line] = at[line] or i end
 check(at["skinned"] and at["Medium Leather x20 | 100% (yours)"]
   and at["skinned"] < at["Medium Leather x20 | 100% (yours)"],
   "1: the section label precedes its items (got:\n" .. joined() .. ")")
-check(at["skinned"] and at["kills seen: 12 · skinned: 10"]
-  and at["skinned"] < at["kills seen: 12 · skinned: 10"] and at["kills seen: 12 · skinned: 10"] == #r,
+check(at["skinned"] and at["skinned: 10"]
+  and at["skinned"] < at["skinned: 10"] and at["skinned: 10"] == #r,
   "1: the totals line closes the block (got:\n" .. joined() .. ")")
 
 -- No researched table exists for a beast: every percentage is OURS, and none
@@ -343,7 +343,7 @@ local _, thinSkin = findPrefix("Medium Leather x6")
 check(thinSkin == "Medium Leather x6",
   "2: below PERSONAL_MIN the skin row is a count with no percentage (got "
   .. tostring(thinSkin) .. ")")
-check(findRow("kills seen: 3 · skinned: 3"),
+check(findRow("skinned: 3"),
   "2: the totals line still says the sample is three (got:\n" .. joined() .. ")")
 check(joined():find("%", 1, true) == nil, "2: no percentage appears in a thin block (got:\n"
   .. joined() .. ")")
@@ -393,7 +393,7 @@ for _, ctype in ipairs({ "Humanoid", "Mechanical", "Undead", "Elemental", "Drago
   reset()
   hoverBeast({ guid = guidOf(CID, 1), ctype = ctype })
   check(P:IsShown() == true, "5: a " .. ctype .. " hover with skin data still shows the block")
-  check(findPrefix("kills seen:") or findPrefix("Medium Leather") or findRow("skinned"),
+  check(findPrefix("skinned:") or findPrefix("Medium Leather") or findRow("skinned"),
     "5: a " .. ctype .. " hover with skin data shows skin lines (got:\n" .. joined() .. ")")
 end
 -- An unreadable type must not hide known data either.
@@ -430,7 +430,7 @@ check(joined():find("Cursed Darkhound", 1, true) ~= nil,
 reset()
 hoverBeast({ guid = guidOf(CID, 1), ctype = "Beast" })
 check(P:IsShown() == true, "5: a Beast with skin data still shows the block")
-check(findPrefix("Medium Leather") or findPrefix("kills seen:"),
+check(findPrefix("Medium Leather") or findPrefix("skinned:"),
   "5: a Beast with skin data still shows skin lines (got:\n" .. joined() .. ")")
 
 -- Non-skinner: nothing, even on a Demon or Beast that has data.
@@ -529,7 +529,7 @@ for _, l in ipairs(rows()) do
 end
 check(anySkinLine == false, "6: with no evidence of skinnability the line is omitted, not guessed (got:\n"
   .. joined() .. ")")
-check(findRow("kills seen: 1 · skinned: 0"),
+check(findRow("skinned: 0"),
   "6: the totals line says one kill and no skins (got:\n" .. joined() .. ")")
 
 -- ═══ 7. THE PROFESSION GATE ═══════════════════════════════════════════════
@@ -668,7 +668,7 @@ check(outD8:find("raw rows=1 floor=" .. floorPx .. "px", 1, true) ~= nil,
 local shownName = rows()[1]
 check(type(shownName) == "userdata" and getmetatable(shownName).__payload == PAYLOAD,
   "8: the secret name is carried to the panel whole (got " .. type(shownName) .. ")")
-check(findRow("kills seen: 12 · skinned: 10") or findRow("skinned"),
+check(findRow("skinned: 10") or findRow("skinned"),
   "8: the data rows are still rendered below the secret name (got:\n"
   .. table.concat({ rows()[2] or "", rows()[3] or "" }, " / ") .. ")")
 -- The name is carried but unmeasurable, so the width floor comes from the
@@ -755,7 +755,7 @@ check(impossible == "Medium Leather x21",
   .. tostring(impossible) .. ")")
 check(joined():find("%", 1, true) == nil,
   "11: no percentage appears when the item outnumbers its sample (got:\n" .. joined() .. ")")
-check(findRow("kills seen: 11 · skinned: 10"),
+check(findRow("skinned: 10"),
   "11: the totals line counts only the deaths that were seen (got:\n" .. joined() .. ")")
 
 -- ═══ 12. THE CORPSE ITEMS ARE STILL EVIDENCE: `id -> GetItemInfo(id)` ══════
@@ -795,7 +795,7 @@ check(findRow("Scroll: LOWER PING WHOMEVER x1") == false,
   "12: the scroll row is not rendered (the old block printed it) (got:\n" .. joined() .. ")")
 check(joined():find("Chunk of Boar Meat", 1, true) == nil,
   "12: no corpse item name reaches the panel (got:\n" .. joined() .. ")")
-check(findRow("kills seen: 1 · skinned: 0"),
+check(findRow("skinned: 0"),
   "12: the totals still render under the name (got:\n" .. joined() .. ")")
 local okD12, errD12, out12 = diagText()
 check(okD12, "12: ttdiag does not raise (" .. tostring(errD12) .. ")")
