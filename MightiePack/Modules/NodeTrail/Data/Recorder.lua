@@ -72,16 +72,19 @@ end
 -- the downgrade round-trip guard. An older build may reset the schema
 -- stamp, re-attach previously trimmed raw picks, or append new ones
 -- without updating mapTotals/stats. On the next upgrade, picks with
--- t <= aggT are not applied to aggregates again. Fold idempotency is
--- a per-record mark (rec.hsFolded = true), set as soon as a pick is
--- folded, so a crash mid-loop, a second live trim, or two picks that
--- share a timestamp cannot skip or double-count. hsT is only a
--- fallback when the evicted prefix has no hsFolded marks, which
--- is a downgrade that re-attached the trimmed prefix without the
--- mark (unmarked picks with t <= hsT were already folded). A
--- mid-loop retry has at least one mark, so remaining same-second
--- siblings are still folded. noTN is not consulted. Nothing is
--- double-counted or dropped from lifetime totals.
+-- already-applied picks carry rec.aggFolded so two gathers in the
+-- same second both count, and are not applied again. Fold
+-- idempotency is a per-record mark (rec.hsFolded = true), set as
+-- soon as a pick is folded, so a crash mid-loop, a second live
+-- trim, or two picks that share a timestamp cannot skip or
+-- double-count. When a downgrade re-attaches the trimmed prefix
+-- without the mark, the evicted prefix has no hsFolded stamps:
+-- unmarked picks with t < hsT were already folded, and at t ==
+-- hsT only the first hsTN of them are treated as already folded
+-- (further same-second siblings are new). A mid-loop retry has at
+-- least one mark, so remaining same-second siblings are still
+-- folded. Nothing is double-counted or dropped from lifetime
+-- totals.
 R.MAX_SAMPLES_PER_MAP = 2000
 -- 2% of normalized map width (0..1). A map is at most 50×50 cells,
 -- so HOTSPOT_MAX_CELLS is the natural bound of the grid, not a trim.
@@ -236,12 +239,13 @@ local function foldedOf(db, mapID)
   end
   local f = db.folded[mapID]
   if type(f) ~= "table" then
-    f = { aggT = 0, hsT = 0, n = 0 }
+    f = { aggT = 0, aggTN = 0, hsT = 0, hsTN = 0, n = 0 }
     db.folded[mapID] = f
   end
   if type(f.aggT) ~= "number" then f.aggT = 0 end
+  if type(f.aggTN) ~= "number" then f.aggTN = 0 end
   if type(f.hsT) ~= "number" then f.hsT = 0 end
-  if type(f.noTN) ~= "number" then f.noTN = 0 end
+  if type(f.hsTN) ~= "number" then f.hsTN = 0 end
   if type(f.n) ~= "number" then f.n = 0 end
   return f
 end
@@ -435,23 +439,43 @@ function R.FoldHerbIntoHotspots(db, mapID, rec)
   end
 end
 
--- Apply raw picks newer than aggT to lifetime aggregates. An older
--- build may already have incremented db.total for the same picks, so
--- total is raised only when it falls behind the sum of mapTotals.
+-- Apply raw picks that have not yet been counted into lifetime
+-- aggregates. Idempotency is rec.aggFolded, so two picks that share
+-- a second both count. aggT / aggTN are a downgrade fallback for
+-- unmarked re-attached picks (t < aggT is already counted; at
+-- t == aggT only the first aggTN are). An older build may already
+-- have incremented db.total for the same picks, so total is raised
+-- only when it falls behind the sum of mapTotals.
 local function foldNewRawIntoAggregates(db, mapID, list)
   if type(list) ~= "table" then return end
   if type(db.stats) ~= "table" then db.stats = emptyHerbStats() end
   if type(db.mapTotals) ~= "table" then db.mapTotals = {} end
   local f = foldedOf(db, mapID)
+  local aggT0 = f.aggT
+  local alreadyAt = f.aggTN or 0
+  local skippedAt = 0
   local added = 0
   for i = 1, #list do
     local rec = list[i]
-    local t = recTime(rec)
-    if t and t > f.aggT then
-      R.ApplyRecordToHerbStats(db.stats, rec)
-      db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
-      added = added + 1
-      f.aggT = t
+    if type(rec) == "table" and rec.aggFolded ~= true then
+      local t = recTime(rec)
+      if t and t < aggT0 then
+        rec.aggFolded = true
+      elseif t and t == aggT0 and skippedAt < alreadyAt then
+        skippedAt = skippedAt + 1
+        rec.aggFolded = true
+      elseif t then
+        R.ApplyRecordToHerbStats(db.stats, rec)
+        db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
+        added = added + 1
+        rec.aggFolded = true
+        if t > f.aggT then
+          f.aggT = t
+          f.aggTN = 1
+        elseif t == f.aggT then
+          f.aggTN = (f.aggTN or 0) + 1
+        end
+      end
     end
   end
   if added > 0 then
@@ -475,12 +499,15 @@ local function foldEvictedAndTrim(db, mapID, list)
   end
   local f = foldedOf(db, mapID)
   local drop = #list - maxN
-  -- hsT is a downgrade fallback only when this prefix has no marks
-  -- (re-attached copies). A mid-loop crash leaves at least one
-  -- hsFolded record, so remaining same-second siblings are folded
-  -- instead of being treated as already done.
+  -- hsT / hsTN are a downgrade fallback only when this prefix has
+  -- no marks (re-attached copies). Skip t < hsT0 outright; at
+  -- t == hsT0 skip only the first hsTN. A mid-loop crash leaves at
+  -- least one hsFolded record, so remaining same-second siblings
+  -- are folded instead of being treated as already done.
   local anyMarked = false
   local hsT0 = f.hsT
+  local alreadyAt = f.hsTN or 0
+  local skippedAt = 0
   for i = 1, drop do
     local rec = list[i]
     if type(rec) == "table" and rec.hsFolded == true then
@@ -494,7 +521,10 @@ local function foldEvictedAndTrim(db, mapID, list)
     -- still-untrimmed record, or a re-attached pick kept it) are skipped.
     if type(rec) == "table" and rec.hsFolded ~= true then
       local t = recTime(rec)
-      if (not anyMarked) and t and t <= hsT0 then
+      if (not anyMarked) and t and t < hsT0 then
+        rec.hsFolded = true
+      elseif (not anyMarked) and t and t == hsT0 and skippedAt < alreadyAt then
+        skippedAt = skippedAt + 1
         rec.hsFolded = true
       else
         R.FoldHerbIntoHotspots(db, mapID, rec)
@@ -502,6 +532,9 @@ local function foldEvictedAndTrim(db, mapID, list)
         f.n = f.n + 1
         if t and t > f.hsT then
           f.hsT = t
+          f.hsTN = 1
+        elseif t and t == f.hsT then
+          f.hsTN = (f.hsTN or 0) + 1
         end
       end
     end
@@ -555,7 +588,21 @@ function ns.UpgradeHerbDB(db)
       if type(db.maps) == "table" then
         for _, mapID in ipairs(sortedMapIDs(db.maps)) do
           local f = foldedOf(db, mapID)
-          f.aggT = maxListTime(db.maps[mapID])
+          local list = db.maps[mapID]
+          f.aggT = maxListTime(list)
+          local nAt = 0
+          if type(list) == "table" then
+            for i = 1, #list do
+              local rec = list[i]
+              if type(rec) == "table" then
+                rec.aggFolded = true
+                if recTime(rec) == f.aggT then
+                  nAt = nAt + 1
+                end
+              end
+            end
+          end
+          f.aggTN = nAt
         end
       end
     end
@@ -805,9 +852,13 @@ function ns.RecordHerb(mapID, x, y, items, nodeID)
   end
   R.ApplyRecordToHerbStats(db.stats, entry)
   local f = foldedOf(db, mapID)
+  entry.aggFolded = true
   local ts = recTime(entry)
   if ts and ts > f.aggT then
     f.aggT = ts
+    f.aggTN = 1
+  elseif ts and ts == f.aggT then
+    f.aggTN = (f.aggTN or 0) + 1
   end
   if #list > R.MAX_SAMPLES_PER_MAP then
     db.maps[mapID] = foldEvictedAndTrim(db, mapID, list)

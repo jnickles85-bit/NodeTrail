@@ -34,7 +34,11 @@
 --      a copy of cell.nodes; HerbCellKey survives a SECRET coordinate
 --      and a tonumber that raises; a second live trim folds newly
 --      evicted untimed picks; same-second siblings both fold and a
---      downgrade re-attach of them does not double-count.
+--      downgrade re-attach of them does not double-count. Same-second
+--      siblings also both count in aggregates (rec.aggFolded). A
+--      downgrade that re-attaches unmarked picks skips t < hsT0, and
+--      at t == hsT0 skips only the stored hsTN count, so an extra
+--      same-second sibling still folds once.
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -663,6 +667,8 @@ check(gridN(sib, MAP_A) == 2,
   "11g: the grid holds both same-second picks (n=" .. tostring(gridN(sib, MAP_A)) .. ")")
 check(sib.folded[MAP_A].hsT == 5000,
   "11g: hsT is the shared second (got " .. tostring(sib.folded[MAP_A].hsT) .. ")")
+check(sib.folded[MAP_A].hsTN == 2,
+  "11g: hsTN counts both picks at that second (got " .. tostring(sib.folded[MAP_A].hsTN) .. ")")
 -- Downgrade re-attaches unmarked copies of those two picks.
 local restored = {
   { x = 0.10, y = 0.10, t = 5000,
@@ -684,6 +690,107 @@ check(sib.folded[MAP_A].n == snapN,
 check(gridN(sib, MAP_A) == snapGrid,
   "11g: the grid is unchanged after the re-attach (n="
     .. tostring(gridN(sib, MAP_A)) .. ")")
+
+
+-- 11h. Two unmarked picks that share a second both count in aggregates.
+-- A downgrade re-attach of those unmarked copies skips t < aggT and
+-- only aggTN picks at t == aggT, so an extra same-second sibling
+-- is counted once.
+local sameAgg = {
+  schema = 2, total = 0,
+  maps = { [MAP_A] = {
+    { x = 0.10, y = 0.10, t = 1000,
+      items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+    { x = 0.11, y = 0.10, t = 2000,
+      items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+    { x = 0.12, y = 0.10, t = 2000,
+      items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  } },
+  mapTotals = { [MAP_A] = 0 },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = { [MAP_A] = { aggT = 0, aggTN = 0, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = sameAgg }
+ns.GetHerbDB()
+check(sameAgg.mapTotals[MAP_A] == 3,
+  "11h: both picks at t=2000 count in mapTotals (got " .. tostring(sameAgg.mapTotals[MAP_A]) .. ")")
+check(sameAgg.total == 3, "11h: lifetime total includes both same-second picks")
+check(sameAgg.folded[MAP_A].aggT == 2000,
+  "11h: aggT is the shared second (got " .. tostring(sameAgg.folded[MAP_A].aggT) .. ")")
+check(sameAgg.folded[MAP_A].aggTN == 2,
+  "11h: aggTN counts both picks at that second (got " .. tostring(sameAgg.folded[MAP_A].aggTN) .. ")")
+check(sameAgg.maps[MAP_A][1].aggFolded == true
+    and sameAgg.maps[MAP_A][2].aggFolded == true
+    and sameAgg.maps[MAP_A][3].aggFolded == true,
+  "11h: every counted pick is marked aggFolded")
+
+local aggRestored = {
+  { x = 0.10, y = 0.10, t = 1000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.11, y = 0.10, t = 2000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.12, y = 0.10, t = 2000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.13, y = 0.10, t = 2000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+}
+sameAgg.maps[MAP_A] = aggRestored
+sameAgg.schema = 1
+ns.GetHerbDB()
+check(sameAgg.mapTotals[MAP_A] == 4,
+  "11h: only the extra same-second sibling is added (got " .. tostring(sameAgg.mapTotals[MAP_A]) .. ")")
+check(sameAgg.total == 4, "11h: lifetime total grows by the extra sibling only")
+check(sameAgg.folded[MAP_A].aggTN == 3,
+  "11h: aggTN includes the new sibling (got " .. tostring(sameAgg.folded[MAP_A].aggTN) .. ")")
+check(aggRestored[4].aggFolded == true, "11h: the new sibling is marked aggFolded")
+
+-- 11i. Unmarked re-attach fallback skips t < hsT0, and at t == hsT0
+-- skips only the stored hsTN count, so an extra same-second pick folds.
+local hsSib = {
+  schema = 2, total = CAP + 2,
+  maps = { [MAP_A] = {} },
+  mapTotals = { [MAP_A] = CAP + 2 },
+  stats = { gathers = {}, co = {}, names = {} },
+  hotspots = {}, folded = {},
+}
+for i = 1, CAP + 2 do
+  hsSib.maps[MAP_A][i] = {
+    x = 0.10 + (i == 2 and 0.04 or 0), y = 0.10,
+    t = (i <= 2) and 5000 or (6000 + i),
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+  }
+end
+NodeTrailDB = { herbs = hsSib }
+ns.GetHerbDB()
+check(hsSib.folded[MAP_A].hsT == 5000 and hsSib.folded[MAP_A].hsTN == 2,
+  "11i: first trim records hsTN=2 at t=5000 (hsTN="
+    .. tostring(hsSib.folded[MAP_A].hsTN) .. ")")
+local hsRestored = {
+  { x = 0.20, y = 0.10, t = 4000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.10, y = 0.10, t = 5000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.14, y = 0.10, t = 5000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  { x = 0.18, y = 0.10, t = 5000,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+}
+for i = 1, #hsSib.maps[MAP_A] do
+  hsRestored[#hsRestored + 1] = hsSib.maps[MAP_A][i]
+end
+local snapNi, snapGridi = hsSib.folded[MAP_A].n, gridN(hsSib, MAP_A)
+hsSib.maps[MAP_A] = hsRestored
+hsSib.schema = 1
+ns.GetHerbDB()
+check(#hsSib.maps[MAP_A] == CAP, "11i: the re-attached prefix is trimmed again")
+check(hsSib.folded[MAP_A].n == snapNi + 1,
+  "11i: t<hsT0 is skipped and only the extra t==hsT0 sibling folds (n="
+    .. tostring(hsSib.folded[MAP_A].n) .. ")")
+check(gridN(hsSib, MAP_A) == snapGridi + 1,
+  "11i: the grid grows by the extra sibling only (n="
+    .. tostring(gridN(hsSib, MAP_A)) .. ")")
+check(hsSib.folded[MAP_A].hsTN == 3,
+  "11i: hsTN includes the new sibling (got " .. tostring(hsSib.folded[MAP_A].hsTN) .. ")")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
