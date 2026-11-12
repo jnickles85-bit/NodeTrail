@@ -180,19 +180,20 @@ check(v1b == "NOT_UPGRADE",
   "one point of Strength LESS is a downgrade, however much stamina comes with it (got "
     .. tostring(v1b) .. ")")
 
--- ---- 1e. Agility (tier 8) still beats a Stamina-only swing -----------------
+-- ---- 1e. Agility (tier 8) vs a Stamina-only swing is a Trade-off -----------
 -- Agility is ranked above Stamina, and Armor is unlisted, so +1 Agi against
--- 500 Armor / +10 Sta is still an upgrade — by the published order, not by
--- an invented Agility weight.
+-- 500 Armor / +10 Sta is a Trade-off — a later ranked loss is not ignored.
 local ONE_AGI_CAND = { "X", "Back", "10 Armor", "+1 Agility" }
 local ONE_AGI_WORN = { "Y", "Back", "500 Armor", "+10 Stamina" }
 local v2, r2, w2 = judge(ONE_AGI_CAND, ONE_AGI_WORN, RET_SPEC)
-check(v2 == "UPGRADE", "one more Agility is an upgrade, got " .. tostring(v2))
-check(type(r2) == "string" and r2:find("decided by Agility & Critical Strike Chance", 1, true),
-  "Agility decides before Stamina (got " .. tostring(r2) .. ")")
-local v2b = judge(ONE_AGI_WORN, ONE_AGI_CAND, RET_SPEC)
+check(v2 == "TRADE_OFF", "one more Agility vs more Stamina is a Trade-off, got " .. tostring(v2))
+check(type(r2) == "string" and r2:find("decided by Agility & Critical Strike Chance", 1, true)
+    and r2:find("Trade-off: +Agility vs −Stamina", 1, true),
+  "Agility vs Stamina names both sides (got " .. tostring(r2) .. ")")
+local v2b, r2b = judge(ONE_AGI_WORN, ONE_AGI_CAND, RET_SPEC)
 check(v2b == "NOT_UPGRADE",
-  "one point of Agility LESS loses, even with more Stamina (got " .. tostring(v2b) .. ")")
+  "one point of Agility LESS is still a downgrade, even with more Stamina (got "
+    .. tostring(v2b) .. " " .. tostring(r2b) .. ")")
 
 -- ---- 1f. Unlisted Armor cannot beat a Stamina difference -------------------
 -- The old Ret tiebreak ranked Armor above Stamina. The Wowhead list does not
@@ -218,21 +219,50 @@ check(type(wc) == "table" and wc.tiebreak == nil, "and no tiebreaker is involved
 check(rc == "decided by Strength & Attack Power [Retribution]",
   "the cloak reason names the deciding tier (got " .. tostring(rc) .. ")")
 
--- ---- 1h. Gloves: +1 Strength decides before the Agility loss ---------------
+-- ---- 1h. Gloves: +1 Strength vs an Agility loss is a Trade-off -------------
 -- Equipped Gloves of the Fang (52 Armor, +4 Str, +6 Agi); hovering Dagmire
 -- Gauntlets (110 Armor, +5 Str, +2 Agi). Strength is tier 7 and Agility is
--- tier 8, so the +1 Strength upgrade decides — the opposite of the old
--- numeric table, where -4 Agility at 2.5 outweighed +1 Strength at 4.
+-- tier 8, so this is a Trade-off, not an Upgrade.
 local vg, rg, wg = judge(DAG_LINES, FANG_LINES, RET_SPEC)
-check(vg == "UPGRADE", "the gloves pair is an upgrade on the Wowhead order, got " .. tostring(vg))
-check(type(rg) == "string" and rg:find("decided by Strength & Attack Power", 1, true),
-  "Dagmire vs Fang is decided by Strength (got " .. tostring(rg) .. ")")
+check(vg == "TRADE_OFF", "the gloves pair is a Trade-off, got " .. tostring(vg))
+check(type(rg) == "string" and rg:find("decided by Strength & Attack Power", 1, true)
+    and rg:find("Trade-off: +Strength vs −Agility", 1, true),
+  "Dagmire vs Fang names both sides (got " .. tostring(rg) .. ")")
 local candStats = V.statTable(DAG_LINES, "candidate")
 local wornStats = V.statTable(FANG_LINES, "worn")
 check(type(candStats) == "table" and candStats.Agility == 2 and candStats.Strength == 5,
   "the Dagmire parse is the client's (5 Str, 2 Agi)")
 check(type(wornStats) == "table" and wornStats.Agility == 6 and wornStats.Strength == 4,
   "the Fang parse is the client's (4 Str, 6 Agi)")
+
+-- ---- 1j. Trophy Belt vs Stormbringer Belt is a Trade-off (live Ret case) --
+-- Worn: Stormbringer Belt, Mail, 104 Armor, +5 Str, +2 Sta.
+-- Candidate: Trophy Belt, Mail, 101 Armor, +5 Int, +3 Spi.
+-- Intellect is first, but Strength and Stamina are later ranked losses.
+-- Unranked Spirit and Armor must not appear in the Trade-off clause.
+local STORM_NAME = "Stormbringer Belt"
+local STORM_LINES = {
+  STORM_NAME, "Binds when equipped", "Waist Mail",
+  "104 Armor", "+5 Strength", "+2 Stamina",
+}
+local TROPHY_NAME = "Trophy Belt"
+local TROPHY_LINES = {
+  TROPHY_NAME, "Binds when equipped", "Waist Mail",
+  "101 Armor", "+5 Intellect", "+3 Spirit",
+}
+local STORM_LINK = link(14783, STORM_NAME)
+local vt, rt, wt = judge(TROPHY_LINES, STORM_LINES, RET_SPEC)
+check(vt == "TRADE_OFF", "Trophy Belt vs Stormbringer Belt is a Trade-off, got " .. tostring(vt))
+check(type(wt) == "table" and wt.decidedBy == "Intellect",
+  "the belt pair is decided by Intellect (got " .. tostring(wt and wt.decidedBy) .. ")")
+check(type(rt) == "string" and rt:find("decided by Intellect", 1, true)
+    and rt:find("Trade-off: +Intellect vs −Strength, −Stamina", 1, true),
+  "the belt reason names both sides (got " .. tostring(rt) .. ")")
+check(type(rt) == "string" and rt:find("Spirit", 1, true) == nil
+    and rt:find("Armor", 1, true) == nil,
+  "unranked Spirit and Armor do not decide the belt pair (got " .. tostring(rt) .. ")")
+check(type(wt) == "table" and wt.tradeOffText == "Trade-off: +Intellect vs −Strength, −Stamina",
+  "detail.tradeOffText is the both-sides clause (got " .. tostring(wt and wt.tradeOffText) .. ")")
 
 -- ---- 1i. Holy and Protection are their own Wowhead order-only profiles ----
 local PAL = V.WEIGHTS.PALADIN
@@ -350,6 +380,7 @@ local function rowFor(cand, worn, wornLink, spec)
     row.tiebreak = wd.tiebreak
     row.decidedBy = wd.decidedBy
     row.orderOutcome = wd.orderOutcome
+    row.tradeOffText = wd.tradeOffText
   end
   return row
 end
@@ -397,6 +428,16 @@ local plainHead = plain(plainLines and plainLines[1] and plainLines[1].text)
 print("rendered: " .. plainHead)
 check(plainHead == "Upgrade — decided by Strength & Attack Power vs Lambent Scale Cloak [Retribution]",
   "a Strength upgrade uses the decided-by sentence (got " .. plainHead .. ")")
+
+-- ---- 2e. Trophy Belt tooltip keeps decided-by and names both sides ---------
+local beltLines = ChestAdvisor.tooltipLines(rowFor(TROPHY_LINES, STORM_LINES, STORM_LINK, RET_SPEC))
+local beltHead = plain(beltLines and beltLines[1] and beltLines[1].text)
+print("rendered: " .. beltHead)
+check(beltHead == "Trade-off: +Intellect vs −Strength, −Stamina — decided by Intellect vs " .. STORM_NAME .. " [Retribution]",
+  "the belt headline names both sides and keeps decided-by (got " .. beltHead .. ")")
+check(beltLines and beltLines[1] and beltLines[1].colour == "amber",
+  "a Trade-off keeps the amber chip colour (got "
+    .. tostring(beltLines and beltLines[1] and beltLines[1].colour) .. ")")
 
 if failed > 0 then
   io.stderr:write(("touchstone_tiebreak_spec: %d failure(s)\n"):format(failed))

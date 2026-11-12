@@ -1610,6 +1610,13 @@ function TOOLTIP_UI.weighted(row, order)
 		else
 			head = "decided by " .. row.decidedBy .. (vs or "") .. (profile or "")
 		end
+		-- Conservative Pareto Trade-offs name both sides in the word
+		-- ("Trade-off: +Intellect vs −Strength, −Stamina") and keep the
+		-- decided-by line in the head, so a screenshot stays diagnosable.
+		if (row.verdict == TRADE_OFF_VERDICT or row.verdict == "TRADE_OFF")
+			and type(row.tradeOffText) == "string" and row.tradeOffText ~= "" then
+			word = row.tradeOffText
+		end
 		if type(row.caveat) == "string" and row.caveat ~= "" then
 			head = head .. " — " .. row.caveat
 		end
@@ -3224,6 +3231,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 			row.decidedBy = weighted.decidedBy
 			row.orderOutcome = weighted.orderOutcome
 			row.caveat = weighted.caveat
+			row.tradeOffText = weighted.tradeOffText
 			-- Card t_c4911603: nil on every ordinary outcome; the signed
 			-- ranked deltas when the tiebreaker decided, so the line can say
 			-- "tiebreaker (...)" instead of "weighted 0".
@@ -6347,6 +6355,7 @@ ChestAdvisor.scan = function()
 							decidedBy = w2 and w2.decidedBy or nil,
 							orderOutcome = w2 and w2.orderOutcome or nil,
 							caveat = w2 and w2.caveat or nil,
+							tradeOffText = w2 and w2.tradeOffText or nil,
 							-- Card t_c4911603: the signed ranked deltas when a
 							-- tiebreaker decided the row, nil otherwise (same
 							-- two-scalar economy as `weighted`/`profile`: one

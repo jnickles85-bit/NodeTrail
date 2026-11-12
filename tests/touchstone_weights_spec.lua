@@ -18,7 +18,7 @@
 --   1. the COMPARATOR (Verdict.lua, loaded on its own): the weighted total
 --      decides, epsilon is a named constant, a zero-weight stat cannot move the
 --      verdict, a missing profile is "unavailable" and never a trade-off, and the
---      same item pair flips to UPGRADE under a stamina-heavy tank profile —
+--      same item pair flips to TRADE_OFF under Protection (Balanced) —
 --      which is what proves the WEIGHTS are driving it;
 --   2. the ROW the scan builds (Verdict.evaluate's third return) and
 --   3. the LINE the player reads (ChestAdvisor.tooltipLines), which must lead
@@ -107,15 +107,18 @@ check(type(reason) == "string" and reason:find("Retribution", 1, true) ~= nil,
 check(type(reason) == "string" and reason:find("decided by Strength & Attack Power", 1, true) ~= nil,
   "live case: the reason names the deciding tier (got " .. tostring(reason) .. ")")
 
--- ---- 1b. The SAME pair is an UPGRADE for a stamina-heavy tank profile -------
--- This is the acceptance's proof that the weights, not the direction of the
--- deltas, decide: identical numbers, opposite verdict.
+-- ---- 1b. The SAME pair is a Trade-off for Protection (Balanced) ------------
+-- Stamina is first and a gain, but Armor and Strength are later ranked losses,
+-- so this is no longer an Upgrade.
 local vp, rp, wp = judge(CAND_LINES, WORN_LINES, PROT_SPEC)
-check(vp == "UPGRADE",
-  "the same pair is an upgrade for Protection, got " .. tostring(vp))
+check(vp == "TRADE_OFF",
+  "the same pair is a Trade-off for Protection, got " .. tostring(vp))
 check(type(wp) == "table" and wp.decidedBy == "Stamina",
-  "Protection (Balanced) decides the cloak pair by Stamina (got "
+  "Protection (Balanced) still names Stamina first (got "
     .. tostring(wp and wp.decidedBy) .. ")")
+check(type(rp) == "string" and rp:find("decided by Stamina", 1, true)
+    and rp:find("Trade-off: +Stamina vs −Armor, −Strength", 1, true),
+  "Protection Trade-off names both sides (got " .. tostring(rp) .. ")")
 check(type(wp) == "table" and wp.profile == "Protection (Balanced)",
   "Protection names its Balanced profile, got " .. tostring(wp and wp.profile))
 
@@ -130,8 +133,10 @@ local SIDE_WORN = { "X", "+11 Strength", "+12 Attack Power" }
 local SIDE_CAND = { "Y", "+12 Strength", "+8 Attack Power" }
 local vs_, rs, ws = judge(SIDE_CAND, SIDE_WORN, RET_SPEC)
 check(vs_ == "TRADE_OFF", "a genuine sidegrade is a trade-off, got " .. tostring(vs_))
-check(type(rs) == "string" and rs:find("conflict", 1, true),
-  "the trade-off names the conflicting stats (got " .. tostring(rs) .. ")")
+check(type(rs) == "string" and rs:find("decided by Strength & Attack Power", 1, true)
+    and rs:find("Trade-off: +Strength vs ", 1, true)
+    and rs:find("Attack Power", 1, true),
+  "the trade-off names both sides (got " .. tostring(rs) .. ")")
 
 -- ---- 1e. A zero-weight stat that rises, with nothing else moving ----------
 -- +3 Spirit is weight 0 on the Retribution damage profile — and, unlike Stamina
@@ -293,6 +298,7 @@ local function rowFor(spec)
     row.profile = wd.profile
     row.decidedBy = wd.decidedBy
     row.orderOutcome = wd.orderOutcome
+    row.tradeOffText = wd.tradeOffText
   end
   return row
 end
@@ -331,17 +337,13 @@ check(detail == "-4 Str, +3 Sta, -3 Armor, -2 Spi",
 check(detail:find("Retribution", 1, true) == nil,
   "the profile is named once, in the headline (got " .. detail .. ")")
 
--- ---- 3b. The same pair under Protection reads as an upgrade -----------------
+-- ---- 3b. The same pair under Protection reads as a Trade-off ----------------
 local protLines = ChestAdvisor.tooltipLines(rowFor(PROT_SPEC))
 local protHead = plain(protLines and protLines[1] and protLines[1].text)
-check(protHead:sub(1, #"Upgrade") == "Upgrade",
-  "Protection sees an Upgrade for the same pair (got " .. protHead .. ")")
-check(protHead:find("decided by Stamina", 1, true) ~= nil,
-  "and it names the deciding tier (got " .. protHead .. ")")
-check(protHead:find("[Protection (Balanced)]", 1, true) ~= nil,
-  "and names Protection (Balanced) (got " .. protHead .. ")")
-check(protLines and protLines[1] and protLines[1].colour == "green",
-  "an upgrade keeps the green the arrow uses (got "
+check(protHead == "Trade-off: +Stamina vs −Armor, −Strength — decided by Stamina vs " .. WORN_NAME .. " [Protection (Balanced)]",
+  "Protection sees a Trade-off for the same pair (got " .. protHead .. ")")
+check(protLines and protLines[1] and protLines[1].colour == "amber",
+  "a Trade-off keeps the amber the chip uses (got "
     .. tostring(protLines and protLines[1] and protLines[1].colour) .. ")")
 
 -- ---- 3c. A genuine sidegrade is still an amber Trade-off --------------------

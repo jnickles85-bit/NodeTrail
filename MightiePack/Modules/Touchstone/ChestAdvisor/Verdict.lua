@@ -4788,8 +4788,56 @@ local function formatBound(value, unit)
 	return tostring(value)
 end
 
+-- Display labels for order-only Trade-off clauses. Tokens that are already
+-- player-facing (Strength, Hit, Crit, …) pass through playerWord unchanged.
+local ORDER_STAT_LABEL = {
+	WeaponDps = "Weapon DPS",
+	WeaponSpeed = "Weapon Speed",
+	WeaponSkill = "Weapon Skill",
+	AttackPower = "Attack Power",
+	SpellDamage = "Spell Damage",
+	SpellPower = "Spell Power",
+	HolyDamage = "Holy Damage",
+	SpellPenetration = "Spell Penetration",
+	HealingPower = "Healing Power",
+	NatureDamage = "Nature Damage",
+	FireDamage = "Fire Damage",
+	BlockChance = "Block Chance",
+	ExpertiseRating = "Expertise Rating",
+}
+
+-- U+2212 MINUS SIGN, so a screenshot can tell a loss from a hyphenated name.
+local TRADE_OFF_MINUS = "\226\136\146"
+
+function Verdict.orderStatLabel(word)
+	if type(word) ~= "string" then return word end
+	return ORDER_STAT_LABEL[word] or playerWord(word) or word
+end
+
+-- "Trade-off: +Intellect vs −Strength, −Stamina". Gains and losses are
+-- already in published-tier order.
+function Verdict.tradeOffText(gains, losses)
+	local function listed(words, sign)
+		local bits = {}
+		for _, word in ipairs(words or {}) do
+			bits[#bits + 1] = sign .. tostring(Verdict.orderStatLabel(word))
+		end
+		return table.concat(bits, ", ")
+	end
+	return "Trade-off: " .. listed(gains, "+") .. " vs " .. listed(losses, TRADE_OFF_MINUS)
+end
+
 -- Walk one order-only profile. Returns the same (verdict, reason, detail)
 -- contract as weightedVerdict.
+--
+-- Conservative Pareto (Mightie, 2026-11-12): an Upgrade requires the
+-- candidate to be equal or better on every ranked stat and better on at
+-- least one. A loss on the first differing ranked tier is a Downgrade,
+-- even if later ranked stats improve (the Ret cloak ruling). A gain on
+-- the first differing tier with a later ranked loss is a Trade-off.
+-- Unranked stats (Spirit, Armor on non-tank specs) still do not decide.
+-- Intra-tier bundles and cap clamps are unchanged; only the early return
+-- that ignored later ranked losses is gone.
 function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	if type(allow) ~= "function" then
 		allow = function(verdict, reason) return verdict, reason end
@@ -4805,13 +4853,14 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	local speedNote = nil
 	local level = Verdict.playerLevel(spec)
 
-	local function finish(verdict, reason, decidedBy, kind)
+	local function finish(verdict, reason, decidedBy, kind, tradeOffText)
 		local detail = {
 			profile = pname,
 			decidedBy = decidedBy,
 			orderOutcome = kind,
 			speedNote = speedNote,
 			caveat = Verdict.profileCaveat(profile),
+			tradeOffText = tradeOffText,
 		}
 		if verdict == "UPGRADE" then
 			local v, r = allow(verdict, reason)
@@ -4858,6 +4907,23 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 			or type(tier.afterValue) == "number"
 	end
 
+	local firstKind, firstLabel = nil, nil
+	local gains, losses = {}, {}
+	local unitConflictExtra = nil
+
+	local function note(kind, label, upWords, downWords)
+		for _, word in ipairs(upWords or {}) do
+			gains[#gains + 1] = word
+		end
+		for _, word in ipairs(downWords or {}) do
+			losses[#losses + 1] = word
+		end
+		if firstKind == nil then
+			firstKind = kind
+			firstLabel = label
+		end
+	end
+
 	for _, tier in ipairs(profile.tiers) do
 		if type(tier) == "table" and type(tier.stats) == "table" then
 			-- Leveling-only tags apply below 60 only. Unknown level
@@ -4867,16 +4933,17 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 			elseif tier.special == "dps_then_speed" then
 				local dpsDelta = signedDelta("WeaponDps")
 				if dpsDelta ~= 0 then
-					local kind = (dpsDelta > 0) and "upgrade" or "downgrade"
-					local v = (dpsDelta > 0) and "UPGRADE" or "NOT_UPGRADE"
-					return finish(v, Verdict.orderReason(profile, kind, "Weapon DPS", src),
-						"Weapon DPS", kind)
+					if dpsDelta > 0 then
+						note("upgrade", "Weapon DPS", { "WeaponDps" }, nil)
+					else
+						note("downgrade", "Weapon DPS", nil, { "WeaponDps" })
+					end
 				end
 				local spdDelta = signedDelta("WeaponSpeed")
 				if spdDelta ~= 0 then
-					-- DPS is equal; speed differs. The source does not say
-					-- whether fast or slow is better, so do not rank it.
-					-- Fall through and remember the note.
+					-- DPS is equal (or already noted); speed differs. The
+					-- source does not say whether fast or slow is better,
+					-- so do not rank it. Remember the note and continue.
 					speedNote = "weapon speed differs (not ranked; the source does not prefer fast or slow)"
 				end
 			elseif isCapped(tier) then
@@ -4901,7 +4968,8 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 				-- on ExpertiseRating and cannot be converted, so cap
 				-- status is unknown and the raw rating is ranked.
 				-- Mixed units (percent on one side, rating-only on the
-				-- other) cannot be compared: TRADE_OFF, cap unknown.
+				-- other) cannot be compared: record a Trade-off conflict.
+				local mixedUnits = false
 				if word == "Expertise" then
 					local candUnit, wornUnit
 					if cand.Expertise ~= nil then
@@ -4915,11 +4983,12 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 						wornUnit = "rating"
 					end
 					if candUnit and wornUnit and candUnit ~= wornUnit then
+						mixedUnits = true
 						local label = "Expertise (cap status unknown)"
-						return finish(TRADE_OFF,
-							Verdict.orderReason(profile, "trade-off", label, src,
-								"percent and rating cannot be compared"),
-							label, "trade-off")
+						if unitConflictExtra == nil then
+							unitConflictExtra = "percent and rating cannot be compared"
+						end
+						note("trade-off", label, nil, nil)
 					elseif candUnit == "rating" or wornUnit == "rating" then
 						candStat = cand.ExpertiseRating
 						wornStat = eq.ExpertiseRating
@@ -4930,30 +4999,32 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 						end
 					end
 				end
-				local current
-				if word == "Hit" and unit ~= "raw" then
-					current = Verdict.currentCapPercent("Hit", spec, tier.hitKind)
-				else
-					current = Verdict.currentCapValue(word, spec, unit)
-				end
-				local delta, status = Verdict.clampedWindowDelta(
-					candStat, wornStat, current, cap, after,
-					scale, unit)
-				if delta ~= 0 then
-					local kind = (delta > 0) and "upgrade" or "downgrade"
-					local v = (delta > 0) and "UPGRADE" or "NOT_UPGRADE"
-					local label = capLabel(tier, status)
-					return finish(v, Verdict.orderReason(profile, kind, label, src),
-						label, kind)
+				if not mixedUnits then
+					local current
+					if word == "Hit" and unit ~= "raw" then
+						current = Verdict.currentCapPercent("Hit", spec, tier.hitKind)
+					else
+						current = Verdict.currentCapValue(word, spec, unit)
+					end
+					local delta, status = Verdict.clampedWindowDelta(
+						candStat, wornStat, current, cap, after,
+						scale, unit)
+					if delta ~= 0 then
+						local label = capLabel(tier, status)
+						if delta > 0 then
+							note("upgrade", label, { word }, nil)
+						else
+							note("downgrade", label, nil, { word })
+						end
+					end
 				end
 			else
 				-- Ordinary or bundled tier. Collect signed deltas; do not
 				-- convert units or invent a combined score.
-				local up, down, parts = {}, {}, {}
+				local up, down = {}, {}
 				for _, word in ipairs(tier.stats) do
 					local delta = signedDelta(word)
 					if delta ~= 0 then
-						parts[#parts + 1] = word
 						if delta > 0 then
 							up[#up + 1] = word
 						else
@@ -4962,27 +5033,51 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 					end
 				end
 				if #up > 0 and #down > 0 then
-					local named = table.concat(parts, " and ")
-					local extra = named .. " conflict"
-					return finish(TRADE_OFF,
-						Verdict.orderReason(profile, "trade-off", tier.name, src, extra),
-						tier.name, "trade-off")
-				end
-				if #parts > 0 then
-					local kind = (#up > 0) and "upgrade" or "downgrade"
-					local v = (#up > 0) and "UPGRADE" or "NOT_UPGRADE"
-					return finish(v, Verdict.orderReason(profile, kind, tier.name, src),
-						tier.name, kind)
+					note("trade-off", tier.name, up, down)
+				elseif #up > 0 then
+					note("upgrade", tier.name, up, nil)
+				elseif #down > 0 then
+					note("downgrade", tier.name, nil, down)
 				end
 			end
 		end
 	end
 
-	-- No ranked tier decided. An unranked speed difference is reported
-	-- but does not become an upgrade or a downgrade.
-	return finish("NOT_UPGRADE",
-		Verdict.orderReason(profile, "no change", nil, src, speedNote),
-		nil, "no change")
+	if firstKind == nil then
+		-- No ranked tier decided. An unranked speed difference is reported
+		-- but does not become an upgrade or a downgrade.
+		return finish("NOT_UPGRADE",
+			Verdict.orderReason(profile, "no change", nil, src, speedNote),
+			nil, "no change")
+	end
+
+	-- A loss on the first differing ranked tier is a Downgrade, even if
+	-- later ranked stats improve.
+	if firstKind == "downgrade" then
+		return finish("NOT_UPGRADE",
+			Verdict.orderReason(profile, "downgrade", firstLabel, src),
+			firstLabel, "downgrade")
+	end
+
+	-- A first-tier gain with no later ranked loss, and no intra-tier
+	-- conflict, is a Pareto Upgrade.
+	if firstKind == "upgrade" and #losses == 0 then
+		return finish("UPGRADE",
+			Verdict.orderReason(profile, "upgrade", firstLabel, src),
+			firstLabel, "upgrade")
+	end
+
+	-- First differing tier is a gain (or an intra-tier conflict) and a
+	-- ranked loss exists, or mixed Expertise units could not be compared.
+	local extra
+	if #gains > 0 and #losses > 0 then
+		extra = Verdict.tradeOffText(gains, losses)
+	else
+		extra = unitConflictExtra or "those stats conflict"
+	end
+	return finish(TRADE_OFF,
+		Verdict.orderReason(profile, "trade-off", firstLabel, src, extra),
+		firstLabel, "trade-off", extra)
 end
 
 function Verdict.weightedTotal(candStats, eqStats, profile)

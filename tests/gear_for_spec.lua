@@ -377,8 +377,8 @@ mustClassify("wand dps remaps off WeaponDps",
   { "Eq Wand",   "Ranged Wand", "(10.0 damage per second)", "+5 Intellect" })
 
 -- Parser unit: a percent sentence lifts to rating (14 crit rating = 1%).
--- On the Arms Wowhead order, Crit is above Strength, so +1% crit still
--- beats +4 Strength — now by tier, not by a numeric 56-vs-16 product.
+-- On the Arms Wowhead order, Crit is above Strength, so +1% crit against
+-- +4 Strength is a Trade-off (a later ranked loss is not ignored).
 -- Retribution is checked separately below (Strength outranks Crit there).
 local armsSpec = { class = "WARRIOR", weightsKey = "arms", clientRole = "DAMAGER" }
 local critItem = { "Crit Charm", "+1 Intellect", "Improves your chance to get a critical strike by 1%." }
@@ -388,10 +388,13 @@ check(type(parsedCrit) == "table" and parsedCrit.Crit == 14,
   "a +1% crit sentence lifts to 14 rating (got " .. tostring(parsedCrit and parsedCrit.Crit) .. ")")
 local vCrit, rCrit, wCrit = Verdict.evaluate(
   { canUse = true, line = critItem }, { canUse = true, line = strItem }, armsSpec)
-check(vCrit == "UPGRADE",
-  "a +1% crit item beats +4 Strength on Arms (got " .. tostring(vCrit) .. " " .. tostring(rCrit) .. ")")
+check(vCrit == "TRADE_OFF",
+  "a +1% crit item vs +4 Strength on Arms is a Trade-off (got " .. tostring(vCrit) .. " " .. tostring(rCrit) .. ")")
 check(type(wCrit) == "table" and wCrit.decidedBy == "Crit",
-  "Arms decides that pair by Crit (got " .. tostring(wCrit and wCrit.decidedBy) .. ")")
+  "Arms still names Crit as the first differing tier (got " .. tostring(wCrit and wCrit.decidedBy) .. ")")
+check(type(rCrit) == "string" and rCrit:find("decided by Crit", 1, true)
+    and rCrit:find("Trade-off: +Crit vs −Strength", 1, true),
+  "Arms Trade-off names both sides (got " .. tostring(rCrit) .. ")")
 
 -- ── Override precedence ────────────────────────────────────────────
 local function asClass(token, display, name, role)
@@ -541,14 +544,15 @@ check(policy == "required",
 local tankProfile = Verdict.profileFor(protSpec)
 check(tankProfile ~= nil and tankProfile == Verdict.WEIGHTS.PALADIN.prot,
   "chosen Protection scores with the sourced Paladin Protection table")
--- A Stamina/Block shield is better on the tank pack than a Strength-heavy one
--- would be for Ret: Stamina is the first Wowhead Balanced tier.
+-- A Stamina/Block shield vs a Strength-heavy one is a Trade-off on the
+-- tank pack: Stamina is first, but Strength is a later ranked loss.
 local shieldV, shieldR = Verdict.weightedVerdict(
   { Stamina = 12, BlockChance = 8, Strength = 0 },
   { Stamina = 0,  BlockChance = 0, Strength = 10 },
   protSpec)
-check(shieldV == "UPGRADE" and type(shieldR) == "string" and shieldR:find("Stamina", 1, true),
-  "a Stamina/Block shield is an upgrade on the Protection tank pack (got "
+check(shieldV == "TRADE_OFF" and type(shieldR) == "string"
+    and shieldR:find("decided by Stamina", 1, true),
+  "a Stamina/Block shield vs Strength is a Trade-off on Protection (got "
     .. tostring(shieldV) .. " " .. tostring(shieldR) .. ")")
 
 -- Verdict text carries (chosen) only when profileSource is set.
@@ -648,12 +652,12 @@ local retOrderSpec = { class = "PALADIN", role = "melee", clientRole = "DAMAGER"
 check(Verdict.isOrderProfile(Verdict.profileFor(retOrderSpec)) == true,
   "Retribution resolves to an order-only profile")
 
--- Tier decision: Hit outranks Strength, so +1% hit beats +20 Strength.
+-- Tier decision: Hit is first, but losing Strength makes this a Trade-off.
 local vHit, rHit, dHit = Verdict.evaluate(
   { canUse = true, line = { "Hit Charm", "Improves your chance to hit by 1%." } },
   { canUse = true, line = { "Str Charm", "+20 Strength" } },
   retOrderSpec)
-check(vHit == "UPGRADE", "Hit (tier 3) beats Strength (tier 7) on Ret (got "
+check(vHit == "TRADE_OFF", "Hit (tier 3) vs Strength (tier 7) on Ret is a Trade-off (got "
   .. tostring(vHit) .. " " .. tostring(rHit) .. ")")
 check(type(rHit) == "string" and rHit:find("decided by Hit", 1, true)
     and rHit:find("cap status unknown", 1, true),
@@ -661,12 +665,13 @@ check(type(rHit) == "string" and rHit:find("decided by Hit", 1, true)
 check(dHit and dHit.decidedBy and dHit.decidedBy:find("Hit", 1, true),
   "detail.decidedBy names Hit")
 
--- On Ret, Strength outranks Crit, so +4 Str beats +1% crit (the inverse of Arms).
+-- On Ret, Strength outranks Crit, so +4 Str vs +1% crit is a Trade-off
+-- (the inverse of Arms still names Strength first).
 local vRetStr, rRetStr = Verdict.evaluate(
   { canUse = true, line = strItem }, { canUse = true, line = critItem }, retOrderSpec)
-check(vRetStr == "UPGRADE" and type(rRetStr) == "string"
+check(vRetStr == "TRADE_OFF" and type(rRetStr) == "string"
     and rRetStr:find("decided by Strength & Attack Power", 1, true),
-  "Ret order: +4 Strength beats +1% crit (got " .. tostring(rRetStr) .. ")")
+  "Ret order: +4 Strength vs +1% crit is a Trade-off (got " .. tostring(rRetStr) .. ")")
 
 -- Intra-tier conflict: Strength up, Attack Power down → TRADE_OFF naming them.
 -- Equal everything else.
@@ -676,9 +681,10 @@ local vConf, rConf = Verdict.evaluate(
   retOrderSpec)
 check(vConf == "TRADE_OFF", "intra-tier Strength/AP conflict is TRADE_OFF (got "
   .. tostring(vConf) .. " " .. tostring(rConf) .. ")")
-check(type(rConf) == "string" and rConf:find("Strength", 1, true)
-    and rConf:find("Attack Power", 1, true) and rConf:find("conflict", 1, true),
-  "TRADE_OFF names the conflicting stats (got " .. tostring(rConf) .. ")")
+check(type(rConf) == "string" and rConf:find("decided by Strength & Attack Power", 1, true)
+    and rConf:find("Trade-off: +Strength vs ", 1, true)
+    and rConf:find("Attack Power", 1, true),
+  "TRADE_OFF names both sides (got " .. tostring(rConf) .. ")")
 
 -- Same-direction intra-tier: both Strength and AP rise → upgrade, no conversion.
 local vSame, rSame = Verdict.evaluate(
@@ -730,17 +736,18 @@ local vUnk, rUnk = Verdict.evaluate(
   { canUse = true, line = { "A", "+10 Hit Rating" } },
   { canUse = true, line = { "B", "+10 Strength" } },
   unknownCap)
-check(vUnk == "UPGRADE" and type(rUnk) == "string"
+check(vUnk == "TRADE_OFF" and type(rUnk) == "string"
+    and rUnk:find("decided by Hit", 1, true)
     and rUnk:find("cap status unknown", 1, true),
   "unreadable cap still ranks Hit and says unknown (got " .. tostring(rUnk) .. ")")
 
--- Weapon DPS tier: higher DPS wins even against more Strength (DPS is tier 2).
+-- Weapon DPS is first, but losing Strength makes this a Trade-off.
 local vDps, rDps = Verdict.evaluate(
   { canUse = true, line = { "Fast", "Two-Hand Sword", "(20.0 damage per second)", "Speed 2.00", "+2 Strength" } },
   { canUse = true, line = { "Slow", "Two-Hand Sword", "(15.0 damage per second)", "Speed 3.60", "+20 Strength" } },
   retOrderSpec)
-check(vDps == "UPGRADE" and type(rDps) == "string" and rDps:find("decided by Weapon DPS", 1, true),
-  "higher weapon DPS decides before Strength (got " .. tostring(rDps) .. ")")
+check(vDps == "TRADE_OFF" and type(rDps) == "string" and rDps:find("decided by Weapon DPS", 1, true),
+  "higher weapon DPS vs more Strength is a Trade-off (got " .. tostring(rDps) .. ")")
 
 -- Equal DPS, different speed, later tier (Strength) decides; speed is not ranked.
 local vSpd, rSpd, dSpd = Verdict.evaluate(
@@ -765,13 +772,13 @@ check(vSpdOnly == "NOT_UPGRADE" and type(rSpdOnly) == "string"
     and rSpdOnly:find("not ranked", 1, true),
   "speed-only difference is no change, reported unranked (got " .. tostring(rSpdOnly) .. ")")
 
--- Weapon Skill outranks Weapon DPS.
+-- Weapon Skill is first, but losing Weapon DPS makes this a Trade-off.
 local vSk, rSk = Verdict.evaluate(
   { canUse = true, line = { "Skill", "Two-Hand Sword", "+1 Swords", "(12.0 damage per second)", "Speed 3.60" } },
   { canUse = true, line = { "Dps",   "Two-Hand Sword", "(20.0 damage per second)", "Speed 3.60" } },
   retOrderSpec)
-check(vSk == "UPGRADE" and type(rSk) == "string" and rSk:find("decided by Weapon Skill", 1, true),
-  "Weapon Skill decides before Weapon DPS (got " .. tostring(rSk) .. ")")
+check(vSk == "TRADE_OFF" and type(rSk) == "string" and rSk:find("decided by Weapon Skill", 1, true),
+  "Weapon Skill vs higher Weapon DPS is a Trade-off (got " .. tostring(rSk) .. ")")
 
 -- ── Options 'Gear for' widget ──────────────────────────────────────
 -- Load Options.lua against this already-booted pkg, with a stub Settings
