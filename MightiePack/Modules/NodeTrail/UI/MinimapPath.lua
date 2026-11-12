@@ -462,6 +462,28 @@ end
 --- use the same scale as the line it sits on top of — two projections of the
 --- same minimap that disagree by a few percent would put the arrow on the
 --- wrong bearing (t_d17939c1).
+
+--- Screen scale of the minimap host. GetEffectiveScale includes the UI
+--- parent chain; GetScale is the fallback when that API is missing.
+local function hostCanvasScale(host)
+  if type(host) ~= "table" then
+    return 1
+  end
+  if type(host.GetEffectiveScale) == "function" then
+    local ok, s = pcall(host.GetEffectiveScale, host)
+    if ok and type(s) == "number" and s > 0 then
+      return s
+    end
+  end
+  if type(host.GetScale) == "function" then
+    local ok, s = pcall(host.GetScale, host)
+    if ok and type(s) == "number" and s > 0 then
+      return s
+    end
+  end
+  return 1
+end
+
 local function decorClip(sample)
   if type(sample) ~= "table" then
     return nil
@@ -470,11 +492,12 @@ local function decorClip(sample)
     return {
       shape = "circle", x = 0, y = 0,
       r = math.min(sample.halfW or 0, sample.halfH or 0) * ROUND_INSET,
+      contain = true,
     }
   end
   local hw = (sample.halfW or 0) * SQUARE_INSET
   local hh = (sample.halfH or 0) * SQUARE_INSET
-  return { shape = "rect", left = -hw, top = -hh, right = hw, bottom = hh }
+  return { shape = "rect", left = -hw, top = -hh, right = hw, bottom = hh, contain = true }
 end
 
 function M:ViewRadiusYards()
@@ -974,13 +997,7 @@ function M:_redraw()
 
   -- Same treatment as the world map: the dot is a screen measurement, divided
   -- by whatever scale this host is drawn at, so both surfaces agree in px.
-  local hostScale = 1
-  if host and type(host.GetScale) == "function" then
-    local okS, s = pcall(host.GetScale, host)
-    if okS and type(s) == "number" and s > 0 then
-      hostScale = s
-    end
-  end
+  local hostScale = hostCanvasScale(host)
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._dotMetrics = metrics
   ns.LineDraw.Draw(self.drawer, host, buf, count, thickness, r, g, bCol, alpha, "yup", metrics)
@@ -1241,13 +1258,7 @@ function M:_redrawSkin()
     proj.segs[i] = entry
   end
 
-  local hostScale = 1
-  if host and type(host.GetScale) == "function" then
-    local okS, s = pcall(host.GetScale, host)
-    if okS and type(s) == "number" and s > 0 then
-      hostScale = s
-    end
-  end
+  local hostScale = hostCanvasScale(host)
   local metrics = ns.LineDraw.DotMetrics(thickness, hostScale)
   self._skinDotMetrics = metrics
   ns.LineDraw.Draw(self.skinDrawer, host, buf, count, thickness, r, g, bCol, alpha, "yup", metrics)

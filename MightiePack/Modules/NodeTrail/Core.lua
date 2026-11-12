@@ -235,6 +235,27 @@ function ns.PrintStatus()
   printL("STATUS_MODULE", on and "on" or "off")
 end
 
+local function invalidateRouteDrawers()
+  local LD = ns.LineDraw
+  if type(LD) ~= "table" or type(LD.Invalidate) ~= "function" then
+    return
+  end
+  local function inv(holder)
+    if type(holder) ~= "table" then
+      return
+    end
+    -- Stroke and decoration drawers all keep a detected mode; a linetest
+    -- pin or auto-apply has to drop every one of them, including the
+    -- style drawers that /nt linetest previously left in place.
+    LD.Invalidate(holder.drawer)
+    LD.Invalidate(holder.skinDrawer)
+    LD.Invalidate(holder.styleDrawer)
+    LD.Invalidate(holder.skinStyleDrawer)
+  end
+  inv(ns.MapOverlay)
+  inv(ns.MinimapPath)
+end
+
 function ns.LineTestCommand(arg)
   local say = function(text)
     DEFAULT_CHAT_FRAME:AddMessage("NodeTrail linetest: " .. tostring(text))
@@ -254,27 +275,12 @@ function ns.LineTestCommand(arg)
     end
     ns.LineDraw._forceMode = (want == "auto") and nil or want
     say("pinned mode=" .. want .. "; invalidating drawers and redrawing")
-    if ns.MapOverlay then
-      if ns.MapOverlay.drawer then
-        ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
-      end
-      if ns.MapOverlay.skinDrawer then
-        ns.LineDraw.Invalidate(ns.MapOverlay.skinDrawer)
-      end
-      if type(ns.MapOverlay.Redraw) == "function" then
-        ns.MapOverlay:Redraw()
-      end
+    invalidateRouteDrawers()
+    if ns.MapOverlay and type(ns.MapOverlay.Redraw) == "function" then
+      ns.MapOverlay:Redraw()
     end
-    if ns.MinimapPath then
-      if ns.MinimapPath.drawer then
-        ns.LineDraw.Invalidate(ns.MinimapPath.drawer)
-      end
-      if ns.MinimapPath.skinDrawer then
-        ns.LineDraw.Invalidate(ns.MinimapPath.skinDrawer)
-      end
-      if type(ns.MinimapPath.Redraw) == "function" then
-        ns.MinimapPath:Redraw()
-      end
+    if ns.MinimapPath and type(ns.MinimapPath.Redraw) == "function" then
+      ns.MinimapPath:Redraw()
     end
     return
   end
@@ -316,18 +322,7 @@ function ns.LineTestCommand(arg)
     ns.LineDraw._forceMode = nil
     -- Apply the proved method by re-detecting (no pin needed; detect picks it).
     say("applying " .. report.recommended .. " and redrawing")
-    if ns.MapOverlay and ns.MapOverlay.drawer then
-      ns.LineDraw.Invalidate(ns.MapOverlay.drawer)
-    end
-    if ns.MapOverlay and ns.MapOverlay.skinDrawer then
-      ns.LineDraw.Invalidate(ns.MapOverlay.skinDrawer)
-    end
-    if ns.MinimapPath and ns.MinimapPath.drawer then
-      ns.LineDraw.Invalidate(ns.MinimapPath.drawer)
-    end
-    if ns.MinimapPath and ns.MinimapPath.skinDrawer then
-      ns.LineDraw.Invalidate(ns.MinimapPath.skinDrawer)
-    end
+    invalidateRouteDrawers()
     if ns.MapOverlay and type(ns.MapOverlay.Redraw) == "function" then
       ns.MapOverlay:Redraw()
     end

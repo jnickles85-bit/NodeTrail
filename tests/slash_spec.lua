@@ -255,6 +255,35 @@ do
   check(help2:find("/nt minimap", 1, true) ~= nil, "help lists /nt minimap")
   check(help2:find("/nt navwalk", 1, true) ~= nil, "help lists /nt navwalk")
   check(help2:find("/nt linetest", 1, true) ~= nil, "help lists /nt linetest")
+
+  -- `/nt linetest` must invalidate the decoration drawers as well as the stroke.
+  ns.LineDraw = {
+    Invalidate = function(d)
+      if type(d) == "table" then
+        d.invalidated = (d.invalidated or 0) + 1
+      end
+    end,
+    RunLineTest = function()
+      return { recommended = "dots", line = {}, rotate = {}, texcoord = {}, dots = {} }
+    end,
+  }
+  ns.MapOverlay = {
+    drawer = {}, skinDrawer = {}, styleDrawer = {}, skinStyleDrawer = {},
+    Redraw = function() end,
+  }
+  ns.MinimapPath = {
+    drawer = {}, skinDrawer = {}, styleDrawer = {}, skinStyleDrawer = {},
+    Redraw = function() end,
+  }
+  run("linetest use rotate")
+  check(ns.MapOverlay.styleDrawer.invalidated == 1
+      and ns.MapOverlay.skinStyleDrawer.invalidated == 1,
+    "linetest use: world-map style drawers are invalidated")
+  check(ns.MinimapPath.styleDrawer.invalidated == 1
+      and ns.MinimapPath.skinStyleDrawer.invalidated == 1,
+    "linetest use: minimap style drawers are invalidated")
+  check(ns.MapOverlay.drawer.invalidated == 1 and ns.MinimapPath.drawer.invalidated == 1,
+    "linetest use: stroke drawers are still invalidated")
 end
 
 if failed == 0 then
