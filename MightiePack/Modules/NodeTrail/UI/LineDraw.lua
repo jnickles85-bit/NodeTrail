@@ -1556,49 +1556,61 @@ end
 -- ── Direction chevrons and start/end/loop markers ─────────────────────
 -- Drawn from a SEPARATE drawer so the stroke pool's rim/core pairing
 -- (and every mapdiag / capacity spec that reads it) stays unchanged.
--- On Forever, SetRotation is proved and SetColorTexture can succeed
--- while painting an untextured black square. Decorations therefore
--- use the same WHITE8X8 + SetVertexColor path as the rotate stroke.
--- A chevron is a short rotated bar along the path; start/end/loop
--- markers are small filled squares with a thin dark rim. If rotation
--- is unavailable, a chevron falls back to one small coloured square
--- (never a black block, and never a cluster of three squares).
+-- Decorations copy the rotate stroke's exact colour and layer sequence:
+-- WHITE8X8, SetVertexColor, SetDrawLayer("OVERLAY", sub). WoW sublevels
+-- only run from -8 to 7; a core at sublevel 8 is dropped, so the rust
+-- fill sat under the black rim and showed as a solid black dash or
+-- square. Cores therefore use sublevel 7 and rims use 6, the same
+-- values as the stroke, and every rim is painted before every core so
+-- the fill still sits on top when SetDrawLayer is missing.
+-- A chevron is a V of two short rust bars pointing along the path
+-- (or one short perpendicular tick if rotation is unavailable). Those
+-- ticks have no rim, so a failed core cannot leave a black dash.
+-- Start/end/loop markers are a light cream square with a thin dark rim.
 
-local DECOR_CHEV_LEN = 8    -- screen px length of a chevron bar
-local DECOR_CHEV_THICK = 3  -- screen px thickness of a chevron bar
+local DECOR_CHEV_LEN = 7    -- screen px length of each chevron arm
+local DECOR_CHEV_THICK = 2  -- screen px thickness of a chevron tick
+local DECOR_CHEV_SPREAD = 4 -- screen px half-width of the V
 local DECOR_MARK = 7        -- screen px of a start/end/loop marker
 local DECOR_LOOP_GROW = 2
-local DECOR_RIM = 1         -- screen px the dark rim adds (subtle)
+local DECOR_RIM = 1         -- screen px the dark marker rim adds
+-- Cream fill so a marker reads against the rust/teal stroke.
+local DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A = 0.98, 0.92, 0.78, 1
+-- Same layer and sublevels the rotate / dot stroke already proved.
+local DECOR_LAYER = "OVERLAY"
+local DECOR_RIM_SUB = 6
+local DECOR_CORE_SUB = 7
 
 local function decorSize(screen, scale)
   scale = (tonumber(scale) and scale > 0) and scale or 1
   return screen / scale
 end
 
---- A filled square painted with WHITE8X8 + vertex colour (never
---- SetColorTexture). Size setters + a centre point when the client
---- kept them; two-corner anchors otherwise.
+--- A filled square painted with the same sequence as paintRotate:
+--- WHITE8X8, vertex colour, OVERLAY at a valid sublevel (default 7).
+--- Size setters + a centre point when the client kept them; two-corner
+--- anchors otherwise.
 local function paintSolid(obj, parent, cx, cy, size, r, g, b, a, space, sub)
   obj:SetParent(parent)
+  obj:ClearAllPoints()
   if obj.SetTexture then
-    pcall(obj.SetTexture, obj, WHITE)
+    obj:SetTexture(WHITE)
   end
   if obj.SetVertexColor then
-    pcall(obj.SetVertexColor, obj, r, g, b, a)
+    obj:SetVertexColor(r, g, b, a)
   end
   if obj.SetAlpha then
     pcall(obj.SetAlpha, obj, 1)
   end
+  if obj.SetTexCoord then
+    obj:SetTexCoord(0, 1, 0, 1)
+  end
   if obj.SetDrawLayer then
-    pcall(obj.SetDrawLayer, obj, "OVERLAY", sub or 8)
+    pcall(obj.SetDrawLayer, obj, DECOR_LAYER, sub or DECOR_CORE_SUB)
   end
   if obj.SetBlendMode then
     pcall(obj.SetBlendMode, obj, "BLEND")
   end
-  if obj.SetTexCoord then
-    pcall(obj.SetTexCoord, obj, 0, 1, 0, 1)
-  end
-  obj:ClearAllPoints()
   if obj.SetWidth and obj.SetHeight then
     pcall(obj.SetWidth, obj, size)
     pcall(obj.SetHeight, obj, size)
@@ -1660,53 +1672,11 @@ function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
   end
   local chevLen = math.max(0.75, decorSize(DECOR_CHEV_LEN, scale))
   local chevThick = math.max(0.75, decorSize(DECOR_CHEV_THICK, scale))
+  local chevSpread = math.max(0.75, decorSize(DECOR_CHEV_SPREAD, scale))
   local mark = decorSize(DECOR_MARK, scale)
   local loop = decorSize(DECOR_MARK + DECOR_LOOP_GROW, scale)
   local rimGrow = decorSize(DECOR_RIM, scale)
   local useRotate = drawer.mode == "rotate"
-  local index, painted = 1, 0
-  -- A same-colour mark on a same-colour stroke disappears, so every
-  -- decoration gets a thin dark rim. The rim is 1 screen px, not the
-  -- 2 px stroke outline, so it stays a hairline and not a black block.
-  local function paintMark(cx, cy, size, cr, cg, cb, ca, sub, rim)
-    if rim ~= false then
-      local under = acquire(drawer, index, parent)
-      index = index + 1
-      if under then
-        paintSolid(under, parent, cx, cy, size + rimGrow,
-          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, (sub or 8) - 1)
-      end
-    end
-    local obj = acquire(drawer, index, parent)
-    index = index + 1
-    if obj then
-      paintSolid(obj, parent, cx, cy, size, cr, cg, cb, ca, space, sub or 8)
-      painted = painted + 1
-    end
-  end
-  local function paintBar(cx, cy, dx, dy, length, thickness, cr, cg, cb, ca, sub, rim)
-    local len = math.sqrt(dx * dx + dy * dy)
-    if len < 1e-8 then
-      dx, dy, len = 1, 0, 1
-    end
-    dx, dy = dx / len, dy / len
-    local hx, hy = dx * length * 0.5, dy * length * 0.5
-    local x1, y1, x2, y2 = cx - hx, cy - hy, cx + hx, cy + hy
-    if rim ~= false then
-      local under = acquire(drawer, index, parent)
-      index = index + 1
-      if under then
-        paintRotate(under, parent, x1, y1, x2, y2, thickness + rimGrow,
-          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, (sub or 8) - 1)
-      end
-    end
-    local obj = acquire(drawer, index, parent)
-    index = index + 1
-    if obj then
-      paintRotate(obj, parent, x1, y1, x2, y2, thickness, cr, cg, cb, ca, space, sub or 8)
-      painted = painted + 1
-    end
-  end
   -- A closed path plans both a start and a loop at the first vertex.
   -- Drawing both would stack two marks; keep the slightly larger loop.
   local hasLoop = false
@@ -1717,28 +1687,110 @@ function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
       break
     end
   end
+  -- Plan first, then acquire, then paint every rim, then every core —
+  -- the same two-pass order the stroke uses.
+  drawer._decorJobs = drawer._decorJobs or {}
+  local jobs, nJobs = drawer._decorJobs, 0
+  local function addJob()
+    nJobs = nJobs + 1
+    local j = jobs[nJobs]
+    if type(j) ~= "table" then
+      j = {}
+      jobs[nJobs] = j
+    end
+    j.rimObj, j.coreObj = nil, nil
+    return j
+  end
+  local function addBar(x1, y1, x2, y2, thickness, cr, cg, cb, ca, hasRim)
+    local j = addJob()
+    j.style = "bar"
+    j.x1, j.y1, j.x2, j.y2 = x1, y1, x2, y2
+    j.thickness = thickness
+    j.r, j.g, j.b, j.a = cr, cg, cb, ca
+    j.hasRim = hasRim and true or false
+  end
+  local function addSquare(cx, cy, size, cr, cg, cb, ca, hasRim)
+    local j = addJob()
+    j.style = "square"
+    j.cx, j.cy, j.size = cx, cy, size
+    j.r, j.g, j.b, j.a = cr, cg, cb, ca
+    j.hasRim = hasRim and true or false
+  end
+  local function unit(dx, dy)
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1e-8 then
+      return 1, 0
+    end
+    return dx / len, dy / len
+  end
   for i = 1, count do
     local it = items[i]
     if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number" then
       if it.kind == "chevron" then
+        local dx, dy = unit(tonumber(it.dx) or 0, tonumber(it.dy) or 0)
         if useRotate then
-          paintBar(it.x, it.y, tonumber(it.dx) or 0, tonumber(it.dy) or 0,
-            chevLen, chevThick, r, g, b, a, 8)
+          -- Two short bars forming a V that points in the travel direction.
+          local px, py = -dy, dx
+          local tx, ty = it.x + dx * (chevLen * 0.55), it.y + dy * (chevLen * 0.55)
+          local bx, by = it.x - dx * (chevLen * 0.45), it.y - dy * (chevLen * 0.45)
+          addBar(bx + px * chevSpread, by + py * chevSpread, tx, ty,
+            chevThick, r, g, b, a, false)
+          addBar(bx - px * chevSpread, by - py * chevSpread, tx, ty,
+            chevThick, r, g, b, a, false)
         else
-          -- One small coloured square, not three overlapping ones.
-          paintMark(it.x, it.y, chevThick, r, g, b, a, 8)
+          -- No rotation: a short tick across the path, not along it.
+          addSquare(it.x, it.y, chevThick, r, g, b, a, false)
         end
       elseif it.kind == "loop" then
-        -- Rust core with a thin dark rim — never a solid black square.
-        paintMark(it.x, it.y, loop, r, g, b, a, 8)
+        addSquare(it.x, it.y, loop, DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A, true)
       elseif it.kind == "end" then
-        paintMark(it.x, it.y, mark, r, g, b, a, 8)
+        addSquare(it.x, it.y, mark, DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A, true)
       elseif it.kind == "start" or it.kind == nil then
         if not hasLoop then
-          paintMark(it.x, it.y, mark, r, g, b, a, 8)
+          addSquare(it.x, it.y, mark, DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A, true)
         end
       end
     end
+  end
+  for i = #jobs, nJobs + 1, -1 do
+    jobs[i] = nil
+  end
+  local index = 1
+  for i = 1, nJobs do
+    local j = jobs[i]
+    if j.hasRim then
+      j.rimObj = acquire(drawer, index, parent)
+      index = index + 1
+    end
+    j.coreObj = acquire(drawer, index, parent)
+    index = index + 1
+  end
+  for i = 1, nJobs do
+    local j = jobs[i]
+    if j.hasRim and j.rimObj then
+      if j.style == "bar" then
+        paintRotate(j.rimObj, parent, j.x1, j.y1, j.x2, j.y2, j.thickness + rimGrow,
+          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, DECOR_RIM_SUB)
+      else
+        paintSolid(j.rimObj, parent, j.cx, j.cy, j.size + rimGrow,
+          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, DECOR_RIM_SUB)
+      end
+    end
+  end
+  local painted = 0
+  for i = 1, nJobs do
+    local j = jobs[i]
+    if j.coreObj then
+      if j.style == "bar" then
+        paintRotate(j.coreObj, parent, j.x1, j.y1, j.x2, j.y2, j.thickness,
+          j.r, j.g, j.b, j.a, space, DECOR_CORE_SUB)
+      else
+        paintSolid(j.coreObj, parent, j.cx, j.cy, j.size,
+          j.r, j.g, j.b, j.a, space, DECOR_CORE_SUB)
+      end
+      painted = painted + 1
+    end
+    j.rimObj, j.coreObj = nil, nil
   end
   hideFrom(drawer, index, false)
   drawer.lastApplied = drawer.lastApplied or {}

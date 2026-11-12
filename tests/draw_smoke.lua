@@ -727,6 +727,152 @@ check(L.PickStrokeMode({
   line = { took = true },
 }) == "line", "a proved CreateLine is used when rotate did not take")
 
+-- Decor cores must use the same texture, colour path, and OVERLAY/7
+-- layer as the rotate stroke, and must sit above their rim (sublevel 6).
+-- Sublevel 8 is outside the client's -8..7 range; a core painted there
+-- is dropped and only the black rim remains visible.
+local WHITE8X8 = "Interface\\Buttons\\WHITE8X8"
+local decoParent = makeFrame(nil)
+decoParent._seq = 0
+function decoParent:CreateTexture()
+  local t = makeRegion()
+  t.kind = "texture"
+  t.parent = self
+  function t:SetRotation(angle) self.rotation = angle end
+  function t:GetRotation() return self.rotation or 0 end
+  function t:SetDrawLayer(layer, sub)
+    self.layer = layer
+    self.sublevel = sub
+  end
+  function t:GetDrawLayer()
+    return self.layer, self.sublevel
+  end
+  function t:SetVertexColor(cr, cg, cb, ca)
+    self.vertexColor = { cr, cg, cb, ca }
+  end
+  function t:SetTexture(path)
+    self.texture = path
+  end
+  function t:Show()
+    self.shown = true
+    decoParent._seq = decoParent._seq + 1
+    self.shownAt = decoParent._seq
+  end
+  self.children[#self.children + 1] = t
+  return t
+end
+local rust = { 0.78, 0.38, 0.16, 0.85 }
+local cream = { 0.98, 0.92, 0.78, 1 }
+local decoDrawer = L.Create()
+L.DrawDecor(decoDrawer, decoParent, {
+  { kind = "start", x = 10, y = 20 },
+  { kind = "end", x = 80, y = 20 },
+  { kind = "chevron", x = 40, y = 20, dx = 1, dy = 0 },
+}, 3, rust[1], rust[2], rust[3], rust[4], "ydown", { scale = 1 })
+
+local function shownKids()
+  local out = {}
+  for _, t in ipairs(decoParent.children) do
+    if t.kind == "texture" and t.shown and type(t.vertexColor) == "table" then
+      out[#out + 1] = t
+    end
+  end
+  return out
+end
+local kids = shownKids()
+check(#kids >= 4, "decor paints marker rims, marker cores, and chevron arms (got " .. tostring(#kids) .. ")")
+
+local function isBlack(c)
+  return c and c[1] == 0 and c[2] == 0 and c[3] == 0
+end
+local function isCream(c)
+  return c and math.abs(c[1] - cream[1]) < 0.02
+    and math.abs(c[2] - cream[2]) < 0.02
+    and math.abs(c[3] - cream[3]) < 0.02
+end
+local function isRust(c)
+  return c and math.abs(c[1] - rust[1]) < 0.02
+    and math.abs(c[2] - rust[2]) < 0.02
+    and math.abs(c[3] - rust[3]) < 0.02
+end
+
+local cores, rims, chevs = {}, {}, {}
+for _, t in ipairs(kids) do
+  if isBlack(t.vertexColor) then
+    rims[#rims + 1] = t
+  elseif isCream(t.vertexColor) then
+    cores[#cores + 1] = t
+  elseif isRust(t.vertexColor) then
+    chevs[#chevs + 1] = t
+  end
+end
+check(#cores == 2, "start and end cores use the cream fill (got " .. tostring(#cores) .. ")")
+check(#rims == 2, "start and end markers keep a thin dark rim (got " .. tostring(#rims) .. ")")
+check(#chevs == 2, "a chevron is two rust arms (got " .. tostring(#chevs) .. ")")
+
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+-- the constant above is written with escaped backslashes in this generator;
+-- compare against what Lua stored.
+local function hasWhite(t)
+  return type(t.texture) == "string" and t.texture:find("WHITE8X8", 1, true) ~= nil
+end
+for i, t in ipairs(cores) do
+  check(hasWhite(t), "marker core " .. i .. " uses WHITE8X8 (got " .. tostring(t.texture) .. ")")
+  check(t.layer == "OVERLAY", "marker core " .. i .. " is on OVERLAY (got " .. tostring(t.layer) .. ")")
+  check(t.sublevel == 7, "marker core " .. i .. " uses stroke sublevel 7 (got " .. tostring(t.sublevel) .. ")")
+end
+for i, t in ipairs(chevs) do
+  check(hasWhite(t), "chevron arm " .. i .. " uses WHITE8X8 (got " .. tostring(t.texture) .. ")")
+  check(t.layer == "OVERLAY", "chevron arm " .. i .. " is on OVERLAY (got " .. tostring(t.layer) .. ")")
+  check(t.sublevel == 7, "chevron arm " .. i .. " uses stroke sublevel 7 (got " .. tostring(t.sublevel) .. ")")
+  check(isRust(t.vertexColor), "chevron arm " .. i .. " is rust, not black")
+end
+for i, t in ipairs(rims) do
+  check(t.layer == "OVERLAY", "marker rim " .. i .. " is on OVERLAY")
+  check(t.sublevel == 6, "marker rim " .. i .. " uses stroke rim sublevel 6 (got " .. tostring(t.sublevel) .. ")")
+end
+-- Each cream core sits above its black rim: higher sublevel, and painted later.
+local function nearestRim(core)
+  local best, bestD
+  for _, rim in ipairs(rims) do
+    local d = math.abs((core.width or 0) - (rim.width or 0))
+    -- same centre: compare shownAt / size; pick unused later. Use size: rim is larger.
+    if (rim.width or 0) >= (core.width or 0) then
+      if not bestD or d < bestD then
+        best, bestD = rim, d
+      end
+    end
+  end
+  return best
+end
+-- Pair by closeness of centres. paintSolid SetPoint CENTER, parent TOPLEFT, cx, -cy.
+local function cxOf(t)
+  local p = t.points and t.points[1]
+  return p and p[4]
+end
+for _, core in ipairs(cores) do
+  local pair
+  local best
+  for _, rim in ipairs(rims) do
+    local dc, dr = cxOf(core), cxOf(rim)
+    if dc and dr then
+      local d = math.abs(dc - dr)
+      if not best or d < best then
+        best, pair = d, rim
+      end
+    end
+  end
+  check(pair ~= nil, "each marker core has a rim at the same centre")
+  if pair then
+    check((pair.sublevel or 0) < (core.sublevel or 0),
+      "decor core sublevel sits above its rim")
+    check(type(core.shownAt) == "number" and type(pair.shownAt) == "number"
+      and core.shownAt > pair.shownAt,
+      "decor core is painted after its rim (core " .. tostring(core.shownAt)
+        .. " rim " .. tostring(pair.shownAt) .. ")")
+  end
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " draw smoke check(s) failed\n")
   os.exit(1)
