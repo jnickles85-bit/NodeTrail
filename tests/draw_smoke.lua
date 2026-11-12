@@ -809,6 +809,15 @@ end
 check(#cores == 2, "start and end cores use the cream fill (got " .. tostring(#cores) .. ")")
 check(#rims == 2, "start and end markers keep a thin dark rim (got " .. tostring(#rims) .. ")")
 check(#chevs == 2, "a chevron is two rust arms (got " .. tostring(#chevs) .. ")")
+for i, t in ipairs(cores) do
+  check(type(t.width) == "number" and math.abs(t.width - 3.5) < 0.05,
+    "marker core " .. i .. " is 3.5 screen px (got " .. tostring(t.width) .. ")")
+end
+for i, t in ipairs(rims) do
+  check(type(t.width) == "number" and math.abs(t.width - 4.0) < 0.05,
+    "marker rim " .. i .. " is 4.0 screen px (core 3.5 plus a 0.5 px rim, got "
+      .. tostring(t.width) .. ")")
+end
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 -- the constant above is written with escaped backslashes in this generator;

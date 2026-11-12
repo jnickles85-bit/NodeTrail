@@ -1566,14 +1566,15 @@ end
 -- A chevron is a V of two short rust bars pointing along the path
 -- (or one short perpendicular tick if rotation is unavailable). Those
 -- ticks have no rim, so a failed core cannot leave a black dash.
--- Start/end/loop markers are a light cream square with a thin dark rim.
+-- Start/end/loop markers are a light cream square with a thin dark rim,
+-- sized in screen px so the world map and minimap stay in proportion.
 
 local DECOR_CHEV_LEN = 7    -- screen px length of each chevron arm
 local DECOR_CHEV_THICK = 2  -- screen px thickness of a chevron tick
 local DECOR_CHEV_SPREAD = 4 -- screen px half-width of the V
-local DECOR_MARK = 7        -- screen px of a start/end/loop marker
-local DECOR_LOOP_GROW = 2
-local DECOR_RIM = 1         -- screen px the dark marker rim adds
+local DECOR_MARK = 3.5      -- screen px of a start/end marker (half of 7)
+local DECOR_LOOP_GROW = 1   -- loop is 4.5 screen px (half of the old 9)
+local DECOR_RIM = 0.5       -- screen px the dark marker rim adds (thin vs 3.5)
 -- Cream fill so a marker reads against the rust/teal stroke.
 local DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A = 0.98, 0.92, 0.78, 1
 -- Same layer and sublevels the rotate / dot stroke already proved.
