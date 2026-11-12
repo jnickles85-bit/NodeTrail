@@ -61,7 +61,7 @@ function D.BindOverlay(host, parent, clipChildren)
   -- the square is drawn over the rest of the UI, so that overlay asks to clip.
   -- The client default is off; the flag is set explicitly so a client that
   -- defaults it on cannot silently crop the world-map route.
-  if host.SetClipsChildren then
+  if type(host.SetClipsChildren) == "function" then
     pcall(host.SetClipsChildren, host, clipChildren and true or false)
   end
   if parent.GetFrameLevel and host.SetFrameLevel then
@@ -229,7 +229,19 @@ local function numberMethod(obj, method)
     return nil
   end
   local ok, value = pcall(fn, obj)
-  if not ok or type(value) ~= "number" or value ~= value then
+  if not ok then
+    return nil
+  end
+  -- A secret-values client can wrap a number so that arithmetic on it is
+  -- forbidden. If the API exists and flags this result, drop it rather
+  -- than treat it as a measured size or coordinate.
+  if type(issecretvalue) == "function" then
+    local sok, secret = pcall(issecretvalue, value)
+    if sok and secret then
+      return nil
+    end
+  end
+  if type(value) ~= "number" or value ~= value then
     return nil
   end
   return value
@@ -313,11 +325,12 @@ function D.LineProof(parent, obj)
     and math.abs(out.start.x) <= PROBE_TOL and math.abs(out.start.y) <= PROBE_TOL
     and math.abs(out.stop.x - PROBE_SPAN) <= PROBE_TOL
     and math.abs(out.stop.y + PROBE_SPAN) <= PROBE_TOL
-  -- A client that does not implement GetStartPoint at all still proves the
-  -- region by sizing it from the endpoints it was given.
-  local sized = type(out.width) == "number" and type(out.height) == "number"
+  -- A region that merely reports some size > 0 is not a proof: a client
+  -- can size a line from a default or a previous use and still drop the
+  -- endpoints we just set. `took` is only the PROBE_SPAN endpoint match.
+  out.sized = type(out.width) == "number" and type(out.height) == "number"
     and out.width > 0 and out.height > 0
-  out.took = took or sized
+  out.took = took
   out.why = out.took and "the endpoints were kept"
     or "the client accepted SetStartPoint/SetEndPoint and kept no geometry"
   if created then
@@ -643,13 +656,21 @@ local function detect(drawer, parent)
       local proof = D.LineProof(parent, line)
       drawer.capability.line = proof
       if proof.took then
-        drawer.mode = "line"
-        drawer.pool[1] = line
-        pcall(line.Hide, line)
-        return
+        -- Honor a session pin from `/nt linetest use ...`. Auto (no pin)
+        -- still takes a proved CreateLine here; a pin for rotate, texcoord,
+        -- or dots falls through so those proofs can be measured.
+        local pin = D._forceMode
+        if not pin or pin == "auto" or pin == "line" then
+          drawer.mode = "line"
+          drawer.pool[1] = line
+          pcall(line.Hide, line)
+          return
+        end
       end
       pcall(line.Hide, line)
-      drawer.disableLine = true
+      if not proof.took then
+        drawer.disableLine = true
+      end
     end
   end
   if type(parent.CreateTexture) ~= "function" then
@@ -1574,7 +1595,7 @@ local DECOR_CHEV_THICK = 2  -- screen px thickness of a chevron tick
 local DECOR_CHEV_SPREAD = 4 -- screen px half-width of the V
 local DECOR_MARK = 3.5      -- screen px of a start/end marker (half of 7)
 local DECOR_LOOP_GROW = 1   -- loop is 4.5 screen px (half of the old 9)
-local DECOR_RIM = 0.5       -- screen px the dark marker rim adds (thin vs 3.5)
+local DECOR_RIM = 1         -- screen px the dark marker rim adds (visible after pixel snap)
 -- Cream fill so a marker reads against the rust/teal stroke.
 local DECOR_MARK_R, DECOR_MARK_G, DECOR_MARK_B, DECOR_MARK_A = 0.98, 0.92, 0.78, 1
 -- Same layer and sublevels the rotate / dot stroke already proved.
@@ -1585,6 +1606,21 @@ local DECOR_CORE_SUB = 7
 local function decorSize(screen, scale)
   scale = (tonumber(scale) and scale > 0) and scale or 1
   return screen / scale
+end
+
+--- Host-unit pad that covers a chevron arm (tip or heel) plus half its
+--- thickness. ClipItems uses this so a chevron is not kept or dropped
+--- from its centre alone.
+function D.DecorClipPad(metrics)
+  local scale = 1
+  if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
+    scale = metrics.scale
+  end
+  local tip = DECOR_CHEV_LEN * 0.55
+  local back = DECOR_CHEV_LEN * 0.45
+  local heel = math.sqrt(back * back + DECOR_CHEV_SPREAD * DECOR_CHEV_SPREAD)
+  local screen = math.max(tip, heel) + DECOR_CHEV_THICK * 0.5
+  return decorSize(screen, scale)
 end
 
 --- A filled square painted with the same sequence as paintRotate:
@@ -1770,10 +1806,14 @@ function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
     local j = jobs[i]
     if j.hasRim and j.rimObj then
       if j.style == "bar" then
-        paintRotate(j.rimObj, parent, j.x1, j.y1, j.x2, j.y2, j.thickness + rimGrow,
+        local rimThick = math.max(j.thickness + decorSize(1, scale), j.thickness + rimGrow)
+        paintRotate(j.rimObj, parent, j.x1, j.y1, j.x2, j.y2, rimThick,
           DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, DECOR_RIM_SUB)
       else
-        paintSolid(j.rimObj, parent, j.cx, j.cy, j.size + rimGrow,
+        -- At least 1 screen px larger than the core so the rim survives
+        -- pixel snap; DECOR_RIM (1) is the usual grow.
+        local rimSize = math.max(j.size + decorSize(1, scale), j.size + rimGrow)
+        paintSolid(j.rimObj, parent, j.cx, j.cy, rimSize,
           DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, DECOR_RIM_SUB)
       end
     end
@@ -1848,7 +1888,15 @@ function D.ApplyDecor(holder, field, host, pts, r, g, b, a, space, metrics, clip
   -- already clipped; without this, a chevron or marker on an unprojected
   -- or off-screen vertex paints into the rest of the UI.
   if clip then
-    buf, n = G.ClipItems(buf, n, clip, holder._clipBuf)
+    -- Do not mutate the caller's clip table; copy it and add the chevron
+    -- arm pad so ClipItems can test the extent, not just the centre.
+    holder._clipSpec = holder._clipSpec or {}
+    local spec = holder._clipSpec
+    spec.shape, spec.x, spec.y, spec.r = clip.shape, clip.x, clip.y, clip.r
+    spec.left, spec.top, spec.right, spec.bottom = clip.left, clip.top, clip.right, clip.bottom
+    spec.contain = clip.contain and true or false
+    spec.pad = tonumber(clip.pad) or D.DecorClipPad(metrics)
+    buf, n = G.ClipItems(buf, n, spec, holder._clipBuf)
   end
   D.DrawDecor(drawer, host, buf, n, r, g, b, a, space, metrics)
 end

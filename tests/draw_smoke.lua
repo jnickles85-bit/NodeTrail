@@ -814,8 +814,8 @@ for i, t in ipairs(cores) do
     "marker core " .. i .. " is 3.5 screen px (got " .. tostring(t.width) .. ")")
 end
 for i, t in ipairs(rims) do
-  check(type(t.width) == "number" and math.abs(t.width - 4.0) < 0.05,
-    "marker rim " .. i .. " is 4.0 screen px (core 3.5 plus a 0.5 px rim, got "
+  check(type(t.width) == "number" and math.abs(t.width - 4.5) < 0.05,
+    "marker rim " .. i .. " is 4.5 screen px (core 3.5 plus a 1 px rim, got "
       .. tostring(t.width) .. ")")
 end
 
@@ -880,6 +880,64 @@ for _, core in ipairs(cores) do
       "decor core is painted after its rim (core " .. tostring(core.shownAt)
         .. " rim " .. tostring(pair.shownAt) .. ")")
   end
+end
+
+-- LineProof only takes a PROBE_SPAN endpoint match, not a mere size > 0.
+do
+  local parent = makeFrame(nil)
+  local sized = makeRegion()
+  sized.kind = "line"
+  function sized:GetWidth() return 32 end
+  function sized:GetHeight() return 8 end
+  function sized:SetStartPoint() end
+  function sized:SetEndPoint() end
+  local proof = L.LineProof(parent, sized)
+  check(proof.sized == true, "LineProof records a positive size")
+  check(proof.took ~= true, "LineProof does not take a line that only has a size (took="
+    .. tostring(proof.took) .. ")")
+
+  local kept = makeRegion()
+  kept.kind = "line"
+  function kept:SetStartPoint(point, rel, relPoint, x, y)
+    self.start = { point, rel, relPoint, x, y }
+  end
+  function kept:SetEndPoint(point, rel, relPoint, x, y)
+    self.stop = { point, rel, relPoint, x, y }
+  end
+  function kept:GetStartPoint()
+    local p = self.start
+    return p[1], p[2], p[3], p[4], p[5]
+  end
+  function kept:GetEndPoint()
+    local p = self.stop
+    return p[1], p[2], p[3], p[4], p[5]
+  end
+  proof = L.LineProof(parent, kept)
+  check(proof.took == true, "LineProof takes a line whose endpoints match the probe span")
+end
+
+-- numberMethod (via GetWidth on a rotate proof) drops a secret-flagged value.
+do
+  local parent = makeFrame(nil)
+  local tex = parent:CreateTexture()
+  function tex:GetWidth() return 64 end
+  function tex:GetHeight() return 8 end
+  function tex:GetRotation() return 0.35 end
+  function tex:SetRotation(a) self.rotation = a end
+  function tex:SetWidth(w) self.width = w end
+  function tex:SetHeight(h) self.height = h end
+  local savedSecret = _G.issecretvalue
+  _G.issecretvalue = function(v) return v == 64 end
+  local rot = L.RotateProof(tex)
+  check(rot.took ~= true, "RotateProof does not use a secret GetWidth (took="
+    .. tostring(rot.took) .. ")")
+  _G.issecretvalue = function() return false end
+  -- Reset width/height/rotation after the secret probe may have left them.
+  tex:SetWidth(64)
+  tex:SetHeight(8)
+  rot = L.RotateProof(tex)
+  check(rot.took == true, "RotateProof takes when issecretvalue exists but is clear")
+  _G.issecretvalue = savedSecret
 end
 
 if failed > 0 then

@@ -638,6 +638,28 @@ do
     .. tostring(M._drawNum) .. " after " .. tostring(n) .. ")")
 end
 
+-- ═══ 11. _viewHooked waits until ScrollContainer hooks are installed ══════
+do
+  M._viewHooked = false
+  M._viewAuxHooked = false
+  local saved = WorldMapFrame.ScrollContainer
+  WorldMapFrame.ScrollContainer = nil
+  M:TryHookMap()
+  check(M._viewHooked ~= true,
+    "11: _viewHooked stays unset when ScrollContainer is missing")
+  local hooks = 0
+  function saved:HookScript(ev, fn)
+    hooks = hooks + 1
+    self.scripts = self.scripts or {}
+    self.scripts[ev] = fn
+  end
+  WorldMapFrame.ScrollContainer = saved
+  M:TryHookMap()
+  check(M._viewHooked == true,
+    "11: _viewHooked is set only after the ScrollContainer hooks are installed")
+  check(hooks >= 1, "11: ScrollContainer HookScript was called (got " .. tostring(hooks) .. ")")
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " map frame projection check(s) failed\n")
   os.exit(1)

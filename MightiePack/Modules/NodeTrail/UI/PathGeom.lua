@@ -688,17 +688,50 @@ end
 --- clip = { shape = "circle", x, y, r } or { shape = "rect", left, top, right, bottom }.
 --- A missing or unknown clip admits every point, so a caller that has no
 --- viewport does not silently drop decorations.
-function G.InsideClip(x, y, clip)
+--- `pad` is an optional extent around (x, y) in the same units, so a
+--- chevron is tested by its arm reach, not only its centre.
+--- `clip.contain` true: the whole extent must sit inside (world-map
+--- window, which does not clip its children). Otherwise the extent
+--- only has to intersect the clip (minimap, which SetClipsChildren
+--- when the client has it).
+function G.InsideClip(x, y, clip, pad)
   if type(clip) ~= "table" then
     return type(x) == "number" and type(y) == "number"
   end
-  if clip.shape == "circle" then
-    return G.InCircle(x, y, clip.x, clip.y, clip.r)
+  pad = tonumber(pad)
+  if not pad then
+    pad = tonumber(clip.pad) or 0
   end
-  return G.InRect(x, y, clip.left, clip.top, clip.right, clip.bottom)
+  if pad < 0 then
+    pad = 0
+  end
+  local contain = clip.contain and true or false
+  if clip.shape == "circle" then
+    local r = tonumber(clip.r) or 0
+    if contain then
+      r = r - pad
+      if r < 0 then
+        r = 0
+      end
+    else
+      r = r + pad
+    end
+    return G.InCircle(x, y, clip.x, clip.y, r)
+  end
+  local left, top = tonumber(clip.left), tonumber(clip.top)
+  local right, bottom = tonumber(clip.right), tonumber(clip.bottom)
+  if not left or not top or not right or not bottom then
+    return false
+  end
+  local x0, x1 = math.min(left, right), math.max(left, right)
+  local y0, y1 = math.min(top, bottom), math.max(top, bottom)
+  if contain then
+    return G.InRect(x, y, x0 + pad, y0 + pad, x1 - pad, y1 - pad)
+  end
+  return G.InRect(x, y, x0 - pad, y0 - pad, x1 + pad, y1 + pad)
 end
 
---- Keep items whose centre is inside the clip. Reuses `out`.
+--- Keep items whose extent is inside (or intersects) the clip. Reuses `out`.
 function G.ClipItems(items, n, clip, out)
   out = out or {}
   n = n or (type(items) == "table" and #items or 0)
@@ -709,10 +742,11 @@ function G.ClipItems(items, n, clip, out)
     end
     return out, 0
   end
+  local pad = type(clip) == "table" and tonumber(clip.pad) or 0
   for i = 1, n do
     local it = items[i]
     if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number"
-      and G.InsideClip(it.x, it.y, clip) then
+      and G.InsideClip(it.x, it.y, clip, pad) then
       kept = kept + 1
       out[kept] = it
     end

@@ -516,7 +516,9 @@ local function windowClip(window)
   if not left or not top or not w or not h then
     return nil
   end
-  return { shape = "rect", left = left, top = top, right = left + w, bottom = top + h }
+  -- contain=true: a chevron arm must sit inside the window, not just its
+  -- centre. The world-map host does not clip its children.
+  return { shape = "rect", left = left, top = top, right = left + w, bottom = top + h, contain = true }
 end
 
 local function sameViewNum(a, b)
@@ -1568,12 +1570,13 @@ function M:TryHookMap()
   -- redraw: the route follows the ground, it does not stay glued to the frame.
   -- Every hook here is best-effort; a client that fires none of them still
   -- redraws on WORLD_MAP_UPDATE and on the map's OnShow.
-  if not self._viewHooked then
-    self._viewHooked = true
+  -- Canvas and map-frame size hooks do not need ScrollContainer. Install
+  -- them once. `_viewHooked` is reserved for the ScrollContainer hooks
+  -- and is only set when those hooks are actually installed, so a map
+  -- that is not ready yet can be retried on a later TryHookMap.
+  if not self._viewAuxHooked then
+    self._viewAuxHooked = true
     local views = {
-      { frame = mapFrame.ScrollContainer,
-        events = { "OnSizeChanged", "OnScrollRangeChanged",
-          "OnVerticalScroll", "OnHorizontalScroll", "OnMouseWheel", "OnMouseUp" } },
       { frame = getCanvas(mapFrame), events = { "OnSizeChanged" } },
       { frame = mapFrame, events = { "OnSizeChanged" } },
     }
@@ -1593,14 +1596,26 @@ function M:TryHookMap()
       pcall(hooksecurefunc, mapFrame, "SetCanvasScale", function() M:Redraw() end)
       pcall(hooksecurefunc, mapFrame, "OnCanvasPanChanged", function() M:Redraw() end)
       pcall(hooksecurefunc, mapFrame, "SetPanTargetOffset", function() M:Redraw() end)
-      local scroll = mapFrame.ScrollContainer
-      if scroll then
+    end
+  end
+  if not self._viewHooked then
+    local scroll = mapFrame.ScrollContainer
+    if scroll and isFn(scroll.HookScript) then
+      local events = { "OnSizeChanged", "OnScrollRangeChanged",
+        "OnVerticalScroll", "OnHorizontalScroll", "OnMouseWheel", "OnMouseUp" }
+      for j = 1, #events do
+        pcall(scroll.HookScript, scroll, events[j], function()
+          M:Redraw()
+        end)
+      end
+      if isFn(hooksecurefunc) then
         pcall(hooksecurefunc, scroll, "SetHorizontalScroll", function() M:Redraw() end)
         pcall(hooksecurefunc, scroll, "SetVerticalScroll", function() M:Redraw() end)
         pcall(hooksecurefunc, scroll, "SetNormalizedHorizontalScroll", function() M:Redraw() end)
         pcall(hooksecurefunc, scroll, "SetNormalizedVerticalScroll", function() M:Redraw() end)
         pcall(hooksecurefunc, scroll, "SetNormalizedZoom", function() M:Redraw() end)
       end
+      self._viewHooked = true
     end
   end
   self:EnsureViewWatch()

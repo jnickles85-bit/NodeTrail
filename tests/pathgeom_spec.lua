@@ -131,6 +131,21 @@ do
   check(kept[1].kind == "start" and kept[2].kind == "chevron" and kept[2].x == 2,
     "7: the in-circle start and chevron stay, in order")
 
+  -- A chevron whose centre is just outside the circle is kept when the
+  -- arm pad intersects the clip, and dropped when the clip must contain
+  -- the whole extent (the world-map window).
+  local edge = { { kind = "chevron", x = 6, y = 0, dx = 1, dy = 0 } }
+  local intersect = { shape = "circle", x = 0, y = 0, r = 5, pad = 2 }
+  local _, en = G.ClipItems(edge, 1, intersect)
+  check(en == 1, "7: an intersecting chevron arm is kept when pad reaches the circle (got " .. tostring(en) .. ")")
+  local contain = { shape = "circle", x = 0, y = 0, r = 5, pad = 2, contain = true }
+  _, en = G.ClipItems(edge, 1, contain)
+  check(en == 0, "7: the same chevron is dropped when the clip must contain the arm (got " .. tostring(en) .. ")")
+  check(G.InsideClip(4, 0, { shape = "rect", left = 0, top = 10, right = 10, bottom = -10, pad = 2, contain = true }),
+    "7: a contained point still sits inside an inverted yup rect after the pad shrinks it")
+  check(not G.InsideClip(1, 0, { shape = "rect", left = 0, top = 10, right = 10, bottom = -10, pad = 2, contain = true }),
+    "7: a centre near the edge is outside once the contain pad shrinks an inverted rect")
+
   local rect = { shape = "rect", left = -1, top = -1, right = 3, bottom = 1 }
   kept, kn = G.ClipItems(items, #items, rect)
   check(kn == 2, "7: a rect clip also drops the far chevron and the end (got " .. tostring(kn) .. ")")
