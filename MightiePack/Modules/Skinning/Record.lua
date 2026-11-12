@@ -70,6 +70,10 @@ R.HOTSPOT_BINS = 50
 R.HOTSPOT_MAX_CELLS = 50 * 50
 R.HOTSPOT_MAX_NODES = 32
 R.HOTSPOT_MAX_PTS = 32
+-- cell.seen and store.unpositionedEvictedGuids grow without a bound,
+-- at about 38 bytes per unique skinned corpse (the guid string plus a
+-- table entry). They are never trimmed: a re-fold must not increment
+-- n, and an unpositioned eviction must not be counted twice.
 R.SKIN_WINDOW = 60        -- a successful cast attributes a window within this
 R.SKIN_SPELL_ID = 8613    -- live-confirmed on this client (dump sk 20)
 
@@ -723,13 +727,18 @@ function R.FoldSkinIntoHotspots(store, rec)
   -- with cell.n (one guid per counted fold) and is never trimmed by
   -- HOTSPOT_MAX_PTS, so a re-fold of a guid that missed the pts cap
   -- cannot increment n. Only the position samples are capped.
+  -- seen is stamped after n is incremented so a crash between the
+  -- check and the increment cannot leave a "seen but not counted"
+  -- hole that a retry would skip.
   if type(rec.guid) == "string" and rec.guid ~= "" then
     if cell.seen[rec.guid] then
       return false
     end
-    cell.seen[rec.guid] = true
   end
   cell.n = (cell.n or 0) + 1
+  if type(rec.guid) == "string" and rec.guid ~= "" then
+    cell.seen[rec.guid] = true
+  end
   local ts = tonumber(rec.skinCastAt) or tonumber(rec.diedAt) or tonumber(rec.firstSeenAt)
   if ts and ts > (tonumber(cell.last) or 0) then
     cell.last = ts
@@ -754,9 +763,39 @@ function R.FoldSkinIntoHotspots(store, rec)
   return true
 end
 
+--- Copy guids already stored in cell.pts into cell.seen, without
+--- incrementing n. A save written before seen existed (the 398752f
+--- head) can have pts and hotspotsSeeded but an empty seen; a re-fold
+--- of those guids would otherwise double-count.
+function R.BackfillSkinSeen(store)
+  if type(store) ~= "table" or type(store.hotspots) ~= "table" then
+    return store
+  end
+  for _, grid in pairs(store.hotspots) do
+    if type(grid) == "table" then
+      for _, cell in pairs(grid) do
+        if type(cell) == "table" and type(cell.pts) == "table" then
+          if type(cell.seen) ~= "table" then
+            cell.seen = {}
+          end
+          for i = 1, #cell.pts do
+            local pt = cell.pts[i]
+            if type(pt) == "table" and type(pt.guid) == "string" and pt.guid ~= "" then
+              cell.seen[pt.guid] = true
+            end
+          end
+        end
+      end
+    end
+  end
+  return store
+end
+
 --- One-time migration: fold every skinned, positioned record still in the
 --- ring into the durable grid. Never discards the ring or the totals.
 --- Guarded by store.hotspotsSeeded so a second load cannot double-count.
+--- Even when already seeded, seen is backfilled from pts so a pre-seen
+--- save cannot be double-counted on a later fold.
 function R.SeedSkinHotspots(store)
   if type(store) ~= "table" then
     return store
@@ -765,6 +804,7 @@ function R.SeedSkinHotspots(store)
     store.hotspots = {}
   end
   if store.hotspotsSeeded == true then
+    R.BackfillSkinSeen(store)
     return store
   end
   local records = type(store.records) == "table" and store.records or {}
@@ -783,6 +823,7 @@ function R.SeedSkinHotspots(store)
     end
   end
   store.hotspotsSeeded = true
+  R.BackfillSkinSeen(store)
   return store
 end
 

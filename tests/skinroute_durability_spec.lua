@@ -20,7 +20,10 @@
 --   6. a crash after the fold but before the ring removal retries
 --      without double-counting (fold first, then drop);
 --   7. a skinned record evicted with no map position is counted per
---      map in unpositionedEvicted and is not folded.
+--      map in unpositionedEvicted and is not folded;
+--   8. a pre-seen save (hotspotsSeeded, pts present, seen missing) is
+--      backfilled on load so a re-fold of those guids does not
+--      increment n.
 --
 -- Not loaded by the addon TOC.
 local src = debug.getinfo(1, "S").source:gsub("^@", "")
@@ -410,6 +413,52 @@ R.CountUnpositionedEviction(up, { guid = upg, skinned = true, map = MAP })
 check(up.unpositionedEvicted[MAP] == 1, "7: recounting the same guid does not increment")
 R.CountUnpositionedEviction(up, { guid = "Creature-0-8-1-1-2966-00000000NONE", skinned = true })
 check(up.unpositionedEvicted["_"] == 1, "7: a missing map is counted under _")
+
+-- ── 8. backfill seen from pts on an already-seeded pre-seen save ─────
+-- Shape of a 398752f save: the grid has pts and n, hotspotsSeeded is
+-- set, but seen is missing. A re-fold of those guids must not grow n.
+local legacy = {
+  schema = 2, records = {}, order = {}, unclassified = {},
+  creatures = {}, counts = {}, hotspots = {}, hotspotsSeeded = true,
+}
+local legacyGuids = {}
+local lKey = nil
+legacy.hotspots[MAP] = {}
+for i = 1, 5 do
+  legacyGuids[i] = "Creature-0-7-1-1-2966-" .. string.format("%012X", 50 + i)
+end
+-- Build the cell as 398752f would have written it: pts and n, no seen.
+lKey = select(1, R.SkinCellKey(0.33, 0.34))
+legacy.hotspots[MAP][lKey] = {
+  n = 5, last = 100, nodes = { [2966] = 5 },
+  pts = {
+    { x = 0.33, y = 0.34, guid = legacyGuids[1] },
+    { x = 0.33, y = 0.34, guid = legacyGuids[2] },
+    { x = 0.33, y = 0.34, guid = legacyGuids[3] },
+    { x = 0.33, y = 0.34, guid = legacyGuids[4] },
+    { x = 0.33, y = 0.34, guid = legacyGuids[5] },
+  },
+}
+-- No seen key at all.
+check(legacy.hotspots[MAP][lKey].seen == nil, "8: the legacy cell has no seen table")
+R.SeedSkinHotspots(legacy)
+local lCell = legacy.hotspots[MAP][lKey]
+check(type(lCell.seen) == "table", "8: load backfills a seen table")
+for i = 1, 5 do
+  check(lCell.seen[legacyGuids[i]] == true,
+    "8: guid " .. i .. " was copied from pts into seen")
+end
+check(lCell.n == 5, "8: backfill does not change n (got " .. tostring(lCell.n) .. ")")
+R.FoldSkinIntoHotspots(legacy, {
+  guid = legacyGuids[3], creatureID = 2966, skinned = true,
+  map = MAP, x = 0.33, y = 0.34,
+})
+check(lCell.n == 5,
+  "8: a re-fold of a backfilled guid does not increment n (got " .. tostring(lCell.n) .. ")")
+-- GetDB / Upgrade is the live entry point.
+NodeTrailDB = { skinning = { enabled = true, chars = { ["Mightie-Forever"] = legacy } } }
+local via = R:GetDB()
+check(via.hotspots[MAP][lKey].n == 5, "8: GetDB does not double-count a pre-seen save")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
