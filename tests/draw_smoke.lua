@@ -700,6 +700,33 @@ check(ns.activeRoute and ns.activeRoute.source == "density", "reload rebuilds de
 SlashCmdList.NODETRAIL("stop")
 check(ns.MapOverlay.path == nil and ns.MinimapPath.path == nil, "stop clears density route")
 
+-- Rotate is the confirmed default when the probe keeps it; texcoord
+-- is never chosen automatically, even if that proof also took.
+local L = ns.LineDraw
+check(L.PickStrokeMode({
+  rotate = { took = true },
+  texcoord = { took = true },
+  line = { took = false },
+}) == "rotate", "proved rotate is the default even when texcoord also took")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  texcoord = { took = true },
+  line = { took = false },
+}) == "dots", "texcoord is not the automatic default")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  texcoord = { took = true },
+  line = { took = false },
+}, "texcoord") == "texcoord", "texcoord can still be pinned")
+check(L.PickStrokeMode({
+  rotate = { took = true },
+  line = { took = true },
+}) == "rotate", "proved rotate wins over a proved CreateLine")
+check(L.PickStrokeMode({
+  rotate = { took = false },
+  line = { took = true },
+}) == "line", "a proved CreateLine is used when rotate did not take")
+
 if failed > 0 then
   io.stderr:write(failed .. " draw smoke check(s) failed\n")
   os.exit(1)

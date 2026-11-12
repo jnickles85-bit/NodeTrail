@@ -493,25 +493,23 @@ function D.TexCoordProof(tex)
 end
 
 --- Pick the best STROKE primitive from measured proofs. A session pin from
---- `/nt linetest use ...` wins, otherwise: a CreateLine that kept its
---- endpoints, a rotation that kept its angle and size, a texcoord that kept
---- its coords, then the two-corner-anchor dots (always the last resort).
+--- `/nt linetest use ...` wins, otherwise a rotation that kept its angle
+--- and size is the confirmed default, then a CreateLine that kept its
+--- endpoints, then the two-corner-anchor dots (the last resort). Texcoord
+--- is never chosen automatically: it dropped on Forever, and the only way
+--- to use it is `/nt linetest use texcoord`.
 function D.PickStrokeMode(capability, pin)
   if type(pin) == "string" and pin ~= "" and pin ~= "auto" then
     return pin
   end
   capability = capability or {}
-  local line = capability.line
-  if type(line) == "table" and line.took then
-    return "line"
-  end
   local rot = capability.rotate
   if type(rot) == "table" and rot.took then
     return "rotate"
   end
-  local tc = capability.texcoord
-  if type(tc) == "table" and tc.took then
-    return "texcoord"
+  local line = capability.line
+  if type(line) == "table" and line.took then
+    return "line"
   end
   return "dots"
 end
@@ -715,6 +713,17 @@ local function paintDot(obj, parent, cx, cy, size, r, g, b, a, space, sublevel)
   local half = (size or 2) * 0.5
   obj:SetParent(parent)
   local via = applyColor(obj, r, g, b, a, WHITE)
+  -- Forever: SetColorTexture can succeed the call and still leave an
+  -- untextured black square. The rotate stroke already proved WHITE8X8
+  -- + SetVertexColor keeps colour, so re-apply that path after the
+  -- colour probe. Decorations and any leftover dots must never render
+  -- as black blocks.
+  if obj.SetTexture then
+    pcall(obj.SetTexture, obj, WHITE)
+  end
+  if obj.SetVertexColor then
+    pcall(obj.SetVertexColor, obj, r, g, b, a)
+  end
   -- A pooled region can still carry an alpha from an earlier use, and an
   -- inherited parent alpha multiplies whatever we set. The vertex colour is the
   -- only alpha this draw means, so the region's own alpha is pinned to 1 (the
@@ -1016,7 +1025,7 @@ local function paintLine(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, spa
   obj:Show()
 end
 
-local function paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space)
+local function paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, space, sublevel)
   local dx, dy = x2 - x1, y2 - y1
   local length = math.sqrt(dx * dx + dy * dy)
   if length < 0.75 then
@@ -1031,11 +1040,14 @@ local function paintRotate(obj, parent, x1, y1, x2, y2, thickness, r, g, b, a, s
   if obj.SetVertexColor then
     obj:SetVertexColor(r, g, b, a)
   end
+  if obj.SetAlpha then
+    pcall(obj.SetAlpha, obj, 1)
+  end
   if obj.SetTexCoord then
     obj:SetTexCoord(0, 1, 0, 1)
   end
   if obj.SetDrawLayer then
-    pcall(obj.SetDrawLayer, obj, "OVERLAY", 7)
+    pcall(obj.SetDrawLayer, obj, "OVERLAY", sublevel or 7)
   end
   if obj.SetBlendMode then
     pcall(obj.SetBlendMode, obj, "BLEND")
@@ -1544,19 +1556,71 @@ end
 -- ── Direction chevrons and start/end/loop markers ─────────────────────
 -- Drawn from a SEPARATE drawer so the stroke pool's rim/core pairing
 -- (and every mapdiag / capacity spec that reads it) stays unchanged.
--- All decorations use the same two-corner-anchor primitive the live
--- client already proved it accepts: no SetRotation, no CreateLine.
--- A chevron is three small squares in a triangle that points along the
--- path; a start/end marker is one larger filled square; a loop marker
--- is one larger outline square.
+-- On Forever, SetRotation is proved and SetColorTexture can succeed
+-- while painting an untextured black square. Decorations therefore
+-- use the same WHITE8X8 + SetVertexColor path as the rotate stroke.
+-- A chevron is a short rotated bar along the path; start/end/loop
+-- markers are small filled squares with a thin dark rim. If rotation
+-- is unavailable, a chevron falls back to one small coloured square
+-- (never a black block, and never a cluster of three squares).
 
-local DECOR_CHEVRON = 5   -- screen px of each chevron square
-local DECOR_MARK = 9      -- screen px of a start/end/loop marker
+local DECOR_CHEV_LEN = 8    -- screen px length of a chevron bar
+local DECOR_CHEV_THICK = 3  -- screen px thickness of a chevron bar
+local DECOR_MARK = 7        -- screen px of a start/end/loop marker
 local DECOR_LOOP_GROW = 2
+local DECOR_RIM = 1         -- screen px the dark rim adds (subtle)
 
 local function decorSize(screen, scale)
   scale = (tonumber(scale) and scale > 0) and scale or 1
   return screen / scale
+end
+
+--- A filled square painted with WHITE8X8 + vertex colour (never
+--- SetColorTexture). Size setters + a centre point when the client
+--- kept them; two-corner anchors otherwise.
+local function paintSolid(obj, parent, cx, cy, size, r, g, b, a, space, sub)
+  obj:SetParent(parent)
+  if obj.SetTexture then
+    pcall(obj.SetTexture, obj, WHITE)
+  end
+  if obj.SetVertexColor then
+    pcall(obj.SetVertexColor, obj, r, g, b, a)
+  end
+  if obj.SetAlpha then
+    pcall(obj.SetAlpha, obj, 1)
+  end
+  if obj.SetDrawLayer then
+    pcall(obj.SetDrawLayer, obj, "OVERLAY", sub or 8)
+  end
+  if obj.SetBlendMode then
+    pcall(obj.SetBlendMode, obj, "BLEND")
+  end
+  if obj.SetTexCoord then
+    pcall(obj.SetTexCoord, obj, 0, 1, 0, 1)
+  end
+  obj:ClearAllPoints()
+  if obj.SetWidth and obj.SetHeight then
+    pcall(obj.SetWidth, obj, size)
+    pcall(obj.SetHeight, obj, size)
+    if space == "yup" then
+      obj:SetPoint("CENTER", parent, "CENTER", cx, cy)
+    else
+      obj:SetPoint("CENTER", parent, "TOPLEFT", cx, -cy)
+    end
+    if obj.SetRotation then
+      pcall(obj.SetRotation, obj, 0)
+    end
+  else
+    local half = (size or 2) * 0.5
+    if space == "yup" then
+      obj:SetPoint("BOTTOMLEFT", parent, "CENTER", cx - half, cy - half)
+      obj:SetPoint("TOPRIGHT", parent, "CENTER", cx + half, cy + half)
+    else
+      obj:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", cx - half, -(cy + half))
+      obj:SetPoint("TOPRIGHT", parent, "TOPLEFT", cx + half, -(cy - half))
+    end
+  end
+  obj:Show()
 end
 
 function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
@@ -1568,12 +1632,17 @@ function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
     drawer.parent = parent
   end
   if not drawer.mode then
-    -- Decorations always use the two-corner-anchor path; if detect would
-    -- pick line/rotate we still paint dots, which is the proven primitive.
+    -- Prefer the proved rotate path for decorations too. Texcoord stays
+    -- non-default unless `/nt linetest` pinned it.
     drawer.disableLine = true
     detect(drawer, parent)
-    if drawer.mode ~= "dots" and type(parent.CreateTexture) == "function" then
-      drawer.mode = "dots"
+    if drawer.mode == "texcoord" and D._forceMode ~= "texcoord" then
+      local rot = drawer.capability and drawer.capability.rotate
+      if type(rot) == "table" and rot.took then
+        drawer.mode = "rotate"
+      elseif type(parent.CreateTexture) == "function" then
+        drawer.mode = "dots"
+      end
     end
   end
   count = count or 0
@@ -1589,54 +1658,85 @@ function D.DrawDecor(drawer, parent, items, count, r, g, b, a, space, metrics)
   if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
     scale = metrics.scale
   end
-  local chev = decorSize(DECOR_CHEVRON, scale)
+  local chevLen = math.max(0.75, decorSize(DECOR_CHEV_LEN, scale))
+  local chevThick = math.max(0.75, decorSize(DECOR_CHEV_THICK, scale))
   local mark = decorSize(DECOR_MARK, scale)
   local loop = decorSize(DECOR_MARK + DECOR_LOOP_GROW, scale)
-  local rimGrow = decorSize(DOT_OUTLINE_GROW, scale)
+  local rimGrow = decorSize(DECOR_RIM, scale)
+  local useRotate = drawer.mode == "rotate"
   local index, painted = 1, 0
-  local function paintOne(cx, cy, size, cr, cg, cb, ca, sub, rim)
-    -- A same-colour marker on a same-colour stroke disappears. Every
-    -- decoration gets a dark rim so start, end, loop, and chevrons read
-    -- as marks on the line, not as more of the line.
+  -- A same-colour mark on a same-colour stroke disappears, so every
+  -- decoration gets a thin dark rim. The rim is 1 screen px, not the
+  -- 2 px stroke outline, so it stays a hairline and not a black block.
+  local function paintMark(cx, cy, size, cr, cg, cb, ca, sub, rim)
     if rim ~= false then
       local under = acquire(drawer, index, parent)
       index = index + 1
       if under then
-        paintDot(under, parent, cx, cy, size + rimGrow,
+        paintSolid(under, parent, cx, cy, size + rimGrow,
           DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, (sub or 8) - 1)
       end
     end
     local obj = acquire(drawer, index, parent)
     index = index + 1
     if obj then
-      paintDot(obj, parent, cx, cy, size, cr, cg, cb, ca, space, sub or 8)
+      paintSolid(obj, parent, cx, cy, size, cr, cg, cb, ca, space, sub or 8)
       painted = painted + 1
+    end
+  end
+  local function paintBar(cx, cy, dx, dy, length, thickness, cr, cg, cb, ca, sub, rim)
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1e-8 then
+      dx, dy, len = 1, 0, 1
+    end
+    dx, dy = dx / len, dy / len
+    local hx, hy = dx * length * 0.5, dy * length * 0.5
+    local x1, y1, x2, y2 = cx - hx, cy - hy, cx + hx, cy + hy
+    if rim ~= false then
+      local under = acquire(drawer, index, parent)
+      index = index + 1
+      if under then
+        paintRotate(under, parent, x1, y1, x2, y2, thickness + rimGrow,
+          DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, space, (sub or 8) - 1)
+      end
+    end
+    local obj = acquire(drawer, index, parent)
+    index = index + 1
+    if obj then
+      paintRotate(obj, parent, x1, y1, x2, y2, thickness, cr, cg, cb, ca, space, sub or 8)
+      painted = painted + 1
+    end
+  end
+  -- A closed path plans both a start and a loop at the first vertex.
+  -- Drawing both would stack two marks; keep the slightly larger loop.
+  local hasLoop = false
+  for i = 1, count do
+    local it = items[i]
+    if type(it) == "table" and it.kind == "loop" then
+      hasLoop = true
+      break
     end
   end
   for i = 1, count do
     local it = items[i]
     if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number" then
       if it.kind == "chevron" then
-        local dx, dy = tonumber(it.dx) or 0, tonumber(it.dy) or 0
-        local len = math.sqrt(dx * dx + dy * dy)
-        if len < 1e-8 then
-          dx, dy, len = 1, 0, 1
+        if useRotate then
+          paintBar(it.x, it.y, tonumber(it.dx) or 0, tonumber(it.dy) or 0,
+            chevLen, chevThick, r, g, b, a, 8)
+        else
+          -- One small coloured square, not three overlapping ones.
+          paintMark(it.x, it.y, chevThick, r, g, b, a, 8)
         end
-        dx, dy = dx / len, dy / len
-        local px, py = -dy, dx
-        local tip = chev * 0.9
-        local back = chev * 0.45
-        local wing = chev * 0.55
-        paintOne(it.x + dx * tip, it.y + dy * tip, chev, r, g, b, a, 8)
-        paintOne(it.x - dx * back + px * wing, it.y - dy * back + py * wing, chev, r, g, b, a, 8)
-        paintOne(it.x - dx * back - px * wing, it.y - dy * back - py * wing, chev, r, g, b, a, 8)
       elseif it.kind == "loop" then
-        paintOne(it.x, it.y, loop, DOT_OUTLINE_R, DOT_OUTLINE_G, DOT_OUTLINE_B, DOT_OUTLINE_A, 8, false)
+        -- Rust core with a thin dark rim — never a solid black square.
+        paintMark(it.x, it.y, loop, r, g, b, a, 8)
       elseif it.kind == "end" then
-        paintOne(it.x, it.y, mark, r, g, b, a, 8)
-      else
-        -- start (default)
-        paintOne(it.x, it.y, mark, r, g, b, a, 8)
+        paintMark(it.x, it.y, mark, r, g, b, a, 8)
+      elseif it.kind == "start" or it.kind == nil then
+        if not hasLoop then
+          paintMark(it.x, it.y, mark, r, g, b, a, 8)
+        end
       end
     end
   end

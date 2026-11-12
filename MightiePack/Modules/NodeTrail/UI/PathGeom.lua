@@ -599,19 +599,17 @@ function G.PlaceMarkers(pts, out)
   return out, n
 end
 
---- How many two-corner-anchored regions a decor plan consumes. Chevrons
---- are three small squares (a triangle that still works without
---- SetRotation). Start and end are one filled square each; a loop marker
---- is one outline square.
+--- How many decoration cores a plan consumes. A chevron is one rotated
+--- bar (or one small square when rotation is unavailable). Start, end,
+--- and loop markers are one filled square each. Rims are acquired
+--- beside these cores and are not counted here.
 function G.DecorRegionCount(items, n)
   n = n or (type(items) == "table" and #items) or 0
   local r = 0
   for i = 1, n do
     local it = items[i]
     local kind = type(it) == "table" and it.kind or nil
-    if kind == "chevron" then
-      r = r + 3
-    elseif kind == "start" or kind == "end" or kind == "loop" then
+    if kind == "chevron" or kind == "start" or kind == "end" or kind == "loop" then
       r = r + 1
     end
   end

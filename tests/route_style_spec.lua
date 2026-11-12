@@ -115,13 +115,13 @@ local lm, ln = G.PlaceMarkers(loopPts)
 check(ln == 2 and lm[1].kind == "start" and lm[2].kind == "loop",
   "5: a closed path gets a start and a loop marker at the first point")
 near(lm[2].x, 0, "5: the loop marker sits on the first point")
--- 2 markers + 5 chevrons = 2*1 + 5*3 = 17 regions.
+-- 2 markers + 5 chevrons = 2*1 + 5*1 = 7 cores.
 local items = {}
 for i = 1, cnFive do items[#items + 1] = chevFive[i] end
 items[#items + 1] = marks[1]
 items[#items + 1] = marks[2]
-check(G.DecorRegionCount(items) == 17,
-  "5: pool use is 3 regions per chevron plus 1 per marker (got "
+check(G.DecorRegionCount(items) == 7,
+  "5: pool use is 1 region per chevron plus 1 per marker (got "
     .. tostring(G.DecorRegionCount(items)) .. ")")
 
 -- ── 6. BuildDrawPath + pool reuse across two plans ───────────────────
