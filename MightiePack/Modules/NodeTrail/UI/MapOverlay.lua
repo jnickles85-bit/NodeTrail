@@ -593,7 +593,13 @@ function M:ReleaseVisuals(why)
       ns.LineDraw.MarkIdle(self.drawer, why)
     else
       ns.LineDraw.Clear(self.drawer)
-      if self.styleDrawer then ns.LineDraw.Clear(self.styleDrawer) end
+    end
+  end
+  if self.styleDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.styleDrawer, why)
+    else
+      ns.LineDraw.Clear(self.styleDrawer)
     end
   end
   if self.host then
@@ -776,7 +782,13 @@ function M:ReleaseSkin(why)
       ns.LineDraw.MarkIdle(self.skinDrawer, why)
     else
       ns.LineDraw.Clear(self.skinDrawer)
-      if self.skinStyleDrawer then ns.LineDraw.Clear(self.skinStyleDrawer) end
+    end
+  end
+  if self.skinStyleDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.skinStyleDrawer, why)
+    else
+      ns.LineDraw.Clear(self.skinStyleDrawer)
     end
   end
   if self.skinHost then
@@ -1283,15 +1295,7 @@ function M:_redraw()
   do
     local dpts = self._decorPts or {}
     self._decorPts = dpts
-    local dn = 0
-    for i = 1, #px do
-      local p = px[i]
-      if p and type(p.x) == "number" and type(p.y) == "number" then
-        dn = dn + 1
-        dpts[dn] = p
-      end
-    end
-    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    dpts = ns.PathGeom.PackProjected(px, dpts)
     ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, b, a, "ydown", metrics)
   end
   -- Why it might still not READ, measured next to the draw: the alpha the whole
@@ -1677,11 +1681,11 @@ function M:_redrawSkin()
   if type(unitScale) ~= "number" or unitScale ~= unitScale or unitScale <= 0 then
     unitScale = 1
   end
-  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.1, 0.85, 0.35, 0.95 }
-  local r = tonumber(c[1]) or 0.1
-  local g = tonumber(c[2]) or 0.85
-  local b = tonumber(c[3]) or 0.35
-  local a = tonumber(c[4]) or 0.95
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.78, 0.38, 0.16, 0.85 }
+  local r = tonumber(c[1]) or 0.78
+  local g = tonumber(c[2]) or 0.38
+  local b = tonumber(c[3]) or 0.16
+  local a = tonumber(c[4]) or 0.85
   local widthFrac = tonumber((self.skinRoute and self.skinRoute.width) or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
   if widthFrac <= 0 then widthFrac = 2 end
   local metrics = ns.LineDraw.DotMetrics(widthFrac, unitScale, self._screenFloor)
@@ -1692,17 +1696,7 @@ function M:_redrawSkin()
     local src = self._skinPx or px
     local dpts = self._skinDecorPts or {}
     self._skinDecorPts = dpts
-    local dn = 0
-    if type(src) == "table" then
-      for i = 1, #src do
-        local p = src[i]
-        if p and type(p.x) == "number" and type(p.y) == "number" then
-          dn = dn + 1
-          dpts[dn] = p
-        end
-      end
-    end
-    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    dpts = ns.PathGeom.PackProjected(src, dpts)
     ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, b, a, "ydown", metrics)
   end
   self._skinQueued = count

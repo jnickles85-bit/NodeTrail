@@ -726,6 +726,54 @@ local herbMini = ns.LineDraw.Applied(MP.drawer) or {}
 check(math.abs((herbMini.r or 0) - 0.400) < 1e-9 and math.abs((herbMini.g or 0) - 0.988) < 1e-9,
   "8: the minimap herb route is still teal")
 
+
+-- ════════════════════════════════════════════════════════════════════════
+-- 9. A "can't draw" release must hide decor regions, not leave them
+-- ════════════════════════════════════════════════════════════════════════
+local function shownDecor(drawer)
+  local n = 0
+  if not drawer or type(drawer.pool) ~= "table" then
+    return 0
+  end
+  local high = drawer.poolHigh or #drawer.pool
+  for i = 1, high do
+    local o = drawer.pool[i]
+    if o then
+      local shown = false
+      if type(o.IsShown) == "function" then
+        shown = o:IsShown() and true or false
+      else
+        shown = o.shown and true or false
+      end
+      if shown then
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+check((shownDecor(M.styleDrawer) or 0) > 0,
+  "9: the world herb route has visible decor before release (got "
+  .. tostring(shownDecor(M.styleDrawer)) .. ")")
+M:ReleaseVisuals("can't draw")
+check(shownDecor(M.styleDrawer) == 0,
+  "9: ReleaseVisuals(reason) hides every world herb decor region (got "
+  .. tostring(shownDecor(M.styleDrawer)) .. " shown)")
+check((shownDecor(M.skinStyleDrawer) or 0) > 0,
+  "9: the world skinning circle has visible decor before release (got "
+  .. tostring(shownDecor(M.skinStyleDrawer)) .. ")")
+M:ReleaseSkin("can't draw")
+check(shownDecor(M.skinStyleDrawer) == 0,
+  "9: ReleaseSkin(reason) hides every world skinning decor region (got "
+  .. tostring(shownDecor(M.skinStyleDrawer)) .. " shown)")
+check((shownDecor(MP.skinStyleDrawer) or 0) > 0,
+  "9: the minimap skinning circle has visible decor before release (got "
+  .. tostring(shownDecor(MP.skinStyleDrawer)) .. ")")
+MP:ReleaseSkinVisuals("can't draw")
+check(shownDecor(MP.skinStyleDrawer) == 0,
+  "9: ReleaseSkinVisuals(reason) hides every minimap skinning decor region (got "
+  .. tostring(shownDecor(MP.skinStyleDrawer)) .. " shown)")
+
 -- ════════════════════════════════════════════════════════════════════════
 if failed > 0 then
   os.exit(1)

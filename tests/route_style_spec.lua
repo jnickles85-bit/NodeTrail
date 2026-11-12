@@ -169,6 +169,48 @@ check(regionsC < regionsA,
     .. " vs " .. tostring(regionsA) .. "), so a reuse-and-hide high-water does not grow")
 check(G.DecorRegionCount(bufC, cC) == 0, "6: a short path contributes no chevron regions")
 
+
+-- ── 7. PackProjected keeps gaps so chevrons cannot shortcut ─────────
+local src = {
+  { x = 0, y = 0 },
+  { why = "no projection" },
+  { x = 100, y = 0 },
+}
+local packed, pn = G.PackProjected(src)
+check(pn == 3, "7: PackProjected keeps the source length (got " .. tostring(pn) .. ")")
+check(packed[2] and packed[2].gap, "7: the unprojected vertex becomes a gap sentinel")
+check(packed[1].x == 0 and packed[3].x == 100, "7: projected points stay in their slots")
+local reused = packed
+local _, pn2 = G.PackProjected({ { x = 1, y = 1 }, { x = 2, y = 2 } }, reused)
+check(reused == packed, "7: PackProjected reuses the out array")
+check(reused[3] == nil, "7: leftover slots are cleared")
+-- A 100-unit line with a hole in the middle must not grow a chevron on
+-- the 0-to-100 shortcut. Spacing 20 would place five chevrons on a solid
+-- 100-unit line; a gapped 0 / hole / 100 path has no usable span.
+local gapped = G.PackProjected({
+  { x = 0, y = 0 },
+  { why = "missing" },
+  { x = 100, y = 0 },
+})
+local _, gn = G.PlaceChevrons(gapped, 20)
+check(gn == 0, "7: no chevron is placed across an unprojected gap (got " .. tostring(gn) .. ")")
+-- Two real runs still get chevrons on each run, never on the hole.
+local runs = G.PackProjected({
+  { x = 0, y = 0 }, { x = 100, y = 0 },
+  { why = "missing" },
+  { x = 0, y = 50 }, { x = 100, y = 50 },
+})
+local ch, cnR = G.PlaceChevrons(runs, 20)
+check(cnR > 0, "7: each projected run can still carry chevrons (got " .. tostring(cnR) .. ")")
+local shortcut = false
+for i = 1, cnR do
+  local y = ch[i].y
+  if y > 1 and y < 49 then
+    shortcut = true
+  end
+end
+check(not shortcut, "7: no chevron sits on the line between the two runs")
+
 if failed > 0 then
   io.stderr:write(failed .. " route-style check(s) failed\n")
   os.exit(1)

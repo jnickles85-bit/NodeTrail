@@ -131,13 +131,17 @@ function ns.GetDB()
   if type(NodeTrailDB.profile) ~= "table" then
     NodeTrailDB.profile = CopyTable(ns.defaults.profile)
   end
+  -- Read the saved colour BEFORE fillMissing: a partial {1,1,1} would
+  -- otherwise pick up the new teal alpha (0.85) and stop looking like
+  -- the old white default ({1,1,1} or {1,1,1,0.9}).
+  local wasOldWhite = isOldWhiteDefault(NodeTrailDB.profile.pathColor)
   fillMissing(NodeTrailDB, ns.defaults)
   -- One-time swap of the previous white default to teal. A colour the
   -- player did not pick (the old shipped default) is replaced; any other
   -- stored table is left alone and the marker is still stamped so this
   -- does not run again.
   if NodeTrailDB.profile.pathColorMigration ~= 1 then
-    if isOldWhiteDefault(NodeTrailDB.profile.pathColor) then
+    if wasOldWhite then
       NodeTrailDB.profile.pathColor = { 0.400, 0.988, 0.945, 0.85 }
     end
     NodeTrailDB.profile.pathColorMigration = 1

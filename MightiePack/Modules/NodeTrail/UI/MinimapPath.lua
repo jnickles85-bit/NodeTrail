@@ -465,6 +465,7 @@ function M:ReleaseVisuals()
   if self.styleDrawer then
     ns.LineDraw.Clear(self.styleDrawer)
   end
+  self._projKey = nil
   if self.host then
     pcall(self.host.Hide, self.host)
   end
@@ -546,11 +547,16 @@ function M:ReleaseSkinVisuals(why)
       ns.LineDraw.MarkIdle(self.skinDrawer, why)
     else
       ns.LineDraw.Clear(self.skinDrawer)
-      if self.skinStyleDrawer then
-        ns.LineDraw.Clear(self.skinStyleDrawer)
-      end
     end
   end
+  if self.skinStyleDrawer then
+    if why then
+      ns.LineDraw.MarkIdle(self.skinStyleDrawer, why)
+    else
+      ns.LineDraw.Clear(self.skinStyleDrawer)
+    end
+  end
+  self._skinProjKey = nil
   if self.skinHost then
     pcall(self.skinHost.Hide, self.skinHost)
   end
@@ -720,16 +726,33 @@ function M:_sample()
   return sample
 end
 
+--- A projection can be reused when the route, the zoom (radius and
+--- minimap size), the rotation, and the player position have not moved.
+local function projectionKey(points, sample)
+  if type(points) ~= "table" or type(sample) ~= "table" then
+    return nil
+  end
+  return string.format("%s:%d:%s:%.4f:%.2f:%.2f:%.6f:%.6f:%.4f:%.4f",
+    tostring(points), #points, tostring(sample.mode or ""),
+    tonumber(sample.radius) or 0,
+    tonumber(sample.halfW) or 0, tonumber(sample.halfH) or 0,
+    tonumber(sample.sinF) or 0, tonumber(sample.cosF) or 0,
+    tonumber(sample.px) or tonumber(sample.mx) or 0,
+    tonumber(sample.py) or tonumber(sample.my) or 0)
+end
+
 function M:_redraw()
-  self._lastQueued = 0
   self._why = nil
-  self._proj = nil
   if not self.points or #self.points < 2 then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "no route"
     self:ReleaseVisuals()
     return
   end
   if not ns.GetDB().showMinimap then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "showMinimap is off"
     self:ReleaseVisuals()
     return
@@ -737,6 +760,8 @@ function M:_redraw()
   if Minimap and type(Minimap.IsVisible) == "function" then
     local ok, visible = pcall(Minimap.IsVisible, Minimap)
     if ok and not visible then
+      self._lastQueued = 0
+      self._proj = nil
       self._why = "the minimap is hidden"
       self:ReleaseVisuals()
       return
@@ -745,17 +770,36 @@ function M:_redraw()
 
   local sample = self:_sample()
   if not sample or not sample.radius or sample.radius <= 0 then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "no projection: " .. tostring(self._sampleWhy or "the sample is unusable")
     self:ReleaseVisuals()
     return
   end
   local host = self:EnsureHost()
   if not host or not self.drawer then
+    self._lastQueued = 0
+    self._proj = nil
     self._why = "no overlay host (CreateFrame failed)"
     self:ReleaseVisuals()
     return
   end
+  local key = projectionKey(self.points, sample)
+  if key and key == self._projKey and self._proj then
+    -- Reuse the pixels, but keep the stamp's clock in step with this tick
+    -- so a still redraw is still dated.
+    local tnow = nowTime()
+    if type(self._stamp) == "table" then
+      self._stamp.time = tnow
+    end
+    if type(self.drawer) == "table" and type(self.drawer.lastApplied) == "table" then
+      self.drawer.lastApplied.time = tnow
+    end
+    return
+  end
 
+  self._lastQueued = 0
+  self._proj = nil
   local buf = self._segBuf or {}
   self._segBuf = buf
   local count = 0
@@ -853,22 +897,12 @@ function M:_redraw()
   do
     local dpts = self._decorPts or {}
     self._decorPts = dpts
-    local dn = 0
-    local src = proj and proj.points
-    if type(src) == "table" then
-      for i = 1, #src do
-        local p = src[i]
-        if p and type(p.x) == "number" and type(p.y) == "number" then
-          dn = dn + 1
-          dpts[dn] = p
-        end
-      end
-    end
-    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
     ns.LineDraw.ApplyDecor(self, "styleDrawer", host, dpts, r, g, bCol, a, "yup", metrics)
   end
   self._lastQueued = count
   self._proj = proj
+  self._projKey = key
 
   -- ── t_86583cf2: THE STAMP. Captured here, once, at draw time ──────────────
   -- Every value below is what THIS draw used. The diag prints the stamp back
@@ -1023,10 +1057,10 @@ end
 --- the same dot machinery as the herb pass; its own drawer, host, colour and
 --- stamps, so neither layer can blank the other.
 function M:_redrawSkin()
-  self._skinQueued = 0
   self._skinWhy = nil
-  self._skinProj = nil
   if not self.skinPoints or #self.skinPoints < 2 then
+    self._skinQueued = 0
+    self._skinProj = nil
     self._skinWhy = "no skinning circle"
     self:ReleaseSkinVisuals()
     return
@@ -1057,7 +1091,17 @@ function M:_redrawSkin()
     self:ReleaseSkinVisuals(self._skinWhy)
     return
   end
+  local skinKey = projectionKey(self.skinPoints, sample)
+  if skinKey and skinKey == self._skinProjKey and self._skinProj then
+    local tnow = nowTime()
+    if type(self.skinDrawer) == "table" and type(self.skinDrawer.lastApplied) == "table" then
+      self.skinDrawer.lastApplied.time = tnow
+    end
+    return
+  end
 
+  self._skinQueued = 0
+  self._skinProj = nil
   local buf = self._skinBuf or {}
   self._skinBuf = buf
   local count = 0
@@ -1097,11 +1141,11 @@ function M:_redrawSkin()
     proj.segs[i] = entry
   end
 
-  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.1, 0.85, 0.35, 0.95 }
-  local r = tonumber(c[1]) or 0.1
-  local g = tonumber(c[2]) or 0.85
-  local bCol = tonumber(c[3]) or 0.35
-  local a = tonumber(c[4]) or 0.95
+  local c = self.skinColor or (ns.SkinRoute and ns.SkinRoute.COLOR) or { 0.78, 0.38, 0.16, 0.85 }
+  local r = tonumber(c[1]) or 0.78
+  local g = tonumber(c[2]) or 0.38
+  local bCol = tonumber(c[3]) or 0.16
+  local a = tonumber(c[4]) or 0.85
   local thickness = tonumber((self.skinRoute and self.skinRoute.width)
     or (ns.SkinRoute and ns.SkinRoute.WIDTH)) or 2
   if thickness <= 0 then thickness = 2 end
@@ -1118,22 +1162,12 @@ function M:_redrawSkin()
   do
     local dpts = self._skinDecorPts or {}
     self._skinDecorPts = dpts
-    local dn = 0
-    local src = proj and proj.points
-    if type(src) == "table" then
-      for i = 1, #src do
-        local p = src[i]
-        if p and type(p.x) == "number" and type(p.y) == "number" then
-          dn = dn + 1
-          dpts[dn] = p
-        end
-      end
-    end
-    for i = #dpts, dn + 1, -1 do dpts[i] = nil end
+    dpts = ns.PathGeom.PackProjected(proj and proj.points, dpts)
     ns.LineDraw.ApplyDecor(self, "skinStyleDrawer", host, dpts, r, g, bCol, a, "yup", metrics)
   end
   self._skinQueued = count
   self._skinProj = proj
+  self._skinProjKey = skinKey
   self._skinSample = sample
   if type(self.skinDrawer.lastApplied) == "table" then
     self.skinDrawer.lastApplied.time = nowTime()

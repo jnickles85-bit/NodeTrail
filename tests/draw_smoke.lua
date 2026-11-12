@@ -476,6 +476,12 @@ if mini[1] then
   near(y2, 0, "east end y")
   check(x2 > 5, "east end is to the right, got " .. tostring(x2))
 end
+local keptProj = ns.MinimapPath._proj
+local keptKey = ns.MinimapPath._projKey
+ns.MinimapPath:_redraw()
+check(ns.MinimapPath._proj == keptProj,
+  "unchanged route, zoom, rotation and position reuse the minimap projection")
+check(ns.MinimapPath._projKey == keptKey, "the projection key is stable when nothing moved")
 
 local farRoute = {
   mapID = 12,

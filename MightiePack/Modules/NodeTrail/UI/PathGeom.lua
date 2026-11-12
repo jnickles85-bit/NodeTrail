@@ -456,6 +456,36 @@ end
 --- the same units as the points. Chevrons are not placed within
 --- `spacing * 0.4` of either end, so they cannot sit on the start/end
 --- markers. Each entry is `{x, y, dx, dy}` with a unit direction.
+--- Copy a projected-point list into `out`, keeping a gap sentinel at
+--- every unprojected vertex so decorations do not shortcut across a hole.
+--- Reuses `out` slots; a gap is a table with `.gap = true` and no x/y.
+function G.PackProjected(src, out)
+  out = out or {}
+  local n = 0
+  if type(src) == "table" then
+    for i = 1, #src do
+      n = i
+      local p = src[i]
+      if p and type(p.x) == "number" and type(p.y) == "number" then
+        out[i] = p
+      else
+        local gap = out[i]
+        if type(gap) ~= "table" or not gap.gap then
+          gap = { gap = true }
+          out[i] = gap
+        else
+          gap.x, gap.y = nil, nil
+          gap.gap = true
+        end
+      end
+    end
+  end
+  for i = #out, n + 1, -1 do
+    out[i] = nil
+  end
+  return out, n
+end
+
 function G.PlaceChevrons(pts, spacing, out)
   out = out or {}
   local n = 0
