@@ -214,11 +214,30 @@ function H.Aggregate(cid)
     skin = {},
   }
   local row = type(bucket.creatures) == "table" and bucket.creatures[cid] or nil
-  if type(row) == "table" then
+  -- ONE authoritative count (t_f2571ca7). The recorder owns the fold contract:
+  -- its totals row is the history (it never evicts) and the ring is a lower
+  -- bound that may lift a row which missed a fold — one way only, so a skin
+  -- whose record has been evicted is never deleted from the count. The count is
+  -- asked for even when there is no row: records can exist without one.
+  -- Without the recorder (a partial load) the raw row is what the save says.
+  local R = H.Recorder()
+  local counts = nil
+  if type(R) == "table" and type(R.CreatureCounts) == "function" then
+    local ok, c = pcall(R.CreatureCounts, R, bucket, cid)
+    if ok and type(c) == "table" then counts = c end
+  end
+  if counts then
+    agg.records = counts.corpses or 0
+    agg.kills = counts.kills or 0
+    agg.skinned = counts.skinned or 0
+    agg.skinWindows = counts.skinWindows or 0
+  elseif type(row) == "table" then
     agg.records = tonumber(row.corpses) or 0
     agg.kills = tonumber(row.kills) or 0
     agg.skinned = tonumber(row.skinned) or 0
     agg.skinWindows = tonumber(row.skinWindows) or 0
+  end
+  if type(row) == "table" then
     for id, cell in pairs(type(row.skin) == "table" and row.skin or {}) do
       if type(cell) == "table" and type(cell.itemID) == "number" then
         agg.skin[#agg.skin + 1] = {
@@ -239,8 +258,11 @@ function H.Aggregate(cid)
     end
     sorted(agg.skin)
   end
-  H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d (totals)")
-    :format(cid, agg.records, agg.kills, agg.skinned, agg.skinWindows)
+  -- the diag says WHERE the number came from: the totals row is the answer, and
+  -- when the ring lifted it (a fold was missed) the line says so.
+  H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d (%s)")
+    :format(cid, agg.records, agg.kills, agg.skinned, agg.skinWindows,
+      counts and counts.behind and "totals lifted by its records" or "totals")
   return agg
 end
 
@@ -458,10 +480,15 @@ function H.Rows(cid, creatureName, agg)
     rows[#rows + 1] = { left = "no observations here yet" }
     return rows, nil
   end
-  -- 2) Skinnable — only when we KNOW. A client call that answers a boolean
-  -- wins; otherwise our own skin windows are the evidence, and no skin window
-  -- yet means we say nothing (five kills we never skinned is not evidence that
-  -- a creature is unskinnable).
+  -- 2) Skinnable — only the CLIENT may say the adjective (t_f2571ca7).
+  -- A boolean from the client wins outright. When the client does not answer
+  -- (nil — this client has no UnitIsSkinnable at all, which is the state a
+  -- corpse is always in) a recorded skin window is reported as exactly that:
+  -- a window we saw. It is NOT upgraded into "skinnable": a window proves a
+  -- window happened, not that the creature can be skinned, and on an ooze
+  -- (live report: "Sap Beast", Stonetalon) it is proof the window was
+  -- mis-attributed. No window and no answer still says nothing at all —
+  -- five kills we never skinned is not evidence of anything.
   local flag = H.SkinFlag("mouseover")
   if flag == true then
     rows[#rows + 1] = { left = "skinnable" }
@@ -469,7 +496,7 @@ function H.Rows(cid, creatureName, agg)
     rows[#rows + 1] = { left = "not skinnable" }
   elseif agg.skinWindows > 0 then
     rows[#rows + 1] = {
-      left = "skinnable · skin windows recorded: " .. tostring(agg.skinWindows),
+      left = "skin windows recorded: " .. tostring(agg.skinWindows),
     }
   end
   -- 3) what skinning gave — the denominator is the corpses we SKINNED. This is
