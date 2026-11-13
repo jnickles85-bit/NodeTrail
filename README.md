@@ -36,13 +36,14 @@ registers `/touchstone`, `/sf`, and `/statforge` on one handler, and `/ts`,
 
 | Command | Description |
 |---------|-------------|
-| `/mp` or `/mp options` or `/mp config` | Open the pack options panel |
+| `/mp` or `/mp options` or `/mp config` | Open the MightiePack window on its **Pack Settings** tab |
 | `/mp status` | Print pack version, interface, client build, and module on/off state |
 | `/mp bug` | Open the bug report popup (no upload — copy and paste into Discord) |
 | `/mp idea [area]` | Open the idea popup (optional area: nodetrail, touchstone, skinning, general) |
 | `/mp skindiag` **(diag)** | Toggle the skinning event-capture probe |
 | `/mp skindiag dump` **(diag)** | Print the captured skinning steps to chat |
 | `/mp skindiag copy` **(diag)** | Open a compact, copyable dump in the bug-report popup |
+| `/nt` (no argument) | Open the MightiePack window on its **Herbs** tab |
 | `/nt help` | Print NodeTrail help (only while NodeTrail is enabled) |
 | `/nt start` | Draw the herb density route for the current zone |
 | `/nt stop` | Clear the herb route |
@@ -61,13 +62,13 @@ registers `/touchstone`, `/sf`, and `/statforge` on one handler, and `/ts`,
 | `/nt skin [on\|off\|status]` | Corpse-skinning recorder (on by default); an explicit off survives `/reload` |
 | `/nt ttdiag` **(diag)** | Item-name resolver failures (ids that could not be named, and which lookups failed) |
 | `/nt linetest [use auto\|line\|rotate\|texcoord\|dots]` **(diag)** | Measure which line primitive this client actually keeps, pin it, and redraw |
-| `/touchstone` (aliases `/sf`, `/statforge`) | Toggle the Touchstone window |
+| `/touchstone` (aliases `/sf`, `/statforge`) | Open the MightiePack window on its **Touchstone** tab |
 | `/touchstone options` | Open Touchstone on the Settings tab |
 | `/touchstone diag` or `diagnostics` **(diag)** | Open the Touchstone diagnostics panel |
 | `/touchstone doctor` **(diag)** | Print the diagnostics report and open the panel |
 | `/touchstone probe` **(diag)** | Run the deep probe into SavedVariables |
 | `/touchstone stats <itemlink>` **(diag)** | Print this client's `C_Item.GetItemStats` pairs for a pasted link |
-| `/ts` (aliases `/up`, `/upgrade`, `/chestadvice`) | Open the Touchstone window |
+| `/ts` (aliases `/up`, `/upgrade`, `/chestadvice`) | Open the MightiePack window on its **Touchstone** tab |
 | `/ts help` | Print the advisor command list |
 | `/ts scale <0.5-1.5>` | Window scale (also the Settings slider; saved across `/reload`) |
 | `/up role <melee\|spell\|clear>` | Record the focus role for a hybrid class |
@@ -143,6 +144,11 @@ MightiePack/Modules/Touchstone/Core.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/Verdict.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/marker.tga
+MightiePack/Window.lua
+MightiePack/Window/Common.lua
+MightiePack/Window/Herbs.lua
+MightiePack/Window/Skinning.lua
+MightiePack/Window/TouchstoneTab.lua
 ```
 
 Also shipped in the zip (not listed above): `CHANGELOG.md` and `LICENSE`.
@@ -217,7 +223,7 @@ are de-duplicated before recording. `/mp skindiag` toggles the capture,
 compact dump in a copyable popup.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 72 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 77 specs:
 
 - `tests/alchemy_skill_gate_spec.lua`
 - `tests/beast_profession_gate_spec.lua`
@@ -291,3 +297,6 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 72 specs:
 - `tests/touchstone_weights_spec.lua`
 - `tests/ttdiag_minimal_spec.lua`
 - `tests/umbrella_spec.lua`
+- `tests/window_settings_build_spec.lua`
+- `tests/window_tab_clicks_spec.lua`
+- `tests/window_tabs_spec.lua`

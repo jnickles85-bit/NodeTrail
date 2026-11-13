@@ -54,3 +54,8 @@ Modules/Touchstone/Integration.lua
 Modules/Touchstone/Core.lua
 BugReport.lua
 Options.lua
+Window.lua
+Window/Common.lua
+Window/Herbs.lua
+Window/Skinning.lua
+Window/TouchstoneTab.lua

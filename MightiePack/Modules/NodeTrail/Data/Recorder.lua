@@ -472,17 +472,23 @@ end
 -- An older build may already have incremented
 -- db.total for the same picks, so total is raised only when it
 -- falls behind the sum of mapTotals.
--- Marks that gate the t == aggT / aggTN skip (and the pre-#29
--- backfill) are those on records at or after capT, or untimed. A
--- crash stamp left only on a trailing t < capT rollback pick must
--- not disable skippedAt / aggTN, or history at the watermark is
--- double-counted.
+--- Marks that gate the t == aggT / aggTN skip (and the pre-#29
+--- backfill) are those on records at or after capT. A
+--- crash stamp left only on a trailing t < capT rollback pick must
+--- not disable skippedAt / aggTN, or history at the watermark is
+--- double-counted.
+---
+--- An UNTIMED mark is neither: a record with no `t` carries no
+--- evidence about the cap at all, so it must not disable the
+--- backfill (card t_a5de2f16 review 1). Treating it as "beyond the
+--- cap" reopened the t == aggT re-apply the backfill exists to
+--- prevent, and a 3-pick save came back as 5.
 local function anyAggFolded(list, capT)
   for i = 1, #list do
     local rec = list[i]
     if type(rec) == "table" and rec.aggFolded == true then
       local t = recTime(rec)
-      if not capT or not t or t >= capT then
+      if t and (not capT or t >= capT) then
         return true
       end
     end
@@ -588,6 +594,31 @@ local function foldNewRawIntoAggregates(db, mapID, list)
   if uncounted < 0 then uncounted = 0 end
   local reachedWM = false
   local rollbackApplied = 0
+  -- Identity of the picks already above this point in list order, built only
+  -- when the first appended-older pick is met (most loads never build it).
+  -- A downgrade can re-attach its copies at the END of the list instead of the
+  -- front; the front re-attach is idempotent because the watermark skips it,
+  -- and an append is idempotent because the very same pick is already in the
+  -- counted prefix. Without this the 3-pick save came back as 5
+  -- (card t_a5de2f16 review 2).
+  local seenKeys, keysBuilt = nil, 0
+  local function pickKey(rec, t)
+    if not t then return nil end
+    return tostring(t) .. "|" .. tostring(rec.x) .. "|" .. tostring(rec.y)
+  end
+  local function ensureKeys(upto)
+    if not seenKeys then seenKeys = {} end
+    if upto > keysBuilt then
+      for i = keysBuilt + 1, upto do
+        local r = list[i]
+        if type(r) == "table" then
+          local k = pickKey(r, recTime(r))
+          if k then seenKeys[k] = true end
+        end
+      end
+      keysBuilt = upto
+    end
+  end
 
   for i = 1, #list do
     local rec = list[i]
@@ -608,7 +639,14 @@ local function foldNewRawIntoAggregates(db, mapID, list)
           skippedAt = skippedAt + 1
           rec.aggFolded = true
         elseif t and t < aggT0 then
-          if rollbackApplied < uncounted then
+          -- An appended pick that is the SAME pick as one already above it in
+          -- list order is a re-attach, already counted in mapTotals: stamp it
+          -- and move on, exactly as the watermark does for the front copies.
+          ensureKeys(i - 1)
+          local key = pickKey(rec, t)
+          if key and seenKeys[key] then
+            rec.aggFolded = true
+          elseif rollbackApplied < uncounted then
             R.ApplyRecordToHerbStats(db.stats, rec)
             db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
             added = added + 1

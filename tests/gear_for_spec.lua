@@ -819,15 +819,19 @@ end
 local boxes = pkg.optionsBoxes
 check(type(boxes) == "table", "optionsBoxes exists after Options.lua")
 
--- Widgets are created in syncCheckboxes, which runs on panel OnShow.
-if _G.MightiePackOptionsPanel and _G.MightiePackOptionsPanel.scripts
-    and _G.MightiePackOptionsPanel.scripts.OnShow then
-  -- Touchstone on so the Gear-for row is shown and NodeTrail re-anchors.
-  if type(pkg.SetModuleEnabled) == "function" then
-    pcall(pkg.SetModuleEnabled, "Touchstone", true)
-  end
-  enabledMods.Touchstone = true
-  pcall(_G.MightiePackOptionsPanel.scripts.OnShow, _G.MightiePackOptionsPanel)
+-- Widgets are created in syncCheckboxes, which runs on the panel's OnShow.
+-- Card t_ea66cd84 (AC-N5): this spec used to invoke the panel's OnShow script
+-- BY HAND, which is how a build that never fires in the client kept a green
+-- suite. Call the build's own named path instead — the same function the client
+-- reaches from OnShow and from the window's tab activation.
+if type(pkg.SetModuleEnabled) == "function" then
+  pcall(pkg.SetModuleEnabled, "Touchstone", true)
+end
+enabledMods.Touchstone = true
+check(type(pkg.SyncOptionsRows) == "function",
+  "the Pack Settings build is reachable through one named path (pkg.SyncOptionsRows)")
+if type(pkg.SyncOptionsRows) == "function" then
+  pcall(pkg.SyncOptionsRows)
 end
 if boxes and boxes.Touchstone and boxes.Touchstone.SetChecked then
   boxes.Touchstone:SetChecked(true)
