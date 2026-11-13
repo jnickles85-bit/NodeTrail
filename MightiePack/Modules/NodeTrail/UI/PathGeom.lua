@@ -748,10 +748,18 @@ function G.ClipItems(items, n, clip, out)
     return out, 0
   end
   local pad = type(clip) == "table" and tonumber(clip.pad) or 0
+  local padFor = type(clip) == "table" and clip.padFor
   for i = 1, n do
     local it = items[i]
+    local itemPad = pad
+    if type(padFor) == "function" then
+      local ok, p = pcall(padFor, it)
+      if ok and tonumber(p) then
+        itemPad = tonumber(p)
+      end
+    end
     if type(it) == "table" and type(it.x) == "number" and type(it.y) == "number"
-      and G.InsideClip(it.x, it.y, clip, pad) then
+      and G.InsideClip(it.x, it.y, clip, itemPad) then
       kept = kept + 1
       out[kept] = it
     end

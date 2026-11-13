@@ -943,6 +943,75 @@ check(mixNew.folded[MAP_A].aggT == 4000 and mixNew.folded[MAP_A].aggTN == 1,
     .. tostring(mixNew.folded[MAP_A].aggT) .. ", aggTN="
     .. tostring(mixNew.folded[MAP_A].aggTN) .. ")")
 
+-- 11m. A pick appended after a clock rollback (t < aggT) still reaches
+-- mapTotals, without re-counting historical picks below the watermark
+-- or double-counting on a second load. hsFolded / aggFolded marks are
+-- not left on kept records.
+local rollback = {
+  schema = 2, total = 2,
+  maps = { [MAP_A] = {
+    peace(1000),
+    peace(2000),
+    peace(500),
+  } },
+  mapTotals = { [MAP_A] = 2 },
+  stats = { gathers = { [PEACE] = 2 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 2000, aggTN = 1, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = rollback }
+ns.GetHerbDB()
+check(rollback.mapTotals[MAP_A] == 3,
+  "11m: a t < aggT append after a clock rollback reaches mapTotals (got "
+    .. tostring(rollback.mapTotals[MAP_A]) .. ")")
+check(rollback.total == 3, "11m: lifetime total grows by the rollback pick only")
+check(rollback.folded[MAP_A].aggT == 2000 and rollback.folded[MAP_A].aggTN == 1,
+  "11m: the watermark stays at the earlier max time (aggT="
+    .. tostring(rollback.folded[MAP_A].aggT) .. ", aggTN="
+    .. tostring(rollback.folded[MAP_A].aggTN) .. ")")
+check(rollback.stats.gathers[PEACE] == 3,
+  "11m: drop-rate stats include the rollback pick (got "
+    .. tostring(rollback.stats.gathers[PEACE]) .. ")")
+check(rollback.maps[MAP_A][1].aggFolded == nil
+    and rollback.maps[MAP_A][2].aggFolded == nil
+    and rollback.maps[MAP_A][3].aggFolded == nil,
+  "11m: the fold does not leave aggFolded on kept records")
+ns.GetHerbDB()
+check(rollback.mapTotals[MAP_A] == 3 and rollback.total == 3,
+  "11m: a second load does not double-count the rollback pick (got mapT="
+    .. tostring(rollback.mapTotals[MAP_A]) .. ")")
+
+-- RecordHerb already counted the rollback pick in this session: fold
+-- must not add it again.
+local liveTime = 500
+local savedTime = time
+time = function() return liveTime end
+local live = {
+  schema = 2, total = 2,
+  maps = { [MAP_A] = { peace(1000), peace(2000) } },
+  mapTotals = { [MAP_A] = 2 },
+  stats = { gathers = { [PEACE] = 2 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 2000, aggTN = 1, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = live }
+ns.GetHerbDB()
+ns.RecordHerb(MAP_A, 0.2, 0.3, { { id = PEACE, name = "Peacebloom", count = 1 } })
+time = savedTime
+check(live.mapTotals[MAP_A] == 3,
+  "11m: RecordHerb counts a rollback pick in the session (got "
+    .. tostring(live.mapTotals[MAP_A]) .. ")")
+check(live.maps[MAP_A][#live.maps[MAP_A]].t == 500,
+  "11m: the recorded pick stored the rolled-back time")
+ns.GetHerbDB()
+check(live.mapTotals[MAP_A] == 3 and live.total == 3,
+  "11m: fold does not double-count a rollback pick RecordHerb already applied (got mapT="
+    .. tostring(live.mapTotals[MAP_A]) .. ")")
+check(live.maps[MAP_A][1].hsFolded == nil
+    and live.maps[MAP_A][2].hsFolded == nil
+    and live.maps[MAP_A][3].hsFolded == nil,
+  "11m: RecordHerb plus fold do not leave hsFolded on kept records")
+
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
   os.exit(1)

@@ -232,6 +232,16 @@ local function numberMethod(obj, method)
   if not ok then
     return nil
   end
+  -- canaccessvalue, when present, is the client's "this value is safe
+  -- to read" check (the same guard readPoint uses). A false answer
+  -- means a secret or blocked field; drop it rather than treat it as
+  -- a measured size or coordinate.
+  if type(canaccessvalue) == "function" then
+    local aok, ar = pcall(canaccessvalue, value)
+    if aok and ar == false then
+      return nil
+    end
+  end
   -- A secret-values client can wrap a number so that arithmetic on it is
   -- forbidden. If the API exists and flags this result, drop it rather
   -- than treat it as a measured size or coordinate.
@@ -1663,6 +1673,24 @@ function D.DecorClipPad(metrics)
   return decorSize(screen, scale)
 end
 
+--- Host-unit pad for one decoration kind. Chevrons use the arm reach;
+--- start/end and loop markers use half their painted square plus the
+--- dark rim, so a marker is not dropped by the larger chevron pad.
+function D.DecorClipPadFor(kind, metrics)
+  if kind == "loop" or kind == "start" or kind == "end" then
+    local scale = 1
+    if type(metrics) == "table" and tonumber(metrics.scale) and metrics.scale > 0 then
+      scale = metrics.scale
+    end
+    local core = DECOR_MARK
+    if kind == "loop" then
+      core = DECOR_MARK + DECOR_LOOP_GROW
+    end
+    return decorSize(core * 0.5 + DECOR_RIM, scale)
+  end
+  return D.DecorClipPad(metrics)
+end
+
 --- A filled square painted with the same sequence as paintRotate:
 --- WHITE8X8, vertex colour, OVERLAY at a valid sublevel (default 7).
 --- Size setters + a centre point when the client kept them; two-corner
@@ -1935,7 +1963,19 @@ function D.ApplyDecor(holder, field, host, pts, r, g, b, a, space, metrics, clip
     spec.shape, spec.x, spec.y, spec.r = clip.shape, clip.x, clip.y, clip.r
     spec.left, spec.top, spec.right, spec.bottom = clip.left, clip.top, clip.right, clip.bottom
     spec.contain = clip.contain and true or false
-    spec.pad = tonumber(clip.pad) or D.DecorClipPad(metrics)
+    -- An explicit clip.pad is used for every kind (tests, callers that
+    -- already computed one pad). Otherwise each item uses its own
+    -- kind's pad so a start marker is not dropped by a chevron arm.
+    if tonumber(clip.pad) then
+      spec.pad = tonumber(clip.pad)
+      spec.padFor = nil
+    else
+      spec.pad = nil
+      local metricsForPad = metrics
+      spec.padFor = function(it)
+        return D.DecorClipPadFor(it and it.kind, metricsForPad)
+      end
+    end
     buf, n = G.ClipItems(buf, n, spec, holder._clipBuf)
   end
   D.DrawDecor(drawer, host, buf, n, r, g, b, a, space, metrics)

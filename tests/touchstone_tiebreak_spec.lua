@@ -287,6 +287,16 @@ check(vN2 == "UPGRADE",
   "a real Stamina gain still upgrades when Strength only has noise (got " .. tostring(vN2) .. ")")
 check(type(wN2) == "table" and wN2.decidedBy == "Stamina",
   "the pair is decided by Stamina, not the Strength crumb (got " .. tostring(wN2 and wN2.decidedBy) .. ")")
+-- The same floor applies to a capped-window rating (Hit, line ~5022).
+-- A crumb inside WEIGHT_EPSILON must not become an Upgrade.
+local vH, rH = V.orderVerdict(
+  { Hit = 10 + noise, Strength = 5, Stamina = 2, Armor = 100 },
+  { Hit = 10, Strength = 5, Stamina = 2, Armor = 100 },
+  RET_SPEC)
+check(vH == "NOT_UPGRADE",
+  "a capped Hit crumb inside WEIGHT_EPSILON is not an Upgrade (got " .. tostring(vH) .. ")")
+check(type(rH) == "string" and rH:find("no change", 1, true),
+  "a capped Hit crumb is treated as no change (got " .. tostring(rH) .. ")")
 
 -- ---- 1i. Holy and Protection are their own Wowhead order-only profiles ----
 local PAL = V.WEIGHTS.PALADIN

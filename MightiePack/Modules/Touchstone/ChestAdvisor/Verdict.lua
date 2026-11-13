@@ -5019,7 +5019,7 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 					local delta, status = Verdict.clampedWindowDelta(
 						candStat, wornStat, current, cap, after,
 						scale, unit)
-					if delta ~= 0 then
+					if ranksAsDifferent(delta) then
 						local label = capLabel(tier, status)
 						if delta > 0 then
 							note("upgrade", label, { word }, nil)

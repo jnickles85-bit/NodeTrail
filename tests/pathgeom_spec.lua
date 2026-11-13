@@ -173,6 +173,33 @@ do
     check(G.InsideClip(kept[i].x, kept[i].y, rect),
       "7: kept decor item " .. i .. " is inside the rect")
   end
+
+  -- Per-kind pads: a start marker may sit closer to the contain edge than
+  -- a chevron, because its painted square is smaller than a chevron arm.
+  local r = 100
+  local chevPad, markPad = 8, 3
+  local clipKinds = {
+    shape = "circle", x = 0, y = 0, r = r, contain = true,
+    padFor = function(it)
+      if it.kind == "start" or it.kind == "end" or it.kind == "loop" then
+        return markPad
+      end
+      return chevPad
+    end,
+  }
+  local nearEdge = r - 5 -- inside for pad 3, outside for pad 8
+  local mixed = {
+    { kind = "start", x = nearEdge, y = 0 },
+    { kind = "chevron", x = nearEdge, y = 0, dx = 1, dy = 0 },
+  }
+  kept, kn = G.ClipItems(mixed, 2, clipKinds)
+  check(kn == 1 and kept[1].kind == "start",
+    "7: a start marker inside its own pad is kept when a chevron at the same point is dropped (got kn="
+      .. tostring(kn) .. ", kind=" .. tostring(kept[1] and kept[1].kind) .. ")")
+  check(G.InsideClip(nearEdge, 0, { shape = "circle", x = 0, y = 0, r = r, pad = markPad, contain = true }),
+    "7: sanity: the marker pad still sits inside the circle")
+  check(not G.InsideClip(nearEdge, 0, { shape = "circle", x = 0, y = 0, r = r, pad = chevPad, contain = true }),
+    "7: sanity: the chevron pad crosses the circle")
 end
 
 if failed > 0 then

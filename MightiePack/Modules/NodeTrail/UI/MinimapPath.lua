@@ -500,6 +500,11 @@ local function decorClip(sample)
   return { shape = "rect", left = -hw, top = -hh, right = hw, bottom = hh, contain = true }
 end
 
+-- Exported so specs can drive the same clip ApplyDecor uses, including
+-- SQUARE contain and the host scale used to size decoration pads.
+M.DecorClip = decorClip
+M.HostCanvasScale = hostCanvasScale
+
 function M:ViewRadiusYards()
   return viewRadiusYards()
 end
