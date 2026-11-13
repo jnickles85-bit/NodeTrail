@@ -58,6 +58,15 @@ local COLOR = {
   text = { 0.88, 0.88, 0.88 },
   muted = { 0.60, 0.60, 0.60 },
   tabOn = { 0.95, 0.85, 0.55 },
+  -- Minimal tab affordance (card t_ea66cd84, AC-N4). The strip's real design
+  -- belongs to the reshape card; this is only enough that the row reads as
+  -- clickable: a faint plate, a brighter plate on hover, and the current tab's
+  -- plate picked out. Values are deliberately close to the pack's own surfaces.
+  tabOff = { 0.10, 0.10, 0.12, 0.85 },
+  tabHover = { 0.17, 0.17, 0.21, 0.95 },
+  tabActive = { 0.20, 0.18, 0.12, 0.95 },
+  tabEdge = { 0.35, 0.30, 0.18, 0.55 },
+  tabEdgeHover = { 0.95, 0.85, 0.55, 0.85 },
 }
 
 local function call(obj, name, ...)
@@ -131,6 +140,33 @@ function W.SavePosition()
 end
 
 -- ── Frame ─────────────────────────────────────────────────────────────────
+-- What a tab's plate looks like: hovered, current, or neither. One helper so
+-- the hover script and the state repaint can never disagree (AC-N4).
+local function tabColors(id, hover)
+  if hover then return COLOR.tabHover, COLOR.tabEdgeHover end
+  if id == W.current then return COLOR.tabActive, COLOR.tabEdge end
+  return COLOR.tabOff, COLOR.tabEdge
+end
+
+--- Paint one tab: its label colour, its plate, and its button state.
+function W.PaintTab(id)
+  local btn = W.tabButtons and W.tabButtons[id]
+  if type(btn) ~= "table" then return false end
+  if type(btn.label) == "table" then
+    local c = (id == W.current) and COLOR.tabOn or COLOR.muted
+    call(btn.label, "SetTextColor", c[1], c[2], c[3])
+  end
+  if type(btn.SetBackdropColor) == "function" then
+    local bg, edge = tabColors(id, btn._hover == true)
+    call(btn, "SetBackdropColor", bg[1], bg[2], bg[3], bg[4])
+    call(btn, "SetBackdropBorderColor", edge[1], edge[2], edge[3], edge[4])
+  end
+  if type(btn.SetButtonState) == "function" then
+    pcall(btn.SetButtonState, btn, (id == W.current) and "PUSHED" or "NORMAL", true)
+  end
+  return true
+end
+
 function W._Ensure()
   if type(W.frame) == "table" then return W.frame end
   if type(CreateFrame) ~= "function" then
@@ -152,7 +188,13 @@ function W._Ensure()
   call(f, "SetToplevel", true)
   if type(f.SetBackdrop) == "function" then
     call(f, "SetBackdrop", {
-      bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+      -- AC-N7 (card t_ea66cd84): the classic path
+      -- `Interface\DialogFrame\UI-DialogBox-Background` does NOT resolve on the
+      -- owner's client — the fill painted nothing while the border still drew,
+      -- so the window interior was see-through over live terrain. The owner
+      -- proved `Interface\Buttons\WHITE8X8` resolves there and goes opaque, and
+      -- SetBackdropColor tints it, so COLOR.bg still decides the colour.
+      bgFile = "Interface\\Buttons\\WHITE8X8",
       edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
       tile = true, tileSize = 32, edgeSize = 32,
       insets = { left = 8, right = 8, top = 8, bottom = 8 },
@@ -228,17 +270,47 @@ function W._Ensure()
   W.tabButtons = {}
   local x = 0
   for _, id in ipairs(W.TABS) do
-    local btn = newFrame("Button", nil, strip)
+    -- Card t_ea66cd84. Two changes to the row, both minimal on purpose:
+    --   * `BackdropTemplate` + a plate and a hover tint, so the row reads as
+    --     clickable instead of as plain text (AC-N4). The real strip design
+    --     belongs to the reshape card t_2d2c37b0;
+    --   * a frame level above every sibling in this window, so nothing the
+    --     window creates — the hosts, the title bar, anything added later —
+    --     can draw over the row and take its clicks. A sibling created after
+    --     the strip sits at the same level as the strip and would otherwise be
+    --     able to cover the row if any of those rects ever moved up.
+    local btn = newFrame("Button", nil, strip, "BackdropTemplate") or newFrame("Button", nil, strip)
     call(btn, "SetSize", 150, W.TABS_HEIGHT - 4)
     call(btn, "SetPoint", "LEFT", strip, "LEFT", x, 0)
     x = x + 156
     call(btn, "EnableMouse", true)
+    if type(btn.SetBackdrop) == "function" then
+      call(btn, "SetBackdrop", {
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        tile = false, edgeSize = 1,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+      })
+    end
+    local okLevel, stripLevel = call(strip, "GetFrameLevel")
+    if okLevel and type(stripLevel) == "number" then
+      call(btn, "SetFrameLevel", stripLevel + 5)
+    end
     local fs = newFontString(btn, "GameFontNormal")
     if type(fs) == "table" then
       call(fs, "SetPoint", "CENTER", btn, "CENTER", 0, 0)
       call(fs, "SetText", W.TAB_LABELS[id])
     end
     btn.label = fs
+    btn._hover = false
+    call(btn, "SetScript", "OnEnter", function()
+      btn._hover = true
+      W.PaintTab(id)
+    end)
+    call(btn, "SetScript", "OnLeave", function()
+      btn._hover = false
+      W.PaintTab(id)
+    end)
     call(btn, "SetScript", "OnClick", function() W.SelectTab(id) end)
     W.tabButtons[id] = btn
   end
@@ -288,16 +360,7 @@ end
 
 local function paintTabs()
   for _, id in ipairs(W.TABS) do
-    local btn = W.tabButtons and W.tabButtons[id]
-    if type(btn) == "table" then
-      if type(btn.label) == "table" then
-        local c = (id == W.current) and COLOR.tabOn or COLOR.muted
-        call(btn.label, "SetTextColor", c[1], c[2], c[3])
-      end
-      if type(btn.SetButtonState) == "function" then
-        pcall(btn.SetButtonState, btn, (id == W.current) and "PUSHED" or "NORMAL", true)
-      end
-    end
+    W.PaintTab(id)
   end
 end
 
@@ -364,6 +427,22 @@ function W.IsOn(tab)
 end
 
 -- ── The options panel becomes the Pack Settings tab ───────────────────────
+--- Build the Pack Settings rows. One named path, called from the tab's own
+--- activation AND from the panel's OnShow (card t_ea66cd84, AC-N3).
+---
+--- Why activation has to do it: a frame created by CreateFrame is BORN SHOWN,
+--- so the birth OnShow is already spent before this tab can ever be opened, and
+--- `panel:Show()` on an already-shown frame fires nothing. On its own, OnShow
+--- can therefore never build the rows — which is why the client showed the
+--- load-time widgets and none of the module rows.
+local function buildSettings()
+  if type(pkg.SyncOptionsRows) ~= "function" then return false end
+  local ok, err = pcall(pkg.SyncOptionsRows)
+  W._settingsBuildError = ok and nil or tostring(err)
+  return ok
+end
+W.BuildSettings = buildSettings
+
 --- Reparent Options.lua's panel into the settings host. Idempotent: the
 --- Settings canvas can reparent it (a player opening AddOns > MightiePack
 --- still gets the same panel), and every open of this window claims it back.
@@ -372,12 +451,19 @@ function W.AttachSettings()
   local panel = pkg.optionsPanel
   if type(host) ~= "table" or type(panel) ~= "table" then return false end
   local okParent, parent = call(panel, "GetParent")
-  if okParent and parent == host and W._settingsHosted then return true end
-  call(panel, "SetParent", host)
-  call(panel, "ClearAllPoints")
-  call(panel, "SetAllPoints", host)
+  local hosted = okParent and parent == host and W._settingsHosted
+  if not hosted then
+    call(panel, "SetParent", host)
+    call(panel, "ClearAllPoints")
+    call(panel, "SetAllPoints", host)
+    W._settingsHosted = true
+  end
+  -- Show on EVERY activation, not only on the reparent. The Settings canvas
+  -- hides the panel when the player leaves AddOns; returning early left it
+  -- hidden inside a shown host, so the tab stayed blank for the rest of the
+  -- session (AC-N2).
   call(panel, "Show")
-  W._settingsHosted = true
+  buildSettings()
   return true
 end
 

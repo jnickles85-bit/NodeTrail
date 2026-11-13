@@ -929,10 +929,19 @@ ideaButton:SetScript("OnLeave", function()
   GameTooltip:Hide()
 end)
 
-panel:SetScript("OnShow", function()
+--- The Pack Settings build: the one named path (card t_ea66cd84, AC-N3).
+-- Called from this panel's own OnShow AND from the window's tab activation.
+-- The activation call is the one that matters: a frame is BORN SHOWN, so the
+-- birth OnShow is spent before the tab can ever be opened, and `Show()` on an
+-- already-shown frame fires nothing. OnShow alone could never build these rows.
+function pkg.SyncOptionsRows()
   syncCheckboxes()
   syncRecipesBlock()
   relayoutLowerSections()
+end
+
+panel:SetScript("OnShow", function()
+  pkg.SyncOptionsRows()
 end)
 
 relayoutLowerSections()

@@ -73,8 +73,21 @@ local function newFrame(kind, name, parent, template)
   function f:GetWidth() return self.width end
   function f:GetHeight() return self.height end
   function f:SetAllPoints(rel) self._allPoints = rel or self.parent end
-  function f:Show() self.shown = true end
-  function f:Hide() self.shown = false end
+  function f:Show()
+    -- Card t_ea66cd84 (AC-N5): the client's own rule. A frame is BORN shown, so
+    -- Show() on an already-shown frame is a no-op that fires nothing; OnShow
+    -- fires only on a false -> true transition of THIS frame's own flag.
+    if self.shown == true then return end
+    self.shown = true
+    local fn = self.scripts and self.scripts.OnShow
+    if type(fn) == "function" then pcall(fn, self) end
+  end
+  function f:Hide()
+    if self.shown ~= true then return end
+    self.shown = false
+    local fn = self.scripts and self.scripts.OnHide
+    if type(fn) == "function" then pcall(fn, self) end
+  end
   function f:IsShown() return self.shown == true end
   function f:IsVisible() return self.shown == true end
   function f:EnableMouse() end

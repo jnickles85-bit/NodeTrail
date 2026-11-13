@@ -361,7 +361,11 @@ local function ensureCopyPopup(key, opts)
   end
   if type(frame.SetBackdrop) == "function" then
     pcall(frame.SetBackdrop, frame, {
-      bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+      -- AC-N7 (card t_ea66cd84): the same unresolved path the main window had.
+      -- On the owner's client UI-DialogBox-Background paints nothing, so this
+      -- popup was see-through too. WHITE8X8 resolves there and is tinted by
+      -- SetBackdropColor below.
+      bgFile = "Interface\\Buttons\\WHITE8X8",
       edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
       tile = true, tileSize = 32, edgeSize = 32,
       insets = { left = 8, right = 8, top = 8, bottom = 8 },

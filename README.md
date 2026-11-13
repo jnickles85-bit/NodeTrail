@@ -223,7 +223,7 @@ are de-duplicated before recording. `/mp skindiag` toggles the capture,
 compact dump in a copyable popup.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 72 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 77 specs:
 
 - `tests/alchemy_skill_gate_spec.lua`
 - `tests/beast_profession_gate_spec.lua`
@@ -297,3 +297,6 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 72 specs:
 - `tests/touchstone_weights_spec.lua`
 - `tests/ttdiag_minimal_spec.lua`
 - `tests/umbrella_spec.lua`
+- `tests/window_settings_build_spec.lua`
+- `tests/window_tab_clicks_spec.lua`
+- `tests/window_tabs_spec.lua`
