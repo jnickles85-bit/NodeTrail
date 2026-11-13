@@ -155,6 +155,13 @@ for _, id in ipairs(W.TABS) do
         .. tostring(owner and (owner.Name or owner.kind) or "nothing")
         .. "; chain: " .. tostring(chain) .. ")")
     check(btn:IsMouseEnabled(), "the " .. id .. " tab button is mouse-enabled")
+    -- The row must never be locked. A locked button ignores mouse-driven state
+    -- changes, and `SetButtonState(state, true)` locked every tab at once —
+    -- the only mechanism in the code that is consistent with all four buttons
+    -- being dead instead of one.
+    check(not btn.buttonStateLock,
+      "the " .. id .. " tab button's state is not locked (buttonStateLock="
+        .. tostring(btn.buttonStateLock) .. ")")
   end
 end
 

@@ -162,7 +162,14 @@ function W.PaintTab(id)
     call(btn, "SetBackdropBorderColor", edge[1], edge[2], edge[3], edge[4])
   end
   if type(btn.SetButtonState) == "function" then
-    pcall(btn.SetButtonState, btn, (id == W.current) and "PUSHED" or "NORMAL", true)
+    -- No lock. `SetButtonState(state, true)` was passed here, which locks the
+    -- button's state on EVERY tab — the current one to PUSHED and the other
+    -- three to NORMAL. A locked button ignores mouse-driven state changes, and
+    -- this was the one thing in the code that applied to all four buttons at
+    -- once, i.e. consistent with the whole row being dead rather than one tab.
+    -- The plate colour (painted above) is what distinguishes current from the
+    -- rest, so the lock bought nothing.
+    pcall(btn.SetButtonState, btn, (id == W.current) and "PUSHED" or "NORMAL")
   end
   return true
 end
