@@ -191,6 +191,8 @@ end
 time = function() return 1700000000 end
 GetTime = function() return 0 end
 GetLocale = function() return "enUS" end
+GetUnitName = function() return "Testchar" end
+GetRealmName = function() return "Testrealm" end
 GetBuildInfo = function() return "1", "15", "0", "16001", "x" end
 IsAddOnLoaded = function() return false end
 UnitExists = function() return false end
@@ -234,7 +236,17 @@ NodeTrailDB = {
     stats = { gathers = { [2447] = 2 }, co = {}, names = { [2447] = "Peacebloom" } },
     hotspots = {}, folded = {},
   },
-  skinning = { enabled = true },
+  skinning = { enabled = true, schema = 2, chars = {
+    ["Testchar-Testrealm"] = {
+      schema = 2, records = {}, order = {}, unclassified = {}, hotspots = {},
+      unpositionedEvicted = {},
+      creatures = { [1234] = {
+        corpses = 3, kills = 4, skinned = 3, skinWindows = 3,
+        skin = { [2934] = { itemID = 2934, count = 6, seen = 3, name = "Ruined Leather Scraps" } },
+      } },
+      counts = { kills = 4, corpseWindows = 3, skinWindows = 3, skinCasts = 3, unattributedWindows = 1 },
+    },
+  } },
   route = { autoRefresh = true },
 }
 StatForgeDB = { ui = { scale = 1 } }
@@ -501,6 +513,33 @@ check(type(accounting) == "table" and type(accounting:GetText()) == "string"
   and #accounting:GetText() > 0,
   "the Skinning tab prints the probe's accounting line (got "
     .. tostring(accounting and accounting:GetText()) .. ")")
+check(type(accounting) == "table" and accounting:GetText():find("kills=4", 1, true) ~= nil,
+  "the accounting line carries the character's own kills (got "
+    .. tostring(accounting and accounting:GetText()) .. ")")
+local slist, sdetail = ST.widgets.list, ST.widgets.detail
+check(type(slist) == "table" and slist.Count() == 1,
+  "the beast list has the one creature the store knows (got " .. tostring(slist and slist.Count()) .. ")")
+check(type(slist) == "table" and slist.entries[1].text:find("skinned 3", 1, true) ~= nil,
+  "the beast row shows skinned-vs-killed counts (got "
+    .. tostring(slist and slist.entries[1] and slist.entries[1].text) .. ")")
+check(type(sdetail) == "table" and #sdetail.rows > 0,
+  "the beast detail has rows from SkinHints.Rows (got "
+    .. tostring(sdetail and #sdetail.rows) .. ")")
+if type(sdetail) == "table" and #sdetail.rows > 0 then
+  local joined = {}
+  for i = 1, #sdetail.rows do
+    local row = sdetail.rows[i]
+    if type(row.left) == "table" then joined[#joined + 1] = row.left:GetText() end
+  end
+  local text = table.concat(joined, " | ")
+  check(text:find("skinned: 3", 1, true) ~= nil,
+    "the beast detail says how many were skinned (got " .. text .. ")")
+  check(text:find("Ruined Leather Scraps", 1, true) ~= nil,
+    "the beast detail lists what skinning gave (got " .. text .. ")")
+end
+-- Opening the tab must not have written a bucket for a character that has none.
+check(type(NodeTrailDB.skinning.chars["Testchar-Testrealm"]) == "table",
+  "the store read is read-only: no bucket was created for a character that had one")
 
 
 -- ── 6. the combat rule: UIParent is never touched ───────────────────────

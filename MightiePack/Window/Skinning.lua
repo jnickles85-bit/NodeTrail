@@ -37,13 +37,26 @@ local function skinning()
   return type(pkg.Skinning) == "table" and pkg.Skinning or nil
 end
 
---- The per-character store, read without creating it.
+--- The per-character store, read WITHOUT creating one. Opening a tab must not
+--- write a bucket into a character that has never skinned anything (the same
+--- rule SkinHints.Bucket follows for the tooltip). The recorder writes
+--- straight into the character bucket, so reading it shows the live counts;
+--- when the sub-option is off there is only the session buffer.
 local function store()
   local sk = skinning()
-  local R = sk and sk.Record
+  local R = sk and sk.Recorder
   if type(R) ~= "table" then return nil end
-  local ok, s = pcall(R.Store, R)
-  if ok and type(s) == "table" then return s end
+  local db = rawget(_G, "NodeTrailDB")
+  local chars = type(db) == "table" and type(db.skinning) == "table" and db.skinning.chars
+  local key = nil
+  if type(R.CharKey) == "function" then
+    local ok, k = pcall(R.CharKey, R)
+    if ok and type(k) == "string" then key = k end
+  end
+  if type(chars) == "table" and key and type(chars[key]) == "table" then
+    return chars[key]
+  end
+  if type(R.session) == "table" then return R.session end
   return nil
 end
 
@@ -52,7 +65,7 @@ end
 --- ring is capped at 100 entries, which is why the NAMES are read from it and
 --- the COUNTS are not).
 local function nameOf(s, cid)
-  local R = skinning() and skinning().Record
+  local R = skinning() and skinning().Recorder
   local recs = type(s) == "table" and type(s.records) == "table" and s.records or {}
   local order = type(s) == "table" and type(s.order) == "table" and s.order or {}
   for i = #order, 1, -1 do
@@ -116,7 +129,7 @@ end
 
 local function accountingText()
   local sk = skinning()
-  local R = sk and sk.Record
+  local R = sk and sk.Recorder
   local s = store()
   if type(R) ~= "table" or type(s) ~= "table" or type(R.AccountingLine) ~= "function" then
     return "accounting unavailable"
