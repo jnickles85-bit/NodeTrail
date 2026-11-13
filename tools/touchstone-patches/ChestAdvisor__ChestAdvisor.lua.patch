@@ -375,7 +375,7 @@
  	local vs = nil
  	if type(row.wornLink) == "string" then
  		vs = " vs " .. itemNameOf(row.wornLink)
-@@ -1286,6 +1594,29 @@
+@@ -1286,6 +1594,36 @@
  		profile = " [" .. row.profile .. "]"
  	end
  	local word, head
@@ -395,6 +395,13 @@
 +		else
 +			head = "decided by " .. row.decidedBy .. (vs or "") .. (profile or "")
 +		end
++		-- Conservative Pareto Trade-offs name both sides in the word
++		-- ("Trade-off: +Intellect vs −Strength, −Stamina") and keep the
++		-- decided-by line in the head, so a screenshot stays diagnosable.
++		if (row.verdict == TRADE_OFF_VERDICT or row.verdict == "TRADE_OFF")
++			and type(row.tradeOffText) == "string" and row.tradeOffText ~= "" then
++			word = row.tradeOffText
++		end
 +		if type(row.caveat) == "string" and row.caveat ~= "" then
 +			head = head .. " — " .. row.caveat
 +		end
@@ -405,7 +412,7 @@
  	if type(row.tiebreak) == "string" and row.tiebreak ~= "" then
  		-- Card t_c4911603: the damage total was tied and the profile's RANKED
  		-- tiebreaker decided. The line is deliberately a different sentence from
-@@ -1308,6 +1639,7 @@
+@@ -1308,6 +1646,7 @@
  			else word = TOOLTIP_UI.words.NO_CHANGE end
  		end
  	end
@@ -413,17 +420,18 @@
  	local detail = nil
  	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
  		and Verdict and type(Verdict.statTable) == "function"
-@@ -2889,6 +3221,9 @@
+@@ -2889,6 +3228,10 @@
  		if type(weighted) == "table" then
  			row.weighted = weighted.total
  			row.profile = weighted.profile
 +			row.decidedBy = weighted.decidedBy
 +			row.orderOutcome = weighted.orderOutcome
 +			row.caveat = weighted.caveat
++			row.tradeOffText = weighted.tradeOffText
  			-- Card t_c4911603: nil on every ordinary outcome; the signed
  			-- ranked deltas when the tiebreaker decided, so the line can say
  			-- "tiebreaker (...)" instead of "weighted 0".
-@@ -5506,10 +5841,22 @@
+@@ -5506,10 +5849,22 @@
  	-- B17 (card t_6696b35a): defer the scan while the client is in combat.
  	-- type() == "function" (not a bare `and` call) so this guard cannot be
  	-- the same text as the toast hold below — that hold is a different
@@ -450,17 +458,18 @@
  		ChestAdvisor._scanDeferred = true
  		return ChestAdvisor.__verdicts or {}
  	end
-@@ -5997,6 +6344,9 @@
+@@ -5997,6 +6352,10 @@
  							-- not come from the weights (a weapon row, a decline).
  							weighted = w2 and w2.total or nil,
  							profile = w2 and w2.profile or nil,
 +							decidedBy = w2 and w2.decidedBy or nil,
 +							orderOutcome = w2 and w2.orderOutcome or nil,
 +							caveat = w2 and w2.caveat or nil,
++							tradeOffText = w2 and w2.tradeOffText or nil,
  							-- Card t_c4911603: the signed ranked deltas when a
  							-- tiebreaker decided the row, nil otherwise (same
  							-- two-scalar economy as `weighted`/`profile`: one
-@@ -6528,6 +6878,7 @@
+@@ -6528,6 +6887,7 @@
  		.. "  A green arrow marks an upgrade. An amber square marks a trade-off (better on some stats, worse on others). On the character sheet the arrow means a bag item is an upgrade for that slot.\n"
  		.. "  /up role <r>   record the focus role for a hybrid class (melee|spell; the client spec read is used automatically when unset)\n"
  		.. "  /up role clear clear the recorded role for this class\n"
@@ -468,7 +477,7 @@
  		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
  		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
  		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real path\n"
-@@ -6537,7 +6888,7 @@
+@@ -6537,7 +6897,7 @@
  		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
  		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
  		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
@@ -477,7 +486,7 @@
  		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
  		.. "  /up log clear  empty the disagreement log\n"
  		.. "  /up rescan     re-scan your bags now — the marks are drawn from a fresh read (an upgrade, a trade-off, or no mark)\n"
-@@ -6586,6 +6937,56 @@
+@@ -6586,6 +6946,56 @@
  	return false, "usage: /up role <melee|spell|clear>"
  end
  
@@ -534,7 +543,7 @@
  -- /up toast <on|off> — persist the notification setting on the EXISTING
  -- per-character store (AC-E). A missing key reads as ON (toastIsEnabled treats
  -- anything but an explicit `false` as enabled), so an existing character with no
-@@ -6758,13 +7159,18 @@
+@@ -6758,13 +7168,18 @@
  -- has exactly one place its values are spelled, and it returns one summary. The
  -- four writers' own confirmations are discarded on purpose: their writes are the
  -- point, the line below is what the player sees.
@@ -554,7 +563,7 @@
  end
  
  -- /ts scale <0.5-1.5> — the window scale the Settings slider also writes.
-@@ -7408,6 +7814,8 @@
+@@ -7408,6 +7823,8 @@
  	local ok, out
  	if subword == "role" then
  		ok, out = cmdRole(trimmed)
