@@ -1005,6 +1005,161 @@ do
   _G.issecretvalue = savedSecret
 end
 
+-- numberMethod also drops a value canaccessvalue rejects.
+do
+  local parent = makeFrame(nil)
+  local tex = parent:CreateTexture()
+  function tex:GetWidth() return 64 end
+  function tex:GetHeight() return 8 end
+  function tex:GetRotation() return 0.35 end
+  function tex:SetRotation(a) self.rotation = a end
+  function tex:SetWidth(w) self.width = w end
+  function tex:SetHeight(h) self.height = h end
+  local savedAccess = _G.canaccessvalue
+  local savedSecret = _G.issecretvalue
+  _G.issecretvalue = nil
+  _G.canaccessvalue = function(v) return v ~= 64 end
+  local rot = L.RotateProof(tex)
+  check(rot.took ~= true, "RotateProof does not use a GetWidth canaccessvalue rejected (took="
+    .. tostring(rot.took) .. ")")
+  _G.canaccessvalue = function() return true end
+  tex:SetWidth(64)
+  tex:SetHeight(8)
+  rot = L.RotateProof(tex)
+  check(rot.took == true, "RotateProof takes when canaccessvalue exists but is clear")
+  _G.canaccessvalue = savedAccess
+  _G.issecretvalue = savedSecret
+end
+
+-- readPoint drops a blocked point name, and a blocked offset, via canaccessvalue.
+do
+  local parent = makeFrame(nil)
+  function parent:CreateLine()
+    local line = makeFrame(self)
+    line.start = { "TOPLEFT", parent, "TOPLEFT", 0, 0 }
+    line.stop = { "TOPLEFT", parent, "TOPLEFT", 64, -64 }
+    function line:SetStartPoint(point, rel, relPoint, x, y)
+      self.start = { point, rel, relPoint, x, y }
+    end
+    function line:SetEndPoint(point, rel, relPoint, x, y)
+      self.stop = { point, rel, relPoint, x, y }
+    end
+    function line:GetStartPoint()
+      local p = self.start
+      return p[1], p[2], p[3], p[4], p[5]
+    end
+    function line:GetEndPoint()
+      local p = self.stop
+      return p[1], p[2], p[3], p[4], p[5]
+    end
+    function line:GetWidth() return 64 end
+    function line:GetHeight() return 64 end
+    return line
+  end
+  local savedAccess = _G.canaccessvalue
+  _G.canaccessvalue = function(v) return v ~= "TOPLEFT" end
+  local proof = L.LineProof(parent)
+  check(proof.took ~= true and proof.start == nil,
+    "readPoint drops the whole point when canaccessvalue rejects the point name")
+  _G.canaccessvalue = function(v) return v ~= 64 end
+  proof = L.LineProof(parent)
+  check(type(proof.stop) == "table" and proof.stop.x == nil,
+    "readPoint drops a blocked offset and keeps the point name (stop.x="
+      .. tostring(proof.stop and proof.stop.x) .. ")")
+  _G.canaccessvalue = function() return true end
+  proof = L.LineProof(parent)
+  check(proof.took == true, "LineProof takes when canaccessvalue exists but is clear")
+  _G.canaccessvalue = savedAccess
+end
+
+-- decorClip itself (not a hand-built clip table) marks contain and
+-- drives ClipItems; SQUARE uses the square inset; hostCanvasScale
+-- prefers GetEffectiveScale.
+do
+  local MP = ns.MinimapPath
+  check(type(MP.DecorClip) == "function", "DecorClip is exported")
+  check(type(MP.HostCanvasScale) == "function", "HostCanvasScale is exported")
+  local round = MP.DecorClip({ shape = "ROUND", halfW = 100, halfH = 100 })
+  check(type(round) == "table" and round.shape == "circle" and round.contain == true
+      and math.abs((round.r or 0) - 96) < 1e-9,
+    "decorClip ROUND is a contain circle at the 0.96 inset (r="
+      .. tostring(round and round.r) .. ")")
+  local armPad = L.DecorClipPad({ scale = 1 })
+  local edge = { { kind = "chevron", x = (round.r or 0) - 2, y = 0, dx = 1, dy = 0 } }
+  local clip = {
+    shape = round.shape, x = round.x, y = round.y, r = round.r,
+    contain = round.contain, pad = armPad,
+  }
+  local _, dropped = ns.PathGeom.ClipItems(edge, 1, clip)
+  check(dropped == 0,
+    "a chevron whose pad crosses the ROUND inset from decorClip is dropped (got "
+      .. tostring(dropped) .. ")")
+
+  local square = MP.DecorClip({ shape = "SQUARE", halfW = 100, halfH = 80 })
+  check(type(square) == "table" and square.shape == "rect" and square.contain == true
+      and math.abs((square.right or 0) - 99) < 1e-9
+      and math.abs((square.top or 0) + 79.2) < 1e-9,
+    "decorClip SQUARE is a contain rect at the 0.99 inset (right="
+      .. tostring(square and square.right) .. ", top="
+      .. tostring(square and square.top) .. ")")
+  local sqClip = {
+    shape = square.shape, left = square.left, top = square.top,
+    right = square.right, bottom = square.bottom, contain = square.contain,
+    pad = armPad,
+  }
+  local sqEdge = { { kind = "chevron", x = (square.right or 0) - 2, y = 0, dx = 1, dy = 0 } }
+  _, dropped = ns.PathGeom.ClipItems(sqEdge, 1, sqClip)
+  check(dropped == 0,
+    "a chevron whose pad crosses the SQUARE inset from decorClip is dropped (got "
+      .. tostring(dropped) .. ")")
+  local inside = { { kind = "chevron", x = 0, y = 0, dx = 1, dy = 0 } }
+  local kept, kn = ns.PathGeom.ClipItems(inside, 1, sqClip)
+  check(kn == 1, "a chevron at the SQUARE centre is kept")
+
+  local corner = MP.DecorClip({ shape = "CORNER", halfW = 100, halfH = 80 })
+  check(type(corner) == "table" and corner.shape == "rect" and corner.contain == true
+      and math.abs((corner.right or 0) - 99) < 1e-9
+      and math.abs((corner.top or 0) + 79.2) < 1e-9,
+    "decorClip CORNER is a contain rect at the 0.99 inset (right="
+      .. tostring(corner and corner.right) .. ", top="
+      .. tostring(corner and corner.top) .. ")")
+  local crClip = {
+    shape = corner.shape, left = corner.left, top = corner.top,
+    right = corner.right, bottom = corner.bottom, contain = corner.contain,
+    pad = armPad,
+  }
+  local crEdge = { { kind = "chevron", x = (corner.right or 0) - 2, y = 0, dx = 1, dy = 0 } }
+  _, dropped = ns.PathGeom.ClipItems(crEdge, 1, crClip)
+  check(dropped == 0,
+    "a chevron whose pad crosses the CORNER inset from decorClip is dropped (got "
+      .. tostring(dropped) .. ")")
+  local crInside = { { kind = "chevron", x = 0, y = 0, dx = 1, dy = 0 } }
+  local crKept, crKn = ns.PathGeom.ClipItems(crInside, 1, crClip)
+  check(crKn == 1, "a chevron at the CORNER centre is kept")
+
+  local host = { GetEffectiveScale = function() return 1.25 end, GetScale = function() return 0.5 end }
+  check(math.abs(MP.HostCanvasScale(host) - 1.25) < 1e-9,
+    "hostCanvasScale prefers GetEffectiveScale")
+  host = { GetScale = function() return 0.75 end }
+  check(math.abs(MP.HostCanvasScale(host) - 0.75) < 1e-9,
+    "hostCanvasScale falls back to GetScale")
+  check(MP.HostCanvasScale({}) == 1, "hostCanvasScale is 1 when no scale API exists")
+  check(MP.HostCanvasScale(nil) == 1, "hostCanvasScale is 1 for a missing host")
+
+  local chev = L.DecorClipPad({ scale = 1 })
+  local mark = L.DecorClipPadFor("start", { scale = 1 })
+  local loop = L.DecorClipPadFor("loop", { scale = 1 })
+  check(type(chev) == "number" and type(mark) == "number" and mark < chev,
+    "a start/end marker pad is smaller than the chevron arm pad (mark="
+      .. tostring(mark) .. ", chev=" .. tostring(chev) .. ")")
+  check(type(loop) == "number" and loop > mark,
+    "the loop marker pad is larger than the start/end pad")
+  check(math.abs(mark - 2.25) < 1e-9,
+    "the start/end marker pad is (core + DECOR_RIM) * 0.5 (got " .. tostring(mark) .. ")")
+  check(math.abs(loop - 2.75) < 1e-9,
+    "the loop marker pad is (core + DECOR_RIM) * 0.5 (got " .. tostring(loop) .. ")")
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " draw smoke check(s) failed\n")
   os.exit(1)

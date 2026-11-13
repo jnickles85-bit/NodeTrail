@@ -1570,26 +1570,20 @@ function M:TryHookMap()
   -- redraw: the route follows the ground, it does not stay glued to the frame.
   -- Every hook here is best-effort; a client that fires none of them still
   -- redraws on WORLD_MAP_UPDATE and on the map's OnShow.
-  -- Canvas and map-frame size hooks do not need ScrollContainer. Install
-  -- them once. `_viewHooked` is reserved for the ScrollContainer hooks
-  -- and is only set when those hooks are actually installed, so a map
-  -- that is not ready yet can be retried on a later TryHookMap.
-  if not self._viewAuxHooked then
-    local views = {
-      { frame = getCanvas(mapFrame), events = { "OnSizeChanged" } },
-      { frame = mapFrame, events = { "OnSizeChanged" } },
-    }
-    local installed = false
-    for i = 1, #views do
-      local entry = views[i]
-      if entry.frame and isFn(entry.frame.HookScript) then
-        for j = 1, #entry.events do
-          pcall(entry.frame.HookScript, entry.frame, entry.events[j], function()
-            M:Redraw()
-          end)
-        end
-        installed = true
-      end
+  -- Canvas and map-frame size hooks do not need ScrollContainer.
+  -- `_viewHooked` is reserved for the ScrollContainer hooks and is
+  -- only set when those hooks are actually installed, so a map that
+  -- is not ready yet can be retried on a later TryHookMap.
+  -- `_viewAuxHooked` is the same gate for the canvas OnSizeChanged
+  -- hook: do not mark it when GetCanvas returns nil, or a later
+  -- TryHookMap would never install that hook. Map-frame size hooks
+  -- and hooksecurefunc hooks are one-shot on `_viewAuxBaseHooked`
+  -- so a retry does not stack them.
+  if not self._viewAuxBaseHooked then
+    if mapFrame and isFn(mapFrame.HookScript) then
+      pcall(mapFrame.HookScript, mapFrame, "OnSizeChanged", function()
+        M:Redraw()
+      end)
     end
     if isFn(hooksecurefunc) then
       pcall(hooksecurefunc, mapFrame, "SetZoom", function() M:Redraw() end)
@@ -1597,10 +1591,18 @@ function M:TryHookMap()
       pcall(hooksecurefunc, mapFrame, "SetCanvasScale", function() M:Redraw() end)
       pcall(hooksecurefunc, mapFrame, "OnCanvasPanChanged", function() M:Redraw() end)
       pcall(hooksecurefunc, mapFrame, "SetPanTargetOffset", function() M:Redraw() end)
-      installed = true
     end
-    if installed then
-      self._viewAuxHooked = true
+    self._viewAuxBaseHooked = true
+  end
+  if not self._viewAuxHooked then
+    local canvas = getCanvas(mapFrame)
+    if canvas and isFn(canvas.HookScript) then
+      local ok = pcall(canvas.HookScript, canvas, "OnSizeChanged", function()
+        M:Redraw()
+      end)
+      if ok then
+        self._viewAuxHooked = true
+      end
     end
   end
   if not self._viewHooked then

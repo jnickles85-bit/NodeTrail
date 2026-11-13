@@ -660,6 +660,43 @@ do
   check(hooks >= 1, "11: ScrollContainer HookScript was called (got " .. tostring(hooks) .. ")")
 end
 
+-- ═══ 12. _viewAuxHooked waits until the canvas hook is installed ══════
+do
+  M._viewAuxHooked = false
+  M._viewAuxBaseHooked = false
+  local savedGet = WorldMapFrame.GetCanvas
+  function WorldMapFrame:GetCanvas() return nil end
+  M:TryHookMap()
+  check(M._viewAuxHooked ~= true,
+    "12: _viewAuxHooked stays unset when the canvas is nil")
+  check(M._viewAuxBaseHooked == true,
+    "12: map-frame hooks can still be installed once while the canvas is missing")
+  local canvasHooks = 0
+  local canvas = { HookScript = function(self, ev, fn)
+    canvasHooks = canvasHooks + 1
+    self.scripts = self.scripts or {}
+    self.scripts[ev] = fn
+  end }
+  local failCanvas = { HookScript = function()
+    error("HookScript failed")
+  end }
+  function WorldMapFrame:GetCanvas() return failCanvas end
+  M:TryHookMap()
+  check(M._viewAuxHooked ~= true,
+    "12: _viewAuxHooked stays unset when HookScript fails")
+
+  function WorldMapFrame:GetCanvas() return canvas end
+  M:TryHookMap()
+  check(M._viewAuxHooked == true,
+    "12: _viewAuxHooked is set only after the canvas hook is installed")
+  check(canvasHooks >= 1, "12: canvas HookScript was called (got " .. tostring(canvasHooks) .. ")")
+  M:TryHookMap()
+  check(canvasHooks == 1,
+    "12: a third TryHookMap does not install a second canvas hook (got "
+      .. tostring(canvasHooks) .. ")")
+  WorldMapFrame.GetCanvas = savedGet
+end
+
 if failed > 0 then
   io.stderr:write(failed .. " map frame projection check(s) failed\n")
   os.exit(1)

@@ -5019,7 +5019,7 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 					local delta, status = Verdict.clampedWindowDelta(
 						candStat, wornStat, current, cap, after,
 						scale, unit)
-					if delta ~= 0 then
+					if ranksAsDifferent(delta) then
 						local label = capLabel(tier, status)
 						if delta > 0 then
 							note("upgrade", label, { word }, nil)
@@ -5154,7 +5154,7 @@ function Verdict.tiebreakTotal(candStats, eqStats, profile)
 	local parts, deciding, dir = {}, nil, nil
 	for _, word in ipairs(ranked) do
 		local delta = (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
-		if delta ~= 0 then
+		if delta > (Verdict.WEIGHT_EPSILON or 0) or delta < -(Verdict.WEIGHT_EPSILON or 0) then
 			parts[#parts + 1] = { word = word, delta = delta }
 			if deciding == nil then
 				deciding = word
