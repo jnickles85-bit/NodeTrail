@@ -75,9 +75,11 @@ end
 -- use a watermark plus count (aggT / aggTN) for kept records, so
 -- SavedVariables do not grow a mark on every raw pick. Mid-loop
 -- crash stamps (rec.aggFolded) are only a first-pass retry aid:
--- if any record is marked, the pass uses only those marks, the
--- same way hotspot folding uses anyMarked. After a pass finishes,
--- the stamps are cleared. Fold idempotency for hotspots is a
+-- t < aggT is always skipped, and anyMarked only gates the
+-- t == aggT aggTN skip, so an unmarked older pick is not
+-- re-counted when a same-second neighbour is still marked.
+-- After a pass finishes, the stamps are cleared. Fold
+-- idempotency for hotspots is a
 -- per-record mark (rec.hsFolded = true), set as soon as a pick is
 -- folded, so a crash mid-loop, a second live trim, or two picks
 -- that share a timestamp cannot skip or double-count. When a
@@ -446,11 +448,11 @@ end
 -- aggregates. The first-pass and keep-list rule is the watermark
 -- plus count (aggT / aggTN): two picks that share a second both
 -- count, and a later load does not need a mark on every kept
--- record. rec.aggFolded is only a mid-loop crash stamp. If any
--- record is marked, the pass mirrors the hotspot anyMarked rule
--- and uses only those marks (so a sibling at t == aggT0 is not
--- swallowed because a marked neighbour was not counted toward
--- skippedAt). After the pass finishes, stamps are cleared. A
+-- record. rec.aggFolded is only a mid-loop crash stamp. t < aggT0
+-- is always skipped; anyMarked only gates the t == aggT0 aggTN
+-- branch, so a same-second sibling is still applied after a crash
+-- and an unmarked older pick is not re-counted. After the pass
+-- finishes, stamps are cleared. A
 -- pre-#29 schema-2 save has aggT but no aggTN and no marks; that
 -- is backfilled by treating t <= aggT as already counted. A
 -- noTN-only marker with aggT still 0 is the same idea: the kept
@@ -516,7 +518,8 @@ local function foldNewRawIntoAggregates(db, mapID, list)
   local added = 0
 
   -- Backfill a main / pre-#29 schema-2 save. Do this only when no
-  -- record is marked; a mid-loop crash uses the marks alone.
+  -- record is marked. A mid-loop crash still skips t < aggT0;
+  -- anyMarked only gates the t == aggT0 aggTN skip.
   if not anyMarked then
     if aggT0 > 0 and alreadyAt == 0 then
       alreadyAt = stampAtOrBelow(list, aggT0)
@@ -534,7 +537,7 @@ local function foldNewRawIntoAggregates(db, mapID, list)
     local rec = list[i]
     if type(rec) == "table" and rec.aggFolded ~= true then
       local t = recTime(rec)
-      if (not anyMarked) and t and t < aggT0 then
+      if t and t < aggT0 then
         rec.aggFolded = true
       elseif (not anyMarked) and t and t == aggT0 and skippedAt < alreadyAt then
         skippedAt = skippedAt + 1
@@ -560,7 +563,8 @@ local function foldNewRawIntoAggregates(db, mapID, list)
     end
   end
   -- Kept raw records do not need the stamp once the watermark is
-  -- current; leaving it would cost ~46 KB per full map.
+  -- current; leaving it would cost ~30 KB per full map (about
+  -- 15 bytes per record for 2,000 records).
   clearAggFolded(list)
 end
 

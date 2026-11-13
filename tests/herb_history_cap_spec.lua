@@ -43,6 +43,9 @@
 --      pre-#29 schema-2 save (aggT set, no aggTN or marks; or a
 --      noTN-only marker with aggT=0) is backfilled without
 --      re-counting totals, and kept records do not retain aggFolded.
+--      A partial-clear mix (unmarked t < aggT0 plus a marked
+--      same-second neighbour) skips the older pick and still
+--      applies the unmarked sibling and any newer pick.
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -882,6 +885,63 @@ check(notn.folded[MAP_A].aggT == 1010,
 check(notn.folded[MAP_A].aggTN == 1,
   "11k: aggTN counts the single pick at that max time (got "
     .. tostring(notn.folded[MAP_A].aggTN) .. ")")
+
+-- 11l. A partial-clear mix: an unmarked pick below the watermark
+-- plus a mid-loop mark on the first of two same-second picks.
+-- t < aggT0 must still be skipped when anyMarked is true; the
+-- unmarked sibling at t == aggT0 must still apply.
+local mix = {
+  schema = 2, total = 2,
+  maps = { [MAP_A] = {
+    peace(1000),
+    (function()
+      local rec = peace(2000)
+      rec.aggFolded = true
+      return rec
+    end)(),
+    peace(2000),
+  } },
+  mapTotals = { [MAP_A] = 2 },
+  stats = { gathers = { [PEACE] = 2 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 2000, aggTN = 1, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = mix }
+ns.GetHerbDB()
+check(mix.mapTotals[MAP_A] == 3,
+  "11l: partial-clear mix applies the unmarked sibling only (got "
+    .. tostring(mix.mapTotals[MAP_A]) .. ")")
+check(mix.total == 3, "11l: lifetime total grows by the sibling only")
+check(mix.folded[MAP_A].aggTN == 2,
+  "11l: aggTN includes the unmarked sibling (got " .. tostring(mix.folded[MAP_A].aggTN) .. ")")
+
+local mixNew = {
+  schema = 2, total = 2,
+  maps = { [MAP_A] = {
+    peace(1000),
+    (function()
+      local rec = peace(2000)
+      rec.aggFolded = true
+      return rec
+    end)(),
+    peace(2000),
+    peace(4000),
+  } },
+  mapTotals = { [MAP_A] = 2 },
+  stats = { gathers = { [PEACE] = 2 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 2000, aggTN = 1, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = mixNew }
+ns.GetHerbDB()
+check(mixNew.mapTotals[MAP_A] == 4,
+  "11l: the same mix plus a new t=4000 pick counts both new ones (got "
+    .. tostring(mixNew.mapTotals[MAP_A]) .. ")")
+check(mixNew.total == 4, "11l: lifetime total grows by the sibling and the new pick")
+check(mixNew.folded[MAP_A].aggT == 4000 and mixNew.folded[MAP_A].aggTN == 1,
+  "11l: the watermark advances to the new pick (aggT="
+    .. tostring(mixNew.folded[MAP_A].aggT) .. ", aggTN="
+    .. tostring(mixNew.folded[MAP_A].aggTN) .. ")")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
