@@ -264,6 +264,30 @@ check(type(rt) == "string" and rt:find("Spirit", 1, true) == nil
 check(type(wt) == "table" and wt.tradeOffText == "Trade-off: +Intellect vs −Strength, −Stamina",
   "detail.tradeOffText is the both-sides clause (got " .. tostring(wt and wt.tradeOffText) .. ")")
 
+-- ---- 1k. Ranked equality uses WEIGHT_EPSILON, not exact signedDelta ~= 0 --
+-- A crumb smaller than the named floor on the first ranked stat must
+-- not become an Upgrade. Without the floor, 5 + 0.1*eps ~= 5 and the
+-- pair would be decided by Strength.
+local noise = V.WEIGHT_EPSILON * 0.1
+local vN, rN, wN = V.orderVerdict(
+  { Strength = 5 + noise, Stamina = 2, Armor = 100 },
+  { Strength = 5, Stamina = 2, Armor = 100 },
+  RET_SPEC)
+check(vN == "NOT_UPGRADE",
+  "a ranked delta inside WEIGHT_EPSILON is not an Upgrade (got " .. tostring(vN) .. ")")
+check(type(rN) == "string" and rN:find("no change", 1, true),
+  "float noise is treated as no change (got " .. tostring(rN) .. ")")
+-- The same crumb must also be ignored when a later ranked stat really
+-- differs, so the first real difference (Stamina) still decides.
+local vN2, rN2, wN2 = V.orderVerdict(
+  { Strength = 5 + noise, Stamina = 3, Armor = 100 },
+  { Strength = 5, Stamina = 2, Armor = 100 },
+  RET_SPEC)
+check(vN2 == "UPGRADE",
+  "a real Stamina gain still upgrades when Strength only has noise (got " .. tostring(vN2) .. ")")
+check(type(wN2) == "table" and wN2.decidedBy == "Stamina",
+  "the pair is decided by Stamina, not the Strength crumb (got " .. tostring(wN2 and wN2.decidedBy) .. ")")
+
 -- ---- 1i. Holy and Protection are their own Wowhead order-only profiles ----
 local PAL = V.WEIGHTS.PALADIN
 check(PAL.holy and PAL.holy.kind == "order" and PAL.holy.w == nil

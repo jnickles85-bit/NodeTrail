@@ -4836,8 +4836,10 @@ end
 -- even if later ranked stats improve (the Ret cloak ruling). A gain on
 -- the first differing tier with a later ranked loss is a Trade-off.
 -- Unranked stats (Spirit, Armor on non-tank specs) still do not decide.
--- Intra-tier bundles and cap clamps are unchanged; only the early return
--- that ignored later ranked losses is gone.
+-- Ranked equality is |signedDelta| <= WEIGHT_EPSILON, so float noise
+-- cannot mint an Upgrade. Intra-tier bundles and cap clamps are
+-- unchanged; only the early return that ignored later ranked losses
+-- is gone.
 function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	if type(allow) ~= "function" then
 		allow = function(verdict, reason) return verdict, reason end
@@ -4900,6 +4902,14 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 		return (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
 	end
 
+	-- A ranked pair is equal when the difference is inside the same
+	-- named noise floor the weighted path uses. Exact ~= 0 would
+	-- treat float crumbs as a first-tier gain and print Upgrade.
+	local function ranksAsDifferent(delta)
+		local eps = Verdict.WEIGHT_EPSILON
+		return delta > eps or delta < -eps
+	end
+
 	local function isCapped(tier)
 		return type(tier.capPercent) == "number"
 			or type(tier.afterPercent) == "number"
@@ -4932,7 +4942,7 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 				-- skip
 			elseif tier.special == "dps_then_speed" then
 				local dpsDelta = signedDelta("WeaponDps")
-				if dpsDelta ~= 0 then
+				if ranksAsDifferent(dpsDelta) then
 					if dpsDelta > 0 then
 						note("upgrade", "Weapon DPS", { "WeaponDps" }, nil)
 					else
@@ -4940,7 +4950,7 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 					end
 				end
 				local spdDelta = signedDelta("WeaponSpeed")
-				if spdDelta ~= 0 then
+				if ranksAsDifferent(spdDelta) then
 					-- DPS is equal (or already noted); speed differs. The
 					-- source does not say whether fast or slow is better,
 					-- so do not rank it. Remember the note and continue.
@@ -5024,7 +5034,7 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 				local up, down = {}, {}
 				for _, word in ipairs(tier.stats) do
 					local delta = signedDelta(word)
-					if delta ~= 0 then
+					if ranksAsDifferent(delta) then
 						if delta > 0 then
 							up[#up + 1] = word
 						else
