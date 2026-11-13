@@ -38,7 +38,11 @@
 --      siblings also both count in aggregates (rec.aggFolded). A
 --      downgrade that re-attaches unmarked picks skips t < hsT0, and
 --      at t == hsT0 skips only the stored hsTN count, so an extra
---      same-second sibling still folds once.
+--      same-second sibling still folds once. A mid-loop aggregate
+--      crash still applies the unmarked same-second sibling. A
+--      pre-#29 schema-2 save (aggT set, no aggTN or marks; or a
+--      noTN-only marker with aggT=0) is backfilled without
+--      re-counting totals, and kept records do not retain aggFolded.
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -719,10 +723,10 @@ check(sameAgg.folded[MAP_A].aggT == 2000,
   "11h: aggT is the shared second (got " .. tostring(sameAgg.folded[MAP_A].aggT) .. ")")
 check(sameAgg.folded[MAP_A].aggTN == 2,
   "11h: aggTN counts both picks at that second (got " .. tostring(sameAgg.folded[MAP_A].aggTN) .. ")")
-check(sameAgg.maps[MAP_A][1].aggFolded == true
-    and sameAgg.maps[MAP_A][2].aggFolded == true
-    and sameAgg.maps[MAP_A][3].aggFolded == true,
-  "11h: every counted pick is marked aggFolded")
+check(sameAgg.maps[MAP_A][1].aggFolded == nil
+    and sameAgg.maps[MAP_A][2].aggFolded == nil
+    and sameAgg.maps[MAP_A][3].aggFolded == nil,
+  "11h: kept records do not keep aggFolded after the pass")
 
 local aggRestored = {
   { x = 0.10, y = 0.10, t = 1000,
@@ -742,7 +746,7 @@ check(sameAgg.mapTotals[MAP_A] == 4,
 check(sameAgg.total == 4, "11h: lifetime total grows by the extra sibling only")
 check(sameAgg.folded[MAP_A].aggTN == 3,
   "11h: aggTN includes the new sibling (got " .. tostring(sameAgg.folded[MAP_A].aggTN) .. ")")
-check(aggRestored[4].aggFolded == true, "11h: the new sibling is marked aggFolded")
+check(aggRestored[4].aggFolded == nil, "11h: the new sibling does not keep aggFolded")
 
 -- 11i. Unmarked re-attach fallback skips t < hsT0, and at t == hsT0
 -- skips only the stored hsTN count, so an extra same-second pick folds.
@@ -791,6 +795,93 @@ check(gridN(hsSib, MAP_A) == snapGridi + 1,
     .. tostring(gridN(hsSib, MAP_A)) .. ")")
 check(hsSib.folded[MAP_A].hsTN == 3,
   "11i: hsTN includes the new sibling (got " .. tostring(hsSib.folded[MAP_A].hsTN) .. ")")
+
+
+-- 11j. Mid-loop crash: the first same-second pick is already marked
+-- and counted in aggTN. The unmarked sibling must still apply; it
+-- must not be swallowed because the marked neighbour was not counted
+-- toward skippedAt.
+local crashAgg = {
+  schema = 2, total = 1,
+  maps = { [MAP_A] = {
+    { x = 0.10, y = 0.10, t = 2000, aggFolded = true,
+      items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+    { x = 0.11, y = 0.10, t = 2000,
+      items = { { id = PEACE, name = "Peacebloom", count = 1 } } },
+  } },
+  mapTotals = { [MAP_A] = 1 },
+  stats = { gathers = { [PEACE] = 1 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {}, folded = { [MAP_A] = { aggT = 2000, aggTN = 1, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = crashAgg }
+ns.GetHerbDB()
+check(crashAgg.mapTotals[MAP_A] == 2,
+  "11j: the unmarked same-second sibling is applied after a crash (got "
+    .. tostring(crashAgg.mapTotals[MAP_A]) .. ")")
+check(crashAgg.total == 2, "11j: lifetime total includes the sibling")
+check(crashAgg.folded[MAP_A].aggTN == 2,
+  "11j: aggTN includes both picks at t=2000 (got " .. tostring(crashAgg.folded[MAP_A].aggTN) .. ")")
+check(crashAgg.maps[MAP_A][1].aggFolded == nil
+    and crashAgg.maps[MAP_A][2].aggFolded == nil,
+  "11j: crash stamps are cleared once the pass finishes")
+
+-- 11k. A real f2f4da2-shaped schema-2 save: aggT set, no aggTN, no
+-- per-record marks. Two of the three picks share the newest second,
+-- so a t==aggT re-apply would bump mapTotals from 3 to 5. Also a
+-- noTN-only marker with aggT still 0 must not re-count the kept
+-- timed picks (mapTotals 50 to 60).
+local peace = function(t)
+  return {
+    x = 0.10, y = 0.10, t = t,
+    items = { { id = PEACE, name = "Peacebloom", count = 1 } },
+  }
+end
+local legacy = {
+  schema = 2, total = 3,
+  maps = { [MAP_A] = { peace(1000), peace(2000), peace(2000) } },
+  mapTotals = { [MAP_A] = 3 },
+  stats = { gathers = { [PEACE] = 3 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  -- f2f4da2 folded marker: aggT / hsT / n only.
+  folded = { [MAP_A] = { aggT = 2000, hsT = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = legacy }
+ns.GetHerbDB()
+check(legacy.mapTotals[MAP_A] == 3,
+  "11k: a pre-#29 schema-2 save does not double-count t==aggT (got "
+    .. tostring(legacy.mapTotals[MAP_A]) .. ")")
+check(legacy.total == 3, "11k: lifetime total stays 3")
+check(legacy.folded[MAP_A].aggTN == 2,
+  "11k: aggTN is backfilled for the two picks at aggT (got "
+    .. tostring(legacy.folded[MAP_A].aggTN) .. ")")
+check(legacy.maps[MAP_A][1].aggFolded == nil
+    and legacy.maps[MAP_A][2].aggFolded == nil
+    and legacy.maps[MAP_A][3].aggFolded == nil,
+  "11k: the backfill does not leave aggFolded on kept records")
+
+local notn = {
+  schema = 2, total = 50,
+  maps = { [MAP_A] = {} },
+  mapTotals = { [MAP_A] = 50 },
+  stats = { gathers = { [PEACE] = 50 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 0, hsT = 0, n = 0, noTN = 40 } },
+}
+for i = 1, 10 do
+  notn.maps[MAP_A][i] = peace(1000 + i)
+end
+NodeTrailDB = { herbs = notn }
+ns.GetHerbDB()
+check(notn.mapTotals[MAP_A] == 50,
+  "11k: a noTN-only marker with aggT=0 does not re-count the kept list (got "
+    .. tostring(notn.mapTotals[MAP_A]) .. ")")
+check(notn.total == 50, "11k: lifetime total stays 50")
+check(notn.folded[MAP_A].aggT == 1010,
+  "11k: the watermark is lifted to the kept list's max time (got "
+    .. tostring(notn.folded[MAP_A].aggT) .. ")")
+check(notn.folded[MAP_A].aggTN == 1,
+  "11k: aggTN counts the single pick at that max time (got "
+    .. tostring(notn.folded[MAP_A].aggTN) .. ")")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")

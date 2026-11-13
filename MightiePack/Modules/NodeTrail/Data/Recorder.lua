@@ -68,23 +68,26 @@ end
 -- this build, which cannot know that shape. A non-numeric schema is
 -- treated as unknown and left alone.
 --
--- The per-map folded marker (db.folded[mapID] = {aggT, hsT, n}) is
--- the downgrade round-trip guard. An older build may reset the schema
--- stamp, re-attach previously trimmed raw picks, or append new ones
--- without updating mapTotals/stats. On the next upgrade, picks with
--- already-applied picks carry rec.aggFolded so two gathers in the
--- same second both count, and are not applied again. Fold
--- idempotency is a per-record mark (rec.hsFolded = true), set as
--- soon as a pick is folded, so a crash mid-loop, a second live
--- trim, or two picks that share a timestamp cannot skip or
--- double-count. When a downgrade re-attaches the trimmed prefix
--- without the mark, the evicted prefix has no hsFolded stamps:
--- unmarked picks with t < hsT were already folded, and at t ==
--- hsT only the first hsTN of them are treated as already folded
--- (further same-second siblings are new). A mid-loop retry has at
--- least one mark, so remaining same-second siblings are still
--- folded. Nothing is double-counted or dropped from lifetime
--- totals.
+-- The per-map folded marker (db.folded[mapID] = {aggT, aggTN, hsT,
+-- hsTN, n}) is the downgrade round-trip guard. An older build may
+-- reset the schema stamp, re-attach previously trimmed raw picks,
+-- or append new ones without updating mapTotals/stats. Aggregates
+-- use a watermark plus count (aggT / aggTN) for kept records, so
+-- SavedVariables do not grow a mark on every raw pick. Mid-loop
+-- crash stamps (rec.aggFolded) are only a first-pass retry aid:
+-- if any record is marked, the pass uses only those marks, the
+-- same way hotspot folding uses anyMarked. After a pass finishes,
+-- the stamps are cleared. Fold idempotency for hotspots is a
+-- per-record mark (rec.hsFolded = true), set as soon as a pick is
+-- folded, so a crash mid-loop, a second live trim, or two picks
+-- that share a timestamp cannot skip or double-count. When a
+-- downgrade re-attaches the trimmed prefix without the mark, the
+-- evicted prefix has no hsFolded stamps: unmarked picks with t <
+-- hsT were already folded, and at t == hsT only the first hsTN of
+-- them are treated as already folded (further same-second siblings
+-- are new). A mid-loop retry has at least one mark, so remaining
+-- same-second siblings are still folded. Nothing is double-counted
+-- or dropped from lifetime totals.
 R.MAX_SAMPLES_PER_MAP = 2000
 -- 2% of normalized map width (0..1). A map is at most 50×50 cells,
 -- so HOTSPOT_MAX_CELLS is the natural bound of the grid, not a trim.
@@ -440,28 +443,100 @@ function R.FoldHerbIntoHotspots(db, mapID, rec)
 end
 
 -- Apply raw picks that have not yet been counted into lifetime
--- aggregates. Idempotency is rec.aggFolded, so two picks that share
--- a second both count. aggT / aggTN are a downgrade fallback for
--- unmarked re-attached picks (t < aggT is already counted; at
--- t == aggT only the first aggTN are). An older build may already
--- have incremented db.total for the same picks, so total is raised
--- only when it falls behind the sum of mapTotals.
+-- aggregates. The first-pass and keep-list rule is the watermark
+-- plus count (aggT / aggTN): two picks that share a second both
+-- count, and a later load does not need a mark on every kept
+-- record. rec.aggFolded is only a mid-loop crash stamp. If any
+-- record is marked, the pass mirrors the hotspot anyMarked rule
+-- and uses only those marks (so a sibling at t == aggT0 is not
+-- swallowed because a marked neighbour was not counted toward
+-- skippedAt). After the pass finishes, stamps are cleared. A
+-- pre-#29 schema-2 save has aggT but no aggTN and no marks; that
+-- is backfilled by treating t <= aggT as already counted. A
+-- noTN-only marker with aggT still 0 is the same idea: the kept
+-- list is already in the totals, and the watermark is lifted to
+-- the list's max time. An older build may already have incremented
+-- db.total for the same picks, so total is raised only when it
+-- falls behind the sum of mapTotals.
+local function anyAggFolded(list)
+  for i = 1, #list do
+    local rec = list[i]
+    if type(rec) == "table" and rec.aggFolded == true then
+      return true
+    end
+  end
+  return false
+end
+
+local function clearAggFolded(list)
+  for i = 1, #list do
+    local rec = list[i]
+    if type(rec) == "table" then
+      rec.aggFolded = nil
+    end
+  end
+end
+
+local function hasLegacyAggMarker(f)
+  return (type(f.noTN) == "number" and f.noTN > 0)
+    or (type(f.n) == "number" and f.n > 0)
+    or (type(f.hsT) == "number" and f.hsT > 0)
+end
+
+local function stampAtOrBelow(list, capT)
+  local nAt = 0
+  for i = 1, #list do
+    local rec = list[i]
+    if type(rec) == "table" then
+      local t = recTime(rec)
+      if t and t <= capT then
+        rec.aggFolded = true
+        if t == capT then
+          nAt = nAt + 1
+        end
+      elseif capT == 0 then
+        -- Untimed-only list, or a noTN-only marker with no times:
+        -- every kept record was already counted.
+        rec.aggFolded = true
+      end
+    end
+  end
+  return nAt
+end
+
 local function foldNewRawIntoAggregates(db, mapID, list)
   if type(list) ~= "table" then return end
   if type(db.stats) ~= "table" then db.stats = emptyHerbStats() end
   if type(db.mapTotals) ~= "table" then db.mapTotals = {} end
   local f = foldedOf(db, mapID)
+  local anyMarked = anyAggFolded(list)
   local aggT0 = f.aggT
   local alreadyAt = f.aggTN or 0
   local skippedAt = 0
   local added = 0
+
+  -- Backfill a main / pre-#29 schema-2 save. Do this only when no
+  -- record is marked; a mid-loop crash uses the marks alone.
+  if not anyMarked then
+    if aggT0 > 0 and alreadyAt == 0 then
+      alreadyAt = stampAtOrBelow(list, aggT0)
+      f.aggTN = alreadyAt
+    elseif aggT0 == 0 and hasLegacyAggMarker(f) then
+      local maxT = maxListTime(list)
+      f.aggT = maxT
+      aggT0 = maxT
+      alreadyAt = stampAtOrBelow(list, maxT)
+      f.aggTN = alreadyAt
+    end
+  end
+
   for i = 1, #list do
     local rec = list[i]
     if type(rec) == "table" and rec.aggFolded ~= true then
       local t = recTime(rec)
-      if t and t < aggT0 then
+      if (not anyMarked) and t and t < aggT0 then
         rec.aggFolded = true
-      elseif t and t == aggT0 and skippedAt < alreadyAt then
+      elseif (not anyMarked) and t and t == aggT0 and skippedAt < alreadyAt then
         skippedAt = skippedAt + 1
         rec.aggFolded = true
       elseif t then
@@ -484,6 +559,9 @@ local function foldNewRawIntoAggregates(db, mapID, list)
       db.total = sum
     end
   end
+  -- Kept raw records do not need the stamp once the watermark is
+  -- current; leaving it would cost ~46 KB per full map.
+  clearAggFolded(list)
 end
 
 -- Fold evicted picks into hotspots, then replace the list. Returns
@@ -594,11 +672,8 @@ function ns.UpgradeHerbDB(db)
           if type(list) == "table" then
             for i = 1, #list do
               local rec = list[i]
-              if type(rec) == "table" then
-                rec.aggFolded = true
-                if recTime(rec) == f.aggT then
-                  nAt = nAt + 1
-                end
+              if type(rec) == "table" and recTime(rec) == f.aggT then
+                nAt = nAt + 1
               end
             end
           end
@@ -852,7 +927,6 @@ function ns.RecordHerb(mapID, x, y, items, nodeID)
   end
   R.ApplyRecordToHerbStats(db.stats, entry)
   local f = foldedOf(db, mapID)
-  entry.aggFolded = true
   local ts = recTime(entry)
   if ts and ts > f.aggT then
     f.aggT = ts
