@@ -144,6 +144,11 @@ MightiePack/Modules/Touchstone/Core.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/Verdict.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/marker.tga
+MightiePack/Window.lua
+MightiePack/Window/Common.lua
+MightiePack/Window/Herbs.lua
+MightiePack/Window/Skinning.lua
+MightiePack/Window/TouchstoneTab.lua
 ```
 
 Also shipped in the zip (not listed above): `CHANGELOG.md` and `LICENSE`.
