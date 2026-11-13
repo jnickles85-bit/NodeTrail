@@ -515,10 +515,10 @@ local function stampAtOrBelow(list, capT)
       if t and t >= capT then
         reachedWM = true
       end
-      if t and t < capT and reachedWM then
-        -- Trailing clock-rollback pick: do not stamp. The fold
-        -- loop applies it when it is not yet in mapTotals.
-      elseif t and t <= capT then
+      -- A trailing clock-rollback pick (t < capT after the
+      -- watermark in list order) is not stamped; the fold loop
+      -- applies it when it is not yet in mapTotals.
+      if t and t <= capT and not (t < capT and reachedWM) then
         rec.aggFolded = true
         if t == capT then
           nAt = nAt + 1
@@ -596,36 +596,38 @@ local function foldNewRawIntoAggregates(db, mapID, list)
       if t and t >= aggT0 then
         reachedWM = true
       end
-      if rec.aggFolded == true then
-        -- Already counted (backfill or mid-loop crash stamp).
-        -- reachedWM is still updated so a later trailing uncounted
-        -- t < aggT0 pick is a rollback append, not a historical
-        -- prefix skipped because the watermark records were stamped.
-      elseif t and t < aggT0 and not reachedWM then
-        rec.aggFolded = true
-      elseif (not anyMarked) and t and t == aggT0 and skippedAt < alreadyAt then
-        skippedAt = skippedAt + 1
-        rec.aggFolded = true
-      elseif t and t < aggT0 then
-        if rollbackApplied < uncounted then
+      -- Already-counted records (backfill or mid-loop crash stamp)
+      -- are not re-applied. reachedWM is still updated above so a
+      -- later trailing uncounted t < aggT0 pick is a rollback
+      -- append, not a historical prefix skipped because the
+      -- watermark records were stamped.
+      if rec.aggFolded ~= true then
+        if t and t < aggT0 and not reachedWM then
+          rec.aggFolded = true
+        elseif (not anyMarked) and t and t == aggT0 and skippedAt < alreadyAt then
+          skippedAt = skippedAt + 1
+          rec.aggFolded = true
+        elseif t and t < aggT0 then
+          if rollbackApplied < uncounted then
+            R.ApplyRecordToHerbStats(db.stats, rec)
+            db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
+            added = added + 1
+            rec.aggFolded = true
+            rollbackApplied = rollbackApplied + 1
+          else
+            rec.aggFolded = true
+          end
+        elseif t then
           R.ApplyRecordToHerbStats(db.stats, rec)
           db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
           added = added + 1
           rec.aggFolded = true
-          rollbackApplied = rollbackApplied + 1
-        else
-          rec.aggFolded = true
-        end
-      elseif t then
-        R.ApplyRecordToHerbStats(db.stats, rec)
-        db.mapTotals[mapID] = (db.mapTotals[mapID] or 0) + 1
-        added = added + 1
-        rec.aggFolded = true
-        if t > f.aggT then
-          f.aggT = t
-          f.aggTN = 1
-        elseif t == f.aggT then
-          f.aggTN = (f.aggTN or 0) + 1
+          if t > f.aggT then
+            f.aggT = t
+            f.aggTN = 1
+          elseif t == f.aggT then
+            f.aggTN = (f.aggTN or 0) + 1
+          end
         end
       end
     end
