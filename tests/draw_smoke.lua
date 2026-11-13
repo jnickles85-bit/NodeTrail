@@ -1116,6 +1116,27 @@ do
   local kept, kn = ns.PathGeom.ClipItems(inside, 1, sqClip)
   check(kn == 1, "a chevron at the SQUARE centre is kept")
 
+  local corner = MP.DecorClip({ shape = "CORNER", halfW = 100, halfH = 80 })
+  check(type(corner) == "table" and corner.shape == "rect" and corner.contain == true
+      and math.abs((corner.right or 0) - 99) < 1e-9
+      and math.abs((corner.top or 0) + 79.2) < 1e-9,
+    "decorClip CORNER is a contain rect at the 0.99 inset (right="
+      .. tostring(corner and corner.right) .. ", top="
+      .. tostring(corner and corner.top) .. ")")
+  local crClip = {
+    shape = corner.shape, left = corner.left, top = corner.top,
+    right = corner.right, bottom = corner.bottom, contain = corner.contain,
+    pad = armPad,
+  }
+  local crEdge = { { kind = "chevron", x = (corner.right or 0) - 2, y = 0, dx = 1, dy = 0 } }
+  _, dropped = ns.PathGeom.ClipItems(crEdge, 1, crClip)
+  check(dropped == 0,
+    "a chevron whose pad crosses the CORNER inset from decorClip is dropped (got "
+      .. tostring(dropped) .. ")")
+  local crInside = { { kind = "chevron", x = 0, y = 0, dx = 1, dy = 0 } }
+  local crKept, crKn = ns.PathGeom.ClipItems(crInside, 1, crClip)
+  check(crKn == 1, "a chevron at the CORNER centre is kept")
+
   local host = { GetEffectiveScale = function() return 1.25 end, GetScale = function() return 0.5 end }
   check(math.abs(MP.HostCanvasScale(host) - 1.25) < 1e-9,
     "hostCanvasScale prefers GetEffectiveScale")
@@ -1133,6 +1154,10 @@ do
       .. tostring(mark) .. ", chev=" .. tostring(chev) .. ")")
   check(type(loop) == "number" and loop > mark,
     "the loop marker pad is larger than the start/end pad")
+  check(math.abs(mark - 2.25) < 1e-9,
+    "the start/end marker pad is (core + DECOR_RIM) * 0.5 (got " .. tostring(mark) .. ")")
+  check(math.abs(loop - 2.75) < 1e-9,
+    "the loop marker pad is (core + DECOR_RIM) * 0.5 (got " .. tostring(loop) .. ")")
 end
 
 if failed > 0 then

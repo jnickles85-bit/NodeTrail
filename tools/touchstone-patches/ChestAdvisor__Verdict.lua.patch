@@ -1968,6 +1968,13 @@
  function Verdict.weightedTotal(candStats, eqStats, profile)
  	local weights = (type(profile) == "table") and profile.w or nil
  	if type(weights) ~= "table" then return nil end
+@@
+ 	for _, word in ipairs(ranked) do
+ 		local delta = (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
+-		if delta ~= 0 then
++		if delta > (Verdict.WEIGHT_EPSILON or 0) or delta < -(Verdict.WEIGHT_EPSILON or 0) then
+ 			parts[#parts + 1] = { word = word, delta = delta }
+ 			if deciding == nil then
 @@ -3590,9 +5173,15 @@
  -- The stored reason: the number the verdict came from, and the profile it came
  -- from, so a wrong profile is visible in the Upgrades tab and in /up diag

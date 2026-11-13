@@ -1674,8 +1674,8 @@ function D.DecorClipPad(metrics)
 end
 
 --- Host-unit pad for one decoration kind. Chevrons use the arm reach;
---- start/end and loop markers use half their painted square plus the
---- dark rim, so a marker is not dropped by the larger chevron pad.
+--- start/end and loop markers use half of (core + dark rim), so a
+--- marker is not dropped by the larger chevron pad.
 function D.DecorClipPadFor(kind, metrics)
   if kind == "loop" or kind == "start" or kind == "end" then
     local scale = 1
@@ -1686,7 +1686,7 @@ function D.DecorClipPadFor(kind, metrics)
     if kind == "loop" then
       core = DECOR_MARK + DECOR_LOOP_GROW
     end
-    return decorSize(core * 0.5 + DECOR_RIM, scale)
+    return decorSize((core + DECOR_RIM) * 0.5, scale)
   end
   return D.DecorClipPad(metrics)
 end

@@ -1597,10 +1597,12 @@ function M:TryHookMap()
   if not self._viewAuxHooked then
     local canvas = getCanvas(mapFrame)
     if canvas and isFn(canvas.HookScript) then
-      pcall(canvas.HookScript, canvas, "OnSizeChanged", function()
+      local ok = pcall(canvas.HookScript, canvas, "OnSizeChanged", function()
         M:Redraw()
       end)
-      self._viewAuxHooked = true
+      if ok then
+        self._viewAuxHooked = true
+      end
     end
   end
   if not self._viewHooked then

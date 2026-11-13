@@ -77,10 +77,13 @@ end
 -- crash stamps (rec.aggFolded) are only a first-pass retry aid:
 -- historical picks with t < aggT are skipped, and anyMarked only
 -- gates the t == aggT aggTN skip, so an unmarked older pick is not
--- re-counted when a same-second neighbour is still marked. A pick
--- appended after a clock rollback (t < aggT, at the end of the list)
--- is still folded into mapTotals when the list is longer than the
--- already-counted kept records; a second pass does not double-count.
+-- re-counted when a same-second neighbour is still marked. Only
+-- marks on records with t >= aggT (or untimed) count toward that
+-- gate, so a stamp left on a trailing rollback pick cannot disable
+-- skippedAt / aggTN and double-count history at the watermark. A
+-- pick appended after a clock rollback (t < aggT, at the end of the
+-- list) is still folded into mapTotals when the list is longer than
+-- the already-counted kept records; a second pass does not double-count.
 -- After a pass finishes, the stamps are cleared. Fold
 -- idempotency for hotspots is a
 -- per-record mark (rec.hsFolded = true), set as soon as a pick is
@@ -454,22 +457,34 @@ end
 -- record. rec.aggFolded is only a mid-loop crash stamp. Historical
 -- picks with t < aggT0 are skipped; anyMarked only gates the
 -- t == aggT0 aggTN branch, so a same-second sibling is still applied
--- after a crash and an unmarked older pick is not re-counted. A
--- trailing pick with t < aggT0 that is not yet in mapTotals (a
--- clock-rollback append) is still applied. After the pass finishes,
--- stamps are cleared. A
+-- after a crash and an unmarked older pick is not re-counted. Only
+-- marks on records with t >= aggT0 (or untimed) count toward
+-- anyMarked. A trailing pick with t < aggT0 that is not yet in
+-- mapTotals (a clock-rollback append) is still applied. After the
+-- pass finishes, stamps are cleared. A
 -- pre-#29 schema-2 save has aggT but no aggTN and no marks; that
--- is backfilled by treating t <= aggT as already counted. A
+-- is backfilled by treating t <= aggT as already counted, without
+-- stamping a trailing uncounted t < aggT pick that sits after the
+-- watermark in list order. A
 -- noTN-only marker with aggT still 0 is the same idea: the kept
 -- list is already in the totals, and the watermark is lifted to
--- the list's max time. An older build may already have incremented
+-- the list's max time, again without stamping a trailing rollback.
+-- An older build may already have incremented
 -- db.total for the same picks, so total is raised only when it
 -- falls behind the sum of mapTotals.
-local function anyAggFolded(list)
+-- Marks that gate the t == aggT / aggTN skip (and the pre-#29
+-- backfill) are those on records at or after capT, or untimed. A
+-- crash stamp left only on a trailing t < capT rollback pick must
+-- not disable skippedAt / aggTN, or history at the watermark is
+-- double-counted.
+local function anyAggFolded(list, capT)
   for i = 1, #list do
     local rec = list[i]
     if type(rec) == "table" and rec.aggFolded == true then
-      return true
+      local t = recTime(rec)
+      if not capT or not t or t >= capT then
+        return true
+      end
     end
   end
   return false
@@ -492,16 +507,23 @@ end
 
 local function stampAtOrBelow(list, capT)
   local nAt = 0
+  local reachedWM = false
   for i = 1, #list do
     local rec = list[i]
     if type(rec) == "table" then
       local t = recTime(rec)
-      if t and t <= capT then
+      if t and t >= capT then
+        reachedWM = true
+      end
+      if t and t < capT and reachedWM then
+        -- Trailing clock-rollback pick: do not stamp. The fold
+        -- loop applies it when it is not yet in mapTotals.
+      elseif t and t <= capT then
         rec.aggFolded = true
         if t == capT then
           nAt = nAt + 1
         end
-      elseif capT == 0 then
+      elseif capT == 0 and not t then
         -- Untimed-only list, or a noTN-only marker with no times:
         -- every kept record was already counted.
         rec.aggFolded = true
@@ -516,15 +538,23 @@ local function foldNewRawIntoAggregates(db, mapID, list)
   if type(db.stats) ~= "table" then db.stats = emptyHerbStats() end
   if type(db.mapTotals) ~= "table" then db.mapTotals = {} end
   local f = foldedOf(db, mapID)
-  local anyMarked = anyAggFolded(list)
   local aggT0 = f.aggT
+  -- When aggT is still 0 (a noTN-only marker about to be lifted),
+  -- ignore marks on trailing t < max-time rollback picks the same
+  -- way the post-lift gate does, so a leftover stamp cannot skip
+  -- the backfill.
+  local markCap = aggT0
+  if (not markCap or markCap == 0) and hasLegacyAggMarker(f) then
+    markCap = maxListTime(list)
+  end
+  local anyMarked = anyAggFolded(list, markCap)
   local alreadyAt = f.aggTN or 0
   local skippedAt = 0
   local added = 0
 
   -- Backfill a main / pre-#29 schema-2 save. Do this only when no
-  -- record is marked. A mid-loop crash still skips t < aggT0;
-  -- anyMarked only gates the t == aggT0 aggTN skip.
+  -- watermark-or-later record is marked. A mid-loop crash still
+  -- skips t < aggT0; anyMarked only gates the t == aggT0 aggTN skip.
   if not anyMarked then
     if aggT0 > 0 and alreadyAt == 0 then
       alreadyAt = stampAtOrBelow(list, aggT0)
@@ -538,30 +568,40 @@ local function foldNewRawIntoAggregates(db, mapID, list)
     end
   end
 
-  -- mapTotals already includes evicted picks (f.n) and every kept pick
-  -- that was counted. A trailing t < aggT0 pick is a clock-rollback
-  -- append when it appears after the watermark in list order; a
-  -- downgrade that re-attaches the trimmed prefix puts those older
-  -- copies back at the front, so the watermark still skips them.
-  -- uncounted caps how many of those trailing picks are applied, so
-  -- a pick RecordHerb already added to mapTotals is not counted twice.
+  -- mapTotals already includes evicted picks (f.n and a leftover
+  -- noTN) and every kept pick that was counted. A trailing t < aggT0
+  -- pick is a clock-rollback append when it appears after the
+  -- watermark in list order; a downgrade that re-attaches the
+  -- trimmed prefix puts those older copies back at the front, so
+  -- the watermark still skips them. uncounted caps how many of
+  -- those trailing picks are applied, so a pick RecordHerb already
+  -- added to mapTotals is not counted twice. noTN is included
+  -- because a noTN-only marker has f.n still 0 while mapTotals
+  -- already contains those evicted picks.
   local evicted = f.n or 0
   if type(evicted) ~= "number" or evicted < 0 then evicted = 0 end
+  local noTN = f.noTN or 0
+  if type(noTN) ~= "number" or noTN < 0 then noTN = 0 end
   local counted = db.mapTotals[mapID] or 0
   if type(counted) ~= "number" then counted = 0 end
-  local uncounted = #list + evicted - counted
+  local uncounted = #list + evicted + noTN - counted
   if uncounted < 0 then uncounted = 0 end
   local reachedWM = false
   local rollbackApplied = 0
 
   for i = 1, #list do
     local rec = list[i]
-    if type(rec) == "table" and rec.aggFolded ~= true then
+    if type(rec) == "table" then
       local t = recTime(rec)
       if t and t >= aggT0 then
         reachedWM = true
       end
-      if t and t < aggT0 and not reachedWM then
+      if rec.aggFolded == true then
+        -- Already counted (backfill or mid-loop crash stamp).
+        -- reachedWM is still updated so a later trailing uncounted
+        -- t < aggT0 pick is a rollback append, not a historical
+        -- prefix skipped because the watermark records were stamped.
+      elseif t and t < aggT0 and not reachedWM then
         rec.aggFolded = true
       elseif (not anyMarked) and t and t == aggT0 and skippedAt < alreadyAt then
         skippedAt = skippedAt + 1

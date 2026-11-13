@@ -677,11 +677,23 @@ do
     self.scripts = self.scripts or {}
     self.scripts[ev] = fn
   end }
+  local failCanvas = { HookScript = function()
+    error("HookScript failed")
+  end }
+  function WorldMapFrame:GetCanvas() return failCanvas end
+  M:TryHookMap()
+  check(M._viewAuxHooked ~= true,
+    "12: _viewAuxHooked stays unset when HookScript fails")
+
   function WorldMapFrame:GetCanvas() return canvas end
   M:TryHookMap()
   check(M._viewAuxHooked == true,
     "12: _viewAuxHooked is set only after the canvas hook is installed")
   check(canvasHooks >= 1, "12: canvas HookScript was called (got " .. tostring(canvasHooks) .. ")")
+  M:TryHookMap()
+  check(canvasHooks == 1,
+    "12: a third TryHookMap does not install a second canvas hook (got "
+      .. tostring(canvasHooks) .. ")")
   WorldMapFrame.GetCanvas = savedGet
 end
 

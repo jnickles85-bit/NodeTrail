@@ -1012,6 +1012,107 @@ check(live.maps[MAP_A][1].hsFolded == nil
     and live.maps[MAP_A][3].hsFolded == nil,
   "11m: RecordHerb plus fold do not leave hsFolded on kept records")
 
+-- 11n. An aggFolded mark left only on a trailing t < aggT0 rollback
+-- pick must not disable the t == aggT0 / aggTN skip. The list is
+-- t=1000, t=2000, t=500 (marked and already in totals), then an
+-- unmarked t=400; start mapT=3, aggT=2000, aggTN=1. The unmarked
+-- append should reach mapTotals once (mapT 4), without re-counting
+-- the watermark pick (which would give mapT 5).
+local markedTrail = peace(500)
+markedTrail.aggFolded = true
+local markedRollback = {
+  schema = 2, total = 3,
+  maps = { [MAP_A] = {
+    peace(1000),
+    peace(2000),
+    markedTrail,
+    peace(400),
+  } },
+  mapTotals = { [MAP_A] = 3 },
+  stats = { gathers = { [PEACE] = 3 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 2000, aggTN = 1, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = markedRollback }
+ns.GetHerbDB()
+check(markedRollback.mapTotals[MAP_A] == 4,
+  "11n: a mark only on a trailing t < aggT rollback pick does not disable the aggTN skip (got mapT="
+    .. tostring(markedRollback.mapTotals[MAP_A]) .. ")")
+check(markedRollback.total == 4,
+  "11n: lifetime total grows by the unmarked append only")
+check(markedRollback.folded[MAP_A].aggT == 2000 and markedRollback.folded[MAP_A].aggTN == 1,
+  "11n: the watermark stays at the earlier max time (aggT="
+    .. tostring(markedRollback.folded[MAP_A].aggT) .. ", aggTN="
+    .. tostring(markedRollback.folded[MAP_A].aggTN) .. ")")
+check(markedRollback.maps[MAP_A][1].aggFolded == nil
+    and markedRollback.maps[MAP_A][2].aggFolded == nil
+    and markedRollback.maps[MAP_A][3].aggFolded == nil
+    and markedRollback.maps[MAP_A][4].aggFolded == nil,
+  "11n: the fold does not leave aggFolded on kept records")
+ns.GetHerbDB()
+check(markedRollback.mapTotals[MAP_A] == 4 and markedRollback.total == 4,
+  "11n: a second load does not double-count (got mapT="
+    .. tostring(markedRollback.mapTotals[MAP_A]) .. ")")
+
+-- 11o. stampAtOrBelow and the noTN max-time lift use the same
+-- reachedWM rule, so a trailing uncounted t < aggT pick is not
+-- stamped on a pre-#29 or noTN-only save and still reaches mapTotals.
+local preStamp = {
+  schema = 2, total = 2,
+  maps = { [MAP_A] = {
+    peace(1000),
+    peace(2000),
+    peace(500),
+  } },
+  mapTotals = { [MAP_A] = 2 },
+  stats = { gathers = { [PEACE] = 2 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 2000, hsT = 0, hsTN = 0, n = 0 } },
+}
+NodeTrailDB = { herbs = preStamp }
+ns.GetHerbDB()
+check(preStamp.mapTotals[MAP_A] == 3,
+  "11o: a pre-#29 save still folds a trailing uncounted t < aggT pick (got mapT="
+    .. tostring(preStamp.mapTotals[MAP_A]) .. ")")
+check(preStamp.total == 3, "11o: lifetime total grows by the trailing pick only")
+check(preStamp.folded[MAP_A].aggT == 2000 and preStamp.folded[MAP_A].aggTN == 1,
+  "11o: the pre-#29 backfill records aggTN at the watermark, not the trailing pick (aggT="
+    .. tostring(preStamp.folded[MAP_A].aggT) .. ", aggTN="
+    .. tostring(preStamp.folded[MAP_A].aggTN) .. ")")
+ns.GetHerbDB()
+check(preStamp.mapTotals[MAP_A] == 3 and preStamp.total == 3,
+  "11o: a second load does not double-count the pre-#29 trailing pick (got mapT="
+    .. tostring(preStamp.mapTotals[MAP_A]) .. ")")
+
+local notnTrail = {
+  schema = 2, total = 50,
+  maps = { [MAP_A] = {} },
+  mapTotals = { [MAP_A] = 50 },
+  stats = { gathers = { [PEACE] = 50 }, co = {}, names = { [PEACE] = "Peacebloom" } },
+  hotspots = {},
+  folded = { [MAP_A] = { aggT = 0, hsT = 0, n = 0, noTN = 40 } },
+}
+for i = 1, 10 do
+  notnTrail.maps[MAP_A][i] = peace(1000 + i)
+end
+notnTrail.maps[MAP_A][11] = peace(400)
+NodeTrailDB = { herbs = notnTrail }
+ns.GetHerbDB()
+check(notnTrail.mapTotals[MAP_A] == 51,
+  "11o: a noTN-only save still folds a trailing uncounted t < max-time pick (got mapT="
+    .. tostring(notnTrail.mapTotals[MAP_A]) .. ")")
+check(notnTrail.total == 51, "11o: lifetime total grows by the trailing noTN pick only")
+check(notnTrail.folded[MAP_A].aggT == 1010,
+  "11o: the noTN lift uses the kept list's max time, not the trailing rollback (got "
+    .. tostring(notnTrail.folded[MAP_A].aggT) .. ")")
+check(notnTrail.folded[MAP_A].aggTN == 1,
+  "11o: aggTN counts the single pick at that max time (got "
+    .. tostring(notnTrail.folded[MAP_A].aggTN) .. ")")
+ns.GetHerbDB()
+check(notnTrail.mapTotals[MAP_A] == 51 and notnTrail.total == 51,
+  "11o: a second load does not double-count the noTN trailing pick (got mapT="
+    .. tostring(notnTrail.mapTotals[MAP_A]) .. ")")
+
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")
   os.exit(1)

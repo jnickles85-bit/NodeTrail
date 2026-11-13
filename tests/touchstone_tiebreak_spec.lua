@@ -298,6 +298,31 @@ check(vH == "NOT_UPGRADE",
 check(type(rH) == "string" and rH:find("no change", 1, true),
   "a capped Hit crumb is treated as no change (got " .. tostring(rH) .. ")")
 
+-- tiebreakTotal uses the same WEIGHT_EPSILON floor, not exact ~= 0.
+-- Shipped profiles have no tiebreak list, so this uses a fixture.
+local TB_PROFILE = { name = "TiebreakFixture", tiebreak = { "Armor", "Stamina" } }
+local tbNil = V.tiebreakTotal(
+  { Armor = 100 + noise, Stamina = 10 },
+  { Armor = 100, Stamina = 10 },
+  TB_PROFILE)
+check(tbNil == nil,
+  "a tiebreak Armor crumb inside WEIGHT_EPSILON is not a decision (got "
+    .. tostring(tbNil) .. ")")
+local tbHit = V.tiebreakTotal(
+  { Armor = 101, Stamina = 10 },
+  { Armor = 100, Stamina = 10 },
+  TB_PROFILE)
+check(type(tbHit) == "table" and tbHit.stat == "Armor" and tbHit.dir == 1,
+  "a real Armor gain still decides the tiebreak (got "
+    .. tostring(tbHit and tbHit.stat) .. ")")
+local tbStam = V.tiebreakTotal(
+  { Armor = 100 + noise, Stamina = 11 },
+  { Armor = 100, Stamina = 10 },
+  TB_PROFILE)
+check(type(tbStam) == "table" and tbStam.stat == "Stamina" and tbStam.dir == 1,
+  "a real Stamina gain still decides when Armor only has noise (got "
+    .. tostring(tbStam and tbStam.stat) .. ")")
+
 -- ---- 1i. Holy and Protection are their own Wowhead order-only profiles ----
 local PAL = V.WEIGHTS.PALADIN
 check(PAL.holy and PAL.holy.kind == "order" and PAL.holy.w == nil
