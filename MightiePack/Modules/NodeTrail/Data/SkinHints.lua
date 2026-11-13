@@ -258,8 +258,11 @@ function H.Aggregate(cid)
     end
     sorted(agg.skin)
   end
-  H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d (totals)")
-    :format(cid, agg.records, agg.kills, agg.skinned, agg.skinWindows)
+  -- the diag says WHERE the number came from: the totals row is the answer, and
+  -- when the ring lifted it (a fold was missed) the line says so.
+  H._diag.agg = ("cid=%d records=%d kills=%d skinned=%d skin-windows=%d (%s)")
+    :format(cid, agg.records, agg.kills, agg.skinned, agg.skinWindows,
+      counts and counts.behind and "totals lifted by its records" or "totals")
   return agg
 end
 
