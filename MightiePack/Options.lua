@@ -509,25 +509,10 @@ local function syncCheckboxes()
       sb:Disable()
     end
 
-    -- Copyable compact /mp skindiag dump, next to the Skinning sub-option.
-    -- Auto-refresh is re-anchored below this button so the vertical chain
-    -- stays a single column.
-    if not boxes.SkinDiagCopy then
-      local copyBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-      copyBtn:SetPoint("TOPLEFT", sb, "BOTTOMLEFT", 0, -SUB_GAP)
-      if type(copyBtn.SetSize) == "function" then pcall(copyBtn.SetSize, copyBtn, 240, 24) end
-      if type(copyBtn.SetWidth) == "function" then pcall(copyBtn.SetWidth, copyBtn, 240) end
-      if type(copyBtn.SetHeight) == "function" then pcall(copyBtn.SetHeight, copyBtn, 24) end
-      copyBtn:SetText("Copy skinning diagnostics")
-      copyBtn:SetScript("OnClick", function()
-        if type(pkg.ShowSkinDiagCopy) == "function" then
-          pkg.ShowSkinDiagCopy()
-        elseif type(pkg.Print) == "function" then
-          pkg.Print("skindiag: copy popup unavailable")
-        end
-      end)
-      boxes.SkinDiagCopy = copyBtn
-    end
+    -- (card t_a5de2f16) The compact /mp skindiag dump's button moved to the
+    -- unified window's Skinning tab, beside the data it summarises. The
+    -- function it called — pkg.ShowSkinDiagCopy — is unchanged, so
+    -- `/mp skindiag copy` still produces the same popup.
   end
 
   -- ── Auto-refresh route sub-option (t_2bc15917, default flipped t_57550700)
@@ -544,9 +529,7 @@ local function syncCheckboxes()
     local ab = boxes.AutoRefresh
     if not ab then
       ab = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-      if boxes.SkinDiagCopy then
-        ab:SetPoint("TOPLEFT", boxes.SkinDiagCopy, "BOTTOMLEFT", 0, -SUB_GAP)
-      elseif boxes.Skinning then
+      if boxes.Skinning then
         ab:SetPoint("TOPLEFT", boxes.Skinning, "BOTTOMLEFT", 0, -SUB_GAP)
       else
         ab:SetPoint("TOPLEFT", modulesHeader, "BOTTOMLEFT", SUB_INDENT - 16, -SUB_GAP)
@@ -991,15 +974,28 @@ pcall(function()
   end
 end)
 
+--- /mp, /mpack, /mightiepack and the module toggles all land here.
+-- Card t_a5de2f16: this is no longer the Settings canvas — it opens the ONE
+-- window on the Pack Settings tab. The Settings category below still exists
+-- (a player who goes looking in AddOns finds the same panel), and the window
+-- claims the panel back when it opens; the content is one frame either way.
+-- The old canvas path remains as the fallback for a client where the window
+-- could not be created at all, so /mp is never dead.
 function pkg.OpenOptions()
+  local W = pkg.Window
+  if type(W) == "table" and type(W.Open) == "function" then
+    local ok = W.Open("settings")
+    if ok then return true end
+  end
   if pkg.settingsCategory and Settings and Settings.OpenToCategory then
     Settings.OpenToCategory(pkg.settingsCategory:GetID())
   elseif InterfaceOptionsFrame_OpenToCategory then
     InterfaceOptionsFrame_OpenToCategory(panel)
     InterfaceOptionsFrame_OpenToCategory(panel)
-  else
+  elseif type(panel.Show) == "function" then
     panel:Show()
   end
+  return false
 end
 
 pkg.optionsPanel = panel

@@ -33,7 +33,18 @@ check(#tocLines > 0, "TOC has lines")
 check(tocLines[1] == "ErrorHandler.lua", "TOC first is ErrorHandler.lua, got " .. tostring(tocLines[1]))
 check(tocLines[2] == "Core.lua", "TOC second is Core.lua, got " .. tostring(tocLines[2]))
 check(tocLines[3] == "Modules.lua", "TOC third is Modules.lua, got " .. tostring(tocLines[3]))
-check(tocLines[#tocLines] == "Options.lua", "TOC last is Options.lua, got " .. tostring(tocLines[#tocLines]))
+check(tocLines[#tocLines] == "Window/TouchstoneTab.lua",
+  "TOC last is the last window tab file, got " .. tostring(tocLines[#tocLines]))
+-- Card t_a5de2f16: the ONE window's shell loads before its tab files, and both
+-- load after Options.lua (the Pack Settings tab is that panel).
+local inToc = {}
+for _, l in ipairs(tocLines) do inToc[l] = true end
+check(inToc["Options.lua"], "TOC contains Options.lua")
+check(inToc["Window.lua"], "TOC contains the unified window shell")
+check(inToc["Window/Common.lua"], "TOC contains the window's shared widgets")
+check(inToc["Window/Herbs.lua"], "TOC contains the Herbs tab")
+check(inToc["Window/Skinning.lua"], "TOC contains the Skinning tab")
+check(inToc["Window/TouchstoneTab.lua"], "TOC contains the Touchstone tab")
 local hasNodeCore = false
 for _, l in ipairs(tocLines) do
   if l == "Modules/NodeTrail/Core.lua" then hasNodeCore = true end
@@ -292,7 +303,14 @@ check(foundSkinOnNT, "status reports skinning on the NodeTrail line: 'NodeTrail:
 
 openedId = nil
 SlashCmdList.MIGHTIEPACK("")
-check(openedId == 42, "open options sets openedId 42")
+-- Card t_a5de2f16: /mp opens the ONE window on its Pack Settings tab. The
+-- Settings canvas (openedId) is kept only as the fallback for a client where
+-- the window cannot be created, so nothing is routed through it here.
+check(type(pkg.Window) == "table" and pkg.Window.IsShown() == true,
+  "/mp shows the unified window")
+check(type(pkg.Window) == "table" and pkg.Window.Current() == "settings",
+  "/mp selects the Pack Settings tab (got " .. tostring(pkg.Window and pkg.Window.Current()) .. ")")
+check(openedId == nil, "/mp does not open the Settings canvas any more")
 
 -- Test 2
 local panel = pkg.optionsPanel
@@ -355,22 +373,16 @@ if autoBox then
   local function point1b(box)
     return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
   end
-  local copyBtn = boxes.SkinDiagCopy
-  check(copyBtn ~= nil, "a Copy skinning diagnostics button sits under the skinning row")
-  local function pointRel(box)
-    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
-  end
-  local cp = pointRel(copyBtn)
-  if cp and skinBox then
-    check(cp[2] == skinBox, "diagnostics button is anchored under the skinning row")
-    check(cp[3] == "BOTTOMLEFT", "diagnostics button sits under the skinning row")
-  end
-  local ap, sp = point1b(autoBox), point1b(skinBox)
+  -- Card t_a5de2f16: the "Copy skinning diagnostics" button moved to the
+  -- unified window's Skinning tab (it sits beside the data it summarises).
+  -- The options panel must NOT keep a second copy of it, and auto-refresh now
+  -- follows the skinning row directly.
+  check(boxes.SkinDiagCopy == nil,
+    "the options panel no longer carries the skinning diagnostics button (it moved to the Skinning tab)")
+  local ap = point1b(autoBox)
+  local sp = point1b(skinBox)
   check(ap ~= nil, "the auto-refresh row was positioned")
-  if ap and copyBtn then
-    check(ap[2] == copyBtn, "auto-refresh row is anchored under the diagnostics button")
-    check(ap[3] == "BOTTOMLEFT", "auto-refresh row sits under the diagnostics button")
-  elseif ap and sp then
+  if ap and sp then
     check(ap[2] == skinBox, "auto-refresh row is anchored under the skinning row")
     check(ap[3] == "BOTTOMLEFT", "auto-refresh row sits under the skinning row")
   end

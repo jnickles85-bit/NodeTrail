@@ -335,7 +335,19 @@ end
 local function handleSlash(msg)
   msg = (msg or ""):match("^%s*(.-)%s*$") or ""
   msg = msg:lower()
-  if msg == "" or msg == "help" then
+  if msg == "" then
+    -- Card t_a5de2f16: a bare /nt (or /nodetrail) opens the ONE MightiePack
+    -- window on the Herbs tab — the browse/history surface. `/nt help` still
+    -- prints the usage block, and every argument form below is unchanged.
+    local W = type(pkg.Window) == "table" and pkg.Window or nil
+    if type(W) == "table" and type(W.Open) == "function" then
+      local ok = W.Open("herbs")
+      if ok then
+        return
+      end
+    end
+    printHelp()
+  elseif msg == "help" then
     printHelp()
   elseif msg == "start" then
     ns.StartRoute()
