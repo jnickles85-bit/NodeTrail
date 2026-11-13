@@ -309,9 +309,13 @@ end
 -- the item — the only denominator a percentage may use, because two hides from
 -- one corpse must not read as two kills.
 --
--- The ring and the totals are written by the SAME events, so they cannot
--- disagree about an observation the player made; they differ only in how far
--- back they reach.
+-- The ring and the totals are written by the SAME events, so in a healthy
+-- bucket they cannot disagree about an observation the player made; they
+-- differ only in how far back they reach. Age is not a proof, though: a fold
+-- can be MISSED (an older build's schema marker, or a crash between the
+-- record write and the totals write), and then the totals are behind their own
+-- records. R:CreatureCounts (below) is the one place that answers "how many",
+-- and it never answers less than the records still prove.
 local CREATURE_NUMBERS = { "corpses", "kills", "skinned", "skinWindows" }
 
 local function newCreature()
@@ -341,6 +345,152 @@ function R:CreatureRow(store, cid, create)
   end
   if type(row.skin) ~= "table" then row.skin = {} end
   return row
+end
+
+-- ── ONE answer to "how many times has this creature been skinned" ──────
+-- t_f2571ca7. The totals row and the ring are written by the same events, but
+-- the row can fall behind them: a fold that never ran (a schema marker written
+-- by an older build, or an error that aborted the handler between the record
+-- write and the totals write) leaves records in the ring that the totals never
+-- counted. The live report measured cid 2957 that way — four skinned records
+-- against a (0,0,1) row; whatever produced those three numbers, this function
+-- is what makes the display survive them.
+--
+-- So the ROW stays authoritative — it is the only store that never evicts, and
+-- a 100-record ring cannot be the history — and the ring is a LOWER BOUND that
+-- may lift it:
+--
+--   skinned     = max(row.skinned,     skinned records still in the ring)
+--   skinWindows = max(row.skinWindows, windows on records still in the ring)
+--   corpses     = max(row.corpses,     records still in the ring)
+--   kills       = max(row.kills,       killObserved records still in the ring)
+--
+-- The correction is ONE-WAY, by design. A row AHEAD of its ring is history that
+-- outlived the ring (cid 2954: row 4, ring 3) and must never be pulled down:
+-- deleting a real skin because its record has been evicted would break the
+-- standing rule that gathered history is preserved. Everything here is read
+-- only — nothing is written back into the save.
+--
+-- "Skin evidence" (clause: a skin must be backed by an observation):
+--   * a skin loot window (skinLootOpens >= 1), or
+--   * skin items from one (older records with no window counter), or
+--   * a successful Skinning cast pinned to the record (skinCastAt /
+--     skinSpellID 8613).
+-- A record can be skinned with NO loot window: the cast succeeded and the
+-- client never opened a skin window for it (live, cid 3125 record
+-- ..AA020CC9AE, skinCastAt=599308.978). The owner asked for that to keep
+-- counting on t_a2f44fb2 ("it should still count the skin even if i dont get
+-- loot"), so a cast-backed skin with no window is NOT a phantom. A bare
+-- `skinned = true` with none of the three is a mark no code path in this file
+-- can produce, and it is not counted anywhere.
+function R.HasSkinEvidence(rec)
+  if type(rec) ~= "table" or rec.skinned ~= true then return false end
+  if (tonumber(rec.skinLootOpens) or 0) >= 1 then return true end
+  if (tonumber(rec.skinSpellID) or 0) == R.SKIN_SPELL_ID then return true end
+  if rec.skinCastAt ~= nil then return true end
+  if type(rec.skinItems) == "table" and #rec.skinItems > 0 then return true end
+  return false
+end
+
+--- Count what the ring still proves about one creature id.
+--- Read only. `phantoms` counts records marked skinned with no evidence at all.
+local function ringCounts(store, cid)
+  local out = {
+    corpses = 0, kills = 0, skinned = 0, skinWindows = 0,
+    skinnedWithoutWindow = 0, phantoms = 0,
+  }
+  if type(store) ~= "table" or type(cid) ~= "number"
+    or type(store.records) ~= "table" then
+    return out
+  end
+  for _, rec in pairs(store.records) do
+    if type(rec) == "table" and rec.creatureID == cid then
+      out.corpses = out.corpses + 1
+      if rec.killObserved == true then out.kills = out.kills + 1 end
+      local opens = tonumber(rec.skinLootOpens) or 0
+      if opens > 0 then
+        out.skinWindows = out.skinWindows + opens
+      elseif type(rec.skinItems) == "table" and #rec.skinItems > 0 then
+        out.skinWindows = out.skinWindows + 1
+      end
+      if R.HasSkinEvidence(rec) then
+        out.skinned = out.skinned + 1
+        if opens < 1 then out.skinnedWithoutWindow = out.skinnedWithoutWindow + 1 end
+      elseif rec.skinned == true then
+        out.phantoms = out.phantoms + 1
+      end
+    end
+  end
+  return out
+end
+
+--- The authoritative counts for one creature: the never-evicted totals row,
+--- lifted by whatever the ring can still prove. Read only.
+--- @param store table  the session buffer or the character bucket
+--- @param cid number   the creature entry (R.CreatureID)
+--- @return table|nil { corpses, kills, skinned, skinWindows,
+---                     skinnedWithoutWindow, ringSkinned, behind }
+function R:CreatureCounts(store, cid)
+  if type(store) ~= "table" or type(cid) ~= "number" then return nil end
+  local row = type(store.creatures) == "table" and store.creatures[cid] or nil
+  local ring = ringCounts(store, cid)
+  local function num(v) return type(v) == "number" and v or 0 end
+  local rowSkinned = type(row) == "table" and num(row.skinned) or 0
+  local counts = {
+    corpses = math.max(type(row) == "table" and num(row.corpses) or 0, ring.corpses),
+    kills = math.max(type(row) == "table" and num(row.kills) or 0, ring.kills),
+    skinned = math.max(rowSkinned, ring.skinned),
+    skinWindows = math.max(type(row) == "table" and num(row.skinWindows) or 0,
+      ring.skinWindows),
+    skinnedWithoutWindow = ring.skinnedWithoutWindow,
+    ringSkinned = ring.skinned,
+    behind = rowSkinned < ring.skinned,
+  }
+  return counts
+end
+
+--- The fold contract, as a list of human-readable violations (empty = the
+--- bucket agrees with itself). Read only; nothing is repaired here. This is
+--- what makes a store that stopped folding visible instead of silently
+--- showing a number its own records do not support.
+---   clause 1  the totals are never BEHIND the records they still hold
+---   clause 2  the window total is never behind the windows it still holds
+---   clause 3  no record carries a skinned mark with nothing behind it
+function R:Invariants(b)
+  local out = {}
+  if type(b) ~= "table" then return out end
+  local seen = {}
+  for _, rec in pairs(type(b.records) == "table" and b.records or {}) do
+    if type(rec) == "table" and type(rec.creatureID) == "number" then
+      seen[rec.creatureID] = true
+    end
+  end
+  for cid in pairs(type(b.creatures) == "table" and b.creatures or {}) do
+    if type(cid) == "number" then seen[cid] = true end
+  end
+  local cids = {}
+  for cid in pairs(seen) do cids[#cids + 1] = cid end
+  table.sort(cids)
+  for i = 1, #cids do
+    local cid = cids[i]
+    local ring = ringCounts(b, cid)
+    local row = type(b.creatures) == "table" and b.creatures[cid] or nil
+    local rowSkinned = type(row) == "table" and (tonumber(row.skinned) or 0) or 0
+    local rowWindows = type(row) == "table" and (tonumber(row.skinWindows) or 0) or 0
+    if rowSkinned < ring.skinned then
+      out[#out + 1] = ("cid %d: totals say %d skinned, its records prove %d")
+        :format(cid, rowSkinned, ring.skinned)
+    end
+    if rowWindows < ring.skinWindows then
+      out[#out + 1] = ("cid %d: totals say %d skin windows, its records prove %d")
+        :format(cid, rowWindows, ring.skinWindows)
+    end
+    if ring.phantoms > 0 then
+      out[#out + 1] = ("cid %d: %d skinned record(s) with no window and no cast")
+        :format(cid, ring.phantoms)
+    end
+  end
+  return out
 end
 
 -- Fold ONE record's current skin item list into its creature's totals.
@@ -443,7 +593,12 @@ local function seedTotals(b)
         local row = R:CreatureRow(b, cid, true)
         row.corpses = row.corpses + 1
         if rec.killObserved == true then row.kills = row.kills + 1 end
-        if rec.skinned == true then row.skinned = row.skinned + 1 end
+        -- Only an OBSERVED skin is seeded (t_f2571ca7). A bare `skinned = true`
+        -- with no window, no items and no pinned cast is a mark nothing in this
+        -- file produces; seeding it would bake a phantom into the totals, where
+        -- it can never be told apart from a real skin whose record has since
+        -- been evicted. The record itself is left exactly as stored.
+        if R.HasSkinEvidence(rec) then row.skinned = row.skinned + 1 end
         local opens = tonumber(rec.skinLootOpens) or 0
         if opens < 0 then opens = 0 end
         if opens > 0 then

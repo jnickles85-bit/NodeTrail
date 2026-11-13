@@ -269,8 +269,9 @@ check(minFloor() == 10, "1: the evidence floor is HerbData.PERSONAL_MIN (got " .
 local r = rows()
 check(r[1] == "Clattering Scorpid", "1: the block opens with the creature's name (got "
   .. tostring(r[1]) .. ")")
-check(findRow("skinnable · skin windows recorded: 10"),
-  "1: skinnability comes from our own skin windows (got:\n" .. joined() .. ")")
+check(findRow("skin windows recorded: 10"),
+  "1: the nil-answer row reports our own skin windows WITHOUT calling the beast "
+  .. "skinnable (t_f2571ca7) (got:\n" .. joined() .. ")")
 check(findRow("skinned"), "1: the skinning section is labelled")
 check(findRow("Medium Leather x20 | 100% (yours)"),
   "1: skin rows carry count + a percentage of the corpses that were skinned (got:\n"
@@ -294,7 +295,9 @@ check(joined():find("92%", 1, true) == nil and joined():find("8%", 1, true) == n
 -- totals. Nothing else may appear, in any order.
 local EXPECTED_BLOCK = {
   "Clattering Scorpid",
-  "skinnable · skin windows recorded: 10",
+  -- t_f2571ca7: the client never answers on this client, so the second row
+  -- states the windows it saw and asserts nothing about skinnability.
+  "skin windows recorded: 10",
   "skinned",
   "Medium Leather x20 | 100% (yours)",
   "skinned: 10",

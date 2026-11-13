@@ -351,7 +351,10 @@ check(P:IsShown() == true, "C: the skinner still sees the beast panel")
 local r = rows()
 local EXPECTED = {
   "Mottled Boar",
-  "skinnable · skin windows recorded: 10",
+  -- t_f2571ca7: a window is not evidence of skinnability, so the nil-answer
+  -- row reports the windows without the adjective. The GATE is what this spec
+  -- pins; the wording itself lives in beast_skinnable_wording_spec.
+  "skin windows recorded: 10",
   "skinned",
   "Medium Leather x10 | 100% (yours)",
   "skinned: 10",

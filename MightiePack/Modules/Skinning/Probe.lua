@@ -1716,27 +1716,66 @@ function P:DumpText(opts)
           say(line)
         end
       end
+      -- Per-creature ids, with the SAME counts the beast block reads
+      -- (R:CreatureCounts, t_f2571ca7): a diagnostic that printed the raw
+      -- totals row would contradict the panel on exactly the creatures the
+      -- panel corrects, and this is the command the owner uses to name a cid.
       local creatures = store.creatures
+      local ids, seenId = {}, {}
+      local function addId(cid)
+        if type(cid) == "number" and not seenId[cid] then
+          seenId[cid] = true
+          ids[#ids + 1] = cid
+        end
+      end
       if type(creatures) == "table" then
-        local ids = {}
-        for cid in pairs(creatures) do
-          if type(cid) == "number" then ids[#ids + 1] = cid end
+        for cid in pairs(creatures) do addId(cid) end
+      end
+      if type(store.records) == "table" then
+        for _, rec in pairs(store.records) do
+          if type(rec) == "table" then addId(rec.creatureID) end
         end
-        table.sort(ids)
-        local capC = 12
-        local shown = math.min(#ids, capC)
-        for i = 1, shown do
-          local row = creatures[ids[i]]
-          if type(row) == "table" then
-            say("cid " .. tostring(ids[i])
-              .. " corpses=" .. tostring(row.corpses or 0)
-              .. " kills=" .. tostring(row.kills or 0)
-              .. " skinned=" .. tostring(row.skinned or 0)
-              .. " skinWindows=" .. tostring(row.skinWindows or 0))
+      end
+      table.sort(ids)
+      local capC = 12
+      local shown = math.min(#ids, capC)
+      for i = 1, shown do
+        local cid = ids[i]
+        local row = type(creatures) == "table" and creatures[cid] or nil
+        local counts = nil
+        if type(R.CreatureCounts) == "function" then
+          local okC, cc = pcall(R.CreatureCounts, R, store, cid)
+          if okC and type(cc) == "table" then counts = cc end
+        end
+        if type(counts) == "table" or type(row) == "table" then
+          local function n(v) return tostring(v or 0) end
+          local rowLine = "cid " .. tostring(cid)
+            .. " corpses=" .. n(counts and counts.corpses or row.corpses)
+            .. " kills=" .. n(counts and counts.kills or row.kills)
+            .. " skinned=" .. n(counts and counts.skinned or row.skinned)
+            .. " skinWindows=" .. n(counts and counts.skinWindows or row.skinWindows)
+          if counts and (counts.behind or counts.skinnedWithoutWindow > 0) then
+            -- say WHY the number differs from the raw row, so a screenshot of
+            -- this line can be acted on: "totals-behind-records" = the totals
+            -- missed a fold; "skin(s) without a window" = a successful cast
+            -- whose loot window never opened (a real skin, not a phantom).
+            rowLine = rowLine .. " (corrections:"
+              .. (counts.behind and " totals-behind-records" or "")
+              .. (counts.skinnedWithoutWindow > 0
+                and (" -" .. counts.skinnedWithoutWindow .. " skin(s) without a window") or "")
+              .. ")"
           end
+          say(rowLine)
         end
-        if #ids > capC then
-          say("... " .. tostring(#ids - capC) .. " more creature id(s)")
+      end
+      if #ids > capC then
+        say("... " .. tostring(#ids - capC) .. " more creature id(s)")
+      end
+      if type(R.Invariants) == "function" then
+        local okI, list = pcall(R.Invariants, R, store)
+        if okI and type(list) == "table" and #list > 0 then
+          say("store: " .. tostring(#list) .. " fold inconsistency(ies), first: "
+            .. tostring(list[1]))
         end
       end
     elseif not okS then
