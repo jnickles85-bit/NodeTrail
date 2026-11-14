@@ -42,7 +42,6 @@
 --      alone is the weaker of the two orderings and it hid this defect for two
 --      cards; `C.StrataCover` / `C.ZOrderHazards` now answer it directly, and
 --      `SetParent` records the comparison at the moment of the move.
-
 --
 -- It is not a Blizzard emulator: it models the API surface this pack calls.
 -- Anything it does not model is absent rather than silently benign, so a spec
@@ -542,7 +541,6 @@ local function effStrata(f)
   if p then return effStrata(p) end
   return strataRank("MEDIUM")
 end
-
 
 --- Draw/mouse order key: strata, then level, then creation order. A frame drawn
 --- later is on top and gets the click.
