@@ -66,8 +66,10 @@
                    so the verdict's colour and the name's size carry the weight
 
 == 5. VERIFICATION AT THE HEAD
-head        : e8c8bc0 (PR #39, base d6c4f1f / nt/t_2d2c37b0)
-specs       : lua5.1 — 35 spec(s) run, 0 failure(s)   (CI: same, run 43655251722)
+head        : gates re-run at 4368e0b (PR #39, base d6c4f1f / nt/t_2d2c37b0).
+              This record is committed on top of that head; the only change after it
+              is this file, and CI is green on the resulting branch tip.
+specs       : lua5.1 — 35 spec(s) run, 0 failure(s)   (CI: same, run 43655559134)
 syntax      : luac5.1 -p over the 20 shipping files — clean
 luacheck    : 0 warnings / 0 errors in 20 files
 vendored    : python tools/sync_touchstone.py --verify-shipped — 11 lua files matched shipped; toc ok
