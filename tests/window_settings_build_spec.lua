@@ -61,27 +61,11 @@ StatForgeDB = { ui = { scale = 1 } }
 loadFile("Core.lua")
 loadFile("Modules.lua")
 for _, f in ipairs({
-  "Modules/NodeTrail/locale/enUS.lua",
-  "Modules/NodeTrail/Config.lua",
-  "Modules/NodeTrail/Data/ItemNames.lua",
-  "Modules/NodeTrail/Data/HerbData.lua",
-  "Modules/NodeTrail/Data/Recorder.lua",
-  "Modules/NodeTrail/Data/Density.lua",
-  "Modules/NodeTrail/Data/Recipes.lua",
-  "Modules/NodeTrail/Data/Profession.lua",
-  "Modules/NodeTrail/Data/SkinHints.lua",
-  "Modules/NodeTrail/UI/TooltipPanel.lua",
-  "Modules/NodeTrail/UI/Tooltip.lua",
-  "Modules/NodeTrail/Core.lua",
 }) do loadFile(f) end
-loadFile("Modules/Skinning/Core.lua")
-loadFile("Modules/Skinning/Record.lua")
 loadFile("BugReport.lua")
 loadFile("Options.lua")
 loadFile("Window.lua")
 loadFile("Window/Common.lua")
-loadFile("Window/Herbs.lua")
-loadFile("Window/Skinning.lua")
 
 StatForge = {
   ShowMain = function() end, HideMain = function() end, ToggleMain = function() end,
@@ -124,7 +108,7 @@ check(type(f) == "table", "the window frame is created")
 
 -- ── AC-N1: three activations, three builds ────────────────────────────────
 builds, onShowFired = 0, 0
-W.Open("herbs")
+W.Open("touchstone")
 for i = 1, 3 do
   local before = builds
   W.SelectTab("settings")
@@ -143,9 +127,9 @@ check(onShowFired == 0,
 
 -- The build's OUTPUT: the module rows exist. A build that is called but builds
 -- nothing must not pass.
-check(type(pkg.optionsBoxes) == "table" and pkg.optionsBoxes.NodeTrail ~= nil,
+check(type(pkg.optionsBoxes) == "table" and pkg.optionsBoxes.Touchstone ~= nil,
   "after activation the module checkbox rows exist (rows are the build's output)")
-check(pkg.optionsBoxes.NodeTrail ~= nil and pkg.optionsBoxes.Touchstone ~= nil,
+check(pkg.optionsBoxes.Touchstone ~= nil and pkg.optionsBoxes.NodeTrail == nil,
   "both enabled modules have a row")
 
 -- ── AC-N2: a hidden panel comes back ─────────────────────────────────────
@@ -169,7 +153,7 @@ do
   local canvas = CreateFrame("Frame", "SpecSettingsCanvas", UIParent)
   panel:SetParent(canvas)
   panel:Hide()
-  W.SelectTab("herbs")
+  W.SelectTab("touchstone")
   W.SelectTab("settings")
   check(panel:GetParent() == W.hosts.settings,
     "activating the tab claims the panel back from the Settings canvas")

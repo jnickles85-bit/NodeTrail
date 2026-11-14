@@ -1,24 +1,27 @@
 -- MightiePack — the ONE window (card t_a5de2f16, audit group 4).
 --
--- Before this file the pack had two outer frames: MightiePackOptionsPanel (a
--- Settings canvas and a standalone frame) and StatForgeMainFrame (Touchstone's
--- 920x620 window). They become four tabs of one movable 960x640 window:
+-- It became four tabs when NodeTrail and Touchstone were both modules of this
+-- pack: Herbs, Skinning, Touchstone and Pack Settings. NodeTrail is its own
+-- addon again (card t_75309c97), so the window is back to the two tabs that are
+-- the pack's own:
 --
---   Herbs          browse/history of the herb records (Window/Herbs.lua)
---   Skinning       what each beast yields (Window/Skinning.lua)
 --   Touchstone     the vendored window's content, its inner strip intact
---   Pack Settings  the options panel (Options.lua), skindiag copy moved out
+--   Pack Settings  the options panel (Options.lua)
+--
+-- The Herbs and Skinning tab bodies moved out with NodeTrail. The frame, the
+-- strata invariant, the drag bar, the tab strip and the input rules are
+-- unchanged, because four cards of client work went into them.
 --
 -- What this file owns:
 --   * the frame, its title bar, its drag, its close and its ESC entry;
---   * the four outer tab buttons and the four content hosts;
---   * where the window was last put — ONE new SavedVariables key with a
---     default, never an existing position key (hard rule 2);
+--   * the two outer tab buttons and the two content hosts;
+--   * where the window was last put — ONE SavedVariables key with a default,
+--     never an existing position key (hard rule 2);
 --   * open / close / toggle / select, which the slashes call.
 --
--- What it does NOT own: the hover herb panel (NodeTrailHerbPanel stays exactly
--- as it is — it is the in-the-moment surface, this is the browse surface), the
--- route overlay, or any module's own state.
+-- What it does NOT own: any module's own state, or any of NodeTrail's surfaces
+-- (the hover herb panel, the route overlay, the Herbs/Skinning tabs) — those
+-- live in the NodeTrail addon.
 --
 -- COMBAT (hard rule 6, Interface 16001): no frame this file creates is
 -- protected, and no protected frame is touched anywhere here. Opening,
@@ -39,11 +42,9 @@ W.WIDTH = 960
 W.HEIGHT = 640
 W.TITLE_HEIGHT = 40
 W.TABS_HEIGHT = 34
-W.DEFAULT_TAB = "herbs"
-W.TABS = { "herbs", "skinning", "touchstone", "settings" }
+W.DEFAULT_TAB = "settings"
+W.TABS = { "touchstone", "settings" }
 W.TAB_LABELS = {
-  herbs = "Herbs",
-  skinning = "Skinning",
   touchstone = "Touchstone",
   settings = "Pack Settings",
 }
@@ -636,6 +637,4 @@ end
 --- tab module and every spec says the same words.
 W.MODULE_OFF_TEXT = {
   touchstone = "Touchstone is off. Turn it on in Pack Settings.",
-  herbs = "NodeTrail is off. Turn it on in Pack Settings.",
-  skinning = "NodeTrail's skinning recorder is off. Turn it on in Pack Settings.",
 }

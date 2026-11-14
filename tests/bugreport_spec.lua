@@ -260,10 +260,15 @@ do
   check(currentHandler == wrapped, "live double install: wrapper unchanged")
 end
 
-pkg.RegisterModule("NodeTrail", {
-  title = "NodeTrail",
+-- A module the report has to list. (NodeTrail is its own addon now, so a
+-- stand-in keeps the "enabled modules" line covered.)
+pkg.RegisterModule("TouchTest", {
+  title = "TouchTest",
   Enable = function() return true end,
 })
+-- Enabled, so the report has a module to list (the default table no longer seeds
+-- NodeTrail: it is a separate addon now).
+pkg.GetSettings().modules.TouchTest = true
 
 for _, f in ipairs(frames) do
   if f.events.ADDON_LOADED and f.scripts.OnEvent then
@@ -341,7 +346,7 @@ check(type(report) == "string", "BuildBugReport returns a string")
 has(report, "MightiePack bug report", "title")
 has(report, "Addon version: 0.3.0-from-caddons", "C_AddOns.GetAddOnMetadata version")
 has(report, "Client version: 1.60.1 (build 54321, interface 16001)", "GetBuildInfo version/build/interface")
-has(report, "Module(s): NodeTrail", "enabled modules")
+has(report, "Module(s): TouchTest", "enabled modules")
 lacks(report, "Touchstone", "disabled module omitted")
 has(report, "Character: Priest 18", "class and level")
 has(report, "Zone/map: Tirisfal Glades (1420)", "zone and map id")

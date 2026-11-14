@@ -1,3 +1,11 @@
+-- slash_spec.lua — the pack's own slash surface.
+--
+-- Card t_75309c97: NodeTrail is its own addon now. Its commands (/nt start,
+-- /nt status, /nt linetest, the module gating, the skinning diagnostics) moved
+-- with the module and are covered by the standalone addon's specs. What is left
+-- here is /mp: its aliases, its help, its identity header, and the fact that it
+-- no longer answers for NodeTrail or for skindiag.
+
 local failed = 0
 local function check(cond, msg)
   if not cond then
@@ -24,103 +32,6 @@ C_Map = { GetBestMapForUnit = function() return mapID end }
 GetSpellInfo = function() return nil end
 time = os.time
 
-local pkg = { modState = { NodeTrail = true } }
-pkg.IsModuleEnabled = function(n) return pkg.modState[n] end
-pkg.RegisterModule = function(name, def) pkg.registered = def end
-
-local files = { "locale/enUS.lua", "Config.lua", "Data/GM2.lua", "Data/ItemNames.lua", "Data/Recorder.lua", "Data/Density.lua", "Data/HerbData.lua", "Data/Recipes.lua", "Core.lua" }
-for _, f in ipairs(files) do
-  assert(loadfile(root .. "/MightiePack/Modules/NodeTrail/" .. f))("MightiePack", pkg)
-end
-local ns = pkg.NodeTrail
-ns.MapOverlay = nil
-ns.MinimapPath = nil
-ns.Tooltip = { _enabled = false, Enable = function(self) self._enabled = true end }
-
-local function run(cmd)
-  for i = #chat, 1, -1 do chat[i] = nil end
-  SlashCmdList.NODETRAIL(cmd)
-  return table.concat(chat, "\n")
-end
-
-check(SlashCmdList.NODETRAIL == nil, "module gating before Enable")
-check(pkg.registered and pkg.registered.notes:find("status", 1, true) ~= nil, "notes contains status")
-
-NodeTrailDB = nil
-ns.Enable()
-check(type(SlashCmdList.NODETRAIL) == "function", "slash registered")
-check(SLASH_NODETRAIL1 == "/nodetrail", "slash1")
-check(SLASH_NODETRAIL2 == "/nt", "slash2")
-check(ns.Tooltip._enabled == true, "tooltip enabled")
-
-local help = run("help")
-for _, needle in ipairs({ "/nt start", "/nt stop", "/nt reload", "/nt status", "density", "Hover a herb", "/mpack" }) do
-  check(help:find(needle, 1, true) ~= nil, "help contains " .. needle)
-end
-check(run("") == help, "empty equals help")
-check(run("bogus") == help, "bogus equals help")
-
-local r = run("reload")
-check(r:find("no active route", 1, true) ~= nil, "reload no route")
-check(r:find("route started", 1, true) == nil, "reload no route started")
-
-local s = run("status")
--- This spec's client stubs no trade-skill API at all (neither the legacy
--- globals nor C_TradeSkillUI), so the alchemy line must not promise the
--- "open your Alchemy window once" step — it must say the feature is
--- unavailable (t_0d5badc3).
-for _, needle in ipairs({ "Route source: density", "on this map (1429): 0 (all maps: 0)", "Active route: none", "Herb tooltip: on", "Alchemy recipes: unavailable on this client (no trade skill API found", "Module: on" }) do
-  check(s:find(needle, 1, true) ~= nil, "status contains " .. needle)
-end
-
-for i = 1, 3 do ns.RecordHerb(1429, i * 0.1, i * 0.1, {}) end
-for i = 1, 2 do ns.RecordHerb(1411, i * 0.1, i * 0.1, {}) end
-s = run("status")
-check(s:find("(1429): 3 (all maps: 5)", 1, true) ~= nil, "herb counts")
-
-ns.GetDB().routeSource = "gm2"
-s = run("status")
-check(s:find("gm2 (GatherMate2", 1, true) ~= nil, "gm2 source")
-ns.GetDB().routeSource = "density"
-
-NodeTrailDB.recipes = { alchemy = {}, alchemyScanned = 123 }
-s = run("status")
-check(s:find("Alchemy recipes: scanned", 1, true) ~= nil, "alchemy scanned")
-
-mapID = nil
-s = run("status")
-check(s:find("(unknown): 0", 1, true) ~= nil, "unknown map")
-mapID = 1429
-
-for i = 1, 6 do ns.RecordHerb(1429, 0.3 + i * 0.004, 0.3 + i * 0.004, {}) end
-for i = 1, 6 do ns.RecordHerb(1429, 0.7 + i * 0.004, 0.6 + i * 0.004, {}) end
-r = run("start")
-check(r:find("route started", 1, true) ~= nil, "start route")
-check(ns.activeRoute and ns.activeRoute.source == "density", "route source density")
-s = run("status")
-check(s:find("Active route: ", 1, true) ~= nil, "active route present")
-check(s:find([[points, density]], 1, true) ~= nil, [[active route density]])
-check(s:find("Active route: none", 1, true) == nil, "not none")
-r = run("reload")
-check(r:find("route started", 1, true) ~= nil, "reload route")
-r = run("stop")
-check(r:find("route cleared", 1, true) ~= nil, "stop route")
-check(ns.activeRoute == nil, "activeRoute nil")
-
-pkg.modState.NodeTrail = false
-s = run("status")
-check(s:find("Module: off", 1, true) ~= nil, "module off")
-
-s = run("  STATUS  ")
-check(s:find("NodeTrail status:", 1, true) ~= nil, "case whitespace status")
-
--- /nt ttdiag: layout diagnostic. The slash spec's Tooltip stub has no
--- Diag implementation, so the branch must fall back cleanly (the branch
--- is only reachable after Enable — module gating already proven above).
-local d = run("ttdiag")
-check(d:find("ttdiag", 1, true) ~= nil, "ttdiag prints")
-check(d:find("unavailable", 1, true) ~= nil, "ttdiag falls back when the tooltip stub has no Diag")
-
 -- ── /mpack status identity header (t_e9996745) ──────────────────────────
 -- The card: `/mpack status` must print, BEFORE the module lines, an addon
 -- version line, an interface/client-build line (build number via
@@ -135,11 +46,6 @@ MightiePackDB = nil
 local mpkg = {}
 assert(loadfile(root .. "/MightiePack/Core.lua"))("MightiePack", mpkg)
 assert(loadfile(root .. "/MightiePack/Modules.lua"))("MightiePack", mpkg)
-mpkg.RegisterModule("NodeTrail", {
-  title = "NodeTrail",
-  notes = "Herb routes from your own gathers (white path on world map + minimap), herb tooltip. /nt start | stop | reload | status",
-  Enable = function() end, -- not called here (no EnableModules in this spec)
-})
 local mpOpened = false
 mpkg.OpenOptions = function() mpOpened = true end
 
@@ -167,9 +73,9 @@ check(st:find("build 16001", 1, true) ~= nil, "mpack status: client build number
 check(st:find("client 16.0.0.16001", 1, true) ~= nil, "mpack status: full GetBuildInfo version string")
 check(st:find("locale enUS", 1, true) ~= nil, "mpack status: current locale")
 check(st:find("GatherMate2: loaded", 1, true) ~= nil, "mpack status: GatherMate2 loaded")
-check(st:find("NodeTrail: on", 1, true) ~= nil, "mpack status: NodeTrail module line still on")
+check(st:find("NodeTrail: a separate addon", 1, true) ~= nil, "mpack status: the NodeTrail line says it is a separate addon")
 check(st:find("Touchstone: off", 1, true) ~= nil, "mpack status: Touchstone module line still off")
-local vPos, ntPos = st:find("version 0.3.0", 1, true), st:find("NodeTrail: on", 1, true)
+local vPos, ntPos = st:find("version 0.3.0", 1, true), st:find("Touchstone: off", 1, true)
 check(vPos ~= nil and ntPos ~= nil and vPos < ntPos, "mpack status: header lines come before module lines")
 
 IsAddOnLoaded = function() return false end
@@ -194,7 +100,7 @@ check(okE, "mpack status: nil GetAddOnMetadata does not error (missing function)
 if okE then
   check(stE:find("version unknown", 1, true) ~= nil, "mpack status: nil GetAddOnMetadata prints version unknown")
   check(stE:find("interface unknown", 1, true) ~= nil, "mpack status: nil GetAddOnMetadata prints interface unknown")
-  check(stE:find("NodeTrail: on", 1, true) ~= nil, "mpack status: module lines survive the nil metadata")
+  check(stE:find("Touchstone: off", 1, true) ~= nil, "mpack status: module lines survive the nil metadata")
 end
 GetAddOnMetadata = function() return nil end
 local okR, stR = pcall(runMp, "status")
@@ -216,7 +122,7 @@ if okN then
   check(stN:find("build unknown", 1, true) ~= nil, "all absent: build unknown")
   check(stN:find("locale unknown", 1, true) ~= nil, "all absent: locale unknown")
   check(stN:find("GatherMate2: unknown", 1, true) ~= nil, "all absent: GatherMate2 unknown")
-  check(stN:find("NodeTrail: on", 1, true) ~= nil, "all absent: module lines still printed")
+  check(stN:find("Touchstone: off", 1, true) ~= nil, "all absent: module lines still printed")
 end
 
 -- A module that refused to run (Touchstone while the standalone folder exists)
@@ -236,55 +142,6 @@ check(stI:find("TouchTest: on (loaded)", 1, true) == nil,
 -- `/nt minimap on|off` is the minimap line's own switch (the world map route is
 -- untouched); `/nt navwalk` records the four-stop walk and must degrade to a
 -- message — not an error — when the minimap module is not loaded.
-do
-  NodeTrailDB.navwalk = nil
-  local before = ns.GetDB().showMinimap
-  local off = run("minimap off")
-  check(ns.GetDB().showMinimap == false, "minimap off: the switch is off (" .. tostring(off) .. ")")
-  check(off:find("minimap route off", 1, true) ~= nil, "minimap off: it says so")
-  check(ns.GetDB().showWorldMap == true, "minimap off: the world map route is untouched")
-  run("minimap on")
-  check(ns.GetDB().showMinimap == true, "minimap on: the switch is on again")
-  check(before == true, "minimap: the default is on, as shipped")
-  local walk = run("navwalk mark start")
-  check(walk:find("navwalk", 1, true) ~= nil, "navwalk: the command is routed (got " .. tostring(walk) .. ")")
-  check(not walk:find("error", 1, true), "navwalk: no error when the minimap module is absent")
-  local walkOut = run("navwalk")
-  check(walkOut:find("navwalk", 1, true) ~= nil, "navwalk: a bare command prints its state")
-  local help2 = run("help")
-  check(help2:find("/nt minimap", 1, true) ~= nil, "help lists /nt minimap")
-  check(help2:find("/nt navwalk", 1, true) ~= nil, "help lists /nt navwalk")
-  check(help2:find("/nt linetest", 1, true) ~= nil, "help lists /nt linetest")
-
-  -- `/nt linetest` must invalidate the decoration drawers as well as the stroke.
-  ns.LineDraw = {
-    Invalidate = function(d)
-      if type(d) == "table" then
-        d.invalidated = (d.invalidated or 0) + 1
-      end
-    end,
-    RunLineTest = function()
-      return { recommended = "dots", line = {}, rotate = {}, texcoord = {}, dots = {} }
-    end,
-  }
-  ns.MapOverlay = {
-    drawer = {}, skinDrawer = {}, styleDrawer = {}, skinStyleDrawer = {},
-    Redraw = function() end,
-  }
-  ns.MinimapPath = {
-    drawer = {}, skinDrawer = {}, styleDrawer = {}, skinStyleDrawer = {},
-    Redraw = function() end,
-  }
-  run("linetest use rotate")
-  check(ns.MapOverlay.styleDrawer.invalidated == 1
-      and ns.MapOverlay.skinStyleDrawer.invalidated == 1,
-    "linetest use: world-map style drawers are invalidated")
-  check(ns.MinimapPath.styleDrawer.invalidated == 1
-      and ns.MinimapPath.skinStyleDrawer.invalidated == 1,
-    "linetest use: minimap style drawers are invalidated")
-  check(ns.MapOverlay.drawer.invalidated == 1 and ns.MinimapPath.drawer.invalidated == 1,
-    "linetest use: stroke drawers are still invalidated")
-end
 
 if failed == 0 then
   print("slash_spec: ok")
