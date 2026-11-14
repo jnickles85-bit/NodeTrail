@@ -66,10 +66,13 @@
 sync_touchstone: source C:\Users\jnick\AppData\Local\hermes\profiles\rowan\cache\scratch\statforge-pristine@80accdd
 sync_touchstone: 11 lua files matched shipped; toc ok
 
-== 4. luacheck
-NOT RUN LOCALLY: luacheck is not installed on this machine (luarocks here is
-pinned to Lua 5.4 with no manifest access, and CI installs luacheck 1.2.0).
-The CI job is the luacheck gate for this branch; its result is reported on the PR.
+== 4. luacheck (local, Lua 5.4 rocks driving luacheck 1.2.0 over the shipping tree)
+$ LUA_PATH="C:/Users/jnick/.luarocks/share/lua/5.4/?.lua;...;;" \
+  LUA_CPATH="C:/Users/jnick/.luarocks/lib/lua/5.4/?.dll;;" \
+  lua C:/Users/jnick/.luarocks/bin/luacheck MightiePack
+Total: 0 warnings / 0 errors in 20 files
+(20 shipping files: the NodeTrail module's 27 left with the extraction, Theme.lua
+is the one added file, Window/Common.lua is gone.)
 
 == 5. CI (run 43640898861, head 2fa1b10, ubuntu-24.04 / Lua 5.1.5 / luacheck 1.2.0)
 32 spec(s) run, 0 failure(s)
