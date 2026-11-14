@@ -1,0 +1,14 @@
+FAIL: a click at the centre of the inner "Upgrades" tab (558,-330) reaches the body: got MightiePackWindow/Frame; chain MightiePackWindow/Frame L2 <- UIParent/Frame L1
+FAIL: a click at the centre of the inner "Log" tab (666,-330) reaches the body: got MightiePackWindow/Frame; chain MightiePackWindow/Frame L2 <- UIParent/Frame L1
+FAIL: a click at the centre of the inner "Settings" tab (774,-330) reaches the body: got MightiePackWindow/Frame; chain MightiePackWindow/Frame L2 <- UIParent/Frame L1
+FAIL: a click at the centre of the Upgrades tab button (1333,-419) reaches the body: got MightiePackWindow/Frame; chain MightiePackWindow/Frame L2 <- UIParent/Frame L1
+FAIL: a click at the centre of the Log tab button (1338,-419) reaches the body: got MightiePackWindow/Frame; chain MightiePackWindow/Frame L2 <- UIParent/Frame L1
+FAIL: hiding the cover hands the inner Log tab back to itself (got MightiePackWindow/Frame)
+inner tab "Upgrades" (558,-330) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+inner tab "Log" (666,-330) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+inner tab "Settings" (774,-330) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+Upgrades tab button (1333,-419) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+Log tab button (1338,-419) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+empty area (484,-540) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+empty area (1436,-540) -> MightiePackWindow/Frame | MightiePackWindow/Frame L2 <- UIParent/Frame L1
+window_inner_input_spec: 6 failure(s)

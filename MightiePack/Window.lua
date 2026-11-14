@@ -189,7 +189,22 @@ function W._Ensure()
   W.frame = f
   call(f, "SetSize", W.WIDTH, W.HEIGHT)
   call(f, "SetFrameStrata", "DIALOG")
-  call(f, "EnableMouse", true)
+  -- ── The window frame does NOT take clicks (card t_cdee6bb6) ─────────────
+  -- It used to: `EnableMouse(true)` here, while the window sits in DIALOG and
+  -- the hosted Touchstone body sits in MEDIUM. Mouse hit-testing follows the
+  -- same order as painting — strata first, then level — so this frame was ABOVE
+  -- the body for input as well and took every click over it. The body's own
+  -- controls (its Upgrades / Log / Settings strip, its panel buttons) were
+  -- present, wired and correct, and never reached; the four OUTER tabs worked
+  -- because they are children of this frame, in the same DIALOG strata.
+  -- That is t_5d0cc41a's strata defect read for the mouse instead of the brush.
+  --
+  -- Nothing is lost by turning it off: dragging lives on the title bar
+  -- (`bar:EnableMouse(true)` + RegisterForDrag, below), the tab row and the
+  -- close button are their own buttons, and the "do not click through to the
+  -- world" duty moves DOWN to the fill, which is the only frame that should
+  -- own empty window space. See W.bg, below.
+  call(f, "EnableMouse", false)
   call(f, "SetClampedToScreen", true)
   call(f, "SetMovable", true)
   call(f, "SetToplevel", true)
@@ -210,8 +225,14 @@ function W._Ensure()
   --
   -- The three properties that make it safe:
   --   * SetAllPoints(window): exactly the window's area, nothing more;
-  --   * EnableMouse(false): the fill must NEVER take a click. A fill that eats
-  --     the tab row is the dead-tab defect (t_ea66cd84) wearing a new coat;
+  --   * EnableMouse(true): the fill is where the "do not click through to the
+  --     world" duty now lives (card t_cdee6bb6). It is the LOWEST layer, so
+  --     content (MEDIUM) and chrome (DIALOG) still win the hit test over it —
+  --     the fill only ever catches the clicks that land on empty window area.
+  --     Turning the WINDOW frame's mouse off without this would trade a dead
+  --     panel for a window you can click through into the camera. (On
+  --     t_5d0cc41a the fill had to be mouse-off because the window frame was
+  --     still catching empty space; both halves are one decision.)
   --   * a level at or below the window's, so on a client that also orders by
   --     level inside a strata the fill still loses.
   local bg = newFrame("Frame", W.NAME .. "Background", f, "BackdropTemplate")
@@ -220,7 +241,7 @@ function W._Ensure()
     W.bg = bg
     call(bg, "SetAllPoints", f)
     call(bg, "SetFrameStrata", "BACKGROUND")
-    call(bg, "EnableMouse", false)
+    call(bg, "EnableMouse", true)
     local okLevel, winLevel = call(f, "GetFrameLevel")
     if okLevel and type(winLevel) == "number" then
       call(bg, "SetFrameLevel", math.max(1, winLevel - 1))

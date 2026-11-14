@@ -23,9 +23,14 @@
 -- hack. This file pins the STRUCTURE, not the instance:
 --
 --   1. THE FILL IS ITS OWN FRAME: BACKGROUND strata, SetAllPoints(window), the
---      same dark 0.96 it always painted, and — load-bearing —
---      `EnableMouse(false)`. A fill that eats the tab row is the dead-tab defect
---      wearing a new coat (t_ea66cd84).
+--      same dark 0.96 it always painted, and — load-bearing — `EnableMouse(true)`
+--      (card t_cdee6bb6). The fill is the LOWEST layer, so content and chrome
+--      still win the hit test over it; what it catches is the click on empty
+--      window area, which must not fall through to the camera. It was mouse-off
+--      on t_5d0cc41a only because the WINDOW frame was still mouse-enabled and
+--      caught that click itself — and that same window frame, in DIALOG, was
+--      eating every click over the MEDIUM Touchstone body. See
+--      tests/window_inner_input_spec.lua for the input half, measured.
 --   2. THE CHROME FRAME PAINTS NO FILL. A backdrop fill on the DIALOG frame is
 --      the defect itself, whatever colour it is; the border stays.
 --   3. THE ORDER: fill < content < chrome, by strata rank, and the body stays
@@ -119,9 +124,10 @@ if type(bg) == "table" then
       .. tostring(bg:GetName()) .. ")")
   check(bg:GetFrameStrata() == "BACKGROUND",
     "the fill frame is on BACKGROUND strata (got " .. tostring(bg:GetFrameStrata()) .. ")")
-  check(bg:IsMouseEnabled() == false,
-    "the fill frame is NOT mouse-enabled — a fill that eats the tab row is the "
-      .. "dead-tab defect wearing a new coat")
+  check(bg:IsMouseEnabled() == true,
+    "the fill frame IS mouse-enabled — it is the lowest layer and owns only the "
+      .. "clicks on empty window area, which must not fall through to the camera "
+      .. "(card t_cdee6bb6)")
   local rw, rf = C.Rect(win), C.Rect(bg)
   local same = math.abs(rw.left - rf.left) < 0.5 and math.abs(rw.right - rf.right) < 0.5
     and math.abs(rw.top - rf.top) < 0.5 and math.abs(rw.bottom - rf.bottom) < 0.5
@@ -258,7 +264,11 @@ do
   zHost:SetParent(nil)
 end
 
--- ── 6. THE FILL DOES NOT OWN THE MOUSE ────────────────────────────────────
+-- ── 6. THE FILL DOES NOT OWN THE MOUSE OVER CONTENT OR CHROME ─────────────
+-- The fill IS mouse-enabled (leg 1, t_cdee6bb6): it owns the clicks on empty
+-- window area. What it must never do is take a click from a control that draws
+-- above it — that was the dead-tab defect (t_ea66cd84) and its inner-strip twin
+-- (t_cdee6bb6). Both are measured here at the same points the player clicks.
 for _, id in ipairs(W.TABS) do
   local btn = W.tabButtons[id]
   if type(btn) == "table" then
@@ -274,6 +284,13 @@ if type(bg) == "table" and type(body) == "table" then
   check(C.MouseOwnerAt(bx, by) ~= bg,
     "the fill frame does not own the mouse over the body")
 end
+-- ...and the window's own DIALOG frame must not either: with the window frame
+-- mouse-enabled it outranked the MEDIUM body for input, which is the whole of
+-- card t_cdee6bb6. Empty-area clicks belong to the fill; content and chrome to
+-- themselves.
+check(win:IsMouseEnabled() == false,
+  "the window's chrome frame does NOT take clicks — in DIALOG it outranks the "
+    .. "MEDIUM body it hosts and would swallow every inner control")
 check(#C.ZOrderHazards() == 0,
   "and the live tree is still hazard-free after the teeth legs are detached (got "
     .. C.DescribeZOrderHazards() .. ")")
