@@ -21,6 +21,10 @@ StatForge = StatForge or {}
 local SF = StatForge
 local C = SF.Colors
 
+-- The host the tab last rendered into. Nothing reads it for behaviour; the layout
+-- snapshot (SF.OptionsTabLayout) needs it because the regions live ON the host.
+local currentHost
+
 -- The slash handler is the writer. The checkboxes call it and then re-read,
 -- so a click and `/up detail` cannot store two different shapes.
 local function advisorSlash(msg)
@@ -123,37 +127,76 @@ local function syncShown(host)
   if host.roleClear then host.roleClear:SetChecked(role == nil) end
 end
 
-local function labelledCheck(parent, name, text, x, y)
+local function labelledCheck(parent, name, text)
+  -- Anchoring is the caller's: a checkbox in a FLOWED stack is placed by the
+  -- block's position (card t_4e5ad8a4), and a checkbox beside another control is
+  -- anchored to that control. A y baked in here is exactly the kind of fixed
+  -- offset that put two controls on the same line.
   local cb = CreateFrame("CheckButton", name, parent, "UICheckButtonTemplate")
-  cb:SetPoint("TOPLEFT", x, y)
   local label = SF.UI_CreateLabel(parent, text, "GameFontHighlight")
   label:SetPoint("LEFT", cb, "RIGHT", 2, 0)
   cb.label = label
   return cb
 end
 
+-- Assigned below build(); build() calls it at the end, so the widgets exist by
+-- the time it runs. A forward local keeps the flow ONE function that both the
+-- build and every render go through.
+local relayout
+
 local function build(host)
   -- ---------------------------------------------------------------------
-  -- Card t_4ddeae90 (defect 1): the vertical rhythm below is COMPRESSED.
-  -- The old offsets (18/56/96/140/200/226/248/278/304/344/392/416, gaps of
-  -- 8-24) put the About block at y -494 in a 515-unit content area, and its
-  -- 11 rendered lines (11 x 12 -- GameFontHighlight is FRIZQT__.TTF height 12
-  -- with spacing 0 in this client) need 132, so the block ended at 626: 111
-  -- units past the frame and nothing clips it. Every control is still here,
-  -- in the same order and at the same x; only the y offsets and the gaps
-  -- moved. Budget: 432 of the 515 units are widget height (About included),
-  -- which leaves 83 for the whole stack's spacing -- so the gaps run 3-7
-  -- instead of 8-24.
-  local title = SF.UI_CreateLabel(host, "Options", "GameFontNormalLarge")
-  title:SetPoint("TOPLEFT", 20, -4)
+  -- Card t_4e5ad8a4 (defect 2): THE STACK FLOWS, and it scrolls.
+  --
+  -- The offsets this replaces (-24/-60/-94/-135/-152/-203/-258/-293/-309) were
+  -- tuned to a 515-unit content area while the About block hung off the BOTTOM
+  -- edge. Inside the unified window the body is smaller (441 units, measured on
+  -- the owner's 2026-11-14 screenshot at window scale 1.00: the panel's interior
+  -- spans 661 px at 1.5 px per unit), so the bottom-anchored block climbed into
+  -- the fixed stack and printed the About paragraph over Role/Class/roleNote.
+  -- The body's height is the WINDOW's business and has already changed twice, so
+  -- nothing below is a y position: every block is anchored under the block above
+  -- it, at that block's measured height (relayout()).
+  --
+  -- The content is taller than the body at every size this window has had (the
+  -- stack above alone ends at ~369 and About needs 132; 501 > 441). A flow that
+  -- simply grew would then draw its tail outside the panel, and nothing clips a
+  -- child to its parent, so the flow lives on a scrolled content frame. The wheel
+  -- moves the whole stack; the tab still opens at the top.
+  local viewport = CreateFrame("Frame", "TouchstoneOptionsViewport", host)
+  viewport:SetAllPoints(host)
+  -- Mouse AND wheel: the documented pair for receiving OnMouseWheel (the two
+  -- list tabs' viewports do the same). The viewport is the content's PARENT, so
+  -- every control inside it is a level above and keeps its own clicks; only the
+  -- empty body area lands here, and it is absorbed rather than reaching the
+  -- camera (the window's own fill is what catches that elsewhere).
+  viewport:EnableMouse(true)
+  viewport:EnableMouseWheel(true)
+  -- The content is TALLER than the body, so it has to be CLIPPED to it: nothing
+  -- in this window clips a child to its parent by default, and without this the
+  -- stack's tail would paint over the panel's border and the window around it —
+  -- the very defect this card is about, moved from "over the text" to "over the
+  -- chrome". Guarded because the API is not in every client this pack targets;
+  -- on a client without it the content still scrolls, and the tail is drawn
+  -- outside the panel while the stack is at the top (recorded, not hidden).
+  if type(viewport.SetClipsChildren) == "function" then
+    viewport:SetClipsChildren(true)
+  end
+  local content = CreateFrame("Frame", nil, viewport)
+  content:SetPoint("TOPLEFT", viewport, "TOPLEFT", 0, 0)
+  content:SetPoint("TOPRIGHT", viewport, "TOPRIGHT", 0, 0)
+  host.viewport = viewport
+  host.content = content
+  host.scroll = 0
+
+  local title = SF.UI_CreateLabel(content, "Options", "GameFontNormalLarge")
   title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   host.title = title
 
   local hideMini = StatForgeDB and StatForgeDB.minimapHide
-  local cb1 = CreateFrame("CheckButton", nil, host, "UICheckButtonTemplate")
-  cb1:SetPoint("TOPLEFT", 16, -24)
+  local cb1 = CreateFrame("CheckButton", nil, content, "UICheckButtonTemplate")
   cb1:SetChecked(not hideMini)
-  local l1 = SF.UI_CreateLabel(host, "Show minimap button", "GameFontHighlight")
+  local l1 = SF.UI_CreateLabel(content, "Show minimap button", "GameFontHighlight")
   l1:SetPoint("LEFT", cb1, "RIGHT", 4, 0)
   cb1:SetScript("OnClick", function(self)
     if not StatForgeDB then return end
@@ -165,10 +208,9 @@ local function build(host)
   -- Card t_b7b5f60c (audit U1 §4): diagnostics behind a BUTTON. The panel and
   -- the `/sf diag` / `/up diag` chat commands are unchanged — this is an
   -- additional surface, not a replacement, so the command path keeps working.
-  local diagBtn = SF.UI_CreateButton(host, "Diagnostics", 160, 28)
-  diagBtn:SetPoint("TOPLEFT", 16, -60)
+  local diagBtn = SF.UI_CreateButton(content, "Diagnostics", 160, 28)
   diagBtn:SetScript("OnClick", function() SF.ShowDiagnosticsPanel() end)
-  local l2 = SF.UI_CreateLabel(host, "Copy this client's API report when a verdict looks wrong",
+  local l2 = SF.UI_CreateLabel(content, "Copy this client's API report when a verdict looks wrong",
     "GameFontHighlight")
   l2:SetPoint("LEFT", diagBtn, "RIGHT", 10, 0)
   l2:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
@@ -183,8 +225,7 @@ local function build(host)
   -- rescales the window under the cursor, so a small drag runs the value to the
   -- end of the track. A drag updates the label only; the scale is applied on
   -- mouse-up. A SetValue that is not a drag still applies immediately.
-  local scaleLabel = SF.UI_CreateLabel(host, "Window scale", "GameFontHighlight")
-  scaleLabel:SetPoint("TOPLEFT", 20, -94)
+  local scaleLabel = SF.UI_CreateLabel(content, "Window scale", "GameFontHighlight")
   host.scaleLabel = scaleLabel
 
   local lo, hi = 0.5, 1.5
@@ -192,7 +233,7 @@ local function build(host)
     lo, hi = SF.WindowScaleBounds()
   end
   local SLIDER_STEP = 0.05
-  local slider = CreateFrame("Slider", nil, host)
+  local slider = CreateFrame("Slider", nil, content)
   slider:SetOrientation("HORIZONTAL")
   slider:SetSize(360, 20)
   slider:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", 0, -3)
@@ -220,7 +261,7 @@ local function build(host)
   if type(slider.SetThumbTexture) == "function" then
     slider:SetThumbTexture(thumb)
   end
-  local scaleValue = SF.UI_CreateLabel(host, "", "GameFontHighlight")
+  local scaleValue = SF.UI_CreateLabel(content, "", "GameFontHighlight")
   scaleValue:SetPoint("LEFT", slider, "RIGHT", 12, 0)
   host.scaleValue = scaleValue
   host.scaleSlider = slider
@@ -272,18 +313,20 @@ local function build(host)
 
   -- "What Touchstone shows". Every control writes through the slash handler
   -- that already owns the ChestAdvisorDB key, then syncShown re-reads it.
-  local shows = SF.UI_CreateLabel(host, "What Touchstone shows", "GameFontNormal")
-  shows:SetPoint("TOPLEFT", 20, -135)
+  local shows = SF.UI_CreateLabel(content, "What Touchstone shows", "GameFontNormal")
   shows:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   host.showsHeader = shows
 
-  local detailLabel = SF.UI_CreateLabel(host, "Tooltip detail", "GameFontHighlight")
-  detailLabel:SetPoint("TOPLEFT", 20, -152)
+  local detailLabel = SF.UI_CreateLabel(content, "Tooltip detail", "GameFontHighlight")
   host.detailLabel = detailLabel
 
-  local detailFull = labelledCheck(host, "TouchstoneOptDetailFull", "Full", 16, -167)
-  local detailCompact = labelledCheck(host, "TouchstoneOptDetailCompact", "Compact", 150, -167)
-  local detailUpgrades = labelledCheck(host, "TouchstoneOptDetailUpgrades", "Upgrades only", 320, -167)
+  local detailFull = labelledCheck(content, "TouchstoneOptDetailFull", "Full")
+  local detailCompact = labelledCheck(content, "TouchstoneOptDetailCompact", "Compact")
+  local detailUpgrades = labelledCheck(content, "TouchstoneOptDetailUpgrades", "Upgrades only")
+  -- One line of three: the row's first control is the block the flow places, and
+  -- its neighbours hang off it, so they cannot separate when the stack moves.
+  detailCompact:SetPoint("TOPLEFT", detailFull, "TOPLEFT", 134, 0)
+  detailUpgrades:SetPoint("TOPLEFT", detailFull, "TOPLEFT", 304, 0)
   detailFull:SetScript("OnClick", function()
     advisorSlash("detail full")
     syncShown(host)
@@ -300,38 +343,38 @@ local function build(host)
   host.detailCompact = detailCompact
   host.detailUpgrades = detailUpgrades
 
-  local detailHint = SF.UI_CreateLabel(host,
+  local detailHint = SF.UI_CreateLabel(content,
     "Full always includes the numbers. Compact shows them while Shift is held. Upgrades only hides not-an-upgrade lines.",
     "GameFontHighlight")
-  detailHint:SetPoint("TOPLEFT", 20, -203)
   detailHint:SetWidth(820)
   detailHint:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.detailHint = detailHint
 
-  local tooltipCheck = labelledCheck(host, "TouchstoneOptTooltip", "Tooltip line", 16, -220)
+  local tooltipCheck = labelledCheck(content, "TouchstoneOptTooltip", "Tooltip line")
   tooltipCheck:SetScript("OnClick", function(self)
     advisorSlash(self:GetChecked() and "tooltip on" or "tooltip off")
     syncShown(host)
   end)
   host.tooltipCheck = tooltipCheck
 
-  local toastCheck = labelledCheck(host, "TouchstoneOptToast", "Upgrade toast", 220, -220)
+  local toastCheck = labelledCheck(content, "TouchstoneOptToast", "Upgrade toast")
+  toastCheck:SetPoint("TOPLEFT", tooltipCheck, "TOPLEFT", 204, 0)
   toastCheck:SetScript("OnClick", function(self)
     advisorSlash(self:GetChecked() and "toast on" or "toast off")
     syncShown(host)
   end)
   host.toastCheck = toastCheck
 
-  local glyphCheck = labelledCheck(host, "TouchstoneOptGlyphs",
-    "Colorblind-safe markers (+ upgrade, ^ trade-off)", 420, -220)
+  local glyphCheck = labelledCheck(content, "TouchstoneOptGlyphs",
+    "Colorblind-safe markers (+ upgrade, ^ trade-off)")
+  glyphCheck:SetPoint("TOPLEFT", tooltipCheck, "TOPLEFT", 404, 0)
   glyphCheck:SetScript("OnClick", function(self)
     advisorSlash(self:GetChecked() and "glyphs on" or "glyphs off")
     syncShown(host)
   end)
   host.glyphCheck = glyphCheck
 
-  local resetBtn = SF.UI_CreateButton(host, "Reset to defaults", 180, 28)
-  resetBtn:SetPoint("TOPLEFT", 16, -258)
+  local resetBtn = SF.UI_CreateButton(content, "Reset to defaults", 180, 28)
   -- Card t_4ddeae90 (defect 2): ONE command, ONE chat line. This used to fire
   -- the four settings subcommands in a row, and the success echo prints once
   -- per call, so a single click produced four lines ("tooltip detail full",
@@ -345,10 +388,10 @@ local function build(host)
     advisorSlash("reset")
     syncShown(host)
   end)
-  local resetHint = SF.UI_CreateLabel(host, "Tooltip, toast, and marker glyphs. Also clears a chosen Gear-for spec (back to Auto). Does not clear /up role or the log.",
+  local resetHint = SF.UI_CreateLabel(content, "Tooltip, toast, and marker glyphs. Also clears a chosen Gear-for spec (back to Auto). Does not clear /up role or the log.",
     "GameFontHighlight")
   resetHint:SetPoint("LEFT", resetBtn, "RIGHT", 10, 0)
-  resetHint:SetPoint("RIGHT", host, "RIGHT", -16, 0)
+  resetHint:SetPoint("RIGHT", content, "RIGHT", -16, 0)
   resetHint:SetJustifyH("LEFT")
   if type(resetHint.SetJustifyV) == "function" then
     resetHint:SetJustifyV("MIDDLE")
@@ -359,13 +402,11 @@ local function build(host)
   resetHint:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.resetButton = resetBtn
 
-  local roleHeader = SF.UI_CreateLabel(host, "Role", "GameFontNormal")
-  roleHeader:SetPoint("TOPLEFT", 20, -293)
+  local roleHeader = SF.UI_CreateLabel(content, "Role", "GameFontNormal")
   roleHeader:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
   host.roleHeader = roleHeader
 
-  local classLabel = SF.UI_CreateLabel(host, "Class:", "GameFontHighlight")
-  classLabel:SetPoint("TOPLEFT", 20, -309)
+  local classLabel = SF.UI_CreateLabel(content, "Class:", "GameFontHighlight")
   host.classLabel = classLabel
   -- The reset control and class label are unnamed, so tests reach them here.
   -- Named checkboxes and the role row register themselves in CreateFrame.
@@ -374,18 +415,19 @@ local function build(host)
     classLabel = classLabel,
   }
 
-  local roleNote = SF.UI_CreateLabel(host, "", "GameFontHighlight")
-  roleNote:SetPoint("TOPLEFT", classLabel, "BOTTOMLEFT", 0, -4)
+  local roleNote = SF.UI_CreateLabel(content, "", "GameFontHighlight")
   roleNote:SetWidth(820)
   roleNote:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.roleNote = roleNote
 
-  local roleRow = CreateFrame("Frame", "TouchstoneOptRoleRow", host)
+  local roleRow = CreateFrame("Frame", "TouchstoneOptRoleRow", content)
   roleRow:SetSize(640, 28)
-  roleRow:SetPoint("TOPLEFT", roleNote, "BOTTOMLEFT", -4, -4)
-  local roleMelee = labelledCheck(roleRow, "TouchstoneOptRoleMelee", "Melee", 0, 0)
-  local roleSpell = labelledCheck(roleRow, "TouchstoneOptRoleSpell", "Spell", 160, 0)
-  local roleClear = labelledCheck(roleRow, "TouchstoneOptRoleClear", "Clear", 320, 0)
+  local roleMelee = labelledCheck(roleRow, "TouchstoneOptRoleMelee", "Melee")
+  roleMelee:SetPoint("TOPLEFT", roleRow, "TOPLEFT", 0, 0)
+  local roleSpell = labelledCheck(roleRow, "TouchstoneOptRoleSpell", "Spell")
+  roleSpell:SetPoint("TOPLEFT", roleMelee, "TOPLEFT", 160, 0)
+  local roleClear = labelledCheck(roleRow, "TouchstoneOptRoleClear", "Clear")
+  roleClear:SetPoint("TOPLEFT", roleMelee, "TOPLEFT", 320, 0)
   roleMelee:SetScript("OnClick", function()
     advisorSlash("role melee")
     syncShown(host)
@@ -403,24 +445,15 @@ local function build(host)
   host.roleSpell = roleSpell
   host.roleClear = roleClear
 
-  -- Card t_4ddeae90 (defect 1): the About block is anchored to the content
-  -- frame's BOTTOM edge, not to the role row above it. It used to chain off
-  -- roleRow's BOTTOM (-18, y -494); its 11 rendered lines need 132 units, so
-  -- it ended 111 units below the 515-unit content frame and -- with no clip and
-  -- no scroll anywhere in this tab -- the tail (/up diag and the Tip line) was
-  -- drawn over the panel's border in open space.
-  --
-  -- Two things fix it. The stack above is compressed (see build()'s header),
-  -- which is where the room came from; and the block's own bottom is now
-  -- DECLARED (515 - 4 = 511) instead of "wherever the stack above happens to
-  -- end". The audit could not measure the client's rendered line height, so a
-  -- top-anchored fix would be only as safe as that guess -- a bottom anchor
-  -- cannot fall outside the panel at any line height. With the evidence-based
-  -- metrics (GameFontHighlight = FRIZQT__.TTF height 12, spacing 0) the stack
-  -- above ends at 369, leaving 10 units of clearance to the role row and 6 to
-  -- the bottom of its 32-tall checkboxes.
-  local about = SF.UI_CreateLabel(host, "", "GameFontHighlight")
-  about:SetPoint("BOTTOMLEFT", host, "BOTTOMLEFT", 20, 4)
+  -- Card t_4e5ad8a4 (defect 2): the About block FLOWS under the role row. It used
+  -- to be anchored to the content frame's BOTTOM edge (t_4ddeae90 did that
+  -- because nobody could measure the client's rendered line height), which is a
+  -- bet on the body's height: at 515 units it cleared the role row by 10, and in
+  -- the unified window's 441-unit body it climbed 74 units into Role/Class.
+  -- The measured metrics on the owner's screenshot are 12 units per
+  -- GameFontHighlight line, so the block is 11 lines = 132 and it needs the
+  -- bottom of whatever is above it, not the bottom of the panel.
+  local about = SF.UI_CreateLabel(content, "", "GameFontHighlight")
   about:SetWidth(840)
   about:SetJustifyH("LEFT")
   about:SetText(
@@ -450,13 +483,117 @@ local function build(host)
   about:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.about = about
 
+  -- The stack, in draw order. Each entry is { region, x, gap, h }:
+  --   region — the block's top-left owner (a composite block owns its first row);
+  --   x      — the block's left edge, in content units (a COLUMN, not a layout);
+  --   gap    — the space above it;
+  --   h      — optional, the block's height when it is more than one region tall.
+  -- There is no y anywhere: relayout() derives it as the sum of the gaps and the
+  -- measured heights above. Adding a control means adding a line here.
+  host.blocks = {
+    { region = title,       x = 20, gap = 4 },
+    { region = cb1,         x = 16, gap = 8 },
+    { region = diagBtn,     x = 16, gap = 10 },
+    { region = scaleLabel,  x = 20, gap = 10,
+      h = function() return (scaleLabel:GetHeight() or 0) + 3 + (slider:GetHeight() or 0) end },
+    { region = shows,       x = 20, gap = 10 },
+    { region = detailLabel, x = 20, gap = 6 },
+    { region = detailFull,  x = 16, gap = 4 },
+    { region = detailHint,  x = 20, gap = 4 },
+    { region = tooltipCheck, x = 16, gap = 6 },
+    { region = resetBtn,    x = 16, gap = 10,
+      h = function() return math.max(resetBtn:GetHeight() or 0, resetHint:GetHeight() or 0) end },
+    { region = roleHeader,  x = 20, gap = 10 },
+    { region = classLabel,  x = 20, gap = 4 },
+    { region = roleNote,    x = 20, gap = 4 },
+    { region = roleRow,     x = 16, gap = 4 },
+    { region = about,       x = 20, gap = 8 },
+  }
+
+  -- The wheel moves the stack. It reads nothing else and stores nothing: the
+  -- scale slider and `/ts scale` remain the only scale controls (card
+  -- t_75261b9a), and this handler exists because the content is taller than the
+  -- body, not because the wheel has a new meaning.
+  viewport:SetScript("OnMouseWheel", function(_, delta)
+    -- Wheel down (the client's -1) moves the stack UP: same sign convention as
+    -- the two list tabs' scrollBy(-(delta or 0)).
+    host.scroll = (host.scroll or 0) - (delta or 0) * 24
+    relayout(host)
+  end)
+
   host.__optionsBuilt = true
+  relayout(host)
+end
+
+-- Card t_4e5ad8a4: the flow. Every block is placed under the block above it, at
+-- that block's MEASURED height, so:
+--   * no absolute y offset exists to be wrong when the body changes size;
+--   * a label that grows a line (a two-line class name, a wrapped hint) pushes
+--     everything under it down instead of being overprinted;
+--   * the About block starts where the role row ends, so it can never climb into
+--     Role/Class -- the defect this card is about.
+-- The content frame's height is the flow's own total; the wheel scrolls it.
+relayout = function(host)
+  local content = type(host) == "table" and host.content or nil
+  if type(content) ~= "table" or type(host.blocks) ~= "table" then return end
+  local y = 0
+  for _, b in ipairs(host.blocks) do
+    local r = b.region
+    -- A hidden block takes no room at all: the role row is hidden for a class
+    -- with one stat order, and a 28-unit hole where a control used to be is the
+    -- same class of bug as a fixed offset.
+    local shown = (type(r) ~= "table") or (type(r.IsShown) ~= "function") or r:IsShown()
+    if type(r) == "table" and shown then
+      y = y + (b.gap or 0)
+      r:ClearAllPoints()
+      r:SetPoint("TOPLEFT", content, "TOPLEFT", b.x or 20, -y)
+      local h
+      if type(b.h) == "function" then h = b.h() else h = r:GetHeight() end
+      if type(h) ~= "number" then h = 0 end
+      y = y + h
+    end
+  end
+  content:SetHeight(math.max(y, 1))
+
+  -- Clamp the scroll to what the stack actually needs: a short body scrolls, a
+  -- tall one does not, and neither can be scrolled into blank space.
+  local viewport = host.viewport
+  local overflow = 0
+  if type(viewport) == "table" then
+    overflow = math.max(0, (content:GetHeight() or 0) - (viewport:GetHeight() or 0))
+  end
+  local v = host.scroll or 0
+  if v < 0 then v = 0 end
+  if v > overflow then v = overflow end
+  host.scroll = v
+  host.scrollMax = overflow
+  -- Re-anchor the content: it hangs off the viewport's top, moved UP by v.
+  content:ClearAllPoints()
+  content:SetPoint("TOPLEFT", viewport, "TOPLEFT", 0, v)
+  content:SetPoint("TOPRIGHT", viewport, "TOPRIGHT", 0, v)
+end
+
+-- Read-only snapshot for the layout spec, the same convention the list tabs use
+-- (SF.UpgradesTabState / SF.LogTabState): the tab reports the very regions it
+-- placed, and re-derives nothing.
+function SF.OptionsTabLayout()
+  local host = currentHost
+  if type(host) ~= "table" then return nil end
+  return {
+    host = host,
+    content = host.content,
+    viewport = host.viewport,
+    blocks = host.blocks,
+    scroll = host.scroll or 0,
+    scrollMax = host.scrollMax or 0,
+  }
 end
 
 -- Repopulate: refresh the one control whose state can change while the window
 -- has been closed. Nothing is created here on a revisit (B8).
 local function render(host)
   if not host.__optionsBuilt then build(host) end
+  currentHost = host
   local hideMini = StatForgeDB and StatForgeDB.minimapHide
   if host.minimapCheck then host.minimapCheck:SetChecked(not hideMini) end
   if host.scaleSlider and type(SF.GetWindowScale) == "function" then
@@ -468,6 +605,11 @@ local function render(host)
     end
   end
   syncShown(host)
+  -- syncShown rewrites the class line and the role note, and either can wrap to a
+  -- different number of lines. Re-flow AFTER the text, every time (card
+  -- t_4e5ad8a4): a stack laid out before the text is a stack laid out for the
+  -- wrong text.
+  relayout(host)
 end
 
 local function release()

@@ -26,3 +26,53 @@
    subtitle:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
  
    local close = CreateFrame("Button", nil, titleBar, "UIPanelCloseButton")
+@@ -620,3 +637,49 @@
+   minimapBtn = btn
+   return btn
+ end
++
++-- ---------------------------------------------------------------------------
++-- The row model the two list tabs share (card t_4e5ad8a4).
++--
++-- A row's height is its own CONTENT's height, measured after the text is set,
++-- and the next row starts at the previous row's BOTTOM. There is no fixed pitch,
++-- because a verdict reason is a sentence rather than a label: "eligibility
++-- unconfirmed (fail-closed): client returned false …" wraps to two or three
++-- lines, and a pitch chosen for one line printed the third line over the next
++-- item's name.
++--
++-- The page is the run of rows that FITS the viewport, measured the same way.
++-- "12 rows" (Upgrades) and "13 rows" (Log) were only true while every row was
++-- the same height; once a row grows, a fixed count either clips the last row or
++-- draws the extra rows outside the panel, and nothing in this window clips a
++-- child to its parent.
++-- ---------------------------------------------------------------------------
++
++--- How many rows from `offset` fit in `avail` units, and their stacked height.
++--- `heights[i]` is row i's measured height; nil ends the list. The first row of
++--- a page is always admitted, so one row taller than the viewport is still shown
++--- (and readable by scrolling) instead of producing an empty page.
++function SF.PageRows(heights, offset, avail)
++  local first = math.max(1, (tonumber(offset) or 0) + 1)
++  local count, used = 0, 0
++  local limit = tonumber(avail) or 0
++  local i = first
++  while type(heights[i]) == "number" do
++    local h = heights[i]
++    if count > 0 and used + h > limit then break end
++    used = used + h
++    count = count + 1
++    i = i + 1
++  end
++  return first, count, used
++end
++
++--- Place one stacked row `y` units below its parent's top, and return the y the
++--- NEXT row starts at (this row's bottom).
++function SF.StackRow(row, parent, y)
++  y = y or 0
++  row:ClearAllPoints()
++  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -y)
++  row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -y)
++  return y + (row:GetHeight() or 0)
++end

@@ -46,10 +46,10 @@ local C = SF.Colors
 local MARKER_TEXTURE =
   (MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
 
-local ROW_H   = 34
+local ROW_H   = 34               -- the LEAST a row may be (a one-line reason)
+local ROW_PAD = 4                -- inside a row, above the name and below the reason
 local ICON    = 22
 local MARK    = 14
-local VISIBLE = 12               -- rows that fit the host without scrolling
 local ROW_INSET = 6
 
 -- The verdict the advisor reports for a genuine trade-off. Read off the
@@ -188,6 +188,7 @@ local state = {
   rendered = {},   -- the rows the toggle admits
   pool     = {},   -- one Button per index, created once
   offset   = 0,
+  shown    = 0,    -- rows on the page the layout last placed
   host     = nil,
   layout   = nil,
 }
@@ -196,13 +197,13 @@ local state = {
 -- tab exposes what it drew, it does not re-derive it.
 --   * `rows`    — every row, in the card's sort order (the full verdict set);
 --   * `admitted`— the rows the toggle currently admits (a subset of `rows`);
---   * `shown`   — how many of the admitted rows are inside the visible window.
+--   * `shown`   — how many of the admitted rows the layout placed on the page.
 function SF.UpgradesTabState()
   local out = {
     showAll  = state.showAll,
     total    = #state.rows,
     admitted = #state.rendered,
-    shown    = 0,
+    shown    = state.shown or 0,
     offset   = state.offset,
     rows     = {},
     rendered = {},
@@ -218,11 +219,6 @@ function SF.UpgradesTabState()
       link = r.link, verdict = r.verdict, reason = r.reason,
       slotWord = r.slotWord, name = r.name, rank = r.rank,
     }
-  end
-  for i = 1, #state.rendered do
-    if i > state.offset and i <= state.offset + VISIBLE then
-      out.shown = out.shown + 1
-    end
   end
   return out
 end
@@ -244,12 +240,17 @@ end
 local function buildRow(parent, index)
   local row = CreateFrame("Button", "TouchstoneUpgradeRow" .. index, parent)
   row:SetHeight(ROW_H)
-  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_H))
-  row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_H))
+  -- No pitch baked in here any more (card t_4e5ad8a4). The row's own height is
+  -- set from its measured text and it is PLACED by the stacking pass
+  -- (SF.StackRow), so a reason that wraps to three lines pushes the next row
+  -- down instead of printing over it.
+  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
   local icon = row:CreateTexture(nil, "ARTWORK")
   icon:SetSize(ICON, ICON)
-  icon:SetPoint("LEFT", ROW_INSET, 0)
+  -- Anchored to the row's TOP: the name and reason hang below the icon, so the
+  -- content's bottom is what the row's height is measured against.
+  icon:SetPoint("TOPLEFT", ROW_INSET, -ROW_PAD)
   row.icon = icon
 
   -- The mark. The green arrow is the SAME marker.tga the bag arrow uses; the
@@ -262,7 +263,11 @@ local function buildRow(parent, index)
   row.mark = mark
 
   local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  name:SetPoint("LEFT", icon, "RIGHT", 10, 6)
+  -- The name is anchored to the row's TOP-LEFT block, level with the icon's top.
+  -- It used to hang off the row's CENTRE (`LEFT`, +6), which puts the reason
+  -- below the centre: a row sized for that reason would then have to be nearly
+  -- twice the content's height to contain it.
+  name:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, 0)
   name:SetWidth(400)
   name:SetJustifyH("LEFT")
   row.itemName = name
@@ -298,6 +303,18 @@ local function buildRow(parent, index)
   return row
 end
 
+-- One row's height: its name and its reason, MEASURED (a FontString's GetHeight
+-- is its rendered height, wrapped lines included), plus the row's own padding.
+-- ROW_H is a floor, not a pitch: a one-line row keeps the height it always had,
+-- a three-line reason makes the row taller and the next row starts below it.
+local function rowHeight(row)
+  local nameH = row.itemName:GetHeight() or 0
+  local reasonH = row.reason:GetHeight() or 0
+  local h = ROW_PAD + nameH + 1 + reasonH + ROW_PAD
+  if h < ROW_H then h = ROW_H end
+  return h
+end
+
 local function build(host)
   local title = SF.UI_CreateLabel(host, "", "GameFontNormalLarge")
   title:SetPoint("TOPLEFT", 18, -14)
@@ -324,17 +341,25 @@ local function build(host)
   viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -10)
   viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -18, 12)
   viewport:EnableMouseWheel(true)
+  -- A row is admitted to a page only if it fits, but one row taller than the
+  -- whole viewport is still admitted (SF.PageRows) — clip so that case cannot
+  -- paint over the panel. Guarded: not every client exposes the call.
+  if type(viewport.SetClipsChildren) == "function" then
+    viewport:SetClipsChildren(true)
+  end
   host.viewport = viewport
 
   local rowParent = CreateFrame("Frame", nil, viewport)
   rowParent:SetPoint("TOPLEFT")
-  rowParent:SetSize(780, VISIBLE * ROW_H)
+  rowParent:SetWidth(780)
   host.rowParent = rowParent
 
   local function scrollBy(delta)
     if type(delta) ~= "number" or delta == 0 then return end
     local shown = #state.rendered
-    local maxOffset = math.max(0, shown - VISIBLE)
+    -- One row per wheel step, all the way to the last row: the page is whatever
+    -- fits, so "rows minus a page" is no longer a number that can be known here.
+    local maxOffset = math.max(0, shown - 1)
     state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
     if state.layout then state.layout() end
   end
@@ -373,14 +398,18 @@ local function repopulate(host)
     end
   end
 
-  local maxOffset = math.max(0, n - VISIBLE)
+  local maxOffset = math.max(0, n - 1)
   if state.offset > maxOffset then state.offset = maxOffset end
 
+  -- Card t_4e5ad8a4: the row model. Every admitted row is BOUND and MEASURED
+  -- first (its height is its own text), then the page is the run of rows that
+  -- fits the viewport, and each row is placed at the previous row's BOTTOM.
+  -- Upgrades and Log run the same two helpers (SF.PageRows / SF.StackRow), so
+  -- the two lists cannot drift apart.
   state.layout = function()
     for i, row in ipairs(state.pool) do
       local r = state.rendered[i]
-      local visible = (r ~= nil) and (i > state.offset) and (i <= state.offset + VISIBLE)
-      if visible then
+      if r then
         row.__link = r.link
         row.slot:SetText(r.slotWord)
 
@@ -402,12 +431,29 @@ local function repopulate(host)
           row.mark:Hide()
         end
 
-        row:Show()
+        row:SetHeight(rowHeight(row))
       else
         row.__link = nil
-        row:Hide()
       end
     end
+
+    local heights = {}
+    for i = 1, #state.rendered do
+      heights[i] = state.pool[i]:GetHeight()
+    end
+    local first, count = SF.PageRows(heights, state.offset, host.viewport:GetHeight() or 0)
+    local y = 0
+    for i = first, first + count - 1 do
+      y = SF.StackRow(state.pool[i], host.rowParent, y)
+      state.pool[i]:Show()
+    end
+    for i, row in ipairs(state.pool) do
+      if i < first or i >= first + count then row:Hide() end
+    end
+    -- The rows end where the page ends: the parent is exactly as tall as what it
+    -- holds, so a grown row can never be pushed outside the panel.
+    host.rowParent:SetHeight(math.max(y, 1))
+    state.shown = count
   end
   state.layout()
 end
@@ -422,7 +468,8 @@ local function render(host)
   host.toggle:SetLabel(state.showAll and "Upgrades only" or "Show all")
 
   local total = #state.rows
-  local shown = #state.rendered
+  local admitted = #state.rendered
+  local page = state.shown or 0
   host.title:SetText(SF.Accent("Upgrades"))
   if total == 0 then
     host.count:SetText("")
@@ -432,11 +479,11 @@ local function render(host)
     host.empty:Hide()
     host.viewport:Show()
     local more = ""
-    if shown > VISIBLE then
+    if admitted > page and page > 0 then
       more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
-        .. tostring(math.min(state.offset + VISIBLE, shown))
+        .. tostring(math.min(state.offset + page, admitted))
     end
-    host.count:SetText(tostring(shown) .. " of " .. tostring(total)
+    host.count:SetText(tostring(admitted) .. " of " .. tostring(total)
       .. " item" .. (total == 1 and "" or "s") .. more)
   end
 end
