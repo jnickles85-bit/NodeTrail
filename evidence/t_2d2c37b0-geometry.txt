@@ -70,3 +70,8 @@ sync_touchstone: 11 lua files matched shipped; toc ok
 NOT RUN LOCALLY: luacheck is not installed on this machine (luarocks here is
 pinned to Lua 5.4 with no manifest access, and CI installs luacheck 1.2.0).
 The CI job is the luacheck gate for this branch; its result is reported on the PR.
+
+== 5. CI (run 43640898861, head 2fa1b10, ubuntu-24.04 / Lua 5.1.5 / luacheck 1.2.0)
+32 spec(s) run, 0 failure(s)
+Luacheck: Checking 20 files ... Total: 0 warnings / 0 errors in 20 files
+luac -p: every shipping file parsed
