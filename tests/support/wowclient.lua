@@ -328,10 +328,14 @@ local function newFrame(kind, name, parent, template)
   end
   function f:SetFrameLevel(l) self.level = l end
   function f:GetFrameLevel()
+    -- Frozen at birth, exactly like the client: a frame's level is set once
+    -- (parent level + 1) and a later SetParent does NOT re-level it. Deriving
+    -- the level from the CURRENT parent would silently repair every reparent,
+    -- which is the class of bug this model must be able to see (a body moved
+    -- into a window keeps the level it was born with, so it can end up level
+    -- with -- or below -- the frame whose backdrop fills that window).
     if type(self.level) == "number" then return self.level end
-    local p = parentOf(self)
-    if p then return p:GetFrameLevel() + 1 end
-    return 1
+    return self._bornLevel or 1
   end
   function f:Raise() end
   function f:Lower() end
@@ -370,7 +374,18 @@ local function newFrame(kind, name, parent, template)
   function f:GetNormalTexture() return self.normalTexture end
   function f:SetPushedTexture(tex) self.pushedTexture = tex or true end
   function f:GetPushedTexture() return self.pushedTexture end
-  function f:SetHighlightTexture(tex) self.highlightTexture = tex or true end
+  function f:SetHighlightTexture(tex)
+    -- The client makes a highlight REGION and returns it from
+    -- GetHighlightTexture; a boolean would crash any code that colours it
+    -- (Touchstone's button helper does: `ht:SetVertexColor(...)`).
+    if type(self._highlight) ~= "table" and type(self.CreateTexture) == "function" then
+      self._highlight = self:CreateTexture(nil, "HIGHLIGHT")
+    end
+    if type(self._highlight) == "table" and type(self._highlight.SetTexture) == "function" then
+      self._highlight:SetTexture(tex)
+    end
+    self.highlightTexture = self._highlight or true
+  end
   function f:GetHighlightTexture() return self.highlightTexture end
   function f:SetDisabledTexture(tex) self.disabledTexture = tex or true end
   function f:GetChildren()
@@ -477,6 +492,12 @@ local function newFrame(kind, name, parent, template)
     f.parent = parent
     if type(parent.children) == "table" then parent.children[#parent.children + 1] = f end
   end
+  -- The client's birth level: parent + 1, and it sticks for the frame's life.
+  f._bornLevel = (type(parent) == "table" and parent:GetFrameLevel() or 0) + 1
+  -- The client publishes a NAMED frame as a global. Without this the model
+  -- cannot see a module that reaches its own frame through `_G["StatForgeMainFrame"]`
+  -- (MightiePack's attach path does exactly that).
+  if type(name) == "string" and name ~= "" then rawset(_G, name, f) end
   C.allFrames[#C.allFrames + 1] = f
   return f
 end
