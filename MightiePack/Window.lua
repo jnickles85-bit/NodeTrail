@@ -193,20 +193,65 @@ function W._Ensure()
   call(f, "SetClampedToScreen", true)
   call(f, "SetMovable", true)
   call(f, "SetToplevel", true)
+  -- ── The fill has its own frame, UNDER everything (card t_5d0cc41a) ───────
+  -- This window frame used to carry the opaque backdrop itself, in DIALOG. A
+  -- body reparented into the window keeps its OWN strata (StatForgeMainFrame is
+  -- MEDIUM, see AttachTouchstone), and strata beats frame level outright, so
+  -- the fill drew OVER the entire Touchstone body: header, inner strip and
+  -- list, uniformly, at every alpha 1.00. Measured on the owner's client:
+  --   TS MEDIUM (body)  vs  WIN DIALOG (the fill).
+  -- No covering-frame detector could see it: the culprit is an ancestor, and an
+  -- ancestor is excluded from "what draws over me" by definition.
+  --
+  -- So the fill moves here and the ordering becomes STRUCTURE, not a per-tab
+  -- fix:   fill (BACKGROUND) < content (MEDIUM) < chrome (DIALOG).
+  -- Any future reparented body at MEDIUM is correct without its own strata
+  -- hack, which is the point of fixing the class instead of the instance.
+  --
+  -- The three properties that make it safe:
+  --   * SetAllPoints(window): exactly the window's area, nothing more;
+  --   * EnableMouse(false): the fill must NEVER take a click. A fill that eats
+  --     the tab row is the dead-tab defect (t_ea66cd84) wearing a new coat;
+  --   * a level at or below the window's, so on a client that also orders by
+  --     level inside a strata the fill still loses.
+  local bg = newFrame("Frame", W.NAME .. "Background", f, "BackdropTemplate")
+    or newFrame("Frame", W.NAME .. "Background", f)
+  if type(bg) == "table" then
+    W.bg = bg
+    call(bg, "SetAllPoints", f)
+    call(bg, "SetFrameStrata", "BACKGROUND")
+    call(bg, "EnableMouse", false)
+    local okLevel, winLevel = call(f, "GetFrameLevel")
+    if okLevel and type(winLevel) == "number" then
+      call(bg, "SetFrameLevel", math.max(1, winLevel - 1))
+    end
+    if type(bg.SetBackdrop) == "function" then
+      call(bg, "SetBackdrop", {
+        -- The same texture and insets the window frame used, so the visible
+        -- fill area is identical to before: only the frame it lives on changed.
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        tile = true, tileSize = 32,
+        insets = { left = 8, right = 8, top = 8, bottom = 8 },
+      })
+      call(bg, "SetBackdropColor", COLOR.bg[1], COLOR.bg[2], COLOR.bg[3], COLOR.bg[4])
+    end
+  end
+
   if type(f.SetBackdrop) == "function" then
     call(f, "SetBackdrop", {
       -- AC-N7 (card t_ea66cd84): the classic path
-      -- `Interface\DialogFrame\UI-DialogBox-Background` does NOT resolve on the
-      -- owner's client — the fill painted nothing while the border still drew,
-      -- so the window interior was see-through over live terrain. The owner
-      -- proved `Interface\Buttons\WHITE8X8` resolves there and goes opaque, and
-      -- SetBackdropColor tints it, so COLOR.bg still decides the colour.
-      bgFile = "Interface\\Buttons\\WHITE8X8",
+      -- `Interface\\DialogFrame\\UI-DialogBox-Background` does NOT resolve on
+      -- the owner's client; the fill painted nothing while the border still
+      -- drew, so the window interior was see-through over live terrain. The
+      -- owner proved `Interface\\Buttons\\WHITE8X8` resolves there and goes
+      -- opaque.
+      -- t_5d0cc41a: that fill now lives on W.bg, above. Do NOT put a bgFile
+      -- back on THIS frame: it sits in DIALOG, above every hosted body, and
+      -- that is exactly the defect this card fixed.
       edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
       tile = true, tileSize = 32, edgeSize = 32,
       insets = { left = 8, right = 8, top = 8, bottom = 8 },
     })
-    call(f, "SetBackdropColor", COLOR.bg[1], COLOR.bg[2], COLOR.bg[3], COLOR.bg[4])
   end
   local left, top = W.SavedPosition()
   if left and top then
@@ -504,6 +549,14 @@ function W.AttachTouchstone()
   call(main, "SetParent", host)
   call(main, "ClearAllPoints")
   call(main, "SetAllPoints", host)
+  -- Card t_5d0cc41a. The invariant, not a workaround:
+  --     fill (W.bg, BACKGROUND)  <  content (this frame, MEDIUM)  <  chrome (DIALOG)
+  -- The body stays on MEDIUM so it can never climb into the chrome and cover the
+  -- title bar, the tab row or the close button — that is what the old DIALOG
+  -- strata did for standalone Touchstone. What made it fatal inside the window
+  -- was the window painting its own opaque fill in DIALOG: strata beats frame
+  -- level, so the fill drew over this whole body. The fill now lives on a
+  -- BACKGROUND-strata frame (W.bg), and this line keeps the body above it.
   call(main, "SetFrameStrata", "MEDIUM")
   call(main, "Show")
   -- Hide the title bar. The frame's children in creation order are titleBar

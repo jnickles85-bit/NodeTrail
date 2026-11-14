@@ -1,0 +1,8 @@
+FAIL: the window's fill lives on its own frame (W.bg)
+FAIL: without W.bg the fill is back on the window frame, in DIALOG
+FAIL: the window frame paints NO fill of its own: a fill on the DIALOG frame is the defect itself, whatever its colour (fill alpha 0.96)
+FAIL: no frame in the pack draws under an ancestor's fill (got 1: StatForgeMainFrame/Frame (MEDIUM) under MightiePackWindow/Frame (DIALOG, fill alpha 0.96, covered 100%))
+FAIL: the Touchstone body does not lose to any ancestor's strata
+FAIL: no reparent put a frame under a covering fill (recorded at the move: 1)
+FAIL: and the live tree is still hazard-free after the teeth legs are detached (got StatForgeMainFrame/Frame (MEDIUM) under MightiePackWindow/Frame (DIALOG, fill alpha 0.96, covered 100%))
+window_strata_spec: 7 failure(s)
