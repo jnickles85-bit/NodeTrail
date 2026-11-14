@@ -236,11 +236,6 @@ function pkg.IdeaCopyHint()
   return hint
 end
 
-function pkg.SkinDiagCopyHint()
-  return "Press Ctrl+A then Ctrl+C to copy, then paste into Discord. "
-    .. "If the text is over 2000 characters, split it across messages."
-end
-
 function pkg.BuildBugReport()
   local ok, text = pcall(function()
     local version = addonVersion()
@@ -519,14 +514,5 @@ function pkg.OpenIdeaReport(areaArg)
     title = "Suggest an idea",
     hintFn = pkg.IdeaCopyHint,
   }, pkg.BuildIdeaReport(areaArg), "could not open the idea form: ")
-end
-
-function pkg.OpenSkinDiagCopy(text)
-  openCopyPopup("skindiag", {
-    frameName = "MightiePackSkinDiagFrame",
-    editName = "MightiePackSkinDiagEdit",
-    title = "Skinning diagnostics",
-    hintFn = pkg.SkinDiagCopyHint,
-  }, type(text) == "string" and text or "", "could not open skinning diagnostics: ")
 end
 

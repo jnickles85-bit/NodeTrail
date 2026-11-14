@@ -42,14 +42,14 @@ for _, l in ipairs(tocLines) do inToc[l] = true end
 check(inToc["Options.lua"], "TOC contains Options.lua")
 check(inToc["Window.lua"], "TOC contains the unified window shell")
 check(inToc["Window/Common.lua"], "TOC contains the window's shared widgets")
-check(inToc["Window/Herbs.lua"], "TOC contains the Herbs tab")
-check(inToc["Window/Skinning.lua"], "TOC contains the Skinning tab")
+check(not inToc["Window/Herbs.lua"], "TOC does not ship the Herbs tab (it moved out with NodeTrail)")
+check(not inToc["Window/Skinning.lua"], "TOC does not ship the Skinning tab")
 check(inToc["Window/TouchstoneTab.lua"], "TOC contains the Touchstone tab")
 local hasNodeCore = false
 for _, l in ipairs(tocLines) do
   if l == "Modules/NodeTrail/Core.lua" then hasNodeCore = true end
 end
-check(hasNodeCore, "TOC contains Modules/NodeTrail/Core.lua")
+check(not hasNodeCore, "TOC does not ship Modules/NodeTrail/Core.lua")
 
 local tocPath = root .. "/MightiePack/MightiePack.toc"
 local tf = assert(io.open(tocPath, "r"))
@@ -221,8 +221,29 @@ end
 -- Test 1
 local pkg = loadPackage(nil)
 check(MightiePack == pkg, "MightiePack global == pkg")
-check(MightiePackDB and MightiePackDB.modules and MightiePackDB.modules.NodeTrail == true, "NodeTrail default true")
-check(MightiePackDB and MightiePackDB.modules and MightiePackDB.modules.Touchstone == false, "Touchstone default false")
+-- ════════════════════════════════════════════════════════════════════════
+-- Test 1: the pack loads, and it is the pack alone (card t_75309c97)
+-- ════════════════════════════════════════════════════════════════════════
+-- NodeTrail is its own addon again. What this section pins is the shape of the
+-- pack after the extraction, because every one of these is a way the split
+-- could go wrong:
+--
+--   * the module list is Touchstone alone, and NodeTrail is not registered,
+--     not loaded and not reachable through pkg;
+--   * none of NodeTrail's files are in the TOC (the tab bodies, the module, the
+--     skinning probe);
+--   * the pack still DECLARES NodeTrailDB — that declaration is the migration
+--     window, and without it the game never loads an existing history for
+--     NodeTrail to adopt — but loading the pack does not create, change or
+--     delete one key of that store;
+--   * /nt is not registered here, and /mp no longer answers for skindiag;
+--   * the window has the two tabs that are the pack's own.
+
+check(MightiePackDB and MightiePackDB.modules and MightiePackDB.modules.Touchstone == false,
+  "Touchstone default false")
+check(MightiePackDB and MightiePackDB.modules and MightiePackDB.modules.NodeTrail == nil,
+  "no default is written for a module this pack no longer has")
+
 local order = pkg.moduleOrder or {}
 local hasNT, hasTS, hasSkinModule = false, false, false
 for _, n in ipairs(order) do
@@ -230,351 +251,179 @@ for _, n in ipairs(order) do
   if n == "Touchstone" then hasTS = true end
   if n == "Skinning" then hasSkinModule = true end
 end
-check(hasNT, "moduleOrder has NodeTrail")
 check(hasTS, "moduleOrder has Touchstone")
-check(not hasSkinModule, "moduleOrder has NO Skinning entry (nested under NodeTrail, t_5507a0ba)")
-check(pkg.modules.Skinning == nil, "Skinning is not a registered module")
-check(pkg.moduleDefaults.Skinning == nil, "moduleDefaults has no Skinning entry")
-check(MightiePackDB.modules.Skinning == nil, "no MightiePackDB.modules.Skinning key is written")
-check(type(pkg.Skinning) == "table" and type(pkg.Skinning.Probe) == "table",
-  "the skinning probe still loads (owned by NodeTrail)")
-check(pkg.IsModuleEnabled("NodeTrail") == true, "NodeTrail enabled")
-check(pkg.IsModuleEnabled("Touchstone") == false, "Touchstone disabled")
-check(pkg.modules and pkg.modules.NodeTrail and pkg.modules.NodeTrail.loaded == true, "NodeTrail loaded")
-check(type(SlashCmdList.NODETRAIL) == "function", "NODETRAIL slash registered")
-check(SLASH_NODETRAIL2 == "/nt", "SLASH_NODETRAIL2 is /nt")
-check(type(SlashCmdList.MIGHTIEPACK) == "function", "MIGHTIEPACK slash registered")
-check(registeredCategory ~= nil, "settings category registered")
-check(registeredCategory and registeredCategory.frame == pkg.optionsPanel, "category frame is optionsPanel")
-check(type(NodeTrailDB) == "table", "NodeTrailDB is table")
-check(type(pkg.NodeTrail) == "table" and type(pkg.NodeTrail.GetSkinDB) == "function",
-  "NodeTrail owns the skinning sub-toggle accessors")
--- t_ba64b076: the recorder is ON by default, so a first login arms the probe
--- with no setup. The migration marker is written here too (there is nothing to
--- migrate on a fresh install) and no user-set flag is invented: a default is
--- not a choice.
-check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == true,
-  "skinning sub-toggle defaults ON (t_ba64b076)")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
-  "sub-toggle persisted at NodeTrailDB.skinning.enabled (default true)")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinMigration == 1,
-  "the one-time skinning migration is marked as run on a fresh install")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet ~= true,
-  "no skinUserSet flag on a fresh install (the default is not a player choice)")
-check(pkg.Skinning.Probe.enabled == true, "the probe is armed at first login (default ON)")
+check(not hasNT, "moduleOrder has no NodeTrail (it is not a module of this pack any more)")
+check(not hasSkinModule, "moduleOrder has no Skinning entry")
+check(pkg.modules and pkg.modules.NodeTrail == nil, "NodeTrail is not registered")
+check(pkg.NodeTrail == nil, "pkg.NodeTrail is not published")
+check(pkg.Skinning == nil, "pkg.Skinning is not published")
+check(pkg.moduleDefaults and pkg.moduleDefaults.NodeTrail == nil,
+  "moduleDefaults has no NodeTrail entry")
+check(pkg.IsModuleEnabled("NodeTrail") == false, "IsModuleEnabled('NodeTrail') is false")
+check(pkg.IsModuleEnabled("Touchstone") == false, "Touchstone disabled by default")
 
--- t_ba64b076, the card's own observable: "/mp skindiag reports the sub-option
--- on" for a fresh install. The real dump command, first line only.
+-- The migration window: the TOC still declares NodeTrailDB.
+check(tocContent:find("## SavedVariables: MightiePackDB, NodeTrailDB, StatForgeDB", 1, true) ~= nil,
+  "the TOC still declares NodeTrailDB (the migration window a player needs)")
+
+-- Nothing of NodeTrail's is a shipping file.
+for _, bad in ipairs({
+  "Modules/NodeTrail/Core.lua",
+  "Modules/Skinning/Probe.lua",
+  "Window/Herbs.lua",
+  "Window/Skinning.lua",
+}) do
+  check(not inToc[bad], "the TOC does not ship " .. bad)
+  local f = io.open(root .. "/MightiePack/" .. bad, "r")
+  check(f == nil, "the file is gone from the repo: " .. bad)
+  if f then f:close() end
+end
+
+-- /nt is the standalone addon's command now.
+check(SlashCmdList.NODETRAIL == nil, "/nt is not registered by the pack")
+check(SLASH_NODETRAIL1 == nil and SLASH_NODETRAIL2 == nil,
+  "the /nt slash globals are not set by the pack")
+check(type(SlashCmdList.MIGHTIEPACK) == "function", "the /mp handler is registered")
+
+-- The detector the pack uses to point at the standalone addon. It answers
+-- "installed", not "loaded": MightiePack sorts first, so at load time NodeTrail
+-- has not loaded yet even when the player has it.
+C_AddOns = { DoesAddOnExist = function(name) return name == "NodeTrail" end }
+
+-- /mp help says where NodeTrail went, and never answers for it.
+local helpBefore = #chat
+SlashCmdList.MIGHTIEPACK("help")
+local saidSeparate, saidSkindiag = false, false
+for i = helpBefore + 1, #chat do
+  local m = tostring(chat[i])
+  if m:find("NodeTrail is a separate addon now", 1, true) then saidSeparate = true end
+  if m:find("skindiag", 1, true) then saidSkindiag = true end
+end
+check(saidSeparate, "/mp help points at the separate addon (/mp help: "
+  .. table.concat(chat, " | ") .. ")")
+check(not saidSkindiag, "/mp help no longer advertises skindiag")
+
+-- A skindiag subcommand is not handled here any more: it falls through to the
+-- usage block instead of running a probe this pack does not have.
 local skBefore = #chat
 SlashCmdList.MIGHTIEPACK("skindiag dump")
-local skFirst = nil
+local ranProbe = false
 for i = skBefore + 1, #chat do
   local m = tostring(chat[i])
-  if m:find("capture ", 1, true) then skFirst = m break end
+  if m:find("/mp skindiag", 1, true) or m:find("skindiag:", 1, true) then ranProbe = true end
 end
-check(skFirst ~= nil and skFirst:find("sub-option ON", 1, true) ~= nil,
-  "/mp skindiag dump reports the sub-option ON for a fresh install (got: " .. tostring(skFirst) .. ")")
-check(skFirst ~= nil and skFirst:find("NodeTrailDB.skinning", 1, true) ~= nil,
-  "/mp skindiag dump says the records are saved to NodeTrailDB.skinning")
+check(not ranProbe, "/mp skindiag no longer runs a probe from this pack")
 
-local before = #chat
-SlashCmdList.NODETRAIL("help")
-local found = false
-for i = before + 1, #chat do
-  if tostring(chat[i]):find("/nt start", 1, true) then found = true end
-end
-check(found, "help mentions /nt start")
-
-before = #chat
+-- /mp status: Touchstone's line, and one honest line about NodeTrail.
+local stBefore = #chat
 SlashCmdList.MIGHTIEPACK("status")
-local foundOn, foundOff, foundSkinLine, foundSkinOnNT = false, false, false, false
-for i = before + 1, #chat do
+local foundTS, foundNTLine, foundSkinLine = false, false, false
+for i = stBefore + 1, #chat do
   local m = tostring(chat[i])
-  if m:find("NodeTrail: on", 1, true) then foundOn = true end
-  if m:find("Touchstone: off", 1, true) then foundOff = true end
+  if m:find("Touchstone: off", 1, true) then foundTS = true end
+  if m:find("NodeTrail: a separate addon", 1, true) then foundNTLine = true end
   if m:find("Skinning:", 1, true) then foundSkinLine = true end
-  if m:find("NodeTrail: on (loaded) - skinning on", 1, true) then foundSkinOnNT = true end
 end
-check(foundOn, "status shows NodeTrail on")
-check(foundOff, "status shows Touchstone off")
-check(not foundSkinLine, "status prints NO separate 'Skinning:' module line")
-check(foundSkinOnNT, "status reports skinning on the NodeTrail line: 'NodeTrail: on (loaded) - skinning on'")
+check(foundTS, "status shows Touchstone off")
+check(foundNTLine, "status says NodeTrail is a separate addon (chat: "
+  .. table.concat(chat, " | ") .. ")")
+check(not foundSkinLine, "status prints no Skinning module line")
 
+-- /mp opens the window on its own tab.
 openedId = nil
 SlashCmdList.MIGHTIEPACK("")
--- Card t_a5de2f16: /mp opens the ONE window on its Pack Settings tab. The
--- Settings canvas (openedId) is kept only as the fallback for a client where
--- the window cannot be created, so nothing is routed through it here.
 check(type(pkg.Window) == "table" and pkg.Window.IsShown() == true,
-  "/mp shows the unified window")
+  "/mp shows the window")
 check(type(pkg.Window) == "table" and pkg.Window.Current() == "settings",
   "/mp selects the Pack Settings tab (got " .. tostring(pkg.Window and pkg.Window.Current()) .. ")")
-check(openedId == nil, "/mp does not open the Settings canvas any more")
+check(#pkg.Window.TABS == 2 and pkg.Window.TABS[1] == "touchstone" and pkg.Window.TABS[2] == "settings",
+  "the window has the pack's two tabs (got " .. tostring(#pkg.Window.TABS) .. ")")
+for _, gone in ipairs({ "herbs", "skinning" }) do
+  check(pkg.Window.hosts[gone] == nil, "the window builds no host for " .. gone)
+  check(pkg.Window.TAB_LABELS[gone] == nil, "the window has no label for " .. gone)
+end
 
--- Test 2
+-- ════════════════════════════════════════════════════════════════════════
+-- Test 2: the options panel is the pack's own rows
+-- ════════════════════════════════════════════════════════════════════════
 local panel = pkg.optionsPanel
 local onShow = panel:GetScript("OnShow")
 onShow(panel)
 onShow(panel)
-local cbCount = 0
-for _, f in ipairs(frames) do
-  if f.template == "UICheckButtonTemplate" then cbCount = cbCount + 1 end
-end
-check(cbCount == #pkg.moduleOrder + 3,
-  "checkbox count = moduleOrder + 3 NodeTrail sub-options (skinning, auto-refresh, skinning circle), got " .. cbCount
-  .. " expected " .. (#pkg.moduleOrder + 3))
 local boxes = pkg.optionsBoxes
 check(boxes ~= nil, "optionsBoxes exists")
-check(boxes.NodeTrail and boxes.NodeTrail:GetChecked() == true, "NodeTrail box checked")
-check(boxes.Touchstone and boxes.Touchstone:GetChecked() == false, "Touchstone box unchecked")
-check(boxes.Touchstone and boxes.Touchstone:IsEnabled() == true, "Touchstone box enabled (no longer a stub)")
+check(boxes.NodeTrail == nil, "the options panel builds no NodeTrail row")
+check(boxes.Skinning == nil, "the options panel builds no skinning sub-option")
+check(boxes.AutoRefresh == nil, "the options panel builds no auto-refresh row")
+check(boxes.SkinRoute == nil, "the options panel builds no farming-circle row")
+check(boxes.Touchstone ~= nil, "the Touchstone row is still there")
+check(boxes.Touchstone and boxes.Touchstone:IsEnabled() == true,
+  "the Touchstone row is usable (no longer a stub)")
+check(boxes.SkinDiagCopy == nil, "the options panel carries no diagnostics-copy button")
 
--- The skinning sub-option is a row of its own under NodeTrail, indented and
--- not a sibling module (t_5507a0ba).
-local skinBox = boxes.Skinning
-check(skinBox ~= nil, "a skinning sub-option checkbox exists")
-check(skinBox and skinBox.template == "UICheckButtonTemplate",
-  "the sub-option is a real checkbutton")
-if skinBox then
-  check(skinBox:GetChecked() == true, "skinning sub-option checked (default ON, t_ba64b076)")
-  check(skinBox:IsEnabled() == true, "skinning sub-option is usable while NodeTrail is on")
-  local function point1(box)
-    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
-  end
-  local ntPt, skPt = point1(boxes.NodeTrail), point1(skinBox)
-  check(skPt ~= nil, "the sub-option was positioned")
-  if ntPt and skPt then
-    -- Skinning is anchored under the NodeTrail checkbox and indented.
-    check(skPt[2] == boxes.NodeTrail, "skinning sub-option is anchored to the NodeTrail checkbox")
-    check(skPt[3] == "BOTTOMLEFT", "skinning sub-option sits under NodeTrail (rel=" .. tostring(skPt[3]) .. ")")
-    check((skPt[4] or 0) > 0, "skinning sub-option is indented relative to NodeTrail (x=" .. tostring(skPt[4]) .. ")")
-  end
-  local touchPt = point1(boxes.Touchstone)
-  check(touchPt ~= nil, "Touchstone row was positioned")
-  check(ntPt ~= nil and ntPt[2] == boxes.Touchstone,
-    "NodeTrail is anchored under Touchstone (vertical module flow)")
-  check(ntPt and ntPt[3] == "BOTTOMLEFT", "NodeTrail sits below Touchstone")
-  check(skPt ~= nil and skPt[2] == boxes.NodeTrail,
-    "the skinning sub-option sits under the NodeTrail row")
-end
+-- The Touchstone switch still round-trips through the panel.
+boxes.Touchstone:SetChecked(true)
+local tsClick = boxes.Touchstone:GetScript("OnClick")
+check(type(tsClick) == "function", "the Touchstone row has an OnClick handler")
+if type(tsClick) == "function" then tsClick(boxes.Touchstone) end
+check(MightiePackDB.modules.Touchstone == true, "ticking Touchstone persists")
+check(pkg.IsModuleEnabled("Touchstone") == true, "Touchstone is enabled after the tick")
 
--- t_2bc15917 / t_57550700: "Auto-refresh route" is the second indented NodeTrail
--- row — the visible control for the pick-triggered rebuild. It is ON by default
--- (Mightie's final call); what changed is that a re-plan now needs a tranche of
--- gathers, not one per herb. (The /reload restore is not this switch.)
-local autoBox = boxes.AutoRefresh
-check(autoBox ~= nil, "an auto-refresh route sub-option checkbox exists")
-check(autoBox and autoBox.template == "UICheckButtonTemplate",
-  "the auto-refresh sub-option is a real checkbutton")
-if autoBox then
-  check(autoBox:GetChecked() == true, "auto-refresh sub-option is ON by default (Mightie's final call)")
-  check(autoBox:IsEnabled() == true, "auto-refresh sub-option is usable while NodeTrail is on")
-  local function point1b(box)
-    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
-  end
-  -- Card t_a5de2f16: the "Copy skinning diagnostics" button moved to the
-  -- unified window's Skinning tab (it sits beside the data it summarises).
-  -- The options panel must NOT keep a second copy of it, and auto-refresh now
-  -- follows the skinning row directly.
-  check(boxes.SkinDiagCopy == nil,
-    "the options panel no longer carries the skinning diagnostics button (it moved to the Skinning tab)")
-  local ap = point1b(autoBox)
-  local sp = point1b(skinBox)
-  check(ap ~= nil, "the auto-refresh row was positioned")
-  if ap and sp then
-    check(ap[2] == skinBox, "auto-refresh row is anchored under the skinning row")
-    check(ap[3] == "BOTTOMLEFT", "auto-refresh row sits under the skinning row")
-  end
-  check(type(autoBox:GetScript("OnClick")) == "function", "auto-refresh row has an OnClick handler")
-end
-
--- t_b46e5e87: "Skinning farming circle" is the third indented NodeTrail row —
--- its own switch, persisted at NodeTrailDB.skinroute.enabled and independent of
--- the probe and of the herb route. ON by default; the circle itself stays
--- hidden until the map has enough skinned corpses and the character is a
--- skinner, so the default cannot draw anything by itself.
-local skinRouteBox = boxes.SkinRoute
-check(skinRouteBox ~= nil, "a skinning farming circle sub-option checkbox exists")
-check(skinRouteBox and skinRouteBox.template == "UICheckButtonTemplate",
-  "the skinning circle sub-option is a real checkbutton")
-if skinRouteBox then
-  check(skinRouteBox:GetChecked() == true, "skinning circle sub-option is ON by default")
-  check(skinRouteBox:IsEnabled() == true, "skinning circle sub-option is usable while NodeTrail is on")
-  local function point1c(box)
-    return box and rawget(box, "pointArgs") and rawget(box, "pointArgs")[1] or nil
-  end
-  local rp, ap = point1c(skinRouteBox), point1c(autoBox)
-  check(rp ~= nil, "the skinning circle row was positioned")
-  if rp and ap then
-    check(rp[2] == autoBox, "skinning circle row is anchored under the auto-refresh row")
-    check(rp[3] == "BOTTOMLEFT", "skinning circle row sits under the auto-refresh row")
-  end
-  check(type(skinRouteBox:GetScript("OnClick")) == "function", "skinning circle row has an OnClick handler")
-end
-
-local popup
-boxes.NodeTrail:SetChecked(false)
-local onClick = boxes.NodeTrail:GetScript("OnClick")
-onClick(boxes.NodeTrail)
-check(#shownPopups == 1, "one popup shown")
-if #shownPopups >= 1 then
-  popup = shownPopups[1]
-  check(popup.which == "MIGHTIEPACK_DISABLE_MODULE", "popup which")
-  check(popup.data and popup.data.name == "NodeTrail", "popup data.name")
-end
-check(MightiePackDB.modules.NodeTrail == true, "NodeTrail still true before confirm")
-
+-- Turning it off is the direction that warns: it asks for a reload through the
+-- pack's own popup, and cancel restores the box without one.
+local popupsBefore = #shownPopups
+boxes.Touchstone:SetChecked(false)
+tsClick(boxes.Touchstone)
+check(#shownPopups == popupsBefore + 1, "unticking Touchstone raises the disable popup")
+check(MightiePackDB.modules.Touchstone == true, "it is still on until the popup is accepted")
 local dlg = StaticPopupDialogs.MIGHTIEPACK_DISABLE_MODULE
-dlg.OnCancel({ data = popup.data }, popup.data)
-check(boxes.NodeTrail:GetChecked() == true, "cancel restores checked")
-check(reloads == 0, "no reload on cancel")
+local last = shownPopups[#shownPopups]
+dlg.OnCancel({ data = last.data }, last.data)
+check(boxes.Touchstone:GetChecked() == true, "cancel restores the box")
 
-boxes.NodeTrail:SetChecked(false)
-dlg.OnHide({ data = popup.data })
-check(boxes.NodeTrail:GetChecked() == true, "hide restores checked")
-
-dlg.OnAccept({ data = popup.data }, popup.data)
-check(MightiePackDB.modules.NodeTrail == false, "accept disables NodeTrail")
-check(reloads == 1, "reload on accept")
-
--- Test 3
-local saved = MightiePackDB
-pkg = loadPackage(saved)
-check(SlashCmdList.NODETRAIL == nil, "NodeTrail slash not registered when disabled")
-check(pkg.modules and pkg.modules.NodeTrail and pkg.modules.NodeTrail.loaded ~= true, "NodeTrail not loaded")
-check(pkg.IsModuleEnabled("NodeTrail") == false, "NodeTrail disabled")
-
-local panel3 = pkg.optionsPanel
-local onShow3 = panel3:GetScript("OnShow")
-onShow3(panel3)
-local boxes3 = pkg.optionsBoxes
-check(boxes3.NodeTrail:GetChecked() == false, "NodeTrail box unchecked after disable")
-
--- The skinning sub-option is greyed out / inert while NodeTrail is off.
-local skin3 = boxes3.Skinning
-check(skin3 ~= nil, "the skinning sub-option exists when NodeTrail is off")
-check(skin3 and skin3:IsEnabled() == false, "sub-option is greyed out (disabled) while NodeTrail is off")
-if skin3 then
-  skin3:SetChecked(true)
-  local skinClick = skin3:GetScript("OnClick")
-  check(type(skinClick) == "function", "the sub-option has an OnClick handler")
-  if type(skinClick) == "function" then skinClick(skin3) end
-  -- t_ba64b076: the greyed row is inert, so it must not record a CHOICE. What
-  -- it snaps back to is the stored value (the default, ON); no user-set flag
-  -- may appear from a click that could not be honoured.
-  local greyDB = type(pkg.NodeTrail.GetSkinDB) == "function" and pkg.NodeTrail.GetSkinDB() or nil
-  check(type(greyDB) == "table" and greyDB.skinUserSet ~= true,
-    "clicking the greyed sub-option records no player choice (no skinUserSet)")
-  check(skin3:GetChecked() == true,
-    "clicking the greyed sub-option snaps back to the stored value (ON)")
-  check(pkg.Skinning.Probe.enabled ~= true, "probe stays off while NodeTrail is off")
+-- ════════════════════════════════════════════════════════════════════════
+-- Test 3: the pack does not touch the NodeTrail store
+-- ════════════════════════════════════════════════════════════════════════
+-- The pack declares NodeTrailDB so the game loads an existing history for the
+-- NodeTrail addon to adopt. It must not read or write a key of it: that is the
+-- difference between a migration window and two addons fighting over a file.
+local function keysOf(t)
+  local out = {}
+  for k in pairs(t or {}) do out[#out + 1] = tostring(k) end
+  table.sort(out)
+  return table.concat(out, ",")
 end
-check(#shownPopups == 1, "the inert sub-option raises no popup")
+local realStore = {
+  herbs = { schema = 2, total = 145, maps = { [1411] = { { x = 0.1, y = 0.2 } } },
+    mapTotals = { [1411] = 1 }, stats = { gathers = { [2447] = 1 } } },
+  profile = { routeSource = "gm2" },
+  skinning = { enabled = true, schema = 2, chars = {} },
+}
+local before = keysOf(realStore)
+local beforeTotal = realStore.herbs.total
+pkg = loadPackage({ modules = { Touchstone = false } }, realStore)
+check(NodeTrailDB == realStore, "the pack uses the store object it was given, unchanged")
+check(keysOf(NodeTrailDB) == before, "the pack adds no key to NodeTrailDB (" .. keysOf(NodeTrailDB) .. ")")
+check(NodeTrailDB.herbs and NodeTrailDB.herbs.total == beforeTotal,
+  "herb totals are untouched by the pack")
+check(NodeTrailDB.profile and NodeTrailDB.profile.routeSource == "gm2",
+  "another addon's profile keys are untouched")
+check(NodeTrailDB.migration == nil, "the pack writes no carry-over stamp (that is NodeTrail's job)")
 
-boxes3.NodeTrail:SetChecked(true)
-local onClick3 = boxes3.NodeTrail:GetScript("OnClick")
-onClick3(boxes3.NodeTrail)
-check(MightiePackDB.modules.NodeTrail == true, "re-tick enables NodeTrail")
-check(pkg.modules.NodeTrail.loaded == true, "NodeTrail loaded after re-tick")
-check(type(SlashCmdList.NODETRAIL) == "function", "NodeTrail slash registered after re-tick")
-check(reloads == 1, "no extra reload on re-tick")
-check(#shownPopups == 1, "no new popup on re-tick")
-check(boxes3.Skinning:IsEnabled() == true, "sub-option becomes usable when NodeTrail is re-ticked")
-
--- t_ba64b076: the sub-option is ON by default, so BOTH directions are
--- exercised here. An untick is the player's explicit opt-out and must be
--- written as such (skinUserSet); a tick is the explicit opt-in. Neither needs a
--- reload, and neither raises a popup.
-check(boxes3.Skinning:GetChecked() == true,
-  "sub-option is checked once NodeTrail is on (default ON, t_ba64b076)")
-check(pkg.Skinning.Probe.enabled == true, "the probe is armed by the default, with no setup")
-
-boxes3.Skinning:SetChecked(false)
-boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == false,
-  "unticking persists enabled = false")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet == true,
-  "unticking writes skinUserSet (an explicit off, not a default)")
-check(pkg.Skinning.Probe.enabled == false, "unticking stops the probe immediately (no reload)")
-check(#shownPopups == 1, "no popup when the sub-option is turned off")
-check(reloads == 1, "no reload when the sub-option is turned off")
-
-local stOff = #chat
-SlashCmdList.MIGHTIEPACK("status")
-local foundSkinOff = false
-for i = stOff + 1, #chat do
-  if tostring(chat[i]):find("NodeTrail: on (loaded) - skinning off", 1, true) then foundSkinOff = true end
-end
-check(foundSkinOff, "status shows 'NodeTrail: on (loaded) - skinning off' after the opt-out")
-
--- Turning it back ON: persisted at NodeTrailDB.skinning.enabled,
--- probe armed immediately, no reload popup (a reload is NOT required).
-boxes3.Skinning:SetChecked(true)
-boxes3.Skinning:GetScript("OnClick")(boxes3.Skinning)
-check(type(NodeTrailDB.skinning) == "table" and NodeTrailDB.skinning.enabled == true,
-  "sub-option persists in NodeTrailDB.skinning.enabled")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet == true,
-  "the opt-in keeps the user-set flag (both directions are choices)")
-check(MightiePackDB.modules.Skinning == nil, "the sub-toggle is NOT written to MightiePackDB.modules")
-check(pkg.Skinning.Probe.enabled == true, "ticking the sub-option arms the probe immediately")
-check(#shownPopups == 1, "no reload popup for the sub-option")
-check(reloads == 1, "no reload for the sub-option")
-
-local stBefore = #chat
-SlashCmdList.MIGHTIEPACK("status")
-local foundSkinOn = false
-for i = stBefore + 1, #chat do
-  if tostring(chat[i]):find("NodeTrail: on (loaded) - skinning on", 1, true) then foundSkinOn = true end
-end
-check(foundSkinOn, "status shows 'NodeTrail: on (loaded) - skinning on'")
-
--- Test 4
-pkg = loadPackage({ modules = { NodeTrail = false, Touchstone = true } })
-check(MightiePackDB.modules.NodeTrail == false, "saved NodeTrail false preserved")
-check(pkg.IsModuleEnabled("Touchstone") == true, "saved Touchstone true preserved")
+-- ════════════════════════════════════════════════════════════════════════
+-- Test 4: a saved settings table from before the extraction is not damaged
+-- ════════════════════════════════════════════════════════════════════════
+-- No detector at all for this load: Touchstone's own contract is that an
+-- unknown answer keeps it inert rather than risking a double load, and that is
+-- worth keeping pinned here too.
+C_AddOns = nil
+pkg = loadPackage({ modules = { NodeTrail = true, Touchstone = true }, seen = { firstRun = true } })
+check(MightiePackDB.modules.NodeTrail == true,
+  "a saved modules.NodeTrail key is left exactly as it is (add-only)")
+check(MightiePackDB.modules.Touchstone == true, "the saved Touchstone key is honoured")
 check(pkg.modules.Touchstone.loaded ~= true,
   "Touchstone stays inert: no detector in this stub means unknown, not absent")
-
--- Test 5: a stale MightiePackDB.modules.Skinning (written by the previous
--- build) is kept but inert — the sub-toggle lives in NodeTrailDB.
-pkg = loadPackage({ modules = { NodeTrail = true, Skinning = true } })
-check(MightiePackDB.modules.Skinning == true, "the stale modules.Skinning key is not lost")
--- t_ba64b076: the stale key has no say over the persisted value either way;
--- what the probe follows now is the DEFAULT (ON), and the stale key must not
--- be mistaken for a player choice.
-check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == true,
-  "the stale modules.Skinning key does not decide the sub-option: the default (ON) applies")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinUserSet ~= true,
-  "the stale key is not copied in as a player choice (no skinUserSet)")
-check(pkg.Skinning.Probe.enabled == true, "the probe is armed by the default, not by the stale key")
-
--- Test 6: the sub-toggle round-trips through NodeTrailDB and arms the probe
--- at boot, without losing the keys that were already there.
-pkg = loadPackage({ modules = { NodeTrail = true } },
-  { profile = { routeSource = "gm2" }, skinning = { enabled = true } })
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
-  "saved sub-toggle survives the reload")
-check(NodeTrailDB.profile.routeSource == "gm2", "existing NodeTrailDB keys are not lost")
-check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == true,
-  "NodeTrail reads the saved sub-toggle")
-check(pkg.Skinning.Probe.enabled == true, "the probe is armed at boot when the sub-toggle is on")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.enabled == true,
-  "and the saved value is not rewritten to false")
-
--- Test 7: a pre-t_5507a0ba NodeTrailDB (no skinning table) gains the key
--- without losing anything — and, since t_ba64b076, gains it with the new
--- default (ON) and the migration marker already written.
-pkg = loadPackage({ modules = { NodeTrail = true } }, { profile = { routeSource = "gm2" } })
-check(type(pkg.NodeTrail.IsSkinningEnabled) == "function"
-  and pkg.NodeTrail.IsSkinningEnabled() == true,
-  "an old NodeTrailDB gets the new default (ON)")
-check(NodeTrailDB.profile.routeSource == "gm2", "the old profile is untouched")
-check(type(NodeTrailDB.skinning) == "table", "the sub-toggle key is added lazily")
-check(NodeTrailDB.skinning ~= nil and NodeTrailDB.skinning.skinMigration == 1,
-  "and the one-time migration is marked as run with it")
+check(pkg.NodeTrail == nil, "the stale NodeTrail key registers no module")
 
 if failed > 0 then
   io.stderr:write(failed .. " checks failed\n")

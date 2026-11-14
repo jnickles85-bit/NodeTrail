@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: MightiePack
-## Notes: Umbrella addon. Toggle modules: NodeTrail (herb routes); Touchstone (gear upgrade advice).
+## Notes: Umbrella addon. NodeTrail (herb and skinning recorder, route guidance) is its own addon now; this pack ships Touchstone (gear upgrade advice). It keeps the NodeTrailDB declaration so an existing history can still be carried over to NodeTrail on the first login with both installed.
 ## Author: Mightie
 ## Version: @project-version@
 ## X-Curse-Project-ID: 1788533
@@ -13,33 +13,6 @@
 ErrorHandler.lua
 Core.lua
 Modules.lua
-Modules/NodeTrail/locale/enUS.lua
-Modules/NodeTrail/Config.lua
-Modules/NodeTrail/Data/GM2.lua
-Modules/NodeTrail/Data/ItemNames.lua
-Modules/NodeTrail/Data/Recorder.lua
-Modules/NodeTrail/Data/Density.lua
-Modules/NodeTrail/Data/HerbData.lua
-Modules/NodeTrail/Data/Profession.lua
-Modules/NodeTrail/Data/SkinHints.lua
-Modules/NodeTrail/Data/Recipes.lua
-Modules/NodeTrail/Route/Cluster.lua
-Modules/NodeTrail/Route/Build.lua
-Modules/NodeTrail/Route/SkinRoute.lua
-Modules/NodeTrail/Route/Auto.lua
-Modules/NodeTrail/UI/PathGeom.lua
-Modules/NodeTrail/UI/LineDraw.lua
-Modules/NodeTrail/UI/MapOverlay.lua
-Modules/NodeTrail/UI/MinimapPath.lua
-Modules/NodeTrail/Nav/Target.lua
-Modules/NodeTrail/Nav/Source.lua
-Modules/NodeTrail/Nav/Arrow.lua
-Modules/NodeTrail/UI/TooltipPanel.lua
-Modules/NodeTrail/UI/Tooltip.lua
-Modules/NodeTrail/Core.lua
-Modules/Skinning/Probe.lua
-Modules/Skinning/Record.lua
-Modules/Skinning/Core.lua
 Modules/Touchstone/Bootstrap.lua
 Modules/Touchstone/Constants.lua
 Modules/Touchstone/UI.lua
@@ -56,6 +29,4 @@ BugReport.lua
 Options.lua
 Window.lua
 Window/Common.lua
-Window/Herbs.lua
-Window/Skinning.lua
 Window/TouchstoneTab.lua

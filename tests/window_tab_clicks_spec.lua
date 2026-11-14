@@ -75,27 +75,11 @@ StatForgeDB = { ui = { scale = 1 } }
 loadFile("Core.lua")
 loadFile("Modules.lua")
 for _, f in ipairs({
-  "Modules/NodeTrail/locale/enUS.lua",
-  "Modules/NodeTrail/Config.lua",
-  "Modules/NodeTrail/Data/ItemNames.lua",
-  "Modules/NodeTrail/Data/HerbData.lua",
-  "Modules/NodeTrail/Data/Recorder.lua",
-  "Modules/NodeTrail/Data/Density.lua",
-  "Modules/NodeTrail/Data/Recipes.lua",
-  "Modules/NodeTrail/Data/Profession.lua",
-  "Modules/NodeTrail/Data/SkinHints.lua",
-  "Modules/NodeTrail/UI/TooltipPanel.lua",
-  "Modules/NodeTrail/UI/Tooltip.lua",
-  "Modules/NodeTrail/Core.lua",
 }) do loadFile(f) end
-loadFile("Modules/Skinning/Core.lua")
-loadFile("Modules/Skinning/Record.lua")
 loadFile("BugReport.lua")
 loadFile("Options.lua")
 loadFile("Window.lua")
 loadFile("Window/Common.lua")
-loadFile("Window/Herbs.lua")
-loadFile("Window/Skinning.lua")
 
 -- The Touchstone seam reroutes five public entry points on StatForge and
 -- registers the tab's renderer; it needs the module's shape, not its body.
@@ -113,7 +97,7 @@ local W = pkg.Window
 check(type(W) == "table", "pkg.Window exists")
 local f = W.Frame()
 check(type(f) == "table", "the window frame is created")
-W.Open("herbs")
+W.Open("settings")
 
 -- ── 1. WIRING: the click goes through the button's own script ─────────────
 -- Reading the script and firing it is the closest a harness can come to the
@@ -216,7 +200,7 @@ end
 -- detector that cannot fail is not evidence; that is the whole lesson of the
 -- card this file exists for.
 do
-  local herbs = W.tabButtons.herbs
+  local herbs = W.tabButtons.touchstone
   local cover = CreateFrame("Frame", "SpecClickEater", f)
   cover:SetPoint("TOPLEFT", herbs, "TOPLEFT", 0, 0)
   cover:SetPoint("BOTTOMRIGHT", herbs, "BOTTOMRIGHT", 0, 0)

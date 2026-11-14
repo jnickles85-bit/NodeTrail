@@ -36,11 +36,25 @@ end
 local HARDCODED = "AddOns\\\\Touchstone"
 
 local files = {}
-local p = io.popen('find "' .. dir .. '" -name "*.lua" 2>/dev/null')
-if p then
-  for line in p:lines() do files[#files + 1] = line end
-  p:close()
+-- GNU find on CI (Linux). A Windows checkout has no GNU find — `find` there is a
+-- text-search tool — so `dir /b /s` is the second attempt. Same two forms the
+-- standalone addon's tree-walking spec uses.
+local function collect(cmd, pattern)
+  local got = {}
+  local ok, pipe = pcall(io.popen, cmd)
+  if not ok or not pipe then return got end
+  for line in pipe:lines() do
+    local path = line:gsub("\\", "/"):gsub("%s+$", "")
+    if path:match(pattern) then got[#got + 1] = path end
+  end
+  pipe:close()
+  return got
 end
+files = collect('find "' .. dir .. '" -name "*.lua" 2>/dev/null', "%.lua$")
+if #files == 0 then
+  files = collect('dir /b /s "' .. dir:gsub("/", "\\") .. '\\*.lua" 2>nul', "%.lua$")
+end
+table.sort(files)
 check(#files > 0, "found vendored Touchstone lua files under " .. dir)
 
 local usesMarker = 0

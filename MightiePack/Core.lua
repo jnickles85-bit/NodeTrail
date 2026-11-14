@@ -52,12 +52,12 @@ function pkg.PackVersion()
   return nil
 end
 
--- NodeTrail is the only gathering module. The skinning probe lives under
--- Modules/Skinning/ but it is NodeTrail's sub-feature (sub-toggle:
--- NodeTrailDB.skinning.enabled), NOT a peer module — three sibling
--- checkboxes read as three separate addons (t_5507a0ba).
+-- NodeTrail used to be the gathering module. It is its own addon now (card
+-- t_75309c97), so the pack's default list holds Touchstone only. The
+-- `modules.NodeTrail` key in an existing MightiePackDB is left exactly as it is:
+-- the pack no longer has a module to read it, and dropping a saved key is not
+-- this card's business.
 pkg.moduleDefaults = {
-  NodeTrail = true,
   Touchstone = false,
 }
 
@@ -116,25 +116,37 @@ SLASH_MIGHTIEPACK2 = "/mpack"
 -- too (the client matches the longest registered slash first, so /mpack
 -- is never shadowed by /mp).
 SLASH_MIGHTIEPACK3 = "/mp"
--- Compact skinning dump in the shared copy popup. Used by `/mp skindiag copy`
--- and the options-panel button; nothing is printed to chat.
-function pkg.ShowSkinDiagCopy()
-  local text = "skindiag: the skinning probe did not load"
-  local sk = pkg.Skinning
-  local P = type(sk) == "table" and sk.Probe or nil
-  if type(P) == "table" and type(P.DumpText) == "function" then
-    local ok, v = pcall(P.DumpText, P, { compact = true, maxSteps = 20 })
-    if ok and type(v) == "string" then
-      text = v
-    else
-      text = "skindiag: could not build the dump: " .. tostring(v)
-    end
+
+--- Is the standalone NodeTrail addon installed on this client?
+---
+--- NodeTrail moved out of the pack (card t_75309c97). The pack does not load,
+--- read or write anything of NodeTrail's any more, but it does keep declaring
+--- `NodeTrailDB` for one migration window: that declaration is what lets a
+--- player's herb and skinning history be read by the game and carried into
+--- NodeTrail.lua on the first login with both addons installed. When NodeTrail
+--- is present, the pack's help points at it instead of answering for it.
+---
+--- Folder existence, not load state: `MightiePack` sorts before `NodeTrail`, so
+--- at our load time IsAddOnLoaded is false even when the player has it. This is
+--- the same provider chain Modules/Touchstone/Bootstrap.lua uses, and `false`
+--- (not nil) only when a detector actually answered.
+function pkg.NodeTrailInstalled()
+  local api = rawget(_G, "C_AddOns")
+  if type(api) == "table" and type(api.DoesAddOnExist) == "function" then
+    local ok, exists = pcall(api.DoesAddOnExist, "NodeTrail")
+    if ok then return exists and true or false end
   end
-  if type(pkg.OpenSkinDiagCopy) == "function" then
-    pkg.OpenSkinDiagCopy(text)
-  elseif type(pkg.Print) == "function" then
-    pkg.Print("skindiag: copy popup unavailable (BugReport module did not load)")
+  local info = rawget(_G, "GetAddOnInfo")
+  if type(info) == "function" then
+    local ok, name = pcall(info, "NodeTrail")
+    if ok then return name ~= nil end
   end
+  local loaded = rawget(_G, "IsAddOnLoaded")
+  if type(loaded) == "function" then
+    local ok, on = pcall(loaded, "NodeTrail")
+    if ok then return on and true or false end
+  end
+  return false
 end
 
 SlashCmdList.MIGHTIEPACK = function(msg)
@@ -206,20 +218,8 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     pkg.Print(("interface %s, build %s, client %s, locale %s, GatherMate2: %s")
       :format(iface, build, clientVersion, loc, gm2))
 
-    -- t_5507a0ba: the skinning probe is NodeTrail's sub-feature, so its
-    -- state belongs on the NodeTrail line — there is no "Skinning:" module
-    -- line any more.
-    local function skinningWord()
-      local nt = pkg.NodeTrail
-      if type(nt) == "table" and type(nt.IsSkinningEnabled) == "function" then
-        local okS, on = pcall(nt.IsSkinningEnabled)
-        if okS then
-          return on and "on" or "off"
-        end
-      end
-      return "off"
-    end
-
+    -- NodeTrail was the only gathering module; it is its own addon now (card
+    -- t_75309c97). The pack's own module list is Touchstone alone.
     for _, name in ipairs(pkg.moduleOrder or {}) do
       local def = pkg.modules and pkg.modules[name]
       if def then
@@ -235,11 +235,13 @@ SlashCmdList.MIGHTIEPACK = function(msg)
         elseif def.loaded then
           line = line .. " (loaded)"
         end
-        if name == "NodeTrail" then
-          line = line .. " - skinning " .. skinningWord()
-        end
         pkg.Print(line)
       end
+    end
+    if pkg.NodeTrailInstalled() then
+      pkg.Print("NodeTrail: a separate addon, installed (/nt help for its commands)")
+    else
+      pkg.Print("NodeTrail: a separate addon, not installed")
     end
   elseif first == "bug" then
     -- Same popup as the options-panel "Report a bug" button.
@@ -257,83 +259,16 @@ SlashCmdList.MIGHTIEPACK = function(msg)
     else
       pkg.Print("idea form unavailable (BugReport module did not load)")
     end
-  elseif first == "skindiag" then
-    -- t_a5f41944 probe, re-homed by t_5507a0ba: the probe is NodeTrail's
-    -- sub-feature (sub-toggle NodeTrailDB.skinning.enabled), not a module.
-    -- CHOICE: a diagnostic is allowed to run while the sub-toggle is off —
-    -- the toggle governs recording, and /mp skindiag is the evidence
-    -- channel used to decide whether recording is worth having. The first
-    -- line says which state it is in, so a pasted dump is never ambiguous.
-    local restL = (rest or ""):lower()
-    local sk = pkg.Skinning
-    local P = type(sk) == "table" and sk.Probe or nil
-    if type(P) ~= "table" then
-      pkg.Print("skindiag: the skinning probe did not load"
-        .. (type(sk) == "table" and sk._error and (" (" .. tostring(sk._error) .. ")") or ""))
-      pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
-      pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
-      return
-    end
-    local nt = pkg.NodeTrail
-    local subOn = false
-    if type(nt) == "table" and type(nt.IsSkinningEnabled) == "function" then
-      local okS, on = pcall(nt.IsSkinningEnabled)
-      subOn = okS and on == true
-    end
-    -- This line used to read "skinning is off (NodeTrail sub-option) —
-    -- diagnostics run, nothing recorded", and it was false: the diagnostic
-    -- starts capture either way, and a live c220ec7 run recorded 9 kills, 8
-    -- corpse windows and 5 skin windows behind that message. What the
-    -- sub-option governs is PERSISTENCE, so say that. It is printed for the
-    -- TOGGLE command only: a dump states its own state on its first line
-    -- (Probe:Diag), and two sentences saying it is one too many.
-    if not subOn and restL ~= "dump" and restL ~= "copy" then
-      pkg.Print("skindiag: sub-option is off (NodeTrail) — records go to the session buffer only")
-    end
-    if not P.enabled and type(P.Enable) == "function" then
-      local okE, errE = pcall(P.Enable, P)
-      if not okE then
-        pkg.Print("skindiag: could not start the probe: " .. tostring(errE))
-        return
-      end
-    end
-    if restL == "" then
-      local okT, on = pcall(P.Toggle, P)
-      if okT then
-        if on then
-          pkg.Print("skindiag: capture ON — kill + loot, cast Skinning, then loot again and dump")
-        elseif subOn then
-          -- t_80ffe952: with the sub-option on, capture IS recording. Turning
-          -- the diagnostic off pauses recording too, and the line says so
-          -- rather than letting the player think it still records.
-          pkg.Print("skindiag: capture off — recording is paused too; /mp skindiag resumes it")
-        else
-          pkg.Print("skindiag: capture off")
-        end
-      else
-        pkg.Print("skindiag: toggle failed: " .. tostring(on))
-      end
-    elseif restL == "dump" then
-      local okD, errD = pcall(P.Diag, P)
-      if not okD then
-        pkg.Print("skindiag: dump failed: " .. tostring(errD))
-      end
-    elseif restL == "copy" then
-      pkg.ShowSkinDiagCopy()
-    else
-      pkg.Print("/mp skindiag - toggle event capture (kill, loot, skin, skin-loot chain)")
-      pkg.Print("/mp skindiag dump - print what was captured (one line per step, screenshot-able)")
-      pkg.Print("/mp skindiag copy - compact dump in a copyable popup (paste into Discord)")
-    end
   else
     -- keep the historical usage line verbatim (existing callers/tests
-    -- rely on it); the new subcommand gets its own line.
+    -- rely on it).
     pkg.Print("/mpack [options|status]")
     pkg.Print("/mpack bug — open the bug report form (no upload — copy and paste into Discord)")
     pkg.Print("/mpack idea — open the idea form (no upload — copy and paste into Discord)")
-    pkg.Print("/mp skindiag (toggle) | /mp skindiag dump (skinning event probe)")
-    if pkg.IsModuleEnabled("NodeTrail") then
-      pkg.Print("NodeTrail: /nt help")
+    if type(pkg.NodeTrailInstalled) == "function" and pkg.NodeTrailInstalled() == true then
+      -- NodeTrail is its own addon. When it is installed, this pack points at
+      -- it instead of pretending to answer for it.
+      pkg.Print("NodeTrail is a separate addon now: /nt help")
     end
   end
 end

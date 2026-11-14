@@ -206,7 +206,10 @@ local function applySkinning(on)
         return false
       end
     end
-    pkg.Print("Skinning (experimental) on — recording corpses into NodeTrailDB; /mp skindiag dump shows what was stored.")
+    -- NodeTrail owns the recorder and its diagnostics now: this row is only
+    -- reachable from NodeTrail's own options, which left with the module, so the
+    -- message must not claim to know where the records went.
+    pkg.Print("Skinning (experimental) on — recorded by NodeTrail; /nt skindiag dump shows what was stored.")
   else
     if type(nt.DisableSkinning) == "function" then
       nt.DisableSkinning()
