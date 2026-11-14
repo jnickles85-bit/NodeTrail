@@ -1,0 +1,26 @@
+== head = tip of nt/t_cdee6bb6 (a311baf + the chrome leg) / base cb358e1 / lua 5.1.5
+
+== window_inner_input_spec (fixed tree, GREEN)
+inner tab "Upgrades" (558,-330) -> (unnamed)/Button | (unnamed)/Button L4 <- (unnamed)/Frame L3 <- StatForgeMainFrame/Frame L2 <- (unnamed)/Frame L3 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+inner tab "Log" (666,-330) -> (unnamed)/Button | (unnamed)/Button L4 <- (unnamed)/Frame L3 <- StatForgeMainFrame/Frame L2 <- (unnamed)/Frame L3 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+inner tab "Settings" (774,-330) -> (unnamed)/Button | (unnamed)/Button L4 <- (unnamed)/Frame L3 <- StatForgeMainFrame/Frame L2 <- (unnamed)/Frame L3 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+Upgrades tab button (1333,-419) -> (unnamed)/Button | (unnamed)/Button L5 <- (unnamed)/Frame L4 <- (unnamed)/Frame L3 <- StatForgeMainFrame/Frame L2 <- (unnamed)/Frame L3 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+Log tab button (1338,-419) -> (unnamed)/Button | (unnamed)/Button L5 <- (unnamed)/Frame L4 <- (unnamed)/Frame L3 <- StatForgeMainFrame/Frame L2 <- (unnamed)/Frame L3 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+empty area (484,-540) -> MightiePackWindowBackground/Frame | MightiePackWindowBackground/Frame L1 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+empty area (1436,-540) -> MightiePackWindowBackground/Frame | MightiePackWindowBackground/Frame L1 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
+window_inner_input_spec: ok
+
+== the specs this card touches or must not weaken
+  window_strata_spec: ok
+  window_tab_clicks_spec: ok
+  window_tabs_spec: ok
+  window_touchstone_shade_spec: ok
+  window_settings_build_spec: ok
+
+== full suite (lua 5.1.5)
+80 spec(s) run, 2 failure(s): tests/tooltip_no_gametooltip_writes_spec.lua tests/touchstone_assets_spec.lua
+  (both are the environment-only path-walk specs: they fail identically at base cb358e1: 79 spec(s), the same 2)
+
+== luacheck 1.2.0 (CI's version)
+
+Total: 0 warnings / 0 errors in 49 files
