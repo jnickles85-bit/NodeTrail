@@ -11,7 +11,7 @@
  -- The slash handler is the writer. The checkboxes call it and then re-read,
  -- so a click and `/up detail` cannot store two different shapes.
  local function advisorSlash(msg)
-@@ -123,37 +127,70 @@
+@@ -123,37 +127,76 @@
    if host.roleClear then host.roleClear:SetChecked(role == nil) end
  end
  
@@ -67,6 +67,12 @@
 +  -- moves the whole stack; the tab still opens at the top.
 +  local viewport = CreateFrame("Frame", "TouchstoneOptionsViewport", host)
 +  viewport:SetAllPoints(host)
++  -- Mouse AND wheel: the documented pair for receiving OnMouseWheel (the two
++  -- list tabs' viewports do the same). The viewport is the content's PARENT, so
++  -- every control inside it is a level above and keeps its own clicks; only the
++  -- empty body area lands here, and it is absorbed rather than reaching the
++  -- camera (the window's own fill is what catches that elsewhere).
++  viewport:EnableMouse(true)
 +  viewport:EnableMouseWheel(true)
 +  -- The content is TALLER than the body, so it has to be CLIPPED to it: nothing
 +  -- in this window clips a child to its parent by default, and without this the
@@ -99,7 +105,7 @@
    l1:SetPoint("LEFT", cb1, "RIGHT", 4, 0)
    cb1:SetScript("OnClick", function(self)
      if not StatForgeDB then return end
-@@ -165,10 +202,9 @@
+@@ -165,10 +208,9 @@
    -- Card t_b7b5f60c (audit U1 §4): diagnostics behind a BUTTON. The panel and
    -- the `/sf diag` / `/up diag` chat commands are unchanged — this is an
    -- additional surface, not a replacement, so the command path keeps working.
@@ -112,7 +118,7 @@
      "GameFontHighlight")
    l2:SetPoint("LEFT", diagBtn, "RIGHT", 10, 0)
    l2:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
-@@ -183,8 +219,7 @@
+@@ -183,8 +225,7 @@
    -- rescales the window under the cursor, so a small drag runs the value to the
    -- end of the track. A drag updates the label only; the scale is applied on
    -- mouse-up. A SetValue that is not a drag still applies immediately.
@@ -122,7 +128,7 @@
    host.scaleLabel = scaleLabel
  
    local lo, hi = 0.5, 1.5
-@@ -192,7 +227,7 @@
+@@ -192,7 +233,7 @@
      lo, hi = SF.WindowScaleBounds()
    end
    local SLIDER_STEP = 0.05
@@ -131,7 +137,7 @@
    slider:SetOrientation("HORIZONTAL")
    slider:SetSize(360, 20)
    slider:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", 0, -3)
-@@ -220,7 +255,7 @@
+@@ -220,7 +261,7 @@
    if type(slider.SetThumbTexture) == "function" then
      slider:SetThumbTexture(thumb)
    end
@@ -140,7 +146,7 @@
    scaleValue:SetPoint("LEFT", slider, "RIGHT", 12, 0)
    host.scaleValue = scaleValue
    host.scaleSlider = slider
-@@ -272,18 +307,20 @@
+@@ -272,18 +313,20 @@
  
    -- "What Touchstone shows". Every control writes through the slash handler
    -- that already owns the ChestAdvisorDB key, then syncShown re-reads it.
@@ -168,7 +174,7 @@
    detailFull:SetScript("OnClick", function()
      advisorSlash("detail full")
      syncShown(host)
-@@ -300,38 +337,38 @@
+@@ -300,38 +343,38 @@
    host.detailCompact = detailCompact
    host.detailUpgrades = detailUpgrades
  
@@ -215,7 +221,7 @@
    -- Card t_4ddeae90 (defect 2): ONE command, ONE chat line. This used to fire
    -- the four settings subcommands in a row, and the success echo prints once
    -- per call, so a single click produced four lines ("tooltip detail full",
-@@ -345,19 +382,25 @@
+@@ -345,19 +388,25 @@
      advisorSlash("reset")
      syncShown(host)
    end)
@@ -246,7 +252,7 @@
    host.classLabel = classLabel
    -- The reset control and class label are unnamed, so tests reach them here.
    -- Named checkboxes and the role row register themselves in CreateFrame.
-@@ -366,18 +409,19 @@
+@@ -366,18 +415,19 @@
      classLabel = classLabel,
    }
  
@@ -273,7 +279,7 @@
    roleMelee:SetScript("OnClick", function()
      advisorSlash("role melee")
      syncShown(host)
-@@ -395,29 +439,29 @@
+@@ -395,29 +445,29 @@
    host.roleSpell = roleSpell
    host.roleClear = roleClear
  
@@ -322,7 +328,7 @@
      "Hover a piece of gear in your bags. A green arrow marks an upgrade;\n" ..
      "an amber square marks a trade-off (better on some stats, worse on others).\n" ..
      "On the character sheet, the green arrow means a bag item is an upgrade for that slot.\n" ..
-@@ -433,13 +477,117 @@
+@@ -433,13 +483,117 @@
    about:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
    host.about = about
  
@@ -440,7 +446,7 @@
    local hideMini = StatForgeDB and StatForgeDB.minimapHide
    if host.minimapCheck then host.minimapCheck:SetChecked(not hideMini) end
    if host.scaleSlider and type(SF.GetWindowScale) == "function" then
-@@ -451,6 +599,11 @@
+@@ -451,6 +605,11 @@
      end
    end
    syncShown(host)

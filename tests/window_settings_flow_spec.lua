@@ -270,6 +270,10 @@ check(aboutAfter.bottom >= vprect.bottom - EPS,
 -- and the window, which is the same defect one layer out.
 check(viewport:GetClipsChildren() == true,
   "S5 the viewport clips its children (SetClipsChildren(true))")
+-- And it can receive the wheel at all: mouse + wheel is the documented pair, and
+-- a viewport that swallowed neither would leave the tail unreachable.
+check(viewport:IsMouseEnabled() == true,
+  "S5 the viewport is mouse-enabled, so the wheel that reaches it is not routed past it")
 
 -- Wheel up past the top: clamps at 0, no blank band.
 for _ = 1, 80 do

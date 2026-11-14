@@ -165,6 +165,12 @@ local function build(host)
   -- moves the whole stack; the tab still opens at the top.
   local viewport = CreateFrame("Frame", "TouchstoneOptionsViewport", host)
   viewport:SetAllPoints(host)
+  -- Mouse AND wheel: the documented pair for receiving OnMouseWheel (the two
+  -- list tabs' viewports do the same). The viewport is the content's PARENT, so
+  -- every control inside it is a level above and keeps its own clicks; only the
+  -- empty body area lands here, and it is absorbed rather than reaching the
+  -- camera (the window's own fill is what catches that elsewhere).
+  viewport:EnableMouse(true)
   viewport:EnableMouseWheel(true)
   -- The content is TALLER than the body, so it has to be CLIPPED to it: nothing
   -- in this window clips a child to its parent by default, and without this the
