@@ -266,10 +266,13 @@ function C.Visible(f)
   return C.Visible(p)
 end
 
-local function fire(f, script)
+local function fire(f, script, ...)
   local fn = type(f.scripts) == "table" and f.scripts[script]
   if type(fn) ~= "function" then return false end
-  local ok, err = pcall(fn, f, script)
+  -- Extra arguments reach the handler: a wheel event's delta is part of the
+  -- behaviour under test (card t_4e5ad8a4), and a handler that only ever saw the
+  -- script name could not be exercised at all.
+  local ok, err = pcall(fn, f, ...)
   if not ok then C.lastScriptError = tostring(err) end
   return ok
 end
@@ -332,6 +335,12 @@ local function newFrame(kind, name, parent, template)
   end
   function f:IsMouseEnabled() return self.mouse == true end
   function f:EnableMouseWheel() end
+  -- Card t_4e5ad8a4: clipping is the only thing that stops a scrolled content
+  -- frame's tail from painting outside its viewport (nothing clips a child to its
+  -- parent by default). The model records the flag so a spec can require it,
+  -- rather than trusting that the call was made.
+  function f:SetClipsChildren(v) self.clipsChildren = v and true or false end
+  function f:GetClipsChildren() return self.clipsChildren == true end
   function f:SetMouseClickEnabled() end
   function f:SetFrameStrata(s) self.strata = s end
   function f:GetName() return self.Name end
@@ -440,21 +449,51 @@ local function newFrame(kind, name, parent, template)
     if type(fontTemplate) == "string" then
       fs.fontPath, fs.size, fs.fontFlags = fontTemplate, C.defaultFontSize, ""
     end
-    function fs:SetText(t) self.text = tostring(t or "") end
+
+    -- Card t_4e5ad8a4: a FontString's HEIGHT is its RENDERED height, and a
+    -- wrapped string renders taller than one line. This model used to answer one
+    -- line for every string, which is exactly the assumption the list tabs were
+    -- making -- so a spec built on it could not see a wrapped reason running out
+    -- of its row. Lines are counted the way the client lays them out: an explicit
+    -- "\n" ends a line, and a string with a width wraps at that width.
+    local function measure(self)
+      if not self.fontPath then self.height = 0; return end
+      local size = self.size or C.defaultFontSize
+      local text = tostring(self.text or "")
+      if text == "" then self.height = 0; return end
+      local limit = tonumber(self.width)
+      local lines = 0
+      for para in string.gmatch(text .. "\n", "(.-)\n") do
+        local n = 1
+        if limit and limit > 0 then
+          n = math.max(1, math.ceil((#para * size * C.charWidth) / limit))
+        end
+        lines = lines + n
+      end
+      self.height = lines * size * C.lineHeight
+    end
+    fs.__measure = measure
+
+    function fs:SetText(t) self.text = tostring(t or ""); measure(self); invalidateRect(self) end
     function fs:GetText() return self.text end
     function fs:SetTextColor(...) self.color = { ... } end
     function fs:GetTextColor() local c = self.color or {}; return c[1], c[2], c[3], c[4] end
     function fs:SetJustifyH(j) self.justify = j end
     function fs:SetJustifyV(j) self.justifyV = j end
     function fs:SetWordWrap(v) self.wordWrap = v end
+    local inheritedSetSize, inheritedSetWidth = fs.SetSize, fs.SetWidth
+    function fs:SetSize(w, h) inheritedSetSize(self, w, h); measure(self) end
+    function fs:SetWidth(w) inheritedSetWidth(self, w); measure(self) end
     function fs:SetFont(path, size, flags)
       self.fontPath, self.size, self.fontFlags = path, size, flags
+      measure(self)
     end
     function fs:GetFont() return self.fontPath, self.size, self.fontFlags end
     function fs:SetFontObject(obj)
       if type(obj) == "table" then
         self.fontPath, self.size = obj.path or "FontObject", obj.size or C.defaultFontSize
       end
+      measure(self)
     end
     function fs:GetStringWidth()
       if not self.fontPath then return 0 end
@@ -462,7 +501,7 @@ local function newFrame(kind, name, parent, template)
     end
     function fs:GetHeight()
       if not self.fontPath then return 0 end
-      return (self.size or C.defaultFontSize) * C.lineHeight
+      return self.height or 0
     end
     f.children[#f.children + 1] = fs
     return fs
@@ -510,6 +549,29 @@ local function newFrame(kind, name, parent, template)
     bar.width, bar.height = 16, 100
     f.children[#f.children + 1] = bar
     f.scrollBar = bar
+  end
+
+  -- Slider surface (the Settings scale slider). The model keeps the RANGE and
+  -- the VALUE; everything positional still comes from the anchors, so a spec can
+  -- read where the slider sits. SetValue does not fire OnValueChanged: the
+  -- handler signature differs (self, value) and a fake value would make the
+  -- tab's silent-refresh path look tested when it is not.
+  if kind == "Slider" then
+    local lo, hi, step = 0, 1, 0
+    function f:SetOrientation(o) self.orientation = o end
+    function f:SetMinMaxValues(a, b) lo, hi = tonumber(a) or 0, tonumber(b) or 0 end
+    function f:GetMinMaxValues() return lo, hi end
+    function f:SetValueStep(s) step = tonumber(s) or 0 end
+    function f:GetValueStep() return step end
+    function f:SetObeyStepOnDrag() end
+    function f:SetThumbTexture(t) self.thumb = t end
+    function f:SetValue(v)
+      v = tonumber(v) or 0
+      if v < lo then v = lo end
+      if v > hi then v = hi end
+      self.value = v
+    end
+    function f:GetValue() return self.value or 0 end
   end
 
   if type(parent) == "table" then
