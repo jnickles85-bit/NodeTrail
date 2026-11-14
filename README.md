@@ -142,7 +142,6 @@ Repo-only (not shipped): `README.md`, `tests/`,
 
 ## Tests
 Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 32 specs:
-
 - `tests/bugreport_spec.lua`
 - `tests/chestadvisor_diag_spec.lua`
 - `tests/chestadvisor_secret_values_spec.lua`
