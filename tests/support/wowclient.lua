@@ -32,6 +32,16 @@
 --      gets the click.
 --   4. `Button` is mouse-enabled from birth (the client's default); a plain
 --      `Frame` is not. `EnableMouse(false)` really disables it.
+--   5. STRATA IS COMPARED, not just level (card t_5d0cc41a). Strata is a
+--      per-frame attribute here: an explicit `SetFrameStrata` is honoured as
+--      written, even when it ranks BELOW the parent's, because that is what the
+--      owner's client reported on 58118b0 (`StatForgeMainFrame` read MEDIUM
+--      inside a DIALOG window, and the window's own 0.96 fill drew over the
+--      whole body). Strata beats level outright, so `SetFrameLevel` on the child
+--      can never lift it back above a fill that sits in a higher strata. `level`
+--      alone is the weaker of the two orderings and it hid this defect for two
+--      cards; `C.StrataCover` / `C.ZOrderHazards` now answer it directly, and
+--      `SetParent` records the comparison at the moment of the move.
 --
 -- It is not a Blizzard emulator: it models the API surface this pack calls.
 -- Anything it does not model is absent rather than silently benign, so a spec
@@ -46,6 +56,10 @@ C.defaultFontSize = 12
 -- Every frame ever created, in creation order (the client's tie-break).
 C.allFrames = {}
 C.createCount = 0
+
+-- Card t_5d0cc41a: every SetParent that left the moved frame under an
+-- ancestor's fill, recorded at the moment of the move (see C.StrataCover).
+C.reparentHazards = {}
 
 -- UIParent taint trap: specs that assert "we never touch UIParent" turn this on.
 C.trackUIParent = false
@@ -320,6 +334,7 @@ local function newFrame(kind, name, parent, template)
   function f:EnableMouseWheel() end
   function f:SetMouseClickEnabled() end
   function f:SetFrameStrata(s) self.strata = s end
+  function f:GetName() return self.Name end
   function f:GetFrameStrata()
     if self.strata then return self.strata end
     local p = parentOf(self)
@@ -328,10 +343,14 @@ local function newFrame(kind, name, parent, template)
   end
   function f:SetFrameLevel(l) self.level = l end
   function f:GetFrameLevel()
+    -- Frozen at birth, exactly like the client: a frame's level is set once
+    -- (parent level + 1) and a later SetParent does NOT re-level it. Deriving
+    -- the level from the CURRENT parent would silently repair every reparent,
+    -- which is the class of bug this model must be able to see (a body moved
+    -- into a window keeps the level it was born with, so it can end up level
+    -- with -- or below -- the frame whose backdrop fills that window).
     if type(self.level) == "number" then return self.level end
-    local p = parentOf(self)
-    if p then return p:GetFrameLevel() + 1 end
-    return 1
+    return self._bornLevel or 1
   end
   function f:Raise() end
   function f:Lower() end
@@ -370,7 +389,18 @@ local function newFrame(kind, name, parent, template)
   function f:GetNormalTexture() return self.normalTexture end
   function f:SetPushedTexture(tex) self.pushedTexture = tex or true end
   function f:GetPushedTexture() return self.pushedTexture end
-  function f:SetHighlightTexture(tex) self.highlightTexture = tex or true end
+  function f:SetHighlightTexture(tex)
+    -- The client makes a highlight REGION and returns it from
+    -- GetHighlightTexture; a boolean would crash any code that colours it
+    -- (Touchstone's button helper does: `ht:SetVertexColor(...)`).
+    if type(self._highlight) ~= "table" and type(self.CreateTexture) == "function" then
+      self._highlight = self:CreateTexture(nil, "HIGHLIGHT")
+    end
+    if type(self._highlight) == "table" and type(self._highlight.SetTexture) == "function" then
+      self._highlight:SetTexture(tex)
+    end
+    self.highlightTexture = self._highlight or true
+  end
   function f:GetHighlightTexture() return self.highlightTexture end
   function f:SetDisabledTexture(tex) self.disabledTexture = tex or true end
   function f:GetChildren()
@@ -393,7 +423,16 @@ local function newFrame(kind, name, parent, template)
     end
     invalidateScale(self)
     invalidateRect(self)
+    -- Card t_5d0cc41a: the reparent is where this class of defect is born. A
+    -- move does not re-level the frame and does not touch its strata, so a body
+    -- that arrived at MEDIUM is drawn UNDER a DIALOG parent's fill from this
+    -- moment on — and no frame level can lift it back. The comparison is made
+    -- here, at the move, and `C.ZOrderHazards()` can re-walk the live tree for
+    -- the same answer when a fill is attached (or removed) afterwards.
+    local hazard = C.StrataCover(self)
+    if hazard then C.reparentHazards[#C.reparentHazards + 1] = hazard end
   end
+
   function f:CreateFontString(_, _, fontTemplate)
     local fs = newFrame("FontString", nil, f)
     fs.text = ""
@@ -477,6 +516,12 @@ local function newFrame(kind, name, parent, template)
     f.parent = parent
     if type(parent.children) == "table" then parent.children[#parent.children + 1] = f end
   end
+  -- The client's birth level: parent + 1, and it sticks for the frame's life.
+  f._bornLevel = (type(parent) == "table" and parent:GetFrameLevel() or 0) + 1
+  -- The client publishes a NAMED frame as a global. Without this the model
+  -- cannot see a module that reaches its own frame through `_G["StatForgeMainFrame"]`
+  -- (MightiePack's attach path does exactly that).
+  if type(name) == "string" and name ~= "" then rawset(_G, name, f) end
   C.allFrames[#C.allFrames + 1] = f
   return f
 end
@@ -484,14 +529,17 @@ end
 C.NewFrame = newFrame
 
 -- ── Mouse hit-testing ───────────────────────────────────────────────────────
+-- Card t_5d0cc41a. An explicit strata is taken as written and is NOT clamped up
+-- to the parent's. That is the behaviour the owner measured on his client
+-- (`StatForgeMainFrame` reporting MEDIUM while its parent read DIALOG, with the
+-- parent's fill drawn over the body). Clamping here would silently repair the
+-- exact reparent this model exists to see, which is how a green suite shipped
+-- the dimmed Touchstone tab.
 local function effStrata(f)
+  if type(f.strata) == "string" then return strataRank(f.strata) end
   local p = parentOf(f)
-  local own = (type(f.strata) == "string") and strataRank(f.strata) or 0
-  if not p then
-    if own > 0 then return own end
-    return strataRank("MEDIUM")
-  end
-  return math.max(own, effStrata(p))
+  if p then return effStrata(p) end
+  return strataRank("MEDIUM")
 end
 
 --- Draw/mouse order key: strata, then level, then creation order. A frame drawn
@@ -508,6 +556,91 @@ local function better(a, b)
   return ao > bo
 end
 C.DrawsAbove = better
+
+-- ── Z-ORDER HAZARDS: a fill in a higher strata covers the child ─────────────
+-- Card t_5d0cc41a. The window painted its own 0.96 fill in DIALOG; the
+-- reparented Touchstone body kept MEDIUM. Strata outranks level, so the fill
+-- drew over the entire body — header, inner strip and list — and every alpha
+-- read 1.00 because nothing was faded. `DrawsAbove` cannot see it from the
+-- body's side when the fill belongs to an ANCESTOR (the ancestor is excluded
+-- from covering-frame detectors by definition), so this answers the question
+-- that was actually being asked: does any frame lose to an ancestor's fill
+-- purely because of strata?
+
+--- The alpha of the fill a frame paints behind its content (its backdrop's bg
+--- texture), or nil when it paints none. Alpha 0 is "no fill": a texture that
+--- paints nothing cannot cover anything.
+function C.FillAlpha(f)
+  if type(f) ~= "table" or type(f.backdrop) ~= "table" then return nil end
+  local bgFile = f.backdrop.bgFile
+  if type(bgFile) ~= "string" or bgFile == "" then return nil end
+  local c = f.backdropColor
+  local a = 1
+  if type(c) == "table" and type(c[4]) == "number" then a = c[4] end
+  if a <= 0 then return nil end
+  return a
+end
+
+--- Share of `f`'s own rect that lies inside `host`'s rect (0..1).
+function C.CoveredFraction(f, host)
+  local a, b = C.Rect(f), C.Rect(host)
+  local area = (a.right - a.left) * (a.top - a.bottom)
+  if area <= 0 then return 0 end
+  local w = math.min(a.right, b.right) - math.max(a.left, b.left)
+  local h = math.min(a.top, b.top) - math.max(a.bottom, b.bottom)
+  if w <= 0 or h <= 0 then return 0 end
+  return (w * h) / area
+end
+
+--- The ancestor that covers `f` purely on STRATA, or nil.
+--- Only a frame that set its OWN strata can lose this way (a frame that never
+--- set one inherits its parent's, which is the same rank). `host` must paint a
+--- fill with alpha > 0 and cover at least half of `f`.
+--- Returns { frame, host, strata, hostStrata, fillAlpha, coverage }.
+function C.StrataCover(f)
+  if type(f) ~= "table" or type(f.strata) ~= "string" then return nil end
+  local own = strataRank(f.strata)
+  local p = parentOf(f)
+  while type(p) == "table" do
+    local alpha = C.FillAlpha(p)
+    if alpha and strataRank(p:GetFrameStrata()) > own then
+      local cov = C.CoveredFraction(f, p)
+      if cov >= 0.5 then
+        return {
+          frame = f, host = p, strata = f.strata,
+          hostStrata = p:GetFrameStrata(), fillAlpha = alpha, coverage = cov,
+        }
+      end
+    end
+    p = parentOf(p)
+  end
+  return nil
+end
+
+--- Every frame in the live tree that draws under an ancestor's fill. Empty is
+--- the invariant: no hosted frame anywhere loses to strata.
+function C.ZOrderHazards()
+  local out = {}
+  for _, f in ipairs(C.allFrames) do
+    local h = C.StrataCover(f)
+    if h then out[#out + 1] = h end
+  end
+  return out
+end
+
+function C.DescribeZOrderHazards()
+  local function name(f)
+    return tostring(f.Name or "?") .. "/" .. tostring(f.kind or "?")
+  end
+  local parts = {}
+  for _, h in ipairs(C.ZOrderHazards()) do
+    parts[#parts + 1] = name(h.frame) .. " (" .. h.strata .. ") under "
+      .. name(h.host) .. " (" .. tostring(h.hostStrata) .. ", fill alpha "
+      .. string.format("%.2f", h.fillAlpha) .. ", covered "
+      .. string.format("%.0f%%", h.coverage * 100) .. ")"
+  end
+  return table.concat(parts, "; ")
+end
 
 --- Every visible, mouse-enabled frame whose rect contains the point, topmost
 --- first. This is the list the client walks to decide who owns a click.
@@ -559,6 +692,7 @@ function C.Install(opts)
   C.allFrames = {}
   C.createCount = 0
   C.chat = {}
+  C.reparentHazards = {}
 
   CreateFrame = function(kind, name, parent, template)
     return newFrame(kind, name, parent, template)

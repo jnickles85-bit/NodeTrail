@@ -1,0 +1,22 @@
+== window_strata_spec (fixed tree, final)
+strata: fill BACKGROUND(1) < content MEDIUM(3) < chrome DIALOG(5)
+levels: window L2, fill L1, host L3, touchstone L2
+window_strata_spec: ok
+
+== full suite (final)
+79 spec(s) run, 2 failure(s): tests/tooltip_no_gametooltip_writes_spec.lua tests/touchstone_assets_spec.lua
+
+== luacheck (final)
+Total: 0 warnings / 0 errors in 49 files
+
+== the two failures are environment-only: the same two specs fail at base 4692803 in a clean worktree
+-- base 4692803: tooltip_no_gametooltip_writes_spec
+FAIL: B: exactly one GameTooltip:HookScript remains (Touchstone's read-only item fallback), got 0: 
+The system cannot find the path specified.
+FAIL: C: the NodeTrail tree was walked
+3 no-GameTooltip-write check(s) failed
+-- base 4692803: touchstone_assets_spec
+The system cannot find the path specified.
+FAIL: found vendored Touchstone lua files under ./MightiePack/Modules/Touchstone
+FAIL: at least the bag/toast file and the upgrades tab reference marker.tga
+touchstone_assets_spec: 2 failure(s)
