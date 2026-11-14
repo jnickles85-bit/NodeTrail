@@ -244,6 +244,120 @@ function W.PaintStatus()
     call(fs, "SetTextColor", r, g, b, a)
     call(fs, "SetText", s.text)
   end
+  -- The summary strip is the same kind of readout as this line — it says what
+  -- the advisor found, from the advisor's own list — so it repaints wherever the
+  -- status does, and it cannot go stale either (card t_07f778ca, PART B3).
+  W.PaintSummary()
+  return s
+end
+
+-- ── The summary strip (card t_07f778ca, PART B3) ───────────────────────────
+-- "2 of 5 are worth taking" · "1 trade-off · 2 refused" over a 3px meter.
+--
+-- The counts come from the verdict LIST, every time: no cached total, no number
+-- typed in. An empty list is a real answer (0 of 0, an empty meter) and must not
+-- divide by zero.
+--
+-- THE SHAPE MATTERS: ChestAdvisor.getVerdicts() returns a table KEYED BY LINK
+-- (`verdicts[link] = { verdict = … }`), not an array — so this walks it with
+-- pairs(). Walking it with ipairs() reads an empty list and prints "0 of 0" over
+-- a full one, which is the exact class of lie this strip must never tell.
+local function tradeOffToken()
+  local V = rawget(_G, "Verdict")
+  if type(V) == "table" and type(V.TRADE_OFF) == "string" then return V.TRADE_OFF end
+  return "TRADE_OFF"
+end
+
+W.WORD_REFUSED = "refused"
+
+--- Count the advisor's own verdict list: how many rows, how many are worth
+--- taking (an UPGRADE — the verdict that means "equip it"), how many are
+--- trade-offs, and how many were refused. The three parts add up to the total.
+function W.Summary()
+  local rows = {}
+  local ca = rawget(_G, "ChestAdvisor")
+  if type(ca) == "table" and type(ca.getVerdicts) == "function" then
+    local ok, list = pcall(ca.getVerdicts)
+    if ok and type(list) == "table" then rows = list end
+  end
+  local trade = tradeOffToken()
+  local out = { total = 0, upgrade = 0, tradeoff = 0, refused = 0, worth = 0 }
+  -- pairs(), not ipairs(): the list is keyed by item link (see above).
+  for _, r in pairs(rows) do
+    if type(r) == "table" then
+      out.total = out.total + 1
+      local v = r.verdict
+      if v == "UPGRADE" then
+        out.upgrade = out.upgrade + 1
+      elseif v == trade or v == "TRADE_OFF" then
+        out.tradeoff = out.tradeoff + 1
+      else
+        out.refused = out.refused + 1
+      end
+    end
+  end
+  out.worth = out.upgrade
+  return out
+end
+
+--- The three strings the strip draws: the count (its own label, in the upgrade
+--- colour), the rest of the line, and the right-hand pair. Pure, so a spec can
+--- ask for the words without a frame.
+function W.SummaryText(s)
+  s = s or W.Summary()
+  local total = tonumber(s.total) or 0
+  local worth = tonumber(s.worth) or 0
+  local trade = tonumber(s.tradeoff) or 0
+  local refused = tonumber(s.refused) or 0
+  local count = tostring(worth)
+  local rest = " of " .. tostring(total) .. (total == 1 and " is worth taking" or " are worth taking")
+  local right = tostring(trade) .. " trade-off" .. (trade == 1 and "" or "s")
+    .. " · " .. tostring(refused) .. " " .. W.WORD_REFUSED
+  return count, rest, right
+end
+
+--- The meter's segment widths for a given strip width. Proportional to the row
+--- count; the last segment takes the rounding remainder so the three segments
+--- always fill the meter exactly (and an empty list is all zeroes, not NaN).
+function W.SummaryMeter(s, width)
+  local total = math.max(0, tonumber(s and s.total) or 0)
+  local w = math.max(0, tonumber(width) or 0)
+  if total == 0 or w == 0 then
+    return { upgrade = 0, tradeoff = 0, noupgrade = 0 }
+  end
+  local up = (math.max(0, tonumber(s.upgrade) or 0) / total) * w
+  local tr = (math.max(0, tonumber(s.tradeoff) or 0) / total) * w
+  local no = w - up - tr
+  if no < 0 then no = 0 end
+  return { upgrade = up, tradeoff = tr, noupgrade = no }
+end
+
+--- Repaint the strip from the live list.
+function W.PaintSummary()
+  local meter, seg = W.summaryMeter, W.summarySegments
+  if type(meter) ~= "table" or type(seg) ~= "table" then return false end
+  local s = W.Summary()
+  W.summary = s
+  local count, rest, right = W.SummaryText(s)
+  if type(W.summaryCount) == "table" then call(W.summaryCount, "SetText", count) end
+  if type(W.summaryLine) == "table" then call(W.summaryLine, "SetText", rest) end
+  if type(W.summaryDetail) == "table" then call(W.summaryDetail, "SetText", right) end
+  local width = 0
+  local okW, w = call(meter, "GetWidth")
+  if okW and type(w) == "number" then width = w end
+  local widths = W.SummaryMeter(s, width)
+  local x = 0
+  for _, key in ipairs({ "upgrade", "tradeoff", "noupgrade" }) do
+    local tex = seg[key]
+    if type(tex) == "table" then
+      local sw = widths[key] or 0
+      call(tex, "SetWidth", sw)
+      call(tex, "ClearAllPoints")
+      call(tex, "SetPoint", "BOTTOMLEFT", meter, "BOTTOMLEFT", x, 0)
+      if sw > 0 then call(tex, "Show") else call(tex, "Hide") end
+      x = x + sw
+    end
+  end
   return s
 end
 
@@ -341,7 +455,7 @@ function W._Ensure()
   -- The colour is the theme's windowBg (the body's brand bg, ours for alpha):
   -- one palette, and the fill is still opaque so the interior never goes
   -- see-through over live terrain (AC-N7).
-  local bg = newFrame("Frame", W.NAME .. "Background", f, "BackdropTemplate")
+  local bg = T.Fill(f, "windowBg", { name = W.NAME .. "Background" })
     or newFrame("Frame", W.NAME .. "Background", f)
   if type(bg) == "table" then
     W.bg = bg
@@ -351,15 +465,6 @@ function W._Ensure()
     local okLevel, winLevel = call(f, "GetFrameLevel")
     if okLevel and type(winLevel) == "number" then
       call(bg, "SetFrameLevel", math.max(1, winLevel - 1))
-    end
-    if type(bg.SetBackdrop) == "function" then
-      call(bg, "SetBackdrop", {
-        bgFile = T.tex.solid,
-        tile = false,
-        insets = T.inset.panel,
-      })
-      local r, g, b, a = T.R("windowBg")
-      call(bg, "SetBackdropColor", r, g, b, a)
     end
   end
 
@@ -394,17 +499,13 @@ function W._Ensure()
   -- One plane across the top: the pack's name, its version, the status line,
   -- and the close button. It is also the drag handle — a band that looks like a
   -- header should behave like one.
-  local band = newFrame("Frame", nil, f, "BackdropTemplate") or newFrame("Frame", nil, f)
+  local band = T.Fill(f, "titleBand") or newFrame("Frame", nil, f, "BackdropTemplate")
+    or newFrame("Frame", nil, f)
   W.titleBar = band
   call(band, "SetPoint", "TOPLEFT", f, "TOPLEFT", 0, 0)
   call(band, "SetPoint", "TOPRIGHT", f, "TOPRIGHT", 0, 0)
   call(band, "SetHeight", T.size.titleBand)
   call(band, "EnableMouse", true)
-  if type(band.SetBackdrop) == "function" then
-    call(band, "SetBackdrop", { bgFile = T.tex.solid, tile = false, insets = T.inset.panel })
-    local r, g, b, a = T.R("titleBand")
-    call(band, "SetBackdropColor", r, g, b, a)
-  end
   if type(band.RegisterForDrag) == "function" then
     pcall(band.RegisterForDrag, band, "LeftButton")
     pcall(band.SetScript, band, "OnDragStart", function()
@@ -505,14 +606,10 @@ function W._Ensure()
     call(btn, "SetHeight", T.size.tabH)
     call(btn, "SetPoint", "TOPLEFT", strip, "TOPLEFT", x, 0)
     call(btn, "EnableMouse", true)
-    if type(btn.SetBackdrop) == "function" then
-      call(btn, "SetBackdrop", {
-        bgFile = T.tex.solid,
-        edgeFile = T.tex.edge,
-        tile = false, edgeSize = T.size.windowEdge,
-        insets = T.inset.edge,
-      })
-    end
+    -- A tab plate: a fill PLUS the hairline it is judged by, so T.Fill takes
+    -- the edge — the fill then starts exactly where the border ends and the
+    -- plate has no transparent ring of its own (card t_07f778ca).
+    T.FillBackdrop(btn, "tabOff", { edge = "hairline" })
     -- Above every sibling the window creates, so nothing added later can draw
     -- over the row and take its clicks (card t_ea66cd84).
     local okLevel, stripLevel = call(strip, "GetFrameLevel")
@@ -557,13 +654,69 @@ function W._Ensure()
     x = x + width + T.size.tabGutter
   end
 
+  -- ── The summary strip (card t_07f778ca, PART B3) ─────────────────────────
+  -- V4's line, under V1's tab bar: what the advisor actually found, in one
+  -- line — "2 of 5 are worth taking", the count in the upgrade colour, and
+  -- "1 trade-off · 2 refused" on the right — over a 3px meter segmented in the
+  -- three verdict colours by proportion.
+  --
+  -- It RECOMPUTES from the verdict list on every activation and every vendored
+  -- refresh (W.PaintSummary); nothing here is cached or hardcoded, and an empty
+  -- list renders as "0 of 0" with an empty meter rather than dividing by zero.
+  local summary = T.Fill(f, "ledgerBand", { name = W.NAME .. "Summary" })
+  W.summaryFrame = summary
+  if type(summary) == "table" then
+    call(summary, "SetPoint", "TOPLEFT", strip, "BOTTOMLEFT", 0, 0)
+    call(summary, "SetPoint", "TOPRIGHT", strip, "BOTTOMRIGHT", 0, 0)
+    call(summary, "SetHeight", T.size.summaryStrip)
+    W.summaryCount = T.Text(summary, "heading", "ledgerUpgrade", "0")
+    W.summaryLine = T.Text(summary, "heading", "ledgerMuted", "")
+    W.summaryDetail = T.Text(summary, "heading", "ledgerDim", "")
+    if type(W.summaryCount) == "table" then
+      call(W.summaryCount, "SetPoint", "BOTTOMLEFT", summary, "BOTTOMLEFT", 0, T.space.xs + T.size.meter + 2)
+    end
+    if type(W.summaryLine) == "table" then
+      call(W.summaryLine, "SetPoint", "BOTTOMLEFT", W.summaryCount, "BOTTOMRIGHT", 0, 0)
+    end
+    if type(W.summaryDetail) == "table" then
+      call(W.summaryDetail, "SetPoint", "BOTTOMRIGHT", summary, "BOTTOMRIGHT", 0, T.space.xs + T.size.meter + 2)
+      call(W.summaryDetail, "SetJustifyH", "RIGHT")
+    end
+    -- The meter: three segments, laid out left to right by PaintSummary.
+    local meter = newFrame("Frame", nil, summary)
+    W.summaryMeter = meter
+    if type(meter) == "table" then
+      call(meter, "SetPoint", "BOTTOMLEFT", summary, "BOTTOMLEFT", 0, 0)
+      call(meter, "SetPoint", "BOTTOMRIGHT", summary, "BOTTOMRIGHT", 0, 0)
+      call(meter, "SetHeight", T.size.meter)
+      W.summarySegments = {
+        upgrade = swatch(meter, "ledgerUpgrade", 0, T.size.meter),
+        tradeoff = swatch(meter, "ledgerTradeoff", 0, T.size.meter),
+        noupgrade = swatch(meter, "ledgerNoUpgrade", 0, T.size.meter),
+      }
+      for _, key in ipairs({ "upgrade", "tradeoff", "noupgrade" }) do
+        local seg = W.summarySegments[key]
+        if type(seg) == "table" then call(seg, "SetPoint", "BOTTOMLEFT", meter, "BOTTOMLEFT", 0, 0) end
+      end
+    end
+    -- A hairline under the strip, so it reads as a band rather than floating.
+    local under = T.Rule(summary, "ledgerLine2", T.space.hair)
+    if type(under) == "table" then
+      call(under, "SetPoint", "BOTTOMLEFT", summary, "BOTTOMLEFT", 0, 0)
+      call(under, "SetPoint", "BOTTOMRIGHT", summary, "BOTTOMRIGHT", 0, 0)
+    end
+  end
+
   -- One content host per tab, inset from the frame on the grid. They are always
   -- created, so switching tabs is a Show/Hide of frames we own, never a frame
   -- creation mid-fight.
   W.hosts = {}
   for _, id in ipairs(W.TABS) do
     local host = newFrame("Frame", nil, f)
-    call(host, "SetPoint", "TOPLEFT", strip, "BOTTOMLEFT", 0, -T.space.sm)
+    -- Under the summary strip when it exists; the strip is chrome, the host is
+    -- the tab's own content (card t_07f778ca, PART B3).
+    local topAnchor = type(W.summaryFrame) == "table" and W.summaryFrame or strip
+    call(host, "SetPoint", "TOPLEFT", topAnchor, "BOTTOMLEFT", 0, -T.space.sm)
     call(host, "SetPoint", "BOTTOMRIGHT", f, "BOTTOMRIGHT", -T.space.md, T.space.md)
     call(host, "Hide")
     W.hosts[id] = host
@@ -626,6 +779,11 @@ function W.SelectTab(id)
   -- AddOns > MightiePack), and the next visit to this tab must get it back.
   if id == "settings" and type(W.AttachSettings) == "function" then
     W.AttachSettings()
+  elseif type(W.HideSettingsPanel) == "function" then
+    -- PART A3 (card t_07f778ca): leaving the tab hides the panel. Before this,
+    -- a shown panel stayed shown over whatever tab was active — invisible, and
+    -- therefore never reported, but a frame above the content all the same.
+    W.HideSettingsPanel()
   end
   local fn = W.renderers and W.renderers[id]
   if type(fn) == "function" then
@@ -713,6 +871,21 @@ function W.AttachSettings()
   return true
 end
 
+--- Hide Options.lua's panel — but ONLY when this window owns it. While the
+--- Settings canvas holds the panel, its visibility is Blizzard's business (a
+--- player reading AddOns > MightiePack must keep the page they are looking at);
+--- the moment the window hosts it, the window is the owner and the tab decides
+--- (card t_07f778ca, PART A3).
+function W.HideSettingsPanel()
+  local panel = pkg.optionsPanel
+  if type(panel) ~= "table" then return false end
+  local host = W.hosts and W.hosts.settings
+  local okParent, parent = call(panel, "GetParent")
+  if not (okParent and type(host) == "table" and parent == host) then return false end
+  call(panel, "Hide")
+  return true
+end
+
 -- ── The vendored Touchstone frame becomes the Touchstone tab ──────────────
 --- Move StatForgeMainFrame in whole. Its inner strip (Upgrades / Log /
 --- Settings) is untouched: the frame keeps its own tab renderers, its own
@@ -752,6 +925,21 @@ function W.AttachTouchstone()
   -- BACKGROUND-strata frame (W.bg), and this line keeps the body above it.
   call(main, "SetFrameStrata", "MEDIUM")
   call(main, "Show")
+  -- ONE WINDOW, ONE FRAME (card t_07f778ca, PART A2).
+  --
+  -- The body arrived with its OWN bordered backdrop: a 1px box around
+  -- StatForgeMainFrame, drawn inside the window. Hosted, that is a second,
+  -- nested frame — the box the owner saw in the Settings screenshot. The
+  -- window is the only chrome here, so the body's edge goes and its fill
+  -- becomes transparent. Its backdrop TABLE stays (the rows still paint on it,
+  -- and a later SetBackdropColor by the body is a colour, not a frame): what is
+  -- removed is the border and the fill, nothing else.
+  if type(main.SetBackdrop) == "function" then
+    call(main, "SetBackdrop", {
+      bgFile = T.tex.solid, tile = false, insets = T.inset.zero,
+    })
+    call(main, "SetBackdropColor", 0, 0, 0, 0)
+  end
   -- Hide the title bar. The frame's children in creation order are titleBar
   -- (height 40), tabStrip (height 32), contentFrame and, on a first use, the
   -- splash cover (which fills the frame). Matching on the 40px height picks

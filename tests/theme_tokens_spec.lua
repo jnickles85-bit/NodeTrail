@@ -181,12 +181,21 @@ check(upg:find("MightiePackTheme", 1, true) ~= nil,
   "the item list reads the pack's theme (MightiePackTheme) for its metrics")
 check(upg:find("local ROW_H   = 34", 1, true) == nil,
   "the item list no longer states ROW_H as a bare literal of its own")
-for _, key in ipairs({ "rowMin", "rowPad", "icon", "mark", "inset", "nameGap" }) do
+-- The keys the LEDGER rows take from the theme (card t_07f778ca, PART B).
+-- rowPad and icon left this list with the ledger: the drawing's row pads top and
+-- bottom by token (11/12), and it has no icon column — an unused metric in the
+-- theme is the start of a second layout.
+local LEDGER_KEYS = {
+  "rowMin", "mark", "inset", "nameGap",
+  "gutter", "change", "padTop", "padBottom", "rule", "nameGapX",
+  "nameSize", "reasonSize", "labelSize",
+}
+for _, key in ipairs(LEDGER_KEYS) do
   check(upg:find("LIST%." .. key) ~= nil,
     "the item list takes " .. key .. " from the theme's T.list")
 end
 if type(T) == "table" and type(T.list) == "table" then
-  for _, key in ipairs({ "rowMin", "rowPad", "icon", "mark", "inset", "nameGap" }) do
+  for _, key in ipairs(LEDGER_KEYS) do
     check(type(T.list[key]) == "number", "the theme publishes T.list." .. key)
   end
 end

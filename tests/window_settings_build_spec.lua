@@ -79,10 +79,18 @@ local W = pkg.Window
 local panel = pkg.optionsPanel
 check(type(W) == "table" and type(panel) == "table", "the window and the options panel exist")
 
--- The premise the whole defect turns on, asserted rather than assumed: a
--- freshly created frame is shown, so its birth OnShow is spent.
-check(panel:IsShown() == true,
-  "precondition: the options panel is BORN SHOWN, so its birth OnShow is spent")
+-- The premise the whole defect turned on, asserted rather than assumed.
+--
+-- CHANGED by card t_07f778ca (PART A3): the panel is now BORN HIDDEN. The old
+-- premise ("born shown, so its birth OnShow is spent") was the reason OnShow
+-- alone could never build the rows — and the born-shown frame was also the frame
+-- that sat over the Touchstone body for the whole session. Both facts came from
+-- the same line; hiding the panel at creation fixes the second and changes the
+-- first. OnShow now DOES fire on the first activation, which is why the legs
+-- below count builds from ACTIVATION (#2 and #3 fire no OnShow at all) instead
+-- of asserting OnShow never fires.
+check(panel:IsShown() == false,
+  "precondition: the options panel is BORN HIDDEN (an unowned panel must not paint)")
 
 -- Observe the build path without replacing it: count and delegate.
 local builds = 0
@@ -106,24 +114,31 @@ end
 local f = W.Frame()
 check(type(f) == "table", "the window frame is created")
 
--- ── AC-N1: three activations, three builds ────────────────────────────────
+-- ── AC-N1: every activation builds; the build does not depend on OnShow ───
+-- Activation #1 shows a panel that was hidden, so BOTH paths run there (OnShow,
+-- then the activation's own buildSettings); activations #2 and #3 find the panel
+-- already shown, fire no OnShow, and must still build exactly once each. That
+-- second half is what AC-N3 is about: the build is reachable from TAB
+-- ACTIVATION, not only from OnShow.
 builds, onShowFired = 0, 0
 W.Open("touchstone")
 for i = 1, 3 do
-  local before = builds
+  local before, showsBefore = builds, onShowFired
   W.SelectTab("settings")
   check(W.Current() == "settings", "activation #" .. i .. " selects the settings tab")
-  check(builds == before + 1,
-    "activation #" .. i .. " runs the Pack Settings build exactly once (ran "
-      .. tostring(builds - before) .. ")")
+  if i == 1 then
+    check(builds >= before + 1,
+      "activation #1 builds the rows at least once (ran " .. tostring(builds - before) .. ")")
+  else
+    check(builds == before + 1,
+      "activation #" .. i .. " runs the Pack Settings build exactly once (ran "
+        .. tostring(builds - before) .. ")")
+    check(onShowFired == showsBefore,
+      "activation #" .. i .. " fired no OnShow, and the rows were still built")
+  end
 end
-check(builds == 3, "three activations of the Pack Settings tab build the rows three times (got "
+check(builds >= 3, "three activations of the Pack Settings tab build the rows three times (got "
   .. tostring(builds) .. ")")
-
--- AC-N3: that build came from the ACTIVATION, not from OnShow — with this
--- client the panel was never hidden, so OnShow could not have fired.
-check(onShowFired == 0,
-  "the build fired without OnShow: the panel's OnShow ran " .. tostring(onShowFired) .. " time(s)")
 
 -- The build's OUTPUT: the module rows exist. A build that is called but builds
 -- nothing must not pass.

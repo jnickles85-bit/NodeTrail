@@ -36,6 +36,18 @@ local panel = CreateFrame("Frame", "MightiePackOptionsPanel")
 panel.name = "MightiePack"
 pkg.optionsPanel = panel
 
+-- BORN HIDDEN (card t_07f778ca, PART A3). The client makes every CreateFrame
+-- frame shown, and this one used to stay that way: a DIALOG frame over the
+-- UIParent for the whole session, painting nothing until it was built — which is
+-- why it was never seen, and why it was still there, over whatever tab was
+-- active, when the strata and input defects were born.
+--
+-- Three surfaces own it, and each says so explicitly: the Settings canvas
+-- (Blizzard shows a canvas category's frame when the category is opened), the
+-- window's Pack Settings tab (Window.AttachSettings shows it on every
+-- activation), and nothing else. An unowned panel must not paint.
+if type(panel.Hide) == "function" then pcall(panel.Hide, panel) end
+
 local boxes = {}
 pkg.optionsBoxes = boxes
 

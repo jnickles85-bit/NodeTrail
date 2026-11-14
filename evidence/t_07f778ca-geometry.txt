@@ -1,0 +1,66 @@
+== MightiePack — card t_07f778ca: the outline fix and the V1 ledger
+== Evidence record. Harness/source evidence ONLY: no in-game screenshot.
+== harness: tests/support/wowclient.lua, 1920x1080, scale 1.0
+
+== 1. CHROME (window open on Touchstone)
+  window                 x  480.0 .. 1440.0   y  -220.0 ..  -860.0    960.0 x 640.0  shown
+  fill (BACKGROUND)      x  480.0 .. 1440.0   y  -220.0 ..  -860.0    960.0 x 640.0  shown
+  title band             x  480.0 .. 1440.0   y  -220.0 ..  -268.0    960.0 x  48.0  shown
+  tab strip              x  496.0 .. 1424.0   y  -268.0 ..  -308.0    928.0 x  40.0  shown
+  summary strip          x  496.0 .. 1424.0   y  -308.0 ..  -340.0    928.0 x  32.0  shown
+  host touchstone        x  496.0 .. 1424.0   y  -348.0 ..  -844.0    928.0 x 496.0  shown
+  host settings          x  496.0 .. 1424.0   y  -348.0 ..  -844.0    928.0 x 496.0  hidden
+  window fill backdrop   bgFile=Interface\Buttons\WHITE8X8  insets=0,0,0,0  edgeFile=nil
+  band backdrop          bgFile=Interface\Buttons\WHITE8X8  insets=0,0,0,0  edgeFile=nil
+  hosted body backdrop   bgFile=Interface\Buttons\WHITE8X8  insets=0,0,0,0  edgeFile=nil  fillAlpha=0
+  options panel          shown=false  parent-is-settings-host=true
+
+== 2. SUMMARY STRIP (V4's line, V1's drawing)
+  line   : 2 of 5 are worth taking
+  right  : 1 trade-off · 2 refused
+  meter  : width 928.0  upgrade 371.2  trade-off 185.6  refused 371.2  (3 px tall)
+
+== 3. THE LEDGER (Upgrades, five fixture rows)
+  column labels: "VERDICT" at x 535.0 w 88.0 (token) | "ITEM AND REASON" at x 629.0 w 550.0 (token) | "CHANGE" at x 1187.0 w 110.0 (token)
+  row 1  x  529.0 .. 1309.0   y  -512.5 ..  -589.5    780.0 x  77.0  shown  (77.0 tall)
+      gutter  x 535.0 .. 623.0  (token 88)
+      verdict "Upgrade"        colour #6fcf97  marker #6fcf97
+      name    "Amber Chain Vest"  #eef1f5
+      reason  "eligibility unconfirmed (fail-closed): the client returned false for this link, so no stat order was read for the slot and the item was left unjudged."
+              #a8b2c0  top y -544.1, name bottom y -543.1 (below, own column)
+      change  "Chest"  #7c8695  x 1193.0 .. 1303.0 (token 110)
+  row 2  x  529.0 .. 1309.0   y  -589.5 ..  -651.1    780.0 x  61.6  shown  (61.6 tall)
+      gutter  x 535.0 .. 623.0  (token 88)
+      verdict "Upgrade"        colour #6fcf97  marker #6fcf97
+      name    "Kelpweave Vest"  #eef1f5
+      reason  "more spell power than the equipped robe"
+              #a8b2c0  top y -621.1, name bottom y -620.1 (below, own column)
+      change  "Chest"  #7c8695  x 1193.0 .. 1303.0 (token 110)
+  row 3  x  529.0 .. 1309.0   y  -651.1 ..  -712.6    780.0 x  61.6  shown  (61.6 tall)
+      gutter  x 535.0 .. 623.0  (token 88)
+      verdict "Trade-off"      colour #e6a94c  marker #e6a94c
+      name    "Mystic Robe"  #eef1f5
+      reason  "trade-off: +12 Spell Power, -8 Stamina"
+              #a8b2c0  top y -682.6, name bottom y -681.6 (below, own column)
+      change  "Chest"  #7c8695  x 1193.0 .. 1303.0 (token 110)
+  row 4  x  529.0 .. 1309.0   y  -712.6 ..  -793.8    780.0 x  81.1  shown  (81.1 tall)
+      gutter  x 535.0 .. 623.0  (token 88)
+      verdict "Not an upgrade" colour #8b95a5  marker none
+      name    "Ragged Gloves"  #eef1f5
+      reason  "less armour than the equipped gloves"
+              #a8b2c0  top y -744.2, name bottom y -743.2 (below, own column)
+      change  "Hands"  #7c8695  x 1193.0 .. 1303.0 (token 110)
+  row 5  x  529.0 .. 1309.0   y  -793.8 ..  -874.9    780.0 x  81.1  hidden  (81.1 tall)
+      gutter  x 535.0 .. 623.0  (token 88)
+      verdict "Not an upgrade" colour #8b95a5  marker none
+      name    "Truesteel Pants"  #eef1f5
+      reason  "no stat is better"
+              #a8b2c0  top y -825.4, name bottom y -824.4 (below, own column)
+      change  "Legs"  #7c8695  x 1193.0 .. 1303.0 (token 110)
+
+== 4. WHAT THE CLIENT CANNOT EXPRESS (reported, not approximated)
+  letter-spacing : none in a FontString — uppercase 9.5px labels are the substitute
+  text shadow    : none — the hierarchy is size + colour
+  corner radius  : none — the drawing is flat and ruled for exactly that reason
+  font weight    : SetFont(path, size, flags) only; 'semibold' is not selectable,
+                   so the verdict's colour and the name's size carry the weight

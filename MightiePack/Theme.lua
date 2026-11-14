@@ -100,6 +100,25 @@ T.pack = {
   -- Pack Settings: a card surface for the sections, and its rule.
   panelBg = { base = "bg", alpha = 0.55 },
   sectionRule = { base = "border", alpha = 0.55 },
+
+  -- ── The ledger's surfaces (card t_07f778ca, PART B) ─────────────────────
+  -- The drawing the owner picked from the pictures is the pack's OWN sheet, not
+  -- the body's brand, so these resolve from T.ledgerPalette (absolute values)
+  -- rather than from the brand. They are named here, once, so every primitive
+  -- (T.Fill, T.Rule, T.Swatch, T.Text) reaches them through the one accessor
+  -- T.R — no second colour lookup and no literal at a call site.
+  ledgerBg        = { ledger = "bg" },
+  ledgerBand      = { ledger = "band" },
+  ledgerSurface   = { ledger = "surface" },
+  ledgerRaised    = { ledger = "raised" },
+  ledgerLine      = { ledger = "line" },
+  ledgerLine2     = { ledger = "line2" },
+  ledgerText      = { ledger = "text" },
+  ledgerMuted     = { ledger = "muted" },
+  ledgerDim       = { ledger = "dim" },
+  ledgerUpgrade   = { ledger = "upgrade" },
+  ledgerTradeoff  = { ledger = "tradeoff" },
+  ledgerNoUpgrade = { ledger = "noupgrade" },
 }
 
 --- r, g, b, a for a token name. A pack token is resolved against the brand on
@@ -108,6 +127,10 @@ T.pack = {
 --- design pass must not turn a typo into a broken window.
 function T.R(name, alpha)
   local spec = T.pack[name]
+  if type(spec) == "table" and type(spec.ledger) == "string" then
+    -- A ledger token: absolute, from the pack's own palette (PART B).
+    return T.Ledger(spec.ledger, alpha)
+  end
   if type(spec) == "table" and type(spec.base) == "string" then
     local c = T.Dim(spec.base)
     local a = alpha
@@ -119,6 +142,61 @@ function T.R(name, alpha)
   local a = alpha
   if a == nil then a = c[4] or 1 end
   return c[1], c[2], c[3], a
+end
+
+-- ── The ledger's palette (card t_07f778ca, PART B) ────────────────────────
+-- The drawing the owner picked from the pictures (V1 · Ledger, with V4's
+-- summary line as the strip under the tab bar) is a FLAT, RULED sheet: one dark
+-- language, no border art, no icons, no corner radius, no shadow.
+--
+-- These colours are stated as ABSOLUTE values because they are the pack's own
+-- drawing, not the body's brand. T.Brand() still returns StatForge.Colors for
+-- the body's own widgets (tests/theme_tokens_spec.lua holds that line); the
+-- ledger tokens are ours and are read through `T.Ledger(name)`, a separate
+-- accessor, so the two palettes cannot silently shadow each other.
+--
+-- The client cannot express three things in the mock, and nothing here pretends
+-- otherwise: FontStrings have no letter-spacing (uppercase at 9.5px is the
+-- substitute), no text shadow, and no corner radius. See T.SetFont.
+T.ledgerPalette = {
+  bg        = { 0.078, 0.086, 0.102 },        -- #14161a  the sheet
+  band      = { 0.098, 0.110, 0.133 },        -- #191c22  a section band
+  surface   = { 0.106, 0.122, 0.149 },        -- #1b1f26  a raised row
+  raised    = { 0.125, 0.141, 0.173 },        -- #20242c  an open / hovered surface
+  line      = { 1.000, 1.000, 1.000, 0.075 }, -- white @ 7.5%: the row rule
+  line2     = { 1.000, 1.000, 1.000, 0.120 }, -- white @ 12%: a section rule
+  text      = { 0.933, 0.945, 0.961 },        -- #eef1f5
+  muted     = { 0.659, 0.698, 0.753 },        -- #a8b2c0
+  dim       = { 0.486, 0.525, 0.584 },        -- #7c8695
+  upgrade   = { 0.435, 0.812, 0.592 },        -- #6fcf97
+  tradeoff  = { 0.902, 0.663, 0.298 },        -- #e6a94c
+  noupgrade = { 0.545, 0.584, 0.647 },        -- #8b95a5
+}
+
+--- r, g, b, a for a ledger token. Unknown is white, never nil, for the same
+--- reason T.R is: a nil colour raises in SetTextColor.
+function T.Ledger(name, alpha)
+  local c = T.ledgerPalette[name]
+  if type(c) ~= "table" then return 1, 1, 1, (alpha ~= nil) and alpha or 1 end
+  local a = alpha
+  if a == nil then a = c[4] or 1 end
+  return c[1], c[2], c[3], a
+end
+
+--- Set a FontString's size, keeping the client's own font file and flags.
+--- `size` is a number of pixels (T.list.nameSize and friends).
+---
+--- WoW's font surface is SetFont(path, size, flags) and NOTHING else: there is
+--- no weight axis ("semibold" is not selectable), no letter-spacing, and no
+--- shadow. The drawing's weight therefore comes from SIZE and COLOUR — the
+--- verdict word carries the colour, the name carries the size — which is the
+--- information design the owner stated. The path is read from the client's own
+--- font object, so the pack never ships or names a font file.
+function T.SetFont(fs, size, flags)
+  if type(fs) ~= "table" or type(size) ~= "number" then return false end
+  local ok, path, _, baseFlags = T.call(fs, "GetFont")
+  if not ok or type(path) ~= "string" or path == "" then return false end
+  return T.call(fs, "SetFont", path, size, flags or baseFlags or "")
 end
 
 -- The vendored body reads this global (through UpgradesTab's patch) to take the
@@ -163,11 +241,20 @@ T.size = {
   underline = 2,      -- the current tab's accent rule
   statusDot = 6,
   contentPad = 16,    -- the body's distance from the frame's edges
+  bodyPad = 20,       -- the ledger's body inset (card t_07f778ca, PART B)
   rowPitch = 32,      -- one settings row (a 24px control, 8px of air)
   checkSize = 20,
   subIndent = 24,     -- a sub-option under its module
   sectionGap = 24,
   windowEdge = 1,     -- the frame's hairline border
+  -- The ledger's columns and rows, from the approved drawing (V1 · Ledger).
+  verdictGutter = 88, -- the marker above the verdict word, both in its colour
+  changeCol = 110,    -- the right-aligned change column
+  rowPadTop = 11,
+  rowPadBottom = 12,
+  rowRule = 1,        -- one hairline between rows
+  summaryStrip = 32,  -- the V4 summary line + meter, under the tab strip (on the grid)
+  meter = 3,          -- the summary meter's thickness
 }
 
 -- ── Textures: the only paths the window may name ──────────────────────────
@@ -181,7 +268,12 @@ T.tex = {
 -- ── Insets ────────────────────────────────────────────────────────────────
 T.inset = {
   edge = { left = 1, right = 1, top = 1, bottom = 1 },
+  -- NOTHING between a flat fill and its frame (card t_07f778ca, the outline
+  -- defect). `panel` (8px) is still published because it is the inset a
+  -- border-art backdrop would need, but a flat WHITE8X8 fill with it paints an
+  -- 8px transparent ring around the window.
   panel = { left = 8, right = 8, top = 8, bottom = 8 },
+  zero = { left = 0, right = 0, top = 0, bottom = 0 },
 }
 
 -- ── The item list's metrics ───────────────────────────────────────────────
@@ -189,13 +281,25 @@ T.inset = {
 -- IS the window's spacing instead of a second set of numbers inside a file we
 -- do not own. rowMin is a FLOOR: the row model measures the wrapped reason and
 -- grows (card t_4e5ad8a4); rowMin is what a one-line row keeps.
+--
+-- The ledger keys (gutter, change, padTop, padBottom, rule, nameSize,
+-- reasonSize, labelSize, nameGapX) are the V1 drawing's own metrics (card
+-- t_07f778ca, PART B). They point at T.size / T.fontSize rather than restating
+-- the numbers, so a column width is stated once.
 T.list = {
   rowMin = 34,
-  rowPad = 4,
-  icon = 22,
   mark = 14,
   inset = 6,
   nameGap = 1,     -- between a row's name and its reason
+  gutter = T.size.verdictGutter,
+  change = T.size.changeCol,
+  padTop = T.size.rowPadTop,
+  padBottom = T.size.rowPadBottom,
+  rule = T.size.rowRule,
+  nameGapX = 12,   -- the verdict gutter's own air, before the name
+  nameSize = 14.5,
+  reasonSize = 12,
+  labelSize = 9.5,
 }
 
 -- ── The kit: the three primitives every surface is built from ─────────────
@@ -248,30 +352,72 @@ function T.Text(parent, fontToken, colorToken, text, alpha)
   return fs
 end
 
---- A panel: solid fill, optional hairline border, both from tokens.
---- opts: { bg = <colour token>, edge = <colour token> | false }
-function T.Panel(parent, opts)
+--- Paint an EXISTING frame as a flat fill, from tokens. This is the one place
+--- the inset rule lives (card t_07f778ca):
+---
+---   * a backdrop with a bgFile and no edgeFile is a FLAT FILL. Its inset band
+---     is empty, so `insets` is {0,0,0,0}. An 8px inset there paints the fill
+---     8px inside the frame and leaves a transparent ring around it — the
+---     owner's "box outline larger than the window", widest above the title bar;
+---   * a backdrop with BOTH a bgFile and an edgeFile reserves that band for the
+---     hairline, so `insets` is the hairline width: the fill starts exactly
+---     where the border art ends.
+---
+--- opts: { edge = <colour token or false>, alpha = <0..1> }
+function T.FillBackdrop(f, colourToken, opts)
+  if type(f) ~= "table" or type(f.SetBackdrop) ~= "function" then return f end
   opts = opts or {}
-  local f = T.NewFrame(opts.kind or "Frame", opts.name, parent or nil, "BackdropTemplate")
-    or T.NewFrame(opts.kind or "Frame", opts.name, parent or nil)
-  if not f then return nil end
-  if type(f.SetBackdrop) == "function" then
-    local bd = { bgFile = T.tex.solid, tile = false, insets = T.inset.panel }
-    local edged = opts.edge ~= false
-    if edged then
-      bd.edgeFile = T.tex.edge
-      bd.edgeSize = T.size.windowEdge
-      bd.insets = T.inset.edge
-    end
-    pcall(f.SetBackdrop, f, bd)
-    local r, g, b, a = T.R(opts.bg or "panelBg")
-    call(f, "SetBackdropColor", r, g, b, a)
-    if edged then
-      local er, eg, eb, ea = T.R(type(opts.edge) == "string" and opts.edge or "hairline")
-      call(f, "SetBackdropBorderColor", er, eg, eb, ea)
-    end
+  local edge = type(opts.edge) == "string" and opts.edge or nil
+  local bd = { bgFile = T.tex.solid, tile = false, insets = T.inset.zero }
+  if edge then
+    bd.edgeFile = T.tex.edge
+    bd.edgeSize = T.size.windowEdge
+    bd.insets = T.inset.edge
+  end
+  pcall(f.SetBackdrop, f, bd)
+  local r, g, b, a = T.R(colourToken or "windowBg", opts.alpha)
+  call(f, "SetBackdropColor", r, g, b, a)
+  if edge then
+    local er, eg, eb, ea = T.R(edge)
+    call(f, "SetBackdropBorderColor", er, eg, eb, ea)
   end
   return f
+end
+
+--- A flat fill: no border art, so NO INSETS. Insets would shrink the fill
+--- inside its frame and leave a transparent ring between fill and border —
+--- the 2026-11-14 outline defect.
+---
+--- Use it for every flat-filled surface (the window fill, the title band, a
+--- section plate, a summary strip). Add `opts.edge` only when the surface also
+--- draws a 1px border, and then the fill and the border coincide by
+--- construction.
+---
+--- opts: { name, kind, edge = <colour token>, alpha }
+function T.Fill(parent, colourToken, opts)
+  opts = opts or {}
+  local kind = opts.kind or "Frame"
+  local f = T.NewFrame(kind, opts.name, parent or nil, "BackdropTemplate")
+    or T.NewFrame(kind, opts.name, parent or nil)
+  if not f then return nil end
+  return T.FillBackdrop(f, colourToken, opts)
+end
+
+--- A panel: solid fill, optional hairline border, both from tokens.
+--- opts: { bg = <colour token>, edge = <colour token> | false }
+---
+--- Kept as the name the tab files already use; the WORK is T.Fill's, so a
+--- panel can never re-introduce the 8px inset ring (card t_07f778ca).
+function T.Panel(parent, opts)
+  opts = opts or {}
+  local edge = opts.edge
+  if edge ~= false then edge = (type(edge) == "string") and edge or "hairline" end
+  return T.Fill(parent, opts.bg or "panelBg", {
+    name = opts.name,
+    kind = opts.kind,
+    alpha = opts.alpha,
+    edge = edge,
+  })
 end
 
 --- A solid rule in a token colour, `height` tall (one hairline by default).

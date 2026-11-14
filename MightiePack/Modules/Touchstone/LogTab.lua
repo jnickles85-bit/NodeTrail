@@ -16,8 +16,52 @@ StatForge = StatForge or {}
 local SF = StatForge
 local C = SF.Colors
 
-local ROW_H   = 30               -- the LEAST a row may be (a one-line reason)
-local ROW_PAD = 4                -- inside a row, above the cells and below them
+local ROW_MIN   = 34               -- the LEAST a row may be (a one-line reason)
+local ROW_INSET = (type(MightiePackTheme) == "table"
+  and type(MightiePackTheme.list) == "table"
+  and tonumber(MightiePackTheme.list.inset)) or 6
+local MARK      = (type(MightiePackTheme) == "table"
+  and type(MightiePackTheme.list) == "table"
+  and tonumber(MightiePackTheme.list.mark)) or 14
+local NAME_GAP  = 1
+
+-- The ledger's columns and type (card t_07f778ca, PART B): the same tokens the
+-- Upgrades list uses, so the two tabs cannot draw two different ledgers.
+local LIST = (type(MightiePackTheme) == "table"
+  and type(MightiePackTheme.list) == "table") and MightiePackTheme.list or {}
+local GUTTER      = LIST.gutter or 88
+local CHANGE_W    = LIST.change or 110
+local PAD_TOP     = LIST.padTop or 11
+local PAD_BOTTOM  = LIST.padBottom or 12
+local RULE_H      = LIST.rule or 1
+local NAME_GAP_X  = LIST.nameGapX or 12
+local NAME_SIZE   = LIST.nameSize or 14.5
+local REASON_SIZE = LIST.reasonSize or 12
+local LABEL_SIZE  = LIST.labelSize or 9.5
+local ROW_W       = 780
+local BODY_PAD    = (type(MightiePackTheme) == "table"
+  and type(MightiePackTheme.size) == "table"
+  and tonumber(MightiePackTheme.size.bodyPad)) or 20
+
+local THEME = (type(MightiePackTheme) == "table") and MightiePackTheme or nil
+
+--- A ledger colour, from the pack's theme when it is loaded; the body's brand
+--- token is only the fallback for a standalone load (the vendored specs load
+--- this file without the pack).
+local function ledgerColor(token, fallback)
+  if THEME and type(THEME.R) == "function" then
+    local ok, r, g, b, a = pcall(THEME.R, token)
+    if ok and type(r) == "number" then return r, g, b, a or 1 end
+  end
+  local c = fallback or { 1, 1, 1 }
+  return c[1], c[2], c[3], (c[4] or 1)
+end
+
+--- The drawing's type sizes: SetFont(path, size, flags) is the client's whole
+--- font surface (no weight axis, no letter-spacing).
+local function ledgerFont(fs, size)
+  if THEME and type(THEME.SetFont) == "function" then pcall(THEME.SetFont, fs, size) end
+end
 
 -- The wall-clock stamp the log entry carries (`at`). The advisor's formatter
 -- is the one the chat print uses. This fallback is the same rule for a host
@@ -67,13 +111,12 @@ local function itemName(link)
 end
 
 -- Which verdict colour: a recorded disagreement is a named negative, so it is
--- rendered in the danger colour rather than the accent. (Only a named negative
--- is ever logged — the advisor's own `isDisagreement` gate — so the colour is a
--- statement about the entry, not a guess.)
+-- drawn in the ledger's own negative colours (card t_07f778ca, PART B) — the
+-- drawing's palette has no alarm red, and the ledger's rule is that the VERDICT
+-- carries the colour. A trade-off reads amber, a refusal the neutral grey.
 local function verdictColor(verdict)
-  if verdict == "NOT_UPGRADE" then return C.danger end
-  if verdict == "TRADE_OFF" then return C.warning end
-  return C.textMuted
+  if verdict == "TRADE_OFF" then return ledgerColor("ledgerTradeoff", C.warning) end
+  return ledgerColor("ledgerNoUpgrade", C.textMuted)
 end
 
 -- The player-facing word for a stored verdict token. The mapping lives on the
@@ -145,85 +188,156 @@ function SF.LogTabState()
   return { total = #state.rows, offset = state.offset, shown = state.shown or 0 }
 end
 
+-- ---------------------------------------------------------------------------
+-- THE LEDGER ROW (card t_07f778ca, PART B) — the same three columns as Upgrades,
+-- so the two lists read as one drawing:
+--
+--   verdict gutter (88)   marker above the verdict word, both in its colour
+--   name                  the item, on its own line
+--     reason              beneath it, muted
+--   change (110, right)   the slot the entry is about, dim — and, BENEATH it,
+--                         the wall-clock stamp: a log row's "when" belongs with
+--                         its "what changed", and the drawing has no fourth
+--                         column for it
+--
+-- plus the row rule. Log entries are all negatives, so most rows have no marker
+-- glyph — the verdict word alone is the statement (the bag grammar has no mark
+-- for a refusal either).
+-- ---------------------------------------------------------------------------
 local function buildRow(parent, index)
   local row = CreateFrame("Frame", "TouchstoneLogRow" .. index, parent)
-  row:SetHeight(ROW_H)
+  row:SetHeight(ROW_MIN)
   -- No pitch (card t_4e5ad8a4): the row's height comes from its own measured
   -- cells and the stacking pass places it (SF.StackRow).
   row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
-  local stamp = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  -- Every cell sits on the row's TOP line, so a reason that wraps to three
-  -- lines grows the ROW instead of printing over the next entry. The cells used
-  -- to hang off the row's centre (`LEFT`, 0), where a wrapped reason is centred
-  -- in a 30-unit row and runs out of it in both directions.
-  stamp:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -ROW_PAD)
-  stamp:SetWidth(84)
-  stamp:SetJustifyH("LEFT")
-  stamp:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
-  row.stamp = stamp
+  local gutter = CreateFrame("Frame", nil, row)
+  gutter:SetWidth(GUTTER)
+  gutter:SetPoint("TOPLEFT", row, "TOPLEFT", ROW_INSET, -PAD_TOP)
+  row.gutter = gutter
 
-  local slot = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  slot:SetPoint("TOPLEFT", stamp, "TOPRIGHT", 8, 0)
-  slot:SetWidth(76)
-  slot:SetJustifyH("LEFT")
-  slot:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
-  row.slot = slot
+  local mark = gutter:CreateTexture(nil, "OVERLAY")
+  mark:SetSize(MARK, MARK)
+  mark:SetPoint("TOPLEFT", gutter, "TOPLEFT", 0, 0)
+  mark:Hide()
+  row.mark = mark
 
-  local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  name:SetPoint("TOPLEFT", slot, "TOPRIGHT", 6, 0)
-  name:SetWidth(190)
+  local verdict = gutter:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  ledgerFont(verdict, NAME_SIZE)
+  verdict:SetPoint("TOPLEFT", gutter, "TOPLEFT", 0, -(MARK + 4))
+  verdict:SetWidth(GUTTER)
+  verdict:SetJustifyH("LEFT")
+  row.verdictWord = verdict
+
+  local textLeft = GUTTER + NAME_GAP_X
+  local textWidth = ROW_W - ROW_INSET * 2 - textLeft - CHANGE_W - 8
+  if textWidth < 120 then textWidth = 120 end
+
+  local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  ledgerFont(name, NAME_SIZE)
+  name:SetPoint("TOPLEFT", row, "TOPLEFT", textLeft, -PAD_TOP)
+  name:SetWidth(textWidth)
   name:SetJustifyH("LEFT")
+  local nr, ng, nb, na = ledgerColor("ledgerText", C.text)
+  name:SetTextColor(nr, ng, nb, na)
   row.itemName = name
 
-  local verdict = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  verdict:SetPoint("TOPLEFT", name, "TOPRIGHT", 8, 0)
-  verdict:SetWidth(96)
-  verdict:SetJustifyH("LEFT")
-  row.verdict = verdict
-
   local reason = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  reason:SetPoint("TOPLEFT", verdict, "TOPRIGHT", 6, 0)
-  reason:SetWidth(360)
+  ledgerFont(reason, REASON_SIZE)
+  reason:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -NAME_GAP)
+  reason:SetWidth(textWidth)
   reason:SetJustifyH("LEFT")
-  reason:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+  local rr, rg, rb, ra = ledgerColor("ledgerMuted", C.textMuted)
+  reason:SetTextColor(rr, rg, rb, ra)
   row.reason = reason
+
+  local change = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  ledgerFont(change, REASON_SIZE)
+  change:SetPoint("TOPRIGHT", row, "TOPRIGHT", -ROW_INSET, -PAD_TOP)
+  change:SetWidth(CHANGE_W)
+  change:SetJustifyH("RIGHT")
+  local dr, dg, db, da = ledgerColor("ledgerDim", C.textDim)
+  change:SetTextColor(dr, dg, db, da)
+  row.change = change
+
+  local stamp = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  ledgerFont(stamp, REASON_SIZE)
+  stamp:SetPoint("TOPRIGHT", change, "BOTTOMRIGHT", 0, -NAME_GAP)
+  stamp:SetWidth(CHANGE_W)
+  stamp:SetJustifyH("RIGHT")
+  local sr, sg, sb, sa = ledgerColor("ledgerDim", C.textDim)
+  stamp:SetTextColor(sr, sg, sb, sa)
+  row.stamp = stamp
+
+  local rule = row:CreateTexture(nil, "ARTWORK")
+  rule:SetHeight(RULE_H)
+  rule:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", ROW_INSET, 0)
+  rule:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -ROW_INSET, 0)
+  local lr, lg, lb, la = ledgerColor("ledgerLine")
+  rule:SetColorTexture(lr, lg, lb, la)
+  row.rule = rule
 
   return row
 end
 
--- One row's height: its tallest cell, measured, plus the row's padding. ROW_H is
--- a floor, not a pitch (card t_4e5ad8a4).
+-- One row's height: the TALLEST column, measured (wrapped lines included), plus
+-- the row's padding and its rule. ROW_MIN is a floor, not a pitch: a three-line
+-- reason grows the row and the next entry starts below it (card t_4e5ad8a4).
 local function rowHeight(row)
-  local h = 0
-  for _, fs in ipairs({ row.stamp, row.slot, row.itemName, row.verdict, row.reason }) do
-    local fh = fs:GetHeight() or 0
-    if fh > h then h = fh end
-  end
-  h = ROW_PAD + h + ROW_PAD
-  if h < ROW_H then h = ROW_H end
+  local gutterH = MARK + 4 + (row.verdictWord:GetHeight() or 0)
+  local textH = (row.itemName:GetHeight() or 0) + NAME_GAP + (row.reason:GetHeight() or 0)
+  local changeH = (row.change:GetHeight() or 0) + NAME_GAP + (row.stamp:GetHeight() or 0)
+  local inner = gutterH
+  if textH > inner then inner = textH end
+  if changeH > inner then inner = changeH end
+  local h = PAD_TOP + inner + PAD_BOTTOM + RULE_H
+  if h < ROW_MIN then h = ROW_MIN end
   return h
 end
 
 local function build(host)
   local title = SF.UI_CreateLabel(host, "", "GameFontNormalLarge")
-  title:SetPoint("TOPLEFT", 18, -14)
-  title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+  title:SetPoint("TOPLEFT", BODY_PAD, -BODY_PAD)
+  local tr, tg, tb, ta = ledgerColor("ledgerText", C.text)
+  title:SetTextColor(tr, tg, tb, ta)
   host.title = title
 
   local count = SF.UI_CreateLabel(host, "", "GameFontNormalSmall")
-  count:SetPoint("LEFT", title, "RIGHT", 12, -2)
-  count:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+  count:SetPoint("LEFT", title, "RIGHT", 12, 0)
+  local mr, mg, mb, ma = ledgerColor("ledgerMuted", C.textMuted)
+  count:SetTextColor(mr, mg, mb, ma)
   host.count = count
 
   local clear = SF.UI_CreateButton(host, "Clear log", 120, 24)
-  clear:SetPoint("TOPRIGHT", -18, -12)
+  clear:SetPoint("TOPRIGHT", -BODY_PAD, -(BODY_PAD - 8))
   clear:SetScript("OnClick", function() SF.LogTabClear() end)
   host.clear = clear
 
+  -- The column-label line, on the same three columns as the rows.
+  local labels = CreateFrame("Frame", "TouchstoneLogColumns", host)
+  labels:SetPoint("TOPLEFT", host, "TOPLEFT", BODY_PAD, -(BODY_PAD + 34))
+  labels:SetPoint("TOPRIGHT", host, "TOPRIGHT", -BODY_PAD, -(BODY_PAD + 34))
+  labels:SetHeight(LABEL_SIZE + 6)
+  local function columnLabel(text, left, width, justify)
+    local fs = labels:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    ledgerFont(fs, LABEL_SIZE)
+    fs:SetPoint("TOPLEFT", labels, "TOPLEFT", left, 0)
+    fs:SetWidth(width)
+    fs:SetJustifyH(justify or "LEFT")
+    fs:SetText(text)
+    local r, g, b, a = ledgerColor("ledgerDim", C.textDim)
+    fs:SetTextColor(r, g, b, a)
+    return fs
+  end
+  host.colVerdict = columnLabel("VERDICT", ROW_INSET, GUTTER)
+  host.colItem = columnLabel("ITEM AND REASON", GUTTER + NAME_GAP_X,
+    ROW_W - ROW_INSET * 2 - GUTTER - NAME_GAP_X - CHANGE_W - 8)
+  host.colChange = columnLabel("CHANGE", ROW_W - ROW_INSET * 2 - CHANGE_W, CHANGE_W, "RIGHT")
+  host.columns = labels
+
   local viewport = CreateFrame("Frame", "TouchstoneLogViewport", host)
-  viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -10)
-  viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -18, 12)
+  viewport:SetPoint("TOPLEFT", labels, "BOTTOMLEFT", 0, -6)
+  viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -BODY_PAD, BODY_PAD)
   viewport:EnableMouseWheel(true)
   -- No page holds more than fits, but a single row taller than the viewport is
   -- still admitted (SF.PageRows) — clip so it cannot paint over the panel.
@@ -234,7 +348,7 @@ local function build(host)
 
   local rowParent = CreateFrame("Frame", nil, viewport)
   rowParent:SetPoint("TOPLEFT")
-  rowParent:SetWidth(780)
+  rowParent:SetWidth(ROW_W)
   host.rowParent = rowParent
 
   local function scrollBy(delta)
@@ -281,13 +395,20 @@ local function repopulate(host)
       local r = state.rows[i]
       if r then
         row.stamp:SetText(r.stamp)
-        row.slot:SetText(r.slot)
+        row.change:SetText(r.slot)
         row.itemName:SetText(r.name)
-        -- Player word, not the stored token (card t_385a0817). The colour
-        -- below still keys off the token.
-        row.verdict:SetText(playerWord(r.verdict))
-        local vc = verdictColor(r.verdict)
-        row.verdict:SetTextColor(vc[1], vc[2], vc[3])
+        -- Player word, not the stored token (card t_385a0817), in the verdict's
+        -- colour — the word and the marker are one colour, read once.
+        row.verdictWord:SetText(playerWord(r.verdict))
+        local vc = { verdictColor(r.verdict) }
+        row.verdictWord:SetTextColor(vc[1], vc[2], vc[3], vc[4] or 1)
+        if r.verdict == "TRADE_OFF" then
+          row.mark:SetTexture(nil)
+          row.mark:SetColorTexture(vc[1], vc[2], vc[3], 0.95)
+          row.mark:Show()
+        else
+          row.mark:Hide()
+        end
         row.reason:SetText(r.reason)
         row:SetHeight(rowHeight(row))
       end
@@ -318,9 +439,11 @@ local function render(host)
   repopulate(host)
 
   local total = #state.rows
-  host.title:SetText(SF.Accent("Log"))
+  -- The section head reads in the ledger's text colour — not SF.Accent(), which
+  -- would put the body's cyan in a drawing whose only colour is the verdict.
+  host.title:SetText("Log")
   if total == 0 then
-    host.count:SetText("")
+    host.count:SetText("0 recorded disagreements")
     host.empty:Show()
     host.viewport:Hide()
     host.clear:SetLabel("Clear log")
@@ -330,7 +453,7 @@ local function render(host)
     local page = state.shown or 0
     local more = ""
     if total > page and page > 0 then
-      more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
+      more = " · rows " .. tostring(state.offset + 1) .. "-"
         .. tostring(math.min(state.offset + page, total))
     end
     host.count:SetText(tostring(total) .. " recorded disagreement"
