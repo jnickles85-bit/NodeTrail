@@ -682,12 +682,14 @@ function W._Ensure()
       call(W.summaryDetail, "SetPoint", "BOTTOMRIGHT", summary, "BOTTOMRIGHT", 0, T.space.xs + T.size.meter + 2)
       call(W.summaryDetail, "SetJustifyH", "RIGHT")
     end
-    -- The meter: three segments, laid out left to right by PaintSummary.
+    -- The meter: three segments, laid out left to right by PaintSummary. It sits
+    -- on the strip's hairline (below), so the band's own bottom edge is never
+    -- the thing the meter is drawn over.
     local meter = newFrame("Frame", nil, summary)
     W.summaryMeter = meter
     if type(meter) == "table" then
-      call(meter, "SetPoint", "BOTTOMLEFT", summary, "BOTTOMLEFT", 0, 0)
-      call(meter, "SetPoint", "BOTTOMRIGHT", summary, "BOTTOMRIGHT", 0, 0)
+      call(meter, "SetPoint", "BOTTOMLEFT", summary, "BOTTOMLEFT", 0, T.space.hair)
+      call(meter, "SetPoint", "BOTTOMRIGHT", summary, "BOTTOMRIGHT", 0, T.space.hair)
       call(meter, "SetHeight", T.size.meter)
       W.summarySegments = {
         upgrade = swatch(meter, "ledgerUpgrade", 0, T.size.meter),
