@@ -281,6 +281,37 @@ for _, id in ipairs(W.TABS) do
   end
 end
 
+-- ── The chrome keeps its own clicks ────────────────────────────────────────
+-- Turning the window frame's mouse off must not cost the affordances that
+-- lived on the chrome. The drag handle is the title bar (its OnDragStart moves
+-- the WINDOW, not the bar), and the close button sits on it — both have to own
+-- their own clicks on their own rect, or the fix would have traded a dead panel
+-- for a window nobody can move or close.
+do
+  local bar = W.titleBar
+  check(type(bar) == "table", "the window has a title bar")
+  if type(bar) == "table" then
+    check(bar:IsMouseEnabled(), "the title bar (the drag handle) is mouse-enabled")
+    check(type(bar:GetScript("OnDragStart")) == "function",
+      "the title bar still carries the drag handler")
+    local bx, by = C.Centre(bar)
+    local owner = C.MouseOwnerAt(bx, by)
+    check(owner == bar,
+      ("a click on the title bar (%.0f,%.0f) is owned by the title bar: got %s")
+        :format(bx, by, nameOf(owner)))
+  end
+  local close = W.close
+  check(type(close) == "table", "the window has a close button on the title bar")
+  if type(close) == "table" then
+    check(close:IsMouseEnabled(), "the close button is mouse-enabled")
+    local cx, cy = C.Centre(close)
+    local owner = C.MouseOwnerAt(cx, cy)
+    check(owner == close,
+      ("a click on the close button (%.0f,%.0f) is owned by the close button: got %s")
+        :format(cx, cy, nameOf(owner)))
+  end
+end
+
 -- ── AC-3: EMPTY window area blocks the world ──────────────────────────────
 -- The other half of the fix: the fill must take the click that used to fall
 -- through to the camera. Two points in the window's border ring — inside the
