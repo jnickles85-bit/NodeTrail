@@ -304,8 +304,14 @@ do
 end
 
 -- ════════════════════════════════════════════════════════════════════
--- 3. Options button near Skinning (experimental) opens the same popup.
+-- 3. The button that opened this popup moved to the Skinning tab.
 -- ════════════════════════════════════════════════════════════════════
+-- Card t_a5de2f16: the "Copy skinning diagnostics" button is no longer in the
+-- options panel — it lives in the unified window's Skinning tab, beside the
+-- data it summarises, and calls the same pkg.ShowSkinDiagCopy this spec has
+-- just proved (through the /mp skindiag copy path, above). The button's new
+-- home and its OnClick are asserted in tests/window_tabs_spec.lua, which boots
+-- the whole addon; here the panel must simply not keep a second copy.
 do
   local panel
   for _, f in ipairs(frames) do
@@ -317,24 +323,8 @@ do
     check(ok, "panel OnShow: " .. tostring(err))
   end
   local btn = findButton("Copy skinning diagnostics")
-  check(btn ~= nil, "options panel has a 'Copy skinning diagnostics' button")
-  if btn and type(btn.scripts.OnClick) == "function" then
-    clearChat()
-    local ok, err = pcall(btn.scripts.OnClick, btn)
-    check(ok, "button OnClick: " .. tostring(err))
-    local edit = findEdit("MightiePackSkinDiagEdit")
-    local frame
-    for _, f in ipairs(frames) do
-      if f.Name == "MightiePackSkinDiagFrame" then frame = f end
-    end
-    check(edit ~= nil and type(edit.text) == "string" and #edit.text > 0,
-      "button opens the copy popup with dump text")
-    check(frame ~= nil and frame.shown == true, "button shows the copy popup")
-    check(chatText():find("Skinning skindiag:", 1, true) == nil,
-      "button path does not dump to chat")
-  elseif btn then
-    check(false, "button has no OnClick handler")
-  end
+  check(btn == nil,
+    "the options panel no longer carries a 'Copy skinning diagnostics' button (it moved to the Skinning tab)")
 end
 
 if failed > 0 then

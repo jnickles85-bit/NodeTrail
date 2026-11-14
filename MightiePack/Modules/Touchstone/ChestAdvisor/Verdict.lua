@@ -4311,6 +4311,21 @@ Verdict.WEIGHTS = {
 -- armor gain and well above ordinary floating-point dust.
 Verdict.WEIGHT_EPSILON = 0.005
 
+-- ONE epsilon rule for every "do these two numbers rank the same" question
+-- (card t_a5de2f16). The ranked comparator, the capped-window check and
+-- tiebreakTotal all ask this function. The two copies that existed before
+-- this card spelled the comparison out twice, and a crumb smaller than the
+-- floor could answer differently depending on which entry point a tooltip
+-- reached.
+--
+-- It reads Verdict.WEIGHT_EPSILON on every call, never a captured copy, so a
+-- fixture pack that changes the floor changes it everywhere.
+function Verdict.ranksAsDifferent(delta)
+	delta = tonumber(delta) or 0
+	local eps = Verdict.WEIGHT_EPSILON or 0
+	return delta > eps or delta < -eps
+end
+
 -- The client's three-word role vocabulary (TANK / HEALER / DAMAGER) to a
 -- weights key, used only when that role maps to exactly one sourced pack.
 -- A class/role with two packs (Warrior DAMAGER is Arms or Fury; Priest
@@ -4905,9 +4920,10 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	-- A ranked pair is equal when the difference is inside the same
 	-- named noise floor the weighted path uses. Exact ~= 0 would
 	-- treat float crumbs as a first-tier gain and print Upgrade.
+-- The comparison itself lives in Verdict.ranksAsDifferent since card
+-- t_a5de2f16: this is a call-through, not a second copy of the rule.
 	local function ranksAsDifferent(delta)
-		local eps = Verdict.WEIGHT_EPSILON
-		return delta > eps or delta < -eps
+		return Verdict.ranksAsDifferent(delta)
 	end
 
 	local function isCapped(tier)
@@ -5154,7 +5170,10 @@ function Verdict.tiebreakTotal(candStats, eqStats, profile)
 	local parts, deciding, dir = {}, nil, nil
 	for _, word in ipairs(ranked) do
 		local delta = (tonumber(cand[word]) or 0) - (tonumber(eq[word]) or 0)
-		if delta > (Verdict.WEIGHT_EPSILON or 0) or delta < -(Verdict.WEIGHT_EPSILON or 0) then
+		-- One rule, not a second copy of the comparison (card t_a5de2f16):
+		-- the ranked comparator and this tiebreaker must agree about a crumb
+		-- smaller than WEIGHT_EPSILON.
+		if Verdict.ranksAsDifferent(delta) then
 			parts[#parts + 1] = { word = word, delta = delta }
 			if deciding == nil then
 				deciding = word
