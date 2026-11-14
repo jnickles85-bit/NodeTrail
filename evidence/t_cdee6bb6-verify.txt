@@ -1,4 +1,4 @@
-== head a311baf+ (this commit) / base cb358e1 / lua 5.1.5
+== head = tip of nt/t_cdee6bb6 (a311baf + the chrome leg) / base cb358e1 / lua 5.1.5
 
 == window_inner_input_spec (fixed tree, GREEN)
 inner tab "Upgrades" (558,-330) -> (unnamed)/Button | (unnamed)/Button L4 <- (unnamed)/Frame L3 <- StatForgeMainFrame/Frame L2 <- (unnamed)/Frame L3 <- MightiePackWindow/Frame L2 <- UIParent/Frame L1
