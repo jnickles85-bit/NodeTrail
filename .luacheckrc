@@ -40,6 +40,7 @@ globals = {
     InterfaceOptionsFrame_OpenToCategory = { other_fields = true }, InterfaceOptions_AddCategory = { other_fields = true }, IsAddOnLoaded = { other_fields = true },
     IsFishingLoot = { other_fields = true }, IsShiftKeyDown = { other_fields = true }, LibStub = { other_fields = true },
     MapCanvasDataProviderMixin = { other_fields = true }, MightiePack = { other_fields = true }, MightiePackDB = { other_fields = true },
+    MightiePackTheme = { other_fields = true },
     MightiePackTouchstoneSkip = { other_fields = true }, Minimap = { other_fields = true }, NodeTrail = { other_fields = true },
     NodeTrailDB = { other_fields = true }, OKAY = { other_fields = true }, OffhandHasWeapon = { other_fields = true }, OpenAllBags = { other_fields = true },
     OpenBackpack = { other_fields = true }, QuestInfo_Display = { other_fields = true }, QuestInfo_ShowRewards = { other_fields = true },

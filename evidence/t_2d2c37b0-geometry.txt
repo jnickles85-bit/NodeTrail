@@ -1,0 +1,72 @@
+== MightiePack — card t_2d2c37b0 reshape + design pass
+== Evidence record. Harness/source evidence ONLY: no in-game screenshot exists
+== (the card carries real screenshots as OWNER-RUN / BLOCKED).
+
+== 1. Geometry, per tab (harness client)
+== MightiePack window geometry — HARNESS EVIDENCE (fake client, not a screenshot)
+== windowclient: tests/support/wowclient.lua, 1920x1080, scale 1.0
+
+-- chrome (window open, Pack Settings active)
+  window                 x   480.0 ..  1440.0   y  -220.0 ..  -860.0   960.0 x 640.0  shown
+  fill (BACKGROUND)      x   480.0 ..  1440.0   y  -220.0 ..  -860.0   960.0 x 640.0  shown
+  title band             x   480.0 ..  1440.0   y  -220.0 ..  -268.0   960.0 x  48.0  shown
+  tab strip              x   496.0 ..  1424.0   y  -268.0 ..  -308.0   928.0 x  40.0  shown
+  tab: touchstone        x   496.0 ..   594.0   y  -268.0 ..  -300.0    98.0 x  32.0  shown
+    underline touchstone x   496.0 ..   594.0   y  -297.0 ..  -299.0    98.0 x   2.0  hidden
+    host touchstone      x   496.0 ..  1424.0   y  -316.0 ..  -844.0   928.0 x 528.0  hidden
+  tab: settings          x   618.0 ..   735.0   y  -268.0 ..  -300.0   117.0 x  32.0  shown
+    underline settings   x   618.0 ..   735.0   y  -297.0 ..  -299.0   117.0 x   2.0  shown
+    host settings        x   496.0 ..  1424.0   y  -316.0 ..  -844.0   928.0 x 528.0  shown
+  status dot             x   496.0 ..   502.0   y  -248.0 ..  -254.0     6.0 x   6.0  shown
+  close button           x  1400.0 ..  1432.0   y  -228.0 ..  -260.0    32.0 x  32.0  shown
+
+-- title band content
+  name        : "MightiePack"
+  version     : "v0.0.0-evidence"
+  status line : "No verdicts yet — open your bags"
+  status text            x   510.0 ..  1392.0   y  -235.9 ..  -252.1   882.0 x  16.2  shown
+  [PASS] title band is the theme's height — 48 == 48
+  [PASS] tab strip is the theme's height — 40 == 40
+  [PASS] tab strip sits directly under the band
+  [PASS] no two visible chrome rects overlap (band / strip / tab vs tab)
+
+-- tab: touchstone (Touchstone)
+  host touchstone        x   496.0 ..  1424.0   y  -316.0 ..  -844.0   928.0 x 528.0  shown
+  [PASS] touchstone: content inset from the frame on the grid — insets L16 R16 B16 (theme pad 16)
+  touchstone body        x   496.0 ..  1424.0   y  -316.0 ..  -844.0   928.0 x 528.0  shown
+  [PASS] touchstone: the body fills its host — 928 x 528
+  [PASS] touchstone: the body stays on MEDIUM — MEDIUM
+  [PASS] touchstone: the body draws above the window fill
+  [PASS] touchstone: the body's own title bar is hidden
+    inner strip          x   508.0 ..  1412.0   y  -324.0 ..  -356.0   904.0 x  32.0  shown
+
+-- tab: settings (Pack Settings)
+  host settings          x   496.0 ..  1424.0   y  -316.0 ..  -844.0   928.0 x 528.0  shown
+  [PASS] settings: content inset from the frame on the grid — insets L16 R16 B16 (theme pad 16)
+  settings panel         x   496.0 ..  1424.0   y  -316.0 ..  -844.0   928.0 x 528.0  shown
+    Touchstone row       x   512.0 ..   536.0   y  -364.0 ..  -388.0    24.0 x  24.0  shown
+    Gear for label       x   536.0 ..   588.8   y  -403.9 ..  -420.1    52.8 x  16.2  shown
+    Gear for button      x   596.8 ..   816.8   y  -400.0 ..  -424.0   220.0 x  24.0  shown
+    bug button           x   496.0 ..   624.0   y  -500.2 ..  -524.2   128.0 x  24.0  shown
+    idea button          x   632.0 ..   776.0   y  -500.2 ..  -524.2   144.0 x  24.0  shown
+    modules card         x   496.0 ..  1424.0   y  -316.0 ..  -444.0   928.0 x 128.0  shown
+  [PASS] settings: the panel fills its host
+  [PASS] settings: the modules card is on the grid — 128
+  [PASS] settings: the module row does not overlap the Gear-for row
+  [PASS] settings: the feedback row is below the modules card
+
+-- summary
+  failures: 0
+  result: PASS (harness geometry)
+
+== 2. Full spec suite
+32 spec(s) run, 0 failure(s)
+
+== 3. Vendored Touchstone tree vs the current pin (patches re-cut for the list metrics)
+sync_touchstone: source C:\Users\jnick\AppData\Local\hermes\profiles\rowan\cache\scratch\statforge-pristine@80accdd
+sync_touchstone: 11 lua files matched shipped; toc ok
+
+== 4. luacheck
+NOT RUN LOCALLY: luacheck is not installed on this machine (luarocks here is
+pinned to Lua 5.4 with no manifest access, and CI installs luacheck 1.2.0).
+The CI job is the luacheck gate for this branch; its result is reported on the PR.

@@ -1,74 +1,93 @@
--- MightiePack — the ONE window (card t_a5de2f16, audit group 4).
+-- MightiePack — the ONE window (card t_a5de2f16; reshaped by card t_2d2c37b0).
 --
--- It became four tabs when NodeTrail and Touchstone were both modules of this
--- pack: Herbs, Skinning, Touchstone and Pack Settings. NodeTrail is its own
--- addon again (card t_75309c97), so the window is back to the two tabs that are
--- the pack's own:
+-- The window is the pack's house, and the pack's product is Touchstone:
 --
 --   Touchstone     the vendored window's content, its inner strip intact
 --   Pack Settings  the options panel (Options.lua)
 --
--- The Herbs and Skinning tab bodies moved out with NodeTrail. The frame, the
--- strata invariant, the drag bar, the tab strip and the input rules are
--- unchanged, because four cards of client work went into them.
+-- Herbs and Skinning were this window's other two tabs until NodeTrail left the
+-- pack (card t_75309c97). They are gone, not hidden: there is no placeholder, no
+-- "coming soon" panel and no link. The window simply has two tabs.
+--
+-- ── The design pass (card t_2d2c37b0) ────────────────────────────────────
+-- The chrome is built from MightiePack/Theme.lua and nothing else. Three
+-- palettes used to meet inside this frame — the gold/brown window, the cyan
+-- Touchstone body, the grey options panel — which is what "a panel of panels"
+-- reads as. Now every colour, font, offset and texture in this file is a token
+-- from that one file, and the palette itself is the body's own table, so the
+-- frame and its content cannot drift apart. tests/theme_tokens_spec.lua holds
+-- the line: a colour literal written inline here fails the suite.
+--
+-- The hierarchy is three bands and one body:
+--
+--   title band   the pack's name, its version, the status line, the close
+--                button — one plane, one hairline under it
+--   status line  what Touchstone knows right now (off / waiting / no data /
+--                scored / verdicts present). Jeremy's promise is "see yes, and
+--                trust it", so the frame states the real state at a glance and
+--                never a state the data does not support.
+--   tab strip    two text tabs; the current one carries an accent underline
+--   content      one host per tab, inset from the frame on the grid
 --
 -- What this file owns:
---   * the frame, its title bar, its drag, its close and its ESC entry;
+--   * the frame, its title band, its drag, its close and its ESC entry;
 --   * the two outer tab buttons and the two content hosts;
+--   * the status line and the state it reads;
 --   * where the window was last put — ONE SavedVariables key with a default,
---     never an existing position key (hard rule 2);
+--     never an existing position key (hard rule 1);
 --   * open / close / toggle / select, which the slashes call.
 --
 -- What it does NOT own: any module's own state, or any of NodeTrail's surfaces
--- (the hover herb panel, the route overlay, the Herbs/Skinning tabs) — those
--- live in the NodeTrail addon.
+-- (those live in the NodeTrail addon).
 --
--- COMBAT (hard rule 6, Interface 16001): no frame this file creates is
+-- COMBAT (hard rule 4, Interface 16001): no frame this file creates is
 -- protected, and no protected frame is touched anywhere here. Opening,
 -- closing, dragging and tab switching only Show/Hide/SetPoint our own frames
 -- and reparent two unprotected addon frames (the options panel and the
 -- Touchstone content frame) — the same operations a player's click already
 -- performs on them today. There is no combat-time layout churn beyond that
 -- single reparent, which happens once per session per surface and is a no-op
--- afterwards.
+-- afterwards. The status line reads public addon state only; it changes no
+-- protected value and calls no protected function.
 
 local _, pkg = ...
 
 local W = {}
 pkg.Window = W
+-- The window's widget kit IS the theme (MightiePack/Theme.lua): one file owns
+-- the tokens and the three primitives that name them. `W.UI` stays as the name
+-- the tab files already use.
+W.UI = pkg.Theme
+
+local T = pkg.Theme
+if type(T) ~= "table" then
+  -- The TOC lists Theme.lua before this file. A build without it has no
+  -- palette at all, and guessing one here is how the second palette came back
+  -- the first time, so this fails loudly rather than quietly.
+  error("MightiePack/Window.lua needs MightiePack/Theme.lua loaded first", 0)
+end
 
 W.NAME = "MightiePackWindow"
-W.WIDTH = 960
-W.HEIGHT = 640
-W.TITLE_HEIGHT = 40
-W.TABS_HEIGHT = 34
+W.WIDTH = T.size.windowW
+W.HEIGHT = T.size.windowH
+W.TITLE_HEIGHT = T.size.titleBand
+W.TABS_HEIGHT = T.size.tabStrip
 W.DEFAULT_TAB = "settings"
 W.TABS = { "touchstone", "settings" }
 W.TAB_LABELS = {
   touchstone = "Touchstone",
   settings = "Pack Settings",
 }
--- The new key. Hard rule 1/2: add-only, defaulted, and it never reads or
--- writes StatForgeDB.ui.* or any other existing position/scale key.
+-- The new key. Hard rule 1: add-only, defaulted, and it never reads or writes
+-- StatForgeDB.ui.* or any other existing position/scale key.
 W.POS_KEY = "windowPos"
 
-local COLOR = {
-  bg = { 0.06, 0.06, 0.07, 0.96 },
-  border = { 0.35, 0.30, 0.18, 0.9 },
-  title = { 0.95, 0.85, 0.55 },
-  text = { 0.88, 0.88, 0.88 },
-  muted = { 0.60, 0.60, 0.60 },
-  tabOn = { 0.95, 0.85, 0.55 },
-  -- Minimal tab affordance (card t_ea66cd84, AC-N4). The strip's real design
-  -- belongs to the reshape card; this is only enough that the row reads as
-  -- clickable: a faint plate, a brighter plate on hover, and the current tab's
-  -- plate picked out. Values are deliberately close to the pack's own surfaces.
-  tabOff = { 0.10, 0.10, 0.12, 0.85 },
-  tabHover = { 0.17, 0.17, 0.21, 0.95 },
-  tabActive = { 0.20, 0.18, 0.12, 0.95 },
-  tabEdge = { 0.35, 0.30, 0.18, 0.55 },
-  tabEdgeHover = { 0.95, 0.85, 0.55, 0.85 },
-}
+-- The vendored body's own title bar is 40px tall and its inner strip 32px.
+-- These are UPSTREAM geometry, not our design: AttachTouchstone recognises the
+-- body's children by them. They live here, named, so nothing else in the file
+-- compares against a bare number that looks like a layout choice.
+local VENDORED_TITLE_H = 40
+local VENDORED_STRIP_H = 32
 
 local function call(obj, name, ...)
   local f = type(obj) == "table" and obj[name]
@@ -84,27 +103,14 @@ local function num(obj, name)
   return nil
 end
 
--- Frame creation with the template guarded: a client (or a spec's fake client)
--- without BackdropTemplate/UIPanelCloseButton must still get a usable frame.
-local function newFrame(kind, name, parent, template)
-  if type(CreateFrame) ~= "function" then return nil end
-  if template ~= nil then
-    local ok, f = pcall(CreateFrame, kind, name, parent, template)
-    if ok and type(f) == "table" then return f end
-  end
-  local ok, f = pcall(CreateFrame, kind, name, parent)
-  if ok and type(f) == "table" then return f end
-  return nil
-end
-
+-- Frame, font and rectangle creation come from the theme's kit (Theme.lua): one
+-- guarded implementation for the window, the options panel and the tab seam, so
+-- a client that refuses a template fails the same way everywhere.
+local newFrame = T.NewFrame
 local function newFontString(parent, template)
-  if type(parent) ~= "table" or type(parent.CreateFontString) ~= "function" then
-    return nil
-  end
-  local ok, fs = pcall(parent.CreateFontString, parent, nil, "OVERLAY", template)
-  if ok and type(fs) == "table" then return fs end
-  return nil
+  return T.Label(parent, template, "")
 end
+local swatch = T.Swatch
 
 local function settings()
   if type(pkg.GetSettings) == "function" then
@@ -140,37 +146,140 @@ function W.SavePosition()
   return true
 end
 
--- ── Frame ─────────────────────────────────────────────────────────────────
--- What a tab's plate looks like: hovered, current, or neither. One helper so
--- the hover script and the state repaint can never disagree (AC-N4).
-local function tabColors(id, hover)
-  if hover then return COLOR.tabHover, COLOR.tabEdgeHover end
-  if id == W.current then return COLOR.tabActive, COLOR.tabEdge end
-  return COLOR.tabOff, COLOR.tabEdge
+-- ── Status: what Touchstone knows, in one line ────────────────────────────
+-- Five states, every one of them read from real state — never invented:
+--
+--   missing   the body's module table is absent            (danger)
+--   off       the player turned Touchstone off             (dim)
+--   waiting   a scan was deferred because of combat         (warning)
+--   empty     no verdicts in hand                          (muted)
+--   scored    verdicts in hand, none of them a change      (accent dim)
+--   verdict   at least one upgrade or trade-off            (success)
+--
+-- There is no separate "scanning" flag in the advisor: a scan either runs to
+-- completion inside the call or is deferred by combat (ChestAdvisor._scanDeferred,
+-- B17). "waiting" is that deferral — the only honest in-flight state there is,
+-- and it says exactly what it is, so the band cannot claim a scan is running
+-- when nothing is.
+local TRADE_OFF_FALLBACK = "TRADE_OFF"
+
+local function verdictRows()
+  local CA = rawget(_G, "ChestAdvisor")
+  if type(CA) ~= "table" or type(CA.getVerdicts) ~= "function" then return nil, CA end
+  local ok, rows = pcall(CA.getVerdicts)
+  if not ok or type(rows) ~= "table" then return nil, CA end
+  return rows, CA
 end
 
---- Paint one tab: its label colour, its plate, and its button state.
+local function tradeOffWord()
+  local V = rawget(_G, "Verdict")
+  if type(V) == "table" and type(V.TRADE_OFF) == "string" then return V.TRADE_OFF end
+  return TRADE_OFF_FALLBACK
+end
+
+local function plural(n, one, many)
+  return tostring(n) .. " " .. (n == 1 and one or many)
+end
+
+--- The status table: { state = <key>, dot = <colour token>, text = <line> }.
+function W.Status()
+  local state = W.TouchstoneState()
+  if state == "missing" then
+    return { state = "missing", dot = "dotMissing", text = "Touchstone did not load" }
+  end
+  if state == "off" then
+    return { state = "off", dot = "dotOff", text = "Touchstone off — see Pack Settings" }
+  end
+
+  local rows, CA = verdictRows()
+  if type(CA) == "table" and CA._scanDeferred == true then
+    return { state = "waiting", dot = "dotWaiting", text = "Scan waits for combat to end" }
+  end
+  if not rows then
+    return { state = "empty", dot = "dotEmpty", text = "No verdicts yet — open your bags" }
+  end
+
+  local trade = tradeOffWord()
+  local total, upgrades, trades = 0, 0, 0
+  for _, row in pairs(rows) do
+    if type(row) == "table" then
+      total = total + 1
+      if row.verdict == "UPGRADE" then
+        upgrades = upgrades + 1
+      elseif row.verdict == trade then
+        trades = trades + 1
+      end
+    end
+  end
+  if total == 0 then
+    return { state = "empty", dot = "dotEmpty", text = "No verdicts yet — open your bags" }
+  end
+  if upgrades == 0 and trades == 0 then
+    return {
+      state = "scored",
+      dot = "dotScored",
+      text = plural(total, "item scored", "items scored") .. " · no change",
+    }
+  end
+  local parts = {}
+  if upgrades > 0 then parts[#parts + 1] = plural(upgrades, "upgrade", "upgrades") end
+  if trades > 0 then parts[#parts + 1] = plural(trades, "trade-off", "trade-offs") end
+  parts[#parts + 1] = plural(total, "item scored", "items scored")
+  return { state = "verdict", dot = "dotVerdict", text = table.concat(parts, " · ") }
+end
+
+--- Paint the status line. Cheap (a dot colour and a string) and called on every
+--- open, every tab switch and every vendored refresh, so the line cannot go
+--- stale while the window is up.
+function W.PaintStatus()
+  local s = W.Status()
+  W.status = s
+  local dot, fs = W.statusDot, W.statusText
+  if type(dot) == "table" and type(dot.SetColorTexture) == "function" then
+    local r, g, b, a = T.R(s.dot)
+    pcall(dot.SetColorTexture, dot, r, g, b, a)
+  end
+  if type(fs) == "table" then
+    local r, g, b, a = T.R(s.state == "verdict" and "text" or "textMuted")
+    call(fs, "SetTextColor", r, g, b, a)
+    call(fs, "SetText", s.text)
+  end
+  return s
+end
+
+-- ── Frame ─────────────────────────────────────────────────────────────────
+--- Paint one tab: its label colour, its plate, its underline and its button
+--- state. One helper, so the hover script and the state repaint cannot
+--- disagree.
 function W.PaintTab(id)
   local btn = W.tabButtons and W.tabButtons[id]
   if type(btn) ~= "table" then return false end
+  local current = (id == W.current)
+  local hovered = btn._hover == true
   if type(btn.label) == "table" then
-    local c = (id == W.current) and COLOR.tabOn or COLOR.muted
-    call(btn.label, "SetTextColor", c[1], c[2], c[3])
+    local token = current and "accent" or (hovered and "text" or "textMuted")
+    local r, g, b, a = T.R(token)
+    call(btn.label, "SetTextColor", r, g, b, a)
   end
   if type(btn.SetBackdropColor) == "function" then
-    local bg, edge = tabColors(id, btn._hover == true)
-    call(btn, "SetBackdropColor", bg[1], bg[2], bg[3], bg[4])
-    call(btn, "SetBackdropBorderColor", edge[1], edge[2], edge[3], edge[4])
+    local token = current and "tabActive" or (hovered and "tabHover" or "tabOff")
+    local r, g, b, a = T.R(token)
+    call(btn, "SetBackdropColor", r, g, b, a)
+    local er, eg, eb, ea = T.R("hairline", current and 0.85 or 0.35)
+    call(btn, "SetBackdropBorderColor", er, eg, eb, ea)
+  end
+  if type(btn.underline) == "table" then
+    if current then call(btn.underline, "Show") else call(btn.underline, "Hide") end
   end
   if type(btn.SetButtonState) == "function" then
-    -- No lock. `SetButtonState(state, true)` was passed here, which locks the
-    -- button's state on EVERY tab — the current one to PUSHED and the other
+    -- No lock. `SetButtonState(state, true)` was passed here once, which locks
+    -- the button's state on EVERY tab — the current one to PUSHED and the other
     -- three to NORMAL. A locked button ignores mouse-driven state changes, and
-    -- this was the one thing in the code that applied to all four buttons at
-    -- once, i.e. consistent with the whole row being dead rather than one tab.
-    -- The plate colour (painted above) is what distinguishes current from the
-    -- rest, so the lock bought nothing.
-    pcall(btn.SetButtonState, btn, (id == W.current) and "PUSHED" or "NORMAL")
+    -- this was the one thing in the code that applied to all buttons at once,
+    -- i.e. consistent with the whole row being dead rather than one tab.
+    -- The plate and the underline are what distinguish current from the rest,
+    -- so the lock bought nothing.
+    pcall(btn.SetButtonState, btn, current and "PUSHED" or "NORMAL")
   end
   return true
 end
@@ -196,12 +305,11 @@ function W._Ensure()
   -- same order as painting — strata first, then level — so this frame was ABOVE
   -- the body for input as well and took every click over it. The body's own
   -- controls (its Upgrades / Log / Settings strip, its panel buttons) were
-  -- present, wired and correct, and never reached; the four OUTER tabs worked
+  -- present, wired and correct, and never reached; the OUTER tabs worked
   -- because they are children of this frame, in the same DIALOG strata.
-  -- That is t_5d0cc41a's strata defect read for the mouse instead of the brush.
   --
-  -- Nothing is lost by turning it off: dragging lives on the title bar
-  -- (`bar:EnableMouse(true)` + RegisterForDrag, below), the tab row and the
+  -- Nothing is lost by turning it off: dragging lives on the title band
+  -- (`band:EnableMouse(true)` + RegisterForDrag, below), the tab row and the
   -- close button are their own buttons, and the "do not click through to the
   -- world" duty moves DOWN to the fill, which is the only frame that should
   -- own empty window space. See W.bg, below.
@@ -213,11 +321,9 @@ function W._Ensure()
   -- This window frame used to carry the opaque backdrop itself, in DIALOG. A
   -- body reparented into the window keeps its OWN strata (StatForgeMainFrame is
   -- MEDIUM, see AttachTouchstone), and strata beats frame level outright, so
-  -- the fill drew OVER the entire Touchstone body: header, inner strip and
-  -- list, uniformly, at every alpha 1.00. Measured on the owner's client:
-  --   TS MEDIUM (body)  vs  WIN DIALOG (the fill).
-  -- No covering-frame detector could see it: the culprit is an ancestor, and an
-  -- ancestor is excluded from "what draws over me" by definition.
+  -- the fill drew OVER the entire Touchstone body. No covering-frame detector
+  -- could see it: the culprit is an ancestor, and an ancestor is excluded from
+  -- "what draws over me" by definition.
   --
   -- So the fill moves here and the ordering becomes STRUCTURE, not a per-tab
   -- fix:   fill (BACKGROUND) < content (MEDIUM) < chrome (DIALOG).
@@ -227,15 +333,14 @@ function W._Ensure()
   -- The three properties that make it safe:
   --   * SetAllPoints(window): exactly the window's area, nothing more;
   --   * EnableMouse(true): the fill is where the "do not click through to the
-  --     world" duty now lives (card t_cdee6bb6). It is the LOWEST layer, so
-  --     content (MEDIUM) and chrome (DIALOG) still win the hit test over it —
-  --     the fill only ever catches the clicks that land on empty window area.
-  --     Turning the WINDOW frame's mouse off without this would trade a dead
-  --     panel for a window you can click through into the camera. (On
-  --     t_5d0cc41a the fill had to be mouse-off because the window frame was
-  --     still catching empty space; both halves are one decision.)
+  --     world" duty now lives. It is the LOWEST layer, so content (MEDIUM) and
+  --     chrome (DIALOG) still win the hit test over it;
   --   * a level at or below the window's, so on a client that also orders by
   --     level inside a strata the fill still loses.
+  --
+  -- The colour is the theme's windowBg (the body's brand bg, ours for alpha):
+  -- one palette, and the fill is still opaque so the interior never goes
+  -- see-through over live terrain (AC-N7).
   local bg = newFrame("Frame", W.NAME .. "Background", f, "BackdropTemplate")
     or newFrame("Frame", W.NAME .. "Background", f)
   if type(bg) == "table" then
@@ -249,31 +354,27 @@ function W._Ensure()
     end
     if type(bg.SetBackdrop) == "function" then
       call(bg, "SetBackdrop", {
-        -- The same texture and insets the window frame used, so the visible
-        -- fill area is identical to before: only the frame it lives on changed.
-        bgFile = "Interface\\Buttons\\WHITE8X8",
-        tile = true, tileSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
+        bgFile = T.tex.solid,
+        tile = false,
+        insets = T.inset.panel,
       })
-      call(bg, "SetBackdropColor", COLOR.bg[1], COLOR.bg[2], COLOR.bg[3], COLOR.bg[4])
+      local r, g, b, a = T.R("windowBg")
+      call(bg, "SetBackdropColor", r, g, b, a)
     end
   end
 
+  -- The chrome frame keeps a border and no fill: a hairline edge, not the old
+  -- 32px dialog frame. The fill is W.bg above; a bgFile here would sit in
+  -- DIALOG, above every hosted body, which is exactly the defect t_5d0cc41a
+  -- fixed.
   if type(f.SetBackdrop) == "function" then
     call(f, "SetBackdrop", {
-      -- AC-N7 (card t_ea66cd84): the classic path
-      -- `Interface\\DialogFrame\\UI-DialogBox-Background` does NOT resolve on
-      -- the owner's client; the fill painted nothing while the border still
-      -- drew, so the window interior was see-through over live terrain. The
-      -- owner proved `Interface\\Buttons\\WHITE8X8` resolves there and goes
-      -- opaque.
-      -- t_5d0cc41a: that fill now lives on W.bg, above. Do NOT put a bgFile
-      -- back on THIS frame: it sits in DIALOG, above every hosted body, and
-      -- that is exactly the defect this card fixed.
-      edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-      tile = true, tileSize = 32, edgeSize = 32,
-      insets = { left = 8, right = 8, top = 8, bottom = 8 },
+      edgeFile = T.tex.edge,
+      tile = false, edgeSize = T.size.windowEdge,
+      insets = T.inset.edge,
     })
+    local r, g, b, a = T.R("hairline")
+    call(f, "SetBackdropBorderColor", r, g, b, a)
   end
   local left, top = W.SavedPosition()
   if left and top then
@@ -289,21 +390,27 @@ function W._Ensure()
     end
   end)
 
-  -- Title bar: our drag handle, our title, our close button. The Touchstone
-  -- frame's own title bar is hidden when its content is moved in, so there is
-  -- exactly one.
-  local bar = newFrame("Frame", nil, f, "BackdropTemplate") or newFrame("Frame", nil, f)
-  W.titleBar = bar
-  call(bar, "SetPoint", "TOPLEFT", f, "TOPLEFT", 8, -8)
-  call(bar, "SetPoint", "TOPRIGHT", f, "TOPRIGHT", -8, -8)
-  call(bar, "SetHeight", W.TITLE_HEIGHT - 8)
-  call(bar, "EnableMouse", true)
-  if type(bar.RegisterForDrag) == "function" then
-    pcall(bar.RegisterForDrag, bar, "LeftButton")
-    pcall(bar.SetScript, bar, "OnDragStart", function()
+  -- ── The title band ───────────────────────────────────────────────────────
+  -- One plane across the top: the pack's name, its version, the status line,
+  -- and the close button. It is also the drag handle — a band that looks like a
+  -- header should behave like one.
+  local band = newFrame("Frame", nil, f, "BackdropTemplate") or newFrame("Frame", nil, f)
+  W.titleBar = band
+  call(band, "SetPoint", "TOPLEFT", f, "TOPLEFT", 0, 0)
+  call(band, "SetPoint", "TOPRIGHT", f, "TOPRIGHT", 0, 0)
+  call(band, "SetHeight", T.size.titleBand)
+  call(band, "EnableMouse", true)
+  if type(band.SetBackdrop) == "function" then
+    call(band, "SetBackdrop", { bgFile = T.tex.solid, tile = false, insets = T.inset.panel })
+    local r, g, b, a = T.R("titleBand")
+    call(band, "SetBackdropColor", r, g, b, a)
+  end
+  if type(band.RegisterForDrag) == "function" then
+    pcall(band.RegisterForDrag, band, "LeftButton")
+    pcall(band.SetScript, band, "OnDragStart", function()
       if type(f.StartMoving) == "function" then pcall(f.StartMoving, f) end
     end)
-    pcall(bar.SetScript, bar, "OnDragStop", function()
+    pcall(band.SetScript, band, "OnDragStop", function()
       -- Save the position ONLY here: a drag is the one event that moves it.
       if type(f.StopMovingOrSizing) == "function" then
         pcall(f.StopMovingOrSizing, f)
@@ -311,71 +418,131 @@ function W._Ensure()
       W.SavePosition()
     end)
   end
-  local title = newFontString(bar, "GameFontNormalLarge")
+  -- The hairline that separates the band from the tab strip.
+  local rule = type(band.CreateTexture) == "function" and band:CreateTexture(nil, "ARTWORK") or nil
+  if type(rule) == "table" then
+    local r, g, b, a = T.R("hairline")
+    if type(rule.SetColorTexture) == "function" then
+      pcall(rule.SetColorTexture, rule, r, g, b, a)
+    end
+    call(rule, "SetHeight", T.space.hair)
+    call(rule, "SetPoint", "BOTTOMLEFT", band, "BOTTOMLEFT", 0, 0)
+    call(rule, "SetPoint", "BOTTOMRIGHT", band, "BOTTOMRIGHT", 0, 0)
+  end
+
+  local title = newFontString(band, T.font.display)
   W.title = title
   if type(title) == "table" then
-    call(title, "SetPoint", "LEFT", bar, "LEFT", 4, 0)
-    local ver = nil
-    if type(pkg.PackVersion) == "function" then
-      local okV, v = pcall(pkg.PackVersion)
-      if okV and type(v) == "string" and v ~= "" then ver = v end
-    end
-    call(title, "SetText", "MightiePack" .. (ver and ("  v" .. ver) or ""))
-    call(title, "SetTextColor", COLOR.title[1], COLOR.title[2], COLOR.title[3])
+    call(title, "SetPoint", "TOPLEFT", band, "TOPLEFT", T.space.md, -T.space.sm)
+    local r, g, b, a = T.R("text")
+    call(title, "SetTextColor", r, g, b, a)
+    call(title, "SetText", "MightiePack")
   end
-  local close = newFrame("Button", nil, bar, "UIPanelCloseButton") or newFrame("Button", nil, bar)
+
+  -- The version is secondary: dim, small, beside the name rather than in it, so
+  -- the name reads as a name.
+  local ver = nil
+  if type(pkg.PackVersion) == "function" then
+    local okV, v = pcall(pkg.PackVersion)
+    if okV and type(v) == "string" and v ~= "" then ver = v end
+  end
+  if type(title) == "table" and ver then
+    local version = newFontString(band, T.font.small)
+    W.version = version
+    if type(version) == "table" then
+      call(version, "SetPoint", "LEFT", title, "RIGHT", T.space.sm, 0)
+      local r, g, b, a = T.R("textDim")
+      call(version, "SetTextColor", r, g, b, a)
+      call(version, "SetText", "v" .. ver)
+    end
+  end
+
+  -- The status line: a dot and a sentence. It is the window's promise that what
+  -- the player sees is what Touchstone actually knows.
+  local dot = swatch(band, "dotOff", T.size.statusDot, T.size.statusDot)
+  if type(dot) == "table" then
+    W.statusDot = dot
+    call(dot, "SetPoint", "TOPLEFT", band, "TOPLEFT", T.space.md, -(T.space.lg + T.space.xs))
+    local fs = newFontString(band, T.font.small)
+    W.statusText = fs
+    if type(fs) == "table" then
+      call(fs, "SetPoint", "LEFT", dot, "RIGHT", T.space.sm, 0)
+      -- Left of the close button, so a long line cannot run under it.
+      call(fs, "SetPoint", "RIGHT", band, "RIGHT", -(T.space.xl + T.space.md), 0)
+      call(fs, "SetJustifyH", "LEFT")
+      local r, g, b, a = T.R("textMuted")
+      call(fs, "SetTextColor", r, g, b, a)
+    end
+  end
+
+  local close = newFrame("Button", nil, band, "UIPanelCloseButton") or newFrame("Button", nil, band)
   if type(close) == "table" then
-    call(close, "SetPoint", "RIGHT", bar, "RIGHT", 2, 0)
-    if type(close.SetText) == "function" and type(close.GetNormalTexture) ~= "function" then
-      call(close, "SetText", "X")
-    elseif type(close.SetNormalTexture) == "function" then
-      call(close, "SetNormalTexture", "Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+    call(close, "ClearAllPoints")
+    call(close, "SetPoint", "TOPRIGHT", band, "TOPRIGHT", -T.space.sm, -T.space.sm)
+    -- The template brings its own art. Only a client that refused the template
+    -- needs the fallback, and even that draws from the theme's texture list.
+    if type(close.GetNormalTexture) ~= "function" and type(close.SetNormalTexture) == "function" then
+      call(close, "SetNormalTexture", T.tex.close)
     end
     call(close, "SetScript", "OnClick", function() W.Close() end)
     W.close = close
   end
 
-  -- Outer tab strip.
+  -- ── The tab strip ────────────────────────────────────────────────────────
+  -- Text tabs on the grid: no boxes, no plates at rest. The current tab is the
+  -- one with the accent underline; hover lifts only the label. The plate
+  -- backdrop still exists (transparent at rest) because it is what the click
+  -- affordance is drawn on and what the hover tint uses.
   local strip = newFrame("Frame", nil, f)
   W.tabStrip = strip
-  call(strip, "SetPoint", "TOPLEFT", bar, "BOTTOMLEFT", 0, -6)
-  call(strip, "SetPoint", "TOPRIGHT", bar, "BOTTOMRIGHT", 0, -6)
-  call(strip, "SetHeight", W.TABS_HEIGHT)
+  call(strip, "SetPoint", "TOPLEFT", band, "BOTTOMLEFT", T.space.md, 0)
+  call(strip, "SetPoint", "TOPRIGHT", band, "BOTTOMRIGHT", -T.space.md, 0)
+  call(strip, "SetHeight", T.size.tabStrip)
   W.tabButtons = {}
   local x = 0
   for _, id in ipairs(W.TABS) do
-    -- Card t_ea66cd84. Two changes to the row, both minimal on purpose:
-    --   * `BackdropTemplate` + a plate and a hover tint, so the row reads as
-    --     clickable instead of as plain text (AC-N4). The real strip design
-    --     belongs to the reshape card t_2d2c37b0;
-    --   * a frame level above every sibling in this window, so nothing the
-    --     window creates — the hosts, the title bar, anything added later —
-    --     can draw over the row and take its clicks. A sibling created after
-    --     the strip sits at the same level as the strip and would otherwise be
-    --     able to cover the row if any of those rects ever moved up.
     local btn = newFrame("Button", nil, strip, "BackdropTemplate") or newFrame("Button", nil, strip)
-    call(btn, "SetSize", 150, W.TABS_HEIGHT - 4)
-    call(btn, "SetPoint", "LEFT", strip, "LEFT", x, 0)
-    x = x + 156
+    call(btn, "SetHeight", T.size.tabH)
+    call(btn, "SetPoint", "TOPLEFT", strip, "TOPLEFT", x, 0)
     call(btn, "EnableMouse", true)
     if type(btn.SetBackdrop) == "function" then
       call(btn, "SetBackdrop", {
-        bgFile = "Interface\\Buttons\\WHITE8X8",
-        edgeFile = "Interface\\Buttons\\WHITE8X8",
-        tile = false, edgeSize = 1,
-        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+        bgFile = T.tex.solid,
+        edgeFile = T.tex.edge,
+        tile = false, edgeSize = T.size.windowEdge,
+        insets = T.inset.edge,
       })
     end
+    -- Above every sibling the window creates, so nothing added later can draw
+    -- over the row and take its clicks (card t_ea66cd84).
     local okLevel, stripLevel = call(strip, "GetFrameLevel")
     if okLevel and type(stripLevel) == "number" then
       call(btn, "SetFrameLevel", stripLevel + 5)
     end
-    local fs = newFontString(btn, "GameFontNormal")
+    local fs = newFontString(btn, T.font.heading)
     if type(fs) == "table" then
-      call(fs, "SetPoint", "CENTER", btn, "CENTER", 0, 0)
       call(fs, "SetText", W.TAB_LABELS[id])
+      call(fs, "SetPoint", "CENTER", btn, "CENTER", 0, 0)
     end
     btn.label = fs
+    -- The tab's width is its own label plus the theme's padding: a text tab is
+    -- as wide as its word, which is the point of not using plates at rest.
+    local labelW = 0
+    if type(fs) == "table" and type(fs.GetStringWidth) == "function" then
+      local okW, w = pcall(fs.GetStringWidth, fs)
+      if okW and type(w) == "number" then labelW = w end
+    end
+    if labelW <= 0 then labelW = T.space.xl * 3 end
+    local width = math.floor(labelW + T.size.tabPadX * 2)
+    call(btn, "SetWidth", width)
+    -- The current tab's accent underline, inside the plate's bottom edge.
+    local under = swatch(btn, "tabUnder", width, T.size.underline)
+    if type(under) == "table" then
+      btn.underline = under
+      call(under, "SetPoint", "BOTTOMLEFT", btn, "BOTTOMLEFT", 0, 1)
+      call(under, "SetPoint", "BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 1)
+      call(under, "Hide")
+    end
     btn._hover = false
     call(btn, "SetScript", "OnEnter", function()
       btn._hover = true
@@ -387,15 +554,17 @@ function W._Ensure()
     end)
     call(btn, "SetScript", "OnClick", function() W.SelectTab(id) end)
     W.tabButtons[id] = btn
+    x = x + width + T.size.tabGutter
   end
 
-  -- One content host per tab. They are always created, so switching tabs is a
-  -- Show/Hide of frames we own, never a frame creation mid-fight.
+  -- One content host per tab, inset from the frame on the grid. They are always
+  -- created, so switching tabs is a Show/Hide of frames we own, never a frame
+  -- creation mid-fight.
   W.hosts = {}
   for _, id in ipairs(W.TABS) do
     local host = newFrame("Frame", nil, f)
-    call(host, "SetPoint", "TOPLEFT", strip, "BOTTOMLEFT", 8, -6)
-    call(host, "SetPoint", "BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 8)
+    call(host, "SetPoint", "TOPLEFT", strip, "BOTTOMLEFT", 0, -T.space.sm)
+    call(host, "SetPoint", "BOTTOMRIGHT", f, "BOTTOMRIGHT", -T.space.md, T.space.md)
     call(host, "Hide")
     W.hosts[id] = host
   end
@@ -463,6 +632,9 @@ function W.SelectTab(id)
     local ok, err = pcall(fn, id)
     if not ok then W._renderError = tostring(err) end
   end
+  -- After the renderer: a renderer may have just changed what the body knows
+  -- (the Touchstone attach is what creates the frame the verdicts live in).
+  W.PaintStatus()
   return true
 end
 
@@ -574,10 +746,9 @@ function W.AttachTouchstone()
   -- Card t_5d0cc41a. The invariant, not a workaround:
   --     fill (W.bg, BACKGROUND)  <  content (this frame, MEDIUM)  <  chrome (DIALOG)
   -- The body stays on MEDIUM so it can never climb into the chrome and cover the
-  -- title bar, the tab row or the close button — that is what the old DIALOG
-  -- strata did for standalone Touchstone. What made it fatal inside the window
-  -- was the window painting its own opaque fill in DIALOG: strata beats frame
-  -- level, so the fill drew over this whole body. The fill now lives on a
+  -- title band, the tab row or the close button. What made it fatal inside the
+  -- window was the window painting its own opaque fill in DIALOG: strata beats
+  -- frame level, so the fill drew over this whole body. The fill now lives on a
   -- BACKGROUND-strata frame (W.bg), and this line keeps the body above it.
   call(main, "SetFrameStrata", "MEDIUM")
   call(main, "Show")
@@ -589,7 +760,7 @@ function W.AttachTouchstone()
   local okKids, kids = call(main, "GetChildren")
   if okKids and type(kids) == "table" then
     for _, child in ipairs(kids) do
-      if type(child) == "table" and num(child, "GetHeight") == 40 then
+      if type(child) == "table" and num(child, "GetHeight") == VENDORED_TITLE_H then
         call(child, "Hide")
         W._hiddenTitleBar = child
       end
@@ -600,15 +771,16 @@ function W.AttachTouchstone()
   local strip = nil
   if okKids and type(kids) == "table" then
     for _, child in ipairs(kids) do
-      if type(child) == "table" and child ~= W._hiddenTitleBar and num(child, "GetHeight") == 32 then
+      if type(child) == "table" and child ~= W._hiddenTitleBar
+        and num(child, "GetHeight") == VENDORED_STRIP_H then
         strip = child
       end
     end
   end
   if type(strip) == "table" then
     call(strip, "ClearAllPoints")
-    call(strip, "SetPoint", "TOPLEFT", main, "TOPLEFT", 12, -8)
-    call(strip, "SetPoint", "TOPRIGHT", main, "TOPRIGHT", -12, -8)
+    call(strip, "SetPoint", "TOPLEFT", main, "TOPLEFT", T.space.sm + T.space.xs, -T.space.sm)
+    call(strip, "SetPoint", "TOPRIGHT", main, "TOPRIGHT", -(T.space.sm + T.space.xs), -T.space.sm)
   end
   if type(UISpecialFrames) == "table" then
     for i = #UISpecialFrames, 1, -1 do
@@ -622,7 +794,7 @@ function W.AttachTouchstone()
 end
 
 --- Is the Touchstone module usable right now? The tab says so plainly when it
---  is not, instead of showing an empty body.
+--- is not, instead of showing an empty body.
 function W.TouchstoneState()
   local SF = rawget(_G, "StatForge")
   if type(SF) ~= "table" then return "missing" end

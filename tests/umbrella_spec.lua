@@ -41,7 +41,22 @@ local inToc = {}
 for _, l in ipairs(tocLines) do inToc[l] = true end
 check(inToc["Options.lua"], "TOC contains Options.lua")
 check(inToc["Window.lua"], "TOC contains the unified window shell")
-check(inToc["Window/Common.lua"], "TOC contains the window's shared widgets")
+check(inToc["Theme.lua"], "TOC contains the pack's theme (tokens and kit)")
+check(not inToc["Window/Common.lua"],
+  "TOC does not ship Window/Common.lua: the kit lives in Theme.lua (t_2d2c37b0)")
+-- The theme must load BEFORE the surfaces that read tokens from it.
+local themeAt, optionsAt, windowAt
+for i, l in ipairs(tocLines) do
+  if l == "Theme.lua" then themeAt = i end
+  if l == "Options.lua" then optionsAt = i end
+  if l == "Window.lua" then windowAt = i end
+end
+check(themeAt and optionsAt and themeAt < optionsAt,
+  "Theme.lua loads before Options.lua (theme " .. tostring(themeAt) .. ", options "
+    .. tostring(optionsAt) .. ")")
+check(themeAt and windowAt and themeAt < windowAt,
+  "Theme.lua loads before Window.lua (theme " .. tostring(themeAt) .. ", window "
+    .. tostring(windowAt) .. ")")
 check(not inToc["Window/Herbs.lua"], "TOC does not ship the Herbs tab (it moved out with NodeTrail)")
 check(not inToc["Window/Skinning.lua"], "TOC does not ship the Skinning tab")
 check(inToc["Window/TouchstoneTab.lua"], "TOC contains the Touchstone tab")
@@ -303,15 +318,19 @@ check(saidSeparate, "/mp help points at the separate addon (/mp help: "
   .. table.concat(chat, " | ") .. ")")
 check(not saidSkindiag, "/mp help no longer advertises skindiag")
 
--- A skindiag subcommand is not handled here any more: it falls through to the
--- usage block instead of running a probe this pack does not have.
+-- A skindiag subcommand no longer runs a probe from this pack: card t_2d2c37b0
+-- RETIRED it deliberately, so it answers with where the diagnostics went. The
+-- spec asserts the retirement sentence (not the absence of the words "/mp
+-- skindiag", which the sentence itself contains on purpose).
 local skBefore = #chat
 SlashCmdList.MIGHTIEPACK("skindiag dump")
-local ranProbe = false
+local answeredSkindiag, ranProbe = false, false
 for i = skBefore + 1, #chat do
   local m = tostring(chat[i])
-  if m:find("/mp skindiag", 1, true) or m:find("skindiag:", 1, true) then ranProbe = true end
+  if m:find("moved out of the pack with NodeTrail", 1, true) then answeredSkindiag = true end
+  if m:find("skindiag:", 1, true) or m:find("Skinning diagnostics:", 1, true) then ranProbe = true end
 end
+check(answeredSkindiag, "/mp skindiag says the diagnostics moved out with NodeTrail")
 check(not ranProbe, "/mp skindiag no longer runs a probe from this pack")
 
 -- /mp status: Touchstone's line, and one honest line about NodeTrail.

@@ -76,10 +76,10 @@ loadFile("Core.lua")
 loadFile("Modules.lua")
 for _, f in ipairs({
 }) do loadFile(f) end
+loadFile("Theme.lua")
 loadFile("BugReport.lua")
 loadFile("Options.lua")
 loadFile("Window.lua")
-loadFile("Window/Common.lua")
 
 -- The Touchstone seam reroutes five public entry points on StatForge and
 -- registers the tab's renderer; it needs the module's shape, not its body.
@@ -219,10 +219,27 @@ do
   cover:SetParent(nil)
 end
 
--- ── 5. AFFORDANCE (AC-N4): a plate, and a hover state ─────────────────────
--- Minimal by design: the strip's real look belongs to the reshape card
--- t_2d2c37b0. What is asserted is only that the control DRAWS as a control and
--- that hovering it changes what it draws.
+-- ── 5. AFFORDANCE (AC-N4, reshaped by t_2d2c37b0) ─────────────────────────
+-- The strip is now TEXT tabs: no plates at rest, the current tab carried by an
+-- accent underline and an accent label. What is asserted here is what the
+-- control must communicate, not how it looks:
+--   * every tab still draws a control (a plate to hit and to tint);
+--   * the CURRENT tab has the underline and the accent label;
+--   * a NON-current tab has neither, and hovering it changes what it draws;
+--   * hovering the current tab changes nothing — it is already the tab you are
+--     on, and a hover state there would be a lie about which tab is current.
+local Theme = pkg.Theme
+local function accentRgb()
+  local r, g, b = Theme.R("accent", 1)
+  return r, g, b
+end
+local function sameColor(fs, r, g, b)
+  if type(fs) ~= "table" or type(fs.GetTextColor) ~= "function" then return false end
+  local cr, cg, cb = fs:GetTextColor()
+  return cr == r and cg == g and cb == b
+end
+
+local ar, ag, ab = accentRgb()
 for _, id in ipairs(W.TABS) do
   local btn = W.tabButtons[id]
   if type(btn) == "table" then
@@ -232,17 +249,28 @@ for _, id in ipairs(W.TABS) do
     local enter, leave = btn:GetScript("OnEnter"), btn:GetScript("OnLeave")
     check(type(enter) == "function", "the " .. id .. " tab button has a hover-in state")
     check(type(leave) == "function", "the " .. id .. " tab button has a hover-out state")
-    if type(enter) == "function" and type(leave) == "function" then
-      pcall(leave, btn)
-      local r0, g0, b0, a0 = btn:GetBackdropColor()
-      pcall(enter, btn)
-      local r1, g1, b1, a1 = btn:GetBackdropColor()
-      check(r0 ~= r1 or g0 ~= g1 or b0 ~= b1 or a0 ~= a1,
-        "hovering the " .. id .. " tab changes its plate colour")
-      pcall(leave, btn)
-      local r2, g2, b2, a2 = btn:GetBackdropColor()
-      check(r0 == r2 and g0 == g2 and b0 == b2 and a0 == a2,
-        "leaving the " .. id .. " tab restores its plate colour")
+
+    local current = (W.current == id)
+    if current then
+      check(type(btn.underline) == "table" and btn.underline:IsShown(),
+        "the CURRENT tab (" .. id .. ") carries the accent underline")
+      check(sameColor(btn.label, ar, ag, ab),
+        "the CURRENT tab (" .. id .. ") label is the theme's accent")
+    else
+      check(type(btn.underline) ~= "table" or btn.underline:IsShown() == false,
+        "the non-current tab (" .. id .. ") has no underline")
+      if type(enter) == "function" and type(leave) == "function" then
+        pcall(leave, btn)
+        local r0, g0, b0, a0 = btn:GetBackdropColor()
+        pcall(enter, btn)
+        local r1, g1, b1, a1 = btn:GetBackdropColor()
+        check(r0 ~= r1 or g0 ~= g1 or b0 ~= b1 or a0 ~= a1,
+          "hovering the non-current tab " .. id .. " changes its plate colour")
+        pcall(leave, btn)
+        local r2, g2, b2, a2 = btn:GetBackdropColor()
+        check(r0 == r2 and g0 == g2 and b0 == b2 and a0 == a2,
+          "leaving the " .. id .. " tab restores its plate colour")
+      end
     end
   end
 end

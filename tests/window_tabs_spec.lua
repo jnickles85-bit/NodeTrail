@@ -267,10 +267,10 @@ loadFile("Core.lua")
 loadFile("Modules.lua")
 for _, f in ipairs({
 }) do loadFile(f) end
+loadFile("Theme.lua")
 loadFile("BugReport.lua")
 loadFile("Options.lua")
 loadFile("Window.lua")
-loadFile("Window/Common.lua")
 
 local W = pkg.Window
 check(type(W) == "table", "pkg.Window exists")
