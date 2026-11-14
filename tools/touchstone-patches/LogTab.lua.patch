@@ -1,0 +1,188 @@
+--- a/LogTab.lua
++++ b/LogTab.lua
+@@ -16,8 +16,8 @@
+ local SF = StatForge
+ local C = SF.Colors
+ 
+-local ROW_H   = 30
+-local VISIBLE = 13
++local ROW_H   = 30               -- the LEAST a row may be (a one-line reason)
++local ROW_PAD = 4                -- inside a row, above the cells and below them
+ 
+ -- The wall-clock stamp the log entry carries (`at`). The advisor's formatter
+ -- is the one the chat print uses. This fallback is the same rule for a host
+@@ -92,6 +92,7 @@
+   rows   = {},
+   pool   = {},
+   offset = 0,
++  shown  = 0,   -- rows on the page the layout last placed
+   host   = nil,
+   layout = nil,
+ }
+@@ -141,43 +142,48 @@
+ end
+ 
+ function SF.LogTabState()
+-  return { total = #state.rows, offset = state.offset }
++  return { total = #state.rows, offset = state.offset, shown = state.shown or 0 }
+ end
+ 
+ local function buildRow(parent, index)
+   local row = CreateFrame("Frame", "TouchstoneLogRow" .. index, parent)
+   row:SetHeight(ROW_H)
+-  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_H))
+-  row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_H))
++  -- No pitch (card t_4e5ad8a4): the row's height comes from its own measured
++  -- cells and the stacking pass places it (SF.StackRow).
++  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+ 
+   local stamp = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  stamp:SetPoint("LEFT", 6, 0)
++  -- Every cell sits on the row's TOP line, so a reason that wraps to three
++  -- lines grows the ROW instead of printing over the next entry. The cells used
++  -- to hang off the row's centre (`LEFT`, 0), where a wrapped reason is centred
++  -- in a 30-unit row and runs out of it in both directions.
++  stamp:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -ROW_PAD)
+   stamp:SetWidth(84)
+   stamp:SetJustifyH("LEFT")
+   stamp:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+   row.stamp = stamp
+ 
+   local slot = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  slot:SetPoint("LEFT", stamp, "RIGHT", 8, 0)
++  slot:SetPoint("TOPLEFT", stamp, "TOPRIGHT", 8, 0)
+   slot:SetWidth(76)
+   slot:SetJustifyH("LEFT")
+   slot:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
+   row.slot = slot
+ 
+   local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  name:SetPoint("LEFT", slot, "RIGHT", 6, 0)
++  name:SetPoint("TOPLEFT", slot, "TOPRIGHT", 6, 0)
+   name:SetWidth(190)
+   name:SetJustifyH("LEFT")
+   row.itemName = name
+ 
+   local verdict = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  verdict:SetPoint("LEFT", name, "RIGHT", 8, 0)
++  verdict:SetPoint("TOPLEFT", name, "TOPRIGHT", 8, 0)
+   verdict:SetWidth(96)
+   verdict:SetJustifyH("LEFT")
+   row.verdict = verdict
+ 
+   local reason = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  reason:SetPoint("LEFT", verdict, "RIGHT", 6, 0)
++  reason:SetPoint("TOPLEFT", verdict, "TOPRIGHT", 6, 0)
+   reason:SetWidth(360)
+   reason:SetJustifyH("LEFT")
+   reason:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+@@ -186,6 +192,19 @@
+   return row
+ end
+ 
++-- One row's height: its tallest cell, measured, plus the row's padding. ROW_H is
++-- a floor, not a pitch (card t_4e5ad8a4).
++local function rowHeight(row)
++  local h = 0
++  for _, fs in ipairs({ row.stamp, row.slot, row.itemName, row.verdict, row.reason }) do
++    local fh = fs:GetHeight() or 0
++    if fh > h then h = fh end
++  end
++  h = ROW_PAD + h + ROW_PAD
++  if h < ROW_H then h = ROW_H end
++  return h
++end
++
+ local function build(host)
+   local title = SF.UI_CreateLabel(host, "", "GameFontNormalLarge")
+   title:SetPoint("TOPLEFT", 18, -14)
+@@ -206,17 +225,23 @@
+   viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -10)
+   viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -18, 12)
+   viewport:EnableMouseWheel(true)
++  -- No page holds more than fits, but a single row taller than the viewport is
++  -- still admitted (SF.PageRows) — clip so it cannot paint over the panel.
++  if type(viewport.SetClipsChildren) == "function" then
++    viewport:SetClipsChildren(true)
++  end
+   host.viewport = viewport
+ 
+   local rowParent = CreateFrame("Frame", nil, viewport)
+   rowParent:SetPoint("TOPLEFT")
+-  rowParent:SetSize(780, VISIBLE * ROW_H)
++  rowParent:SetWidth(780)
+   host.rowParent = rowParent
+ 
+   local function scrollBy(delta)
+     if type(delta) ~= "number" or delta == 0 then return end
+     local total = #state.rows
+-    local maxOffset = math.max(0, total - VISIBLE)
++    -- One row per wheel step, to the last entry: the page is whatever fits.
++    local maxOffset = math.max(0, total - 1)
+     state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
+     if state.layout then state.layout() end
+   end
+@@ -244,14 +269,17 @@
+     end
+   end
+ 
+-  local maxOffset = math.max(0, n - VISIBLE)
++  local maxOffset = math.max(0, n - 1)
+   if state.offset > maxOffset then state.offset = maxOffset end
+ 
++  -- Card t_4e5ad8a4: the same row model Upgrades uses — bind and measure every
++  -- row, take the page that fits the viewport, stack the rows at each other's
++  -- bottoms. SF.PageRows / SF.StackRow are the shared rule, so a change to one
++  -- list's geometry cannot leave the other behind.
+   state.layout = function()
+     for i, row in ipairs(state.pool) do
+       local r = state.rows[i]
+-      local visible = (r ~= nil) and (i > state.offset) and (i <= state.offset + VISIBLE)
+-      if visible then
++      if r then
+         row.stamp:SetText(r.stamp)
+         row.slot:SetText(r.slot)
+         row.itemName:SetText(r.name)
+@@ -261,11 +289,25 @@
+         local vc = verdictColor(r.verdict)
+         row.verdict:SetTextColor(vc[1], vc[2], vc[3])
+         row.reason:SetText(r.reason)
+-        row:Show()
+-      else
+-        row:Hide()
++        row:SetHeight(rowHeight(row))
+       end
+     end
++
++    local heights = {}
++    for i = 1, n do
++      heights[i] = state.pool[i]:GetHeight()
++    end
++    local first, count = SF.PageRows(heights, state.offset, host.viewport:GetHeight() or 0)
++    local y = 0
++    for i = first, first + count - 1 do
++      y = SF.StackRow(state.pool[i], host.rowParent, y)
++      state.pool[i]:Show()
++    end
++    for i, row in ipairs(state.pool) do
++      if i < first or i >= first + count then row:Hide() end
++    end
++    host.rowParent:SetHeight(math.max(y, 1))
++    state.shown = count
+   end
+   state.layout()
+ end
+@@ -285,10 +327,11 @@
+   else
+     host.empty:Hide()
+     host.viewport:Show()
++    local page = state.shown or 0
+     local more = ""
+-    if total > VISIBLE then
++    if total > page and page > 0 then
+       more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
+-        .. tostring(math.min(state.offset + VISIBLE, total))
++        .. tostring(math.min(state.offset + page, total))
+     end
+     host.count:SetText(tostring(total) .. " recorded disagreement"
+       .. (total == 1 and "" or "s") .. more)
