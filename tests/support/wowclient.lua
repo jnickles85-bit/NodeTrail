@@ -456,21 +456,27 @@ local function newFrame(kind, name, parent, template)
     -- making -- so a spec built on it could not see a wrapped reason running out
     -- of its row. Lines are counted the way the client lays them out: an explicit
     -- "\n" ends a line, and a string with a width wraps at that width.
+    -- Its WIDTH, when the caller never set one, is the string's own width (the
+    -- client's GetWidth), not zero: an overlap check is only as good as the rect
+    -- it is given, and a zero-width label made every check against it vacuous.
     local function measure(self)
       if not self.fontPath then self.height = 0; return end
       local size = self.size or C.defaultFontSize
       local text = tostring(self.text or "")
       if text == "" then self.height = 0; return end
-      local limit = tonumber(self.width)
-      local lines = 0
+      local limit = tonumber(self.explicitWidth)
+      local lines, widest = 0, 0
       for para in string.gmatch(text .. "\n", "(.-)\n") do
+        local w = #para * size * C.charWidth
+        if w > widest then widest = w end
         local n = 1
         if limit and limit > 0 then
-          n = math.max(1, math.ceil((#para * size * C.charWidth) / limit))
+          n = math.max(1, math.ceil(w / limit))
         end
         lines = lines + n
       end
       self.height = lines * size * C.lineHeight
+      if not limit then self.width = widest end
     end
     fs.__measure = measure
 
@@ -483,7 +489,11 @@ local function newFrame(kind, name, parent, template)
     function fs:SetWordWrap(v) self.wordWrap = v end
     local inheritedSetSize, inheritedSetWidth = fs.SetSize, fs.SetWidth
     function fs:SetSize(w, h) inheritedSetSize(self, w, h); measure(self) end
-    function fs:SetWidth(w) inheritedSetWidth(self, w); measure(self) end
+    function fs:SetWidth(w)
+      inheritedSetWidth(self, w)
+      self.explicitWidth = w
+      measure(self)
+    end
     function fs:SetFont(path, size, flags)
       self.fontPath, self.size, self.fontFlags = path, size, flags
       measure(self)
