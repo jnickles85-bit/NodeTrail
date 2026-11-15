@@ -57,12 +57,34 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # Pinned, not "main": a sync must reproduce the tree it was reviewed against, and
 # `git clone --branch main` would silently move with upstream. `--ref main` still
 # resolves to whatever main is at run time, for a deliberate catch-up.
-SOURCE_REF = "80accdd47b4db127d929ae1010f5b34a96a74e83"
+#
+# Provenance of the pin (v0.3.8-beta):
+#   ec947b39fa00710faec07d75085ab34b3c219b6b
+#   StatForge main, "Merge pull request #97 from jnickles85-bit/wt/t_0153f144"
+#   (2026-11-15). It carries three merged PRs over the previous pin 30f3d32:
+#     #95 / wt/t_92e703ac  the verdict line is drawn with the item's own lines,
+#                          above every third-party block (tooltip placement)
+#     #96 / wt/t_fc11dd1c  every refusal names its side (hovered / equipped) and
+#                          carries no judged on-hit clause
+#     #97 / wt/t_0153f144  the changed-verdict sweep pins its base to a NAMED
+#                          revision instead of origin/main
+#   It does NOT carry Slice 1 (bag arrows, quest marks, GearAPI); that merged
+#   after this cut and is v0.3.9 material.
+SOURCE_REF = "ec947b39fa00710faec07d75085ab34b3c219b6b"
 
 # Order is load-bearing. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).
+# Weights.lua sits directly after Constants.lua and before Verdict.lua: it
+# writes `StatForge.Weights` onto the global Constants.lua creates, and
+# Verdict.weightsFor probes that table AT CALL TIME. Until the 30f3d32 pin the
+# pack shipped without it, so every priced layer the verdict engine has
+# (`weightedResolution`, and the weapon path's priced-word fall-through) found
+# nothing and could not decide — the parity trap: the reader parsed "+34
+# Healing" correctly and still answered "equal weapon damage per second"
+# because no table priced the word. Card t_24a4c8ea.
 LUA_FILES = [
     "Constants.lua",
+    "Weights.lua",
     "UI.lua",
     "OptionsTab.lua",
     "UpgradesTab.lua",

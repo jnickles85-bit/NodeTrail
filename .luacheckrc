@@ -22,7 +22,7 @@ globals = {
     C_Minimap = { other_fields = true }, C_PlayerInfo = { other_fields = true }, C_SpecializationInfo = { other_fields = true },
     C_Timer = { other_fields = true }, C_TooltipInfo = { other_fields = true }, C_TradeSkillUI = { other_fields = true },
     ChestAdvisor = { other_fields = true }, ChestAdvisorDB = { other_fields = true }, ContainerFrameUtil_GetItemButtonAndContainer = { other_fields = true },
-    CopyTable = { other_fields = true }, CreateFrame = { other_fields = true }, CreateFromMixins = { other_fields = true },
+    CopyTable = { other_fields = true }, CreateColor = { other_fields = true }, CreateFrame = { other_fields = true }, CreateFromMixins = { other_fields = true },
     DEFAULT_CHAT_FRAME = { other_fields = true }, Enum = { other_fields = true }, GameFontNormalSmall = { other_fields = true },
     GameTooltip = { other_fields = true }, GetAddOnMetadata = { other_fields = true }, GetBuildInfo = { other_fields = true },
     GetCVar = { other_fields = true }, GetCombatRatingBonus = { other_fields = true }, GetCursorPosition = { other_fields = true }, GetExpertisePercent = { other_fields = true }, GetInventoryItemLink = { other_fields = true }, GetItemInfoInstant = { other_fields = true },

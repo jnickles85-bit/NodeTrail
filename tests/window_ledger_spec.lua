@@ -46,15 +46,18 @@ end
 local LONG_REASON =
   "eligibility unconfirmed (fail-closed): the client returned false for this link, " ..
   "so no stat order was read for the slot and the item was left unjudged."
-local SHORT_REASON = "more spell power than the equipped robe"
 
 -- Sorted by rank then name: UPGRADE first, then TRADE_OFF, then the refusals.
+-- The reasons on rows 2-5 are FILLED IN BELOW from the vendored reader itself
+-- (card t_24a4c8ea): the ledger's job is to draw whatever reason the reader
+-- hands it, so the fixture asks the reader instead of typing a copy that can
+-- drift away from it.
 local FIXTURE = {
   { link = "[Amber Chain Vest]", id = 1001, verdict = "UPGRADE", slotWord = "Chest", reason = LONG_REASON },
-  { link = "[Kelpweave Vest]",  id = 1002, verdict = "UPGRADE", slotWord = "Chest", reason = SHORT_REASON },
-  { link = "[Mystic Robe]",     id = 1003, verdict = "TRADE_OFF", slotWord = "Chest", reason = SHORT_REASON },
-  { link = "[Ragged Gloves]",   id = 1004, verdict = "NOT_UPGRADE", slotWord = "Hands", reason = SHORT_REASON },
-  { link = "[Truesteel Pants]", id = 1005, verdict = "NOT_UPGRADE", slotWord = "Legs", reason = SHORT_REASON },
+  { link = "[Kelpweave Vest]",  id = 1002, verdict = "UPGRADE", slotWord = "Chest", reason = "" },
+  { link = "[Mystic Robe]",     id = 1003, verdict = "TRADE_OFF", slotWord = "Chest", reason = "" },
+  { link = "[Ragged Gloves]",   id = 1004, verdict = "NOT_UPGRADE", slotWord = "Hands", reason = "" },
+  { link = "[Truesteel Pants]", id = 1005, verdict = "NOT_UPGRADE", slotWord = "Legs", reason = "" },
 }
 
 MightiePackDB = { modules = { Touchstone = true }, seen = { firstRun = true }, bugCount = 0 }
@@ -88,6 +91,43 @@ if type(CA.tooltipUI.word) ~= "function" then
   -- "one vocabulary" leg vacuous rather than wrong.
   CA.tooltipUI.word = function(token) return tostring(token) end
 end
+
+-- ---- the reasons the reader emits at this pin (card t_24a4c8ea) -------------
+-- Asked of the vendored reader, not typed here: the two shapes this re-vendor
+-- exists for are the wand pair's dps sentence and DD-2's priced healing word.
+-- If the reader's wording moves, this fixture moves with it and the ledger
+-- still has to draw whatever comes back.
+local V = rawget(_G, "Verdict")
+check(type(V) == "table", "the vendored Verdict is loaded")
+local WAND_REASON, HEAL_REASON = "", ""
+if type(V) == "table" then
+  local WAND = { "Lesser Magic Wand", "Binds when equipped", "Ranged  Wand",
+    "12 - 22 Arcane Damage  Speed 1.50", "(11.3 damage per second)",
+    "Equip: Increases damage and healing done by magical spells and effects by up to 1.",
+    "Durability 35 / 35", "Requires Level 5", "Sell Price: 1s 10c" }
+  local NOVICE = { "Novice's Practice Wand", "Binds when equipped", "Ranged  Wand",
+    "3 - 9 Arcane Damage  Speed 1.50", "(4.0 damage per second)",
+    "Durability 20 / 20", "Requires Level 3" }
+  local ZWEI = { "Polished ZweiHander of Healing", "Two-Hand  Sword",
+    "20 - 37 Damage  Speed 3.00", "(9.5 damage per second)",
+    "Equip: Increases healing done by up to 34 and damage done by up to 11"
+      .. " for all magical spells and effects" }
+  local PLAIN = { "Plain ZweiHander", "Two-Hand  Sword",
+    "20 - 37 Damage  Speed 3.00", "(9.5 damage per second)" }
+  local PRIEST = { class = "PRIEST", role = "PRIEST", order = { "Intellect", "Spirit", "Stamina" } }
+  local HEALER = { class = "PRIEST", role = "spell", clientRole = "HEALER",
+    order = { "Intellect", "Spirit", "Stamina" } }
+  WAND_REASON = select(2, V.compareWeapon(WAND, NOVICE, true, PRIEST, true)) or ""
+  HEAL_REASON = select(2, V.compareWeapon(ZWEI, PLAIN, true, HEALER, true)) or ""
+  check(WAND_REASON == "upgrade: more weapon damage per second (11.30 vs 4.00)",
+    "the reader emits the wand pair's dps reason (got " .. tostring(WAND_REASON) .. ")")
+  check(HEAL_REASON == "upgrade: better on Healing",
+    "the reader prices the of-Healing pair on the Healing word (got " .. tostring(HEAL_REASON) .. ")")
+end
+FIXTURE[2].reason = WAND_REASON
+FIXTURE[3].reason = HEAL_REASON
+FIXTURE[4].reason = HEAL_REASON
+FIXTURE[5].reason = WAND_REASON
 
 -- Open the window on Touchstone and render the Upgrades inner tab, which is what
 -- creates the rows in the client.

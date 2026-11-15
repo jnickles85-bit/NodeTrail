@@ -283,10 +283,25 @@ function SF.StatProbe(link)
   -- same call, same pcall discipline, same secret checks. The only
   -- difference is the contract: that edge maps the pairs into the module's
   -- words; this one reports them verbatim.
+  --
+  -- card t_8575389a: the ARGUMENT FORM is part of the read. The owner measured
+  -- this client answering C_Item.GetItemStats("item:18510") and returning
+  -- NOTHING for a full hyperlink ("|Hitem:18510|h[…]|h"). So the probe passes the
+  -- proven form too — the same normalisation the advisor's funnel applies — so a
+  -- read that comes back empty is the client's answer about a form that WORKS,
+  -- not the silent trap. (This probe has always passed the numeric id, which the
+  -- client accepts; "item:ID" is the one MEASURED, and one form in both files is
+  -- one fewer thing to get wrong.)
+  --
+  -- ⚠ NO extra line is printed for it. The probe's exact output lines are pinned
+  -- by card t_acc9fd97's battery (P1/P5-P8: label, then the pairs or the
+  -- fail-closed sentence, then the tally), and an announcement line here would
+  -- break a contract this card does not own. The form is pinned where it belongs:
+  -- by the argument the stub records, in this card's own battery.
   if not (C_Item and type(C_Item.GetItemStats) == "function") then
     return SF.PrintError("stat probe: this client offers no C_Item.GetItemStats — the pairs cannot be read")
   end
-  local ok, raw = pcall(C_Item.GetItemStats, id)
+  local ok, raw = pcall(C_Item.GetItemStats, "item:" .. idStr)
   if not ok then
     return SF.PrintError("stat probe: C_Item.GetItemStats raised for this item — " .. stripLocation(raw))
   end

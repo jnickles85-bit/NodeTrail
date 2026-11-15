@@ -141,8 +141,10 @@ local function loaded(path, ...)
   return ok
 end
 
+-- The shipped load order (card t_24a4c8ea): Weights.lua second, so
+-- `StatForge.Weights` exists before Verdict.lua probes it at call time.
 local VENDORED = {
-  "Constants.lua", "UI.lua", "OptionsTab.lua", "UpgradesTab.lua", "LogTab.lua",
+  "Constants.lua", "Weights.lua", "UI.lua", "OptionsTab.lua", "UpgradesTab.lua", "LogTab.lua",
   "Diagnostics.lua", "Probe.lua", "ChestAdvisor/Verdict.lua",
   "ChestAdvisor/ChestAdvisor.lua", "Integration.lua", "Core.lua",
 }
