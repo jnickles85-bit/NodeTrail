@@ -620,12 +620,20 @@ local KNOWN = {
 	["Hit"]            = true,
 	["Crit"]           = true,
 	["FeralAttackPower"] = true,
-	-- Upcoming sourced packs will price these keys (Hit/Crit rating,
-	-- Defense, weapon DPS, and the usual companion combat stats). They
-	-- are KNOWN so a tooltip line that names them is accumulated rather
-	-- than suppressed. Whether a profile PRICES a word is still the
-	-- weight table's answer; an unpriced known word is a zero, not a
-	-- guess.
+	-- The extended reader's vocabulary: the client prints these words on a
+	-- tooltip line of their own ("+12 Defense", "20 Attack Power", "10 MP5",
+	-- "12 Weapon Skill"), and every one of them suppressed the item while it
+	-- was absent from this table. They are KNOWN so a line naming them is
+	-- ACCUMULATED rather than suppressed. Whether a profile PRICES a word is
+	-- still the weight/tier table's answer: an unpriced known word is a zero,
+	-- never a guess.
+	--
+	-- ⚠ The healing / spell-damage / school keys are NOT here any more: card
+	-- t_4e1e1b1d (DD-2) declares Healing, SpellDamage and the six school
+	-- powers itself, and this pack's older spellings (HealingPower,
+	-- HolyDamage, …) were dropped with the parse that produced them, so that
+	-- one stat has one name in the reader and in the packs. See
+	-- ChestAdvisor__Verdict.lua.patch's header for the full list.
 	["Defense"]          = true,
 	["Dodge"]            = true,
 	["Parry"]            = true,
@@ -634,28 +642,42 @@ local KNOWN = {
 	["WeaponDps"]        = true,
 	["MP5"]              = true,
 	["HP5"]              = true,
-	-- ForeverDB leveling packs also price these words (haste / expertise /
-	-- block chance / bonus armor / healing and school spell power / wand DPS).
-	-- They are KNOWN so a tooltip line that names them is accumulated rather
-	-- than suppressed. A pack that does not price a word still treats it as
-	-- zero, not a guess.
 	["Haste"]            = true,
 	["Expertise"]        = true,
 	["ExpertiseRating"]  = true,
 	["BlockChance"]      = true,
 	["BonusArmor"]       = true,
-	["HealingPower"]     = true,
-	["SpellDamage"]      = true,
-	["HolyDamage"]       = true,
-	["FireDamage"]       = true,
-	["FrostDamage"]      = true,
-	["ShadowDamage"]     = true,
-	["NatureDamage"]     = true,
-	["ArcaneDamage"]     = true,
 	["SpellPenetration"] = true,
 	["WandDps"]          = true,
 	["WeaponSkill"]      = true,
 	["WeaponSpeed"]      = true,
+	-- Card t_4e1e1b1d (DD-2): healing-only and SCHOOL-specific spell damage.
+	-- Until this card every one of these sentences suppressed the item
+	-- ("cannot classify: Equip: Increases healing done by spells and effects by
+	-- up to 22."), which is why a healer and a school-focused caster could get
+	-- no verdict at all. They are separate words on purpose: +22 healing is not
+	-- +22 spell power (it does nothing for a Warlock's Shadow Bolt), and Fire
+	-- damage is not Frost damage (a Frost mage's Frostbolt gets nothing from
+	-- Fire power). Which of them are worth anything to a given class is the
+	-- weight table's answer, never this table's — see the SCHOOL POWER note in
+	-- Weights.lua and, for the one class rule the packs imply, the MAGE
+	-- max(Fire, Frost) note above weightedScore.
+	["Healing"]        = true,
+	-- Card t_8575389a: the DAMAGE half of the combined healing+damage sentence
+	-- ("…and damage done by up to 14 for all magical spells and effects."), and
+	-- the school-less damage-only sentence. It is NOT SpellPower: the sentence
+	-- states damage alone, and this client gives it its own key
+	-- (ITEM_MOD_SPELL_DAMAGE_DONE_SHORT). KNOWN here so the line classifies; it
+	-- has no weight key at all (no 29th key, the owner's ruling), so no table
+	-- prices it and it can only ever contribute 0 — the same shape as
+	-- FeralAttackPower, and see the exemption note in wordUnpriced.
+	["SpellDamage"]    = true,
+	["HolyPower"]      = true,
+	["FirePower"]      = true,
+	["FrostPower"]     = true,
+	["ShadowPower"]    = true,
+	["NaturePower"]    = true,
+	["ArcanePower"]    = true,
 }
 
 -- ---- Defect 2 (card t_548f0341): the client's own stat read -----------------
@@ -708,6 +730,32 @@ Verdict.ITEM_STAT_KEYS = {
 	-- the owner's worn shield: 478 Armor on the tooltip == RESISTANCE0_NAME 478.
 	RESISTANCE0          = "Armor",
 	ITEM_MOD_SPELL_POWER = "SpellPower",
+	-- Card t_8575389a: INTELLECT had no verified key until the owner's Hide of
+	-- the Wild read (2026-10-20) returned `ITEM_MOD_INTELLECT_SHORT = 10` for the
+	-- item's own "+10 Intellect" line. It was the LAST unmapped key on that read
+	-- — apiStats reported it through `unmapped` and the pair failed closed as
+	-- "cannot classify: ITEM_MOD_INTELLECT_SHORT (a client stat key this addon
+	-- has not verified)" — on a caster's primary stat, which is the worst place
+	-- in this table to have a hole. Spelled here from the same live read.
+	ITEM_MOD_INTELLECT = "Intellect",
+	-- ── card t_8575389a: the two halves of the combined sentence ──────────
+	-- VERIFIED on the owner's live client (Forever beta, 2026-10-20) against Hide
+	-- of the Wild, item:18510 — keys and values verbatim:
+	--     ITEM_MOD_SPELL_HEALING_DONE_SHORT = 42
+	--     ITEM_MOD_SPELL_DAMAGE_DONE_SHORT  = 14
+	-- ONE number each, carried by the CLIENT: nothing is derived from the healing
+	-- half (the card's superseded /3 fallback is not implemented anywhere). Before
+	-- these two entries both keys were UNVERIFIED, which apiStats reports through
+	-- `unmapped` — so an item the client had read perfectly still failed closed as
+	-- "cannot classify: ITEM_MOD_SPELL_DAMAGE_DONE_SHORT (a client stat key this
+	-- addon has not verified)". That was the last suppression on this path.
+	--
+	-- The key inventory this table used to cite (2026-10-04, extracted from the
+	-- binary) listed no healing or damage key, and the DD-2 note above says so.
+	-- The inventory was EXTRACTED, not measured; the owner's live read is the
+	-- measurement, and it supersedes that silence for these two keys only.
+	ITEM_MOD_SPELL_HEALING_DONE = "Healing",
+	ITEM_MOD_SPELL_DAMAGE_DONE  = "SpellDamage",
 	-- ── card t_795eee9e: the rest of the vocabulary the cited packs price ────
 	-- ── card t_3cdbb70a (DD-1): HIT and CRIT are SPLIT ─────────────────────
 	-- t_795eee9e folded melee, ranged and spell hit onto ONE word (and the
@@ -777,14 +825,19 @@ Verdict.ITEM_STAT_KEYS = {
 	ITEM_MOD_EXPERTISE_RATING    = "ExpertiseRating",
 	ITEM_MOD_BLOCK_RATING        = "BlockChance",
 	ITEM_MOD_SPELL_PENETRATION   = "SpellPenetration",
-	ITEM_MOD_SPELL_HEALING_DONE  = "HealingPower",
-	ITEM_MOD_SPELL_DAMAGE_DONE   = "SpellDamage",
-	ITEM_MOD_HOLY_POWER          = "HolyDamage",
-	ITEM_MOD_FIRE_POWER          = "FireDamage",
-	ITEM_MOD_FROST_POWER         = "FrostDamage",
-	ITEM_MOD_SHADOW_POWER        = "ShadowDamage",
-	ITEM_MOD_NATURE_POWER        = "NatureDamage",
-	ITEM_MOD_ARCANE_POWER        = "ArcaneDamage",
+	-- DD-2 maps the healing and the damage half of the combined sentence
+	-- itself (…_SPELL_HEALING_DONE -> Healing, …_SPELL_DAMAGE_DONE ->
+	-- SpellDamage, both behind the owner's live read), so this pack does not
+	-- map them a second time: a duplicate key here would silently win over
+	-- DD-2's and split one stat into two words. The SCHOOL keys are still this
+	-- pack's, spelled with DD-2's words so the client read and the text parse
+	-- land on the same key.
+	ITEM_MOD_HOLY_POWER          = "HolyPower",
+	ITEM_MOD_FIRE_POWER          = "FirePower",
+	ITEM_MOD_FROST_POWER         = "FrostPower",
+	ITEM_MOD_SHADOW_POWER        = "ShadowPower",
+	ITEM_MOD_NATURE_POWER        = "NaturePower",
+	ITEM_MOD_ARCANE_POWER        = "ArcanePower",
 	ITEM_MOD_BONUS_ARMOR         = "BonusArmor",
 	ITEM_MOD_EXTRA_ARMOR         = "BonusArmor",
 }
@@ -1408,6 +1461,20 @@ local CLIENT_ROLES = { TANK = true, HEALER = true, DAMAGER = true }
 -- item NAME line (free text — no content pattern can enumerate item
 -- names) is handled positionally by parseSide, where the scan path's
 -- line list starts at the name on a real client.
+-- Card t_4e1e1b1d (DD-2): the six schools the packs price a damage term for.
+-- A FIXED list, not `(%a+)` acceptance: the sentence's school slot is read into
+-- a word only when it is one of these, so "Increases damage done by Undead
+-- spells…" (or any future spelling) stays unplaceable and suppresses instead of
+-- being guessed at — the card's AC-A near-miss rule.
+local SCHOOL_POWER_WORD = {
+	holy   = "HolyPower",
+	fire   = "FirePower",
+	frost  = "FrostPower",
+	shadow = "ShadowPower",
+	nature = "NaturePower",
+	arcane = "ArcanePower",
+}
+
 local parseLine_ = function(line)
 	if type(line) ~= "string" then return nil, nil end
 	local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
@@ -1485,14 +1552,17 @@ local parseLine_ = function(line)
 		if rest == "bonus armor" then return "BonusArmor" end
 		if rest == "spell power" or rest == "spellpower" then return "SpellPower" end
 		if rest == "spell damage" or rest == "spell dmg" then return "SpellDamage" end
-		if rest == "healing power" or rest == "healing" then return "HealingPower" end
+		-- DD-2's words, not this pack's older spellings: a "+34 Healing" line
+		-- and DD-2's "…healing done by up to 34" sentence must land on ONE key,
+		-- or the tier that prices it sees only half the item.
+		if rest == "healing power" or rest == "healing" then return "Healing" end
 		if rest == "spell penetration" then return "SpellPenetration" end
-		if rest == "holy spell damage" or rest == "holy damage" then return "HolyDamage" end
-		if rest == "fire spell damage" or rest == "fire damage" then return "FireDamage" end
-		if rest == "frost spell damage" or rest == "frost damage" then return "FrostDamage" end
-		if rest == "shadow spell damage" or rest == "shadow damage" then return "ShadowDamage" end
-		if rest == "nature spell damage" or rest == "nature damage" then return "NatureDamage" end
-		if rest == "arcane spell damage" or rest == "arcane damage" then return "ArcaneDamage" end
+		if rest == "holy spell damage" or rest == "holy damage" then return "HolyPower" end
+		if rest == "fire spell damage" or rest == "fire damage" then return "FirePower" end
+		if rest == "frost spell damage" or rest == "frost damage" then return "FrostPower" end
+		if rest == "shadow spell damage" or rest == "shadow damage" then return "ShadowPower" end
+		if rest == "nature spell damage" or rest == "nature damage" then return "NaturePower" end
+		if rest == "arcane spell damage" or rest == "arcane damage" then return "ArcanePower" end
 		if rest == "weapon skill" or rest == "weapon skill rating" then
 			return "WeaponSkill"
 		end
@@ -1820,6 +1890,14 @@ local parseLine_ = function(line)
 		"wand", "bow", "gun", "crossbow", "dagger", "sword", "mace",
 		"staff", "polearm", "axe", "thrown", "miscellaneous",
 		"fist weapon",
+		-- (card t_d5c915f2) "Fishing Pole" is the subtype the client prints on a
+		-- two-hand fishing pole ("Two-Hand  Fishing Pole"). It was the one weapon
+		-- subtype in the owner's vocabulary that this list did not carry, so the
+		-- TYPE LINE fell to the cosmetic path and every pole hover disclosed a
+		-- "partial read: \"Two-Hand Fishing Pole\" ignored" that was the item's own
+		-- chrome. Same clause as the rest, same narrowness: the subtype word plus
+		-- the slot word, nothing wider.
+		"fishing pole",
 	}
 	local is_weapon_type = false
 	for _, slot in ipairs(WEAPON_SLOTS) do
@@ -1915,38 +1993,147 @@ local parseLine_ = function(line)
 	-- suppress the whole item ("cannot classify: Equip: Increases damage and
 	-- healing..."). The number is read from the sentence itself.
 	--
-	-- Healing-only, school-specific, and damage-only (no healing) spell
-	-- sentences are THEIR OWN words. Folding them into generic SpellPower
-	-- would lie: a Ret pack prices HolyDamage separately from SpellPower,
-	-- and a Shadow pack prices ShadowDamage at the top of the table.
-	-- Each sentence is matched on `stat_sentence` (equip: prefix and the
-	-- trailing period already stripped).
-	local healn = stat_sentence:match(
-		"^increases healing done by spells and effects by up to (%d+)$")
-	if healn then return tonumber(healn), "HealingPower" end
-	local sdn = stat_sentence:match(
-		"^increases damage done by magical spells and effects by up to (%d+)$")
-	if sdn then return tonumber(sdn), "SpellDamage" end
-	local schoolWord = {
-		holy = "HolyDamage", fire = "FireDamage", frost = "FrostDamage",
-		shadow = "ShadowDamage", nature = "NatureDamage", arcane = "ArcaneDamage",
-	}
-	for sch, sword in pairs(schoolWord) do
-		local n = stat_sentence:match(
-			"^increases damage done by " .. sch .. " spells and effects by up to (%d+)$")
-		if n then return tonumber(n), sword end
-	end
-	local spenn = stat_sentence:match("^increases your spell penetration by (%d+)$")
-		or stat_sentence:match("^increases spell penetration by (%d+)$")
-	if spenn then return tonumber(spenn), "SpellPenetration" end
-	local bval = stat_sentence:match("^increases the block value of your shield by (%d+)$")
-	if bval then return tonumber(bval), "Block" end
-	-- Classic generic spell power (damage AND healing).
+	-- The old note here said these stayed unparsed "on purpose: there is no
+	-- Healing or FireSpellPower word to put them in". Card t_4e1e1b1d (DD-2)
+	-- gave them words (Healing, and one per school), so they are read now —
+	-- see the DD-2 clauses below the generic match.
+	-- SpellPower is a known word so the line no longer suppresses. It is not
+	-- in any class ORDER (see the playtest note on Verdict.ORDERS), so an
+	-- ORDINAL verdict is unchanged by it: a melee character is judged on the
+	-- item's other stats, and a caster is still judged on the documented
+	-- int/spi/sta order, and a pair whose only difference is spell power
+	-- stays level on the relevance set. What the owner's later ruling added
+	-- (card t_b7cd07e1, "Spell power gets a weight from the packs") is a
+	-- WEIGHT: this word now enters the weighted sum of an ordinal trade-off
+	-- as the SPOW word of WEIGHT_KEYS below, priced from the pack the table
+	-- cites (see the SPELL POWER note in Weights.lua).
 	local spn = plain:match(
 		"^equip:%s*increases damage and healing done by magical spells and effects by up to (%d+)%.?$")
 		or stat_sentence:match(
 		"^increases damage and healing done by magical spells and effects by up to (%d+)$")
 	if spn then return tonumber(spn), "SpellPower" end
+	-- The two sentences this pack reads and DD-2 does not (measured against
+	-- 30f3d32: neither shape exists upstream, and neither word is in DD-2's
+	-- map), kept verbatim so the words stay priced instead of suppressive:
+	--   * spell penetration — "Equip: Increases your spell penetration by 10."
+	--   * shield block VALUE — a raw number, distinct from the Block stat.
+	-- The healing-only, damage-only and school sentences that used to sit here
+	-- are DELETED, not re-worded: DD-2 reads all three, into Healing /
+	-- SpellDamage / the six school powers, and a second clause claiming the
+	-- same sentence under another name is how the two vocabularies drifted.
+	local spenn = stat_sentence:match("^increases your spell penetration by (%d+)$")
+		or stat_sentence:match("^increases spell penetration by (%d+)$")
+	if spenn then return tonumber(spenn), "SpellPenetration" end
+	local bval = stat_sentence:match("^increases the block value of your shield by (%d+)$")
+	if bval then return tonumber(bval), "Block" end
+	-- ── card t_4e1e1b1d (DD-2): healing-only and school-specific damage ────
+	-- The two shapes the note above used to send to the suppression bucket.
+	-- They are exact matches, in the same style as the generic clause above:
+	-- a lower-cased, de-coloured sentence, an integer N, an optional trailing
+	-- period, and NOTHING else. A near miss is still unplaceable and still
+	-- suppresses the item, which is the card's AC-A ("…by up to 12 against
+	-- Undead" still blocks): the clauses do not widen to a prefix match, and
+	-- the school is a FIXED list rather than any word, so no invented school
+	-- can be read as damage power.
+	--
+	-- The number is the magnitude the sentence states, with no conversion.
+	-- Whether it is worth anything to the class holding the item — and at what
+	-- price — is the weight table's answer (HEAL / SP<SCHOOL> below), and a
+	-- class whose pack prices 0 reads the item exactly as if the line were
+	-- absent (AC-E; see the SCHOOL POWER exemption in wordUnpriced).
+	local hpn = plain:match(
+		"^equip:%s*increases healing done by spells and effects by up to (%d+)%.?$")
+	if hpn then return tonumber(hpn), "Healing" end
+	local school, snum = plain:match(
+		"^equip:%s*increases damage done by (%a+) spells and effects by up to (%d+)%.?$")
+	if snum then
+		local schoolWord = SCHOOL_POWER_WORD[school]
+		if schoolWord then return tonumber(snum), schoolWord end
+	end
+	-- ── card t_8575389a: healing WITH its 1/3 damage, on ONE line ─────────
+	-- The owner's live client print, verbatim (C_TooltipInfo.GetItemByID(18510),
+	-- a single line, type 0; Forever beta, 2026-10-20):
+	--
+	--   "Equip: Increases healing done by up to 42 and damage done by up to 14
+	--    for all magical spells and effects."
+	--
+	-- TWO stats on ONE line, so this is the only clause that returns a FOURTH
+	-- value: `also`, the second half. The healing half is the ordinary
+	-- (num, word) return and the damage half rides beside it, so every caller
+	-- that takes three returns is untouched, and an unreadable line still comes
+	-- back as a nil with no `also` at all.
+	--
+	-- NOT A DERIVATION, and this is the card's superseded clause. The client
+	-- carries the damage half as its OWN key for this item
+	-- (ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = 14), so the second number is READ.
+	-- The card's "derive damage = healing / 3" fallback is therefore inactive on
+	-- this item and is implemented NOWHERE in this module: a /3 folded in here
+	-- would double-count the 14 on every item that states both halves (AC-3).
+	--
+	-- THE CAUTIONARY EXAMPLE, and why that sentence is worth a comment: ForeverGear
+	-- — a third-party addon running on this same client — derives
+	-- `HealingPower / 3` in TWO places, Stats.lua:803-808 (its normalization pass)
+	-- and Stats.lua:1022-1024 (its cache write), the second carrying the note "a
+	-- separate derived channel so a healing profile does not automatically
+	-- double-count offensive value". Two sites, one derived number, and no reader
+	-- can tell which is authoritative. That is the anti-pattern AC-5 names: if a
+	-- derivation is ever needed here it gets ONE site, ONE named constant and ONE
+	-- comment (Mira's §4 ruling on this card asks for the citation; the owner's own
+	-- read means the derivation is not needed at all).
+	--
+	-- The shape is EXACT, in the same style as the clauses above: the
+	-- "for all magical spells and effects" tail is part of the match and the
+	-- sentence must be the WHOLE line, so a near miss ("…and damage done by up
+	-- to 14 against Undead", a missing tail, a percentage) still suppresses —
+	-- the card's AC-A near-miss rule, unchanged.
+	local hpn2, spn2 = plain:match(
+		"^equip:%s*increases healing done by up to (%d+) and damage done by up to (%d+)"
+		.. " for all magical spells and effects%.?$")
+	if spn2 then
+		-- SpellDamage, not SpellPower: the sentence states a damage bonus, and
+		-- folding it onto the spell-power word would price a healer's item on a
+		-- term the tooltip never printed (AC-3's "the 14 is not counted as spell
+		-- power"). Whether any table PRICES the word is a weights question this
+		-- card does not touch — no 29th weight key exists, by the owner's ruling.
+		return tonumber(hpn2), "Healing", nil, { SpellDamage = tonumber(spn2) }
+	end
+	-- ── card t_33dd248c: the SAME phrasing, ONE number ────────────────────────
+	-- The two-stat clause above owns the sentence "…by up to 34 and damage done
+	-- by up to 11 for all magical spells and effects". Its SINGLE-number siblings
+	-- — the same tail, one stat — were still suppressive, so the same item family
+	-- read two ways depending on whether the client printed one number or two: a
+	-- "+34 Healing" weapon failed closed as an unplaceable line while its
+	-- "+34 Healing / +11 damage" twin judged. That inconsistency is what this
+	-- card's acceptance names, and these two clauses close it.
+	--
+	-- Same exactness rules as every clause above: the whole line, integer
+	-- magnitudes, an optional trailing period, the "for all magical spells and
+	-- effects" tail part of the match. A near miss ("…for all magical spells",
+	-- "…by up to eleven", a percentage) still matches nothing and still
+	-- suppresses. SpellDamage again, never SpellPower, for the reason stated on
+	-- the damage-only clause below.
+	local hpnTail = plain:match(
+		"^equip:%s*increases healing done by up to (%d+) for all magical spells and effects%.?$")
+	if hpnTail then return tonumber(hpnTail), "Healing" end
+	local spnTail = plain:match(
+		"^equip:%s*increases damage done by up to (%d+) for all magical spells and effects%.?$")
+	if spnTail then return tonumber(spnTail), "SpellDamage" end
+	-- The DAMAGE-ONLY mirror of DD-2's healing-only clause — a school-less
+	-- damage sentence. SECONDARY evidence, and named as such: the owner's Hide
+	-- of the Wild does NOT print this wording, and no capture in this repo does.
+	-- It is read for three reasons, none of them a guess about this item:
+	--   * it is the exact mirror of the healing-only clause DD-2 already ships;
+	--   * ForeverGear's parser carves the same sentence out by name (Stats.lua,
+	--     "Generic spell-damage wording. Require magical/spell context so normal
+	--     weapon damage such as '34 - 51 Damage' can never become Spell Power"),
+	--     which is what a damage-only line on a real tooltip looks like;
+	--   * leaving it suppressive is precisely the defect this card exists to
+	--     kill (one unreadable line turning a decidable item into "cannot
+	--     classify"), and it was measured as suppressive before this card.
+	-- It maps to SpellDamage, never SpellPower — same reason as above.
+	local spnOnly = plain:match(
+		"^equip:%s*increases damage done by spells and effects by up to (%d+)%.?$")
+	if spnOnly then return tonumber(spnOnly), "SpellDamage" end
 	-- A non-blank line we cannot place. Returning "Unknown" (a word) rather
 	-- than nil keeps it in the same channel as procs, so parseSide routes
 	-- it to the suppression bucket exactly like any other unknown word.
@@ -2029,15 +2216,10 @@ local API_WORD_TEXT = {
 	Intellect  = { "intellect" },
 	Spirit     = { "spirit" },
 	Armor      = { "armor" },
-	SpellPower = { "spell power", "spellpower", "damage and healing" },
-	SpellDamage = { "spell damage", "damage done by magical spells" },
-	HealingPower = { "healing power", "healing done by spells", "spell healing" },
-	HolyDamage = { "holy spells", "holy damage" },
-	FireDamage = { "fire spells", "fire damage" },
-	FrostDamage = { "frost spells", "frost damage" },
-	ShadowDamage = { "shadow spells", "shadow damage" },
-	NatureDamage = { "nature spells", "nature damage" },
-	ArcaneDamage = { "arcane spells", "arcane damage" },
+	-- DD-2 (below) carries the healing, damage-half and school entries with
+	-- SCOPED needles of its own, and narrows nothing else; this pack adds only
+	-- the words DD-2 has no entry for, so a sentence cannot be claimed by two
+	-- words in the sorted walk.
 	SpellPenetration = { "spell penetration" },
 	Haste = { "haste" },
 	ExpertiseRating = { "expertise rating", "expertise" },
@@ -2059,6 +2241,48 @@ local API_WORD_TEXT = {
 	-- shorter "hit" win; with one word there is nothing to disambiguate.)
 	FeralAttackPower = { "in cat, bear", "feral attack power",
 	                     "dire bear", "moonkin" },
+	-- card t_4e1e1b1d (DD-2): healing-only and the six schools. The parser now
+	-- reads all seven sentences, so a line of these shapes never reaches the
+	-- reconciler — these needles exist so that a WORN-side odd spelling of the
+	-- same stat still reconciles to its own word, and so that the sentence's
+	-- phrasing is written down where the claim loop can find it. They also keep
+	-- the claim loop HONEST: SpellPower's needles include "spells and effects",
+	-- which every one of these sentences contains, so without an entry of its
+	-- own a school line could be claimed by SpellPower (the loop walks the
+	-- words in sorted order) and priced as the wrong stat.
+	--
+	-- The client's own ITEM_MOD vocabulary has no verified key for any of
+	-- these seven (the key inventory this file cites lists no healing or
+	-- school damage key), and the map is not reachable from the client read
+	-- anyway: `explain` only considers stats carried by the CLIENT'S OWN stat
+	-- read, and no client key maps to any of these seven, so no client value
+	-- can name one of them today. The entries are the recogniser's vocabulary
+	-- for a rendered line, not a claim that a read exists.
+	--
+	-- ⚠ LATENT FALSE POSITIVE, named here rather than left for a review. The
+	-- needles are matched by CONTAINMENT against the whole de-coloured line,
+	-- so IF a client key were ever mapped to one of these words, the bare
+	-- "fire damage" needle would also claim a PROC line — "Chance on hit: 30
+	-- Fire damage" — and price a weapon proc as spell damage. A future mapping
+	-- must bring a scoped match (the "damage done by <school>" phrasing, or the
+	-- Equip: prefix) with it, never the bare school needle.
+	Healing     = { "healing done by spells", "healing done", "healing power" },
+	-- card t_8575389a: the DAMAGE half. SCOPED needles on purpose — the latent
+	-- false positive named above is exactly this word's risk: a bare "damage" or
+	-- a bare school word would claim a weapon proc ("Chance on hit: 30 Fire
+	-- damage") as spell damage. These two phrases only ever occur inside a
+	-- sentence that states the stat, so a proc line cannot carry one.
+	--
+	-- They matter only for a line the text parser could NOT place: both shapes
+	-- this word reads (the combined sentence and the damage-only sentence) now
+	-- arrive as stats and never reach the reconciler.
+	SpellDamage = { "damage done by spells and effects", "damage done by up to" },
+	HolyPower   = { "damage done by holy", "holy spells", "holy damage" },
+	FirePower   = { "damage done by fire", "fire spells", "fire damage" },
+	FrostPower  = { "damage done by frost", "frost spells", "frost damage" },
+	ShadowPower = { "damage done by shadow", "shadow spells", "shadow damage" },
+	NaturePower = { "damage done by nature", "nature spells", "nature damage" },
+	ArcanePower = { "damage done by arcane", "arcane spells", "arcane damage" },
 	Defense = { "defense" },
 	Dodge   = { "dodge" },
 	Parry   = { "parry" },
@@ -2131,9 +2355,12 @@ end
 -- Sell price is the item's own terminator. A line after it that carries a number
 -- is an addon delta ("-8 Armor") and is foreign; a number-free line is wardrobe
 -- chrome and stays, so the cosmetic path can ignore it and say so. A genuine
--- unparsed stat ("+15 Frost Resistance", a healing-only Equip line) sits in the
--- item body, before that terminator, and still suppresses (fail-closed stays —
--- the card's constraint).
+-- unparsed stat ("+15 Frost Resistance") sits in the item body, before that
+-- terminator, and still suppresses (fail-closed stays — the card's constraint).
+-- ⚠ A healing-only Equip line USED to be the second example here and is not one
+-- any more: card t_4e1e1b1d (DD-2) reads it as the word Healing, so it is a
+-- classified stat now, not an unparsed line. What suppresses a pair carrying it
+-- is the priced off-order guard (card t_e2ebb44e), not this list.
 local FOREIGN_LINE_HEADERS = {
 	"item used in guide",
 	"if you replace this item",
@@ -2309,7 +2536,7 @@ local parseSide = function(lines, side, apiWords)
 		if isNameShape then
 			-- The name line: exempt, never a suppression.
 		else
-			local num, word, kind = parseLine_(line)
+			local num, word, kind, also = parseLine_(line)
 			if word == "Enchanted" then
 				-- Anchant line on the WORN side (t_ea70928d): fold BOTH halves
 				-- of the enchant payload into this side's stats — the bonus is
@@ -2350,6 +2577,21 @@ local parseSide = function(lines, side, apiWords)
 					-- Accumulate (t_ea70928d): the worn side merges a folded enchant
 					-- bonus into the same stat word (armor: 55 base + 8 enchant).
 					stats[word] = (stats[word] or 0) + num
+					-- Card t_8575389a: ONE line, TWO stats. The combined
+					-- healing+damage sentence hands its second half back in
+					-- `also`; fold it through this same accumulator so the
+					-- second number is read exactly like the first — no second
+					-- parser, no second code path. The clause that produces
+					-- `also` is fixed (Healing + SpellDamage) and KNOWN gates
+					-- both halves, so an unknown word could not be smuggled in
+					-- even if a future clause returned one.
+					if type(also) == "table" then
+						for w, v in pairs(also) do
+							if KNOWN[w] and type(v) == "number" then
+								stats[w] = (stats[w] or 0) + v
+							end
+						end
+					end
 				else
 					-- An Unknown word (or the "Unknown" sentinel for an
 					-- unplaceable line): keep the raw line for the reason
@@ -2525,6 +2767,21 @@ end
 -- "Hit" and "Crit" are already a player's spelling.)
 local REASON_WORD = {
 	FeralAttackPower = "Feral AP",
+	-- card t_4e1e1b1d (DD-2): the six school tokens are not a player's
+	-- spelling either ("better on FirePower"). Two words, the way a player
+	-- says it. Healing is already a word a player reads on the item, so it is
+	-- deliberately NOT mapped here (the DD-1 note above: map only the tokens
+	-- that are not a player's spelling).
+	HolyPower   = "Holy Power",
+	FirePower   = "Fire Power",
+	FrostPower  = "Frost Power",
+	ShadowPower = "Shadow Power",
+	NaturePower = "Nature Power",
+	ArcanePower = "Arcane Power",
+	-- card t_8575389a: the damage half's token is not a player's spelling
+	-- either — the item says "damage done by … for all magical spells and
+	-- effects", and a player says "spell damage".
+	SpellDamage = "Spell Damage",
 }
 
 local function playerWord(statWord)
@@ -2673,8 +2930,14 @@ end
 -- docs/t_9d3273cb-changed-verdicts.txt measures row by row.
 local WEIGHT_KEYS = { "STR", "AGI", "STA", "INT", "SPI", "ARMOR", "BLOCK",
                       "HIT", "CRIT", "AP", "RAP", "MP5", "HP5",
-                      "DEF", "DODGE", "PARRY", "WDN",
-                      "FAP", "SPOW" }
+                      "DEF", "DODGE", "PARRY", "WDN", "FAP",
+                      -- card t_4e1e1b1d (DD-2): healing power, and one key per
+                      -- school of spell damage. They sit BEFORE SPOW so the
+                      -- key that has anchored the non-vacuity breaks since
+                      -- card t_b7cd07e1 (SPOW last) keeps that position.
+                      "HEAL", "SPHOLY", "SPFIRE", "SPFROST",
+                      "SPSHADOW", "SPNATURE", "SPARCANE",
+                      "SPOW" }
 -- The same set, as a lookup, for the two validators that must answer "is this
 -- one of the words above?" — derived from the list so the two cannot disagree.
 local WEIGHT_KEY_SET = {}
@@ -2689,6 +2952,13 @@ local WEIGHT_WORD = {
 	-- why it is its own word). The two spell words are gone with their two keys
 	-- — card t_9d3273cb, see the retirement note above.
 	FAP = "FeralAttackPower",
+	-- card t_4e1e1b1d (DD-2): healing power and the six schools. One word each,
+	-- never folded into SpellPower: a healer's Healing and a mage's FirePower
+	-- are different claims about different items, and folding them would price
+	-- a Fire item off a Holy priest's pack.
+	HEAL = "Healing",
+	SPHOLY = "HolyPower", SPFIRE = "FirePower", SPFROST = "FrostPower",
+	SPSHADOW = "ShadowPower", SPNATURE = "NaturePower", SPARCANE = "ArcanePower",
 	SPOW = "SpellPower",
 }
 
@@ -2862,7 +3132,10 @@ Verdict.WEIGHT_THRESHOLD = 0.5
 -- The table is refused WHOLE unless EVERY one of the schema's keys (WEIGHT_KEYS
 -- above — originally seven plus SPOW, extended to eighteen by card t_795eee9e
 -- and to nineteen by card t_3cdbb70a's FAP; card t_9d3273cb retired the two
--- spell keys that once made it twenty-one)
+-- spell keys that once made it twenty-one, and card t_4e1e1b1d (DD-2) added
+-- HEAL plus one key per school of spell damage on top of that. The count is
+-- deliberately NOT spelled out: the set IS WEIGHT_KEYS, and a number written
+-- here goes stale the next time a card adds a key (card t_d53877b1 §3).
 -- is a finite, non-negative number, `source` is a non-empty string, AND `source`
 -- CARRIES
 -- the provenance marker the weight file publishes (SF.WEIGHTS_MARKER). A
@@ -3197,6 +3470,13 @@ Verdict.UNCONFIRMED_DIFFERENCE_ONLY = {
 -- pair.  Falling through here lets the pair-level predicate own the
 -- difference.
 local function wordUnpriced(word, _weights)
+--
+-- Card t_4e1e1b1d (DD-2) added seven more priced words (Healing and one per
+-- spell-damage school) and needs no entry here for the same reason the other
+-- former exemptions are gone: a spec that prices the word lets it decide the
+-- pair, and a spec that prices it 0 gets a genuine 0 rather than a closed
+-- pair. The exempt-list this file carried for it before card C1 no longer
+-- has a job.
 	local list = rawget(Verdict, "UNCONFIRMED_UNITS")
 	local only = rawget(Verdict, "UNCONFIRMED_DIFFERENCE_ONLY")
 	if type(list) == "table" and list[word] == true
@@ -3240,6 +3520,41 @@ function Verdict.unpricedWordReason(word)
 	return "cannot judge: " .. word
 		.. " (no confirmed value for this stat for this class)"
 end
+
+-- ── SUPERSEDED: THE PRICED OFF-ORDER GUARD (card t_e2ebb44e) ────────────────
+-- This file used to carry `Verdict.offOrderPricedWord` and
+-- `Verdict.offOrderReason`, and `evaluate` called them above the dominance call:
+-- a word the resolved pack PRICED but the class ORDER did not rank closed the
+-- pair as UNKNOWN, naming that word ("cannot judge: Spirit ...").
+--
+-- WHY IT WAS RIGHT WHEN IT WAS WRITTEN. At the tree the card was cut from
+-- (`2ff0926`, PR #55's base) the ordinal proof read the ORDER's terms alone, so
+-- a priced word outside the order was genuinely unweighable: a Holy priest's
+-- "+22 Healing" counted for nothing and the pair answered "equal" — or, mirror-
+-- wise, told a healer to drop 22 Healing for 2 Intellect. Closing the pair was
+-- the honest interim answer, and the card said so: "the interim answer: fail
+-- closed; widening dominance is a separate owner decision".
+--
+-- WHY IT IS GONE (owner ruling 2026-11-05; RECORDED, not deleted quietly). Card
+-- t_da23ec75 — "order = wording, priced set = proof" — landed on main as PR #69
+-- and gave the dominance proof `Verdict.proofTerms(order, weights)`: the order's
+-- words PLUS every word this pair's pack prices. The proof now weighs exactly
+-- the words the guard claimed it could not, and it words the win or loss with
+-- the term that decided it — "upgrade: better on SpellPower — the weighted gain
+-- outweighs the Spirit loss".
+--
+-- Measured on this tree before removal: the guard turned the owner's own AC-1
+-- fixture (a priest mace against the equipped staff) from NOT_UPGRADE into
+-- "cannot judge: SpellPower", and closed every caster pair carrying SpellPower —
+-- the commonest caster weapon stat — while the proof underneath was already
+-- deciding those pairs correctly. A cost with no remaining protection.
+--
+-- WHAT THIS MEANS FOR THE LEDGERS. Any sweep that owned rows by "the guard
+-- closed it" owns nothing by that rule now; its rows are re-derived from the
+-- proof's own reasons. OPTION 2 (card t_468dd94a) asked the weighted layer to
+-- decide these pairs instead of closing them — which is what the weighted layer
+-- does now, so that card is superseded rather than waiting.
+
 
 -- Public: Verdict.unconfirmedDifference(candStats, eqStats) — THE PAIR-LEVEL
 -- PREDICATE the owner's option C rules for (card t_d53877b1 §2):
@@ -3425,6 +3740,58 @@ function Verdict.gateCloses(words, _class, _role, _clientRole)
 	return nil
 end
 
+-- ── Card t_4e1e1b1d (DD-2): the MAGE higher-of rule ────────────────────────
+-- Verbatim from the class article this card cites:
+--   "Frostfire Bolt always uses the higher of the Mage's spell damage bonuses
+--    to Fire or Frost damage."
+-- So on a Mage an item's Fire power and its Frost power are NOT two bonuses
+-- added together: the effective bonus is whichever is HIGHER. Scoring them as a
+-- sum would double-count (+20 Fire / +20 Frost would read as 40 — AC-C's "scores
+-- as 20, not 40"), and scoring them as two independent terms would price a
+-- school that cast never uses (AC-C's "Fire +20 / Frost +0 versus Fire +0 /
+-- Frost +20 scores LEVEL").
+--
+-- WHY A PRE-PASS RATHER THAN A TERM INSIDE THE LOOP. max() is not distributive
+-- over the per-word sum: the pair's delta is max(c_f, c_fr) - max(e_f, e_fr),
+-- which no per-word sum can recover. The pass rewrites BOTH sides onto ONE
+-- canonical word — the school carrying the largest of the four numbers, Fire on
+-- a tie — carrying that side's max, and nils the other. weightedScore then sums
+-- exactly one term for the pair, and the reason names a school the item
+-- actually has (a Frost-only item is never called "Fire Power").
+--
+-- THE PASS IS INERT UNLESS ALL THREE HOLD: the class is MAGE, the two school
+-- weights are equal and positive, and at least one side carries a school value.
+-- It therefore cannot move a non-Mage row, and a table whose Fire and Frost
+-- prices differ is left alone rather than silently using one of the two
+-- numbers. When inert it returns the ORIGINAL tables — no copy, no new object —
+-- so nothing downstream can observe a different table.
+local function mageSchoolCollapse(candStats, eqStats, weights, spec)
+	if type(spec) ~= "table" or spec.class ~= "MAGE" then return candStats, eqStats end
+	local wf, wfr = rawget(weights, "SPFIRE"), rawget(weights, "SPFROST")
+	if type(wf) ~= "number" or type(wfr) ~= "number" then return candStats, eqStats end
+	if wf <= 0 or wf ~= wfr then return candStats, eqStats end
+	local cand = type(candStats) == "table" and candStats or nil
+	local eq   = type(eqStats)   == "table" and eqStats   or nil
+	local function num(side, word)
+		local v = side and rawget(side, word)
+		return type(v) == "number" and v or 0
+	end
+	local fire, frost = math.max(num(cand, "FirePower"), num(eq, "FirePower")),
+		math.max(num(cand, "FrostPower"), num(eq, "FrostPower"))
+	if fire == 0 and frost == 0 then return candStats, eqStats end
+	local keep = (frost > fire) and "FrostPower" or "FirePower"
+	local drop = (keep == "FirePower") and "FrostPower" or "FirePower"
+	local function rewrite(side)
+		if type(side) ~= "table" then return side end
+		local out = {}
+		for k, v in pairs(side) do out[k] = v end
+		out[keep] = math.max(num(side, "FirePower"), num(side, "FrostPower"))
+		out[drop] = nil
+		return out
+	end
+	return rewrite(cand or {}), rewrite(eq or {})
+end
+
 -- Score one pair against a validated weights table.
 --   returns delta (weighted gain minus weighted loss; > 0 = candidate ahead),
 --           disagree (the sum of the ABSOLUTE weighted terms), and the player
@@ -3432,9 +3799,12 @@ end
 --           (nil when there is none).
 -- A term level on both sides — or absent on both — contributes nothing and
 -- cannot be named. nil when nothing in the vocabulary moved at all.
-local function weightedScore(candStats, eqStats, weights)
-	local cand = type(candStats) == "table" and candStats or {}
-	local eq   = type(eqStats)   == "table" and eqStats   or {}
+-- `spec` is OPTIONAL and read ONLY by the MAGE higher-of pass above (card
+-- t_4e1e1b1d); with no spec the sum is exactly what it was before the card.
+local function weightedScore(candStats, eqStats, weights, spec)
+	local cs, es = mageSchoolCollapse(candStats, eqStats, weights, spec)
+	local cand = type(cs) == "table" and cs or {}
+	local eq   = type(es) == "table" and es or {}
 	local delta, disagree = 0, 0
 	local gainWord, lossWord, gainValue, lossValue = nil, nil, 0, 0
 	for _, k in ipairs(WEIGHT_KEYS) do
@@ -3536,7 +3906,7 @@ local function weightedResolution(candStats, eqStats, spec)
 		spec and spec.clientRole)
 	if weights == nil then return nil end
 	local delta, disagree, gainWord, lossWord =
-		weightedScore(candStats, eqStats, weights)
+		weightedScore(candStats, eqStats, weights, spec)
 	-- A tie (delta == 0), or no move at all (delta == nil), is NOT a widened
 	-- verdict in EITHER direction: the two sides are weighted level, and the
 	-- caller's TRADE_OFF is the honest reading.
@@ -3762,7 +4132,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-29",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Healing Power", stats = { "HealingPower" } },
+				{ name = "Healing Power", stats = { "Healing" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spirit", stats = { "Spirit" } },
@@ -3783,7 +4153,7 @@ Verdict.WEIGHTS = {
 				{ name = "Agility", stats = { "Agility" } },
 				{ name = "Block Chance", stats = { "BlockChance" } },
 				{ name = "Defense", stats = { "Defense" }, afterValue = 440, capUnit = "raw" },
-				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
+				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyPower" } },
 				{ name = "Parry", stats = { "Parry" } },
 				{ name = "Dodge", stats = { "Dodge" } },
 				{ name = "Strength", stats = { "Strength" } },
@@ -3806,7 +4176,7 @@ Verdict.WEIGHTS = {
 			variant = "Balanced",
 			tiers = {
 				{ name = "Stamina", stats = { "Stamina" } },
-				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
+				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyPower" } },
 				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Defense", stats = { "Defense" }, capValue = 440, capUnit = "raw" },
 				{ name = "Armor", stats = { "Armor" } },
@@ -3833,7 +4203,7 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			variant = "Offensive",
 			tiers = {
-				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyDamage" } },
+				{ name = "Spell Damage", stats = { "SpellPower", "SpellDamage", "HolyPower" } },
 				{ name = "Hit", stats = { "Hit" }, capPercent = 8, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
 				{ name = "Crit", stats = { "Crit" } },
@@ -3864,7 +4234,7 @@ Verdict.WEIGHTS = {
 				{ name = "Weapon DPS & Speed", stats = { "WeaponDps", "WeaponSpeed" }, special = "dps_then_speed" },
 				{ name = "Hit", stats = { "Hit" }, capPercent = 9, hitKind = "melee", ratingPerPercent = 10 },
 				{ name = "Expertise", stats = { "Expertise" }, capPercent = 6.5, valueUnit = "percent" },
-				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower", "HolyDamage" } },
+				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower", "HolyPower" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Strength & Attack Power", stats = { "Strength", "AttackPower" } },
 				{ name = "Agility & Critical Strike Chance", stats = { "Agility", "Crit" } },
@@ -3956,7 +4326,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-01",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Healing Power", stats = { "HealingPower" } },
+				{ name = "Healing Power", stats = { "Healing" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Spirit", stats = { "Spirit" } },
@@ -3980,7 +4350,7 @@ Verdict.WEIGHTS = {
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Spell Damage", stats = { "SpellDamage", "SpellPower" } },
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Nature Damage & Fire Damage", stats = { "NatureDamage", "FireDamage" } },
+				{ name = "Nature Damage & Fire Damage", stats = { "NaturePower", "FirePower" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Spirit", stats = { "Spirit" } },
 				{ name = "Strength", stats = { "Strength" }, levelingOnly = true },
@@ -4018,7 +4388,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-01",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Healing Power", stats = { "HealingPower" } },
+				{ name = "Healing Power", stats = { "Healing" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
 				{ name = "Intellect", stats = { "Intellect" } },
@@ -4037,7 +4407,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-30",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Healing Power", stats = { "HealingPower" } },
+				{ name = "Healing Power", stats = { "Healing" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Spirit", stats = { "Spirit" } },
 				{ name = "Crit", stats = { "Crit" } },
@@ -4053,7 +4423,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-10-31",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Healing Power", stats = { "HealingPower" } },
+				{ name = "Healing Power", stats = { "Healing" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "MP5", stats = { "MP5" } },
 				{ name = "Spirit", stats = { "Spirit" } },
@@ -4071,7 +4441,7 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Spell Damage & Shadow Damage", stats = { "SpellDamage", "SpellPower", "ShadowDamage" } },
+				{ name = "Spell Damage & Shadow Damage", stats = { "SpellDamage", "SpellPower", "ShadowPower" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Spirit", stats = { "Spirit" } },
 				{ name = "Stamina", stats = { "Stamina" } },
@@ -4088,7 +4458,7 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			tiers = {
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 },
-				{ name = "Spell Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "ArcaneDamage" } },
+				{ name = "Spell Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "ArcanePower" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
 				{ name = "Haste", stats = { "Haste" } },
@@ -4106,7 +4476,7 @@ Verdict.WEIGHTS = {
 			fetched = "2026-11-11",
 			tiers = {
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 },
-				{ name = "Spell Damage & Fire Damage", stats = { "SpellDamage", "SpellPower", "FireDamage" } },
+				{ name = "Spell Damage & Fire Damage", stats = { "SpellDamage", "SpellPower", "FirePower" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Spell Penetration", stats = { "SpellPenetration" } },
 				{ name = "Haste", stats = { "Haste" } },
@@ -4125,7 +4495,7 @@ Verdict.WEIGHTS = {
 			tiers = {
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Crit", stats = { "Crit" } },
-				{ name = "Spell Damage, Frost Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "FrostDamage", "ArcaneDamage" } },
+				{ name = "Spell Damage, Frost Damage & Arcane Damage", stats = { "SpellDamage", "SpellPower", "FrostPower", "ArcanePower" } },
 				{ name = "Intellect", stats = { "Intellect" } },
 				{ name = "Spirit", stats = { "Spirit" } },
 				{ name = "Stamina", stats = { "Stamina" } },
@@ -4141,7 +4511,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-11",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Spell Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "ShadowDamage" } },
+				{ name = "Spell Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "ShadowPower" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Haste", stats = { "Haste" } },
@@ -4158,7 +4528,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-03",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Spell Damage, Fire Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "FireDamage", "ShadowDamage" } },
+				{ name = "Spell Damage, Fire Damage & Shadow Damage", stats = { "SpellPower", "SpellDamage", "FirePower", "ShadowPower" } },
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Haste", stats = { "Haste" } },
@@ -4175,7 +4545,7 @@ Verdict.WEIGHTS = {
 			updated = "2026-11-03",
 			fetched = "2026-11-11",
 			tiers = {
-				{ name = "Spell Damage & Fire Damage", stats = { "SpellPower", "SpellDamage", "FireDamage" } },
+				{ name = "Spell Damage & Fire Damage", stats = { "SpellPower", "SpellDamage", "FirePower" } },
 				{ name = "Crit", stats = { "Crit" } },
 				{ name = "Hit", stats = { "Hit" }, capPercent = 17, hitKind = "spell", ratingPerPercent = 10 }, -- page states a from-gear hit target (talents cover the rest); clamp the player's total hit, which already includes talents, at the 17% cap stated on the page
 				{ name = "Haste", stats = { "Haste" } },
@@ -4812,11 +5182,7 @@ local ORDER_STAT_LABEL = {
 	AttackPower = "Attack Power",
 	SpellDamage = "Spell Damage",
 	SpellPower = "Spell Power",
-	HolyDamage = "Holy Damage",
 	SpellPenetration = "Spell Penetration",
-	HealingPower = "Healing Power",
-	NatureDamage = "Nature Damage",
-	FireDamage = "Fire Damage",
 	BlockChance = "Block Chance",
 	ExpertiseRating = "Expertise Rating",
 }
@@ -5739,6 +6105,10 @@ end
 if Verdict.LEGACY_DOMINANCE_DECIDES then
 	local outcome, firstDiff = Verdict.dominance(candStats, eqStats, terms)
 
+	-- Gate 8d (card t_e2ebb44e) is deliberately ABSENT here — see the SUPERSEDED
+	-- record above: card t_da23ec75's proofTerms already weighs every priced
+	-- word, so closing these pairs was a cost with no remaining protection.
+
 	if outcome == "dominant" then
 		-- Word the win with the SAME grammar the legacy path used: the first
 		-- term of the proof on which the candidate is strictly better. Order
@@ -6308,6 +6678,104 @@ local function isSecretValue(v)
 	return false
 end
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- THE DAMAGE-RANGE GRAMMAR — one definition, two spellings (card t_d5c915f2)
+--
+-- A weapon's printed damage line is
+--     <min> - <max> [<school>] Damage
+-- ("12 - 22 Arcane Damage", "19 - 36 Damage") and the school word is OPTIONAL:
+-- a physical weapon prints none, a wand or a staff prints the school of its
+-- damage. The owner's own hover (a Lesser Magic Wand over a Novice's Practice
+-- Wand) showed why the two halves of this reader have to agree: parseWeaponLine
+-- read the range and the speed out of "12 - 22 Arcane Damage  Speed 1.50"
+-- correctly, but isWeaponChrome — the ONE test that may drop a line — knew only
+-- the school-LESS spelling, so the line stayed in the stat list, nothing could
+-- classify it, and the pair read UNKNOWN with the numbers already in hand.
+--
+-- So the grammar is declared HERE, once, in the two spellings the Lua pattern
+-- engine needs: `read` captures the two numbers, `bare` is the same shape
+-- without captures for stripping. The SCHOOLS are DATA: a new school is one
+-- line in the table below, never a second pattern somewhere else.
+-- parseWeaponLine READS through `read`; stripWeaponChrome STRIPS through `bare`
+-- and WEAPON_DAMAGE_SCHOOLS. The reader and the stripper cannot drift apart
+-- again, because there is one grammar and one school list between them.
+-- ═══════════════════════════════════════════════════════════════════════════
+local WEAPON_RANGE = {
+	read = "(%d+)%s*%-%s*(%d+)",   -- low, high
+	bare = "%d+%s*%-%s*%d+",       -- the same shape, no captures
+}
+
+-- The schools a damage range — or the parenthesised damage-per-second line — can
+-- name, lower-case because every strip runs on a lower-cased line. "physical"
+-- is in the list for the spelling that names the physical school explicitly
+-- instead of printing none. An UNKNOWN school word is deliberately NOT chrome:
+-- the line then stays in the stat list and the pair fails closed, which is the
+-- honest answer for a school this reader has never been shown.
+local WEAPON_DAMAGE_SCHOOLS = {
+	"arcane", "fire", "frost", "shadow", "nature", "holy", "physical",
+}
+
+-- The parenthesised damage-per-second shape ,  the school-less spelling every
+-- client prints ("(11.3 damage per second)") and the school-named variant some
+-- clients print ("(11.3 Arcane damage per second)"). `capture` selects the
+-- READER's spelling (the number in a capture) or the STRIPPER's (no capture), so
+-- ONE builder produces both halves and they cannot disagree about which DPS lines
+-- exist. `school == ""` is the school-less spelling, with the looser `%s*` the
+-- older pattern used before the word "damage".
+local function weaponDpsPattern(school, capture)
+	local num = capture and "([%d]+[%.%,]?%d*)" or "[%d]+[%.%,]?%d*"
+	local mid = school == "" and "%s*damage" or "%s+" .. school .. "%s+damage"
+	return "%(" .. num .. mid .. "%s+per%s+second%)"
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ON-HIT PROCS — a shape that is neither chrome nor a stat (card t_d5c915f2,
+-- from the operator's own live test of a Fishing Pole)
+--
+--     Chance on hit: Sear the target with a vortex of blazing wind, dealing
+--     39 to 59 Holystorm damage.
+--
+-- Three separate questions, and the answers are deliberately different:
+--
+--   1. Is it CHROME? No. It is not the weapon's own damage arithmetic, so the
+--      total strip must keep it — dropping it would hide the very fact the
+--      answer has to disclose.
+--   2. Is it the weapon's DAMAGE? No, and this is a real defect the exclusion
+--      below closes: a proc's damage range is a second range on the same
+--      tooltip, and the reader used to take whichever range it saw first. The
+--      dash spelling ("dealing 5 - 10 Fire damage") was read as the weapon's own
+--      5-10 range, and with a "Speed" line present weaponDPS invented a 3.75 dps
+--      the client never printed. The "to" spelling ("39 to 59") is invisible to
+--      the reader for the same reason it is invisible to the strip: the range
+--      grammar is a dash, and a proc range must never become the weapon's dps,
+--      whichever way it is spelled. So a proc line is REFUSED by parseWeaponLine
+--      outright, in both spellings — the fix is the refusal, not a second range
+--      pattern.
+--   3. Does it SUPPRESS the pair? That is the verdict-philosophy call, and it is
+--      made on the weapon path only (compareWeapon): an on-hit effect carries no
+--      comparable stat and no comparable arithmetic, so it cannot be priced, and
+--      refusing the whole weapon for it makes the advisor silent on every proc
+--      weapon in the game. The pair is therefore judged on what IS comparable —
+--      the printed damage arithmetic and the stat lines — and the proc is NAMED
+--      as unpriced on the answer, which is the honest form of "we read it and
+--      cannot price it". Armour rows keep today's doctrine untouched: this card
+--      is the weapon pass.
+--
+-- The recogniser is the PREFIX, not the sentence: the wording after "Chance on
+-- hit:" varies per item ("Sear the target ...", "to heal you", "to gain 20 attack
+-- power") and no list of effect sentences survives contact with real data. An
+-- optional "Equip:" lead-in is accepted because some clients print it that way.
+local function weaponOnHitLine(line)
+	if type(line) ~= "string" then return false end
+	-- Colour escapes first: the tooltip's own read can carry them, and a
+	-- coloured prefix must classify the same as a plain one.
+	local low = line:lower():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	low = low:gsub("^%s+", "")
+	local rest = low:match("^equip:%s*(.*)$")
+	if rest ~= nil then low = rest end
+	return low:match("^chance on hit") ~= nil
+end
+
 -- Parse one tooltip line for weapon numbers. Returns a table of whichever of
 -- {minDamage, maxDamage, speed, dps} the line carries, or nil if it carries
 -- none. `line` may be a plain string; a `nil`/secret/non-string reads as no
@@ -6319,6 +6787,10 @@ end
 -- all three (AC-B).
 local function parseWeaponLine(line)
 	if type(line) ~= "string" or isSecretValue(line) then return nil end
+	-- An ON-HIT PROC line is never the weapon's own damage arithmetic, in either
+	-- range spelling (see the block above): refusing it here is what stops a
+	-- proc's "dealing 5 - 10 Fire damage" from becoming the weapon's dps.
+	if weaponOnHitLine(line) then return nil end
 	-- Normalise the dash characters to the ASCII hyphen BEFORE matching. Lua
 	-- patterns match BYTES, so a character class cannot hold the multi-byte
 	-- UTF-8 en-dash (E2 80 93) / em-dash (E2 80 94) as a single element — the
@@ -6330,8 +6802,13 @@ local function parseWeaponLine(line)
 	if trimmed == "" then return nil end
 	local out = nil
 
-	-- Damage RANGE: "1 - 3 Damage" (dashes now normalised to '-').
-	local lo, hi = trimmed:match("(%d+)%s*%-%s*(%d+)")
+	-- Damage RANGE: "1 - 3 Damage", "12 - 22 Arcane Damage" (dashes now
+	-- normalised to '-'). Read through the ONE grammar declared above: the
+	-- pattern anchors on the two numbers and a dash, so the optional school
+	-- word between them and the word "damage" changes nothing here — and it is
+	-- the same shape stripWeaponChrome removes from the stat side, which is what
+	-- keeps the reader and the stripper from drifting apart (card t_d5c915f2).
+	local lo, hi = trimmed:match(WEAPON_RANGE.read)
 	if lo and hi then
 		local a, b = tonumber(lo), tonumber(hi)
 		if a and b then
@@ -6356,8 +6833,16 @@ local function parseWeaponLine(line)
 		end
 	end
 
-	-- Parenthesised DPS: "(1.05 damage per second)".
-	local dps = trimmed:lower():match("%(([%d]+[%.%,]?%d*)%s*damage%s+per%s+second%)")
+	-- Parenthesised DPS: "(1.05 damage per second)", and the school-named
+	-- spelling through the same builder the strip uses (card t_d5c915f2).
+	local lowTrim = trimmed:lower()
+	local dps = lowTrim:match(weaponDpsPattern("", true))
+	if not dps then
+		for _, school in ipairs(WEAPON_DAMAGE_SCHOOLS) do
+			dps = lowTrim:match(weaponDpsPattern(school, true))
+			if dps then break end
+		end
+	end
 	if dps then
 		local v = tonumber((dps:gsub(",", ".")))
 		if v then
@@ -6443,6 +6928,60 @@ local function compareDPS(candNumbers, wornNumbers, wornSlotFilled)
 		return "NOT_UPGRADE", ("less weapon damage per second (%.2f vs %.2f)"):format(c, w), "less"
 	end
 	return "NOT_UPGRADE", ("equal weapon damage per second (%.2f)"):format(c), "equal"
+end
+
+-- (card t_d5c915f2) THE EQUAL CLAIM ON THE SPELL-LED FALL-THROUGHS.
+--
+-- The melee branch of compareWeapon has refused to claim "equal weapon damage per
+-- second" across a measurable Hit or Crit gap since card t_ee04ad6d, through
+-- Verdict.beyondResolution. The two SPELL-led fall-throughs did not: when the
+-- stats are level on the role's own order (or the worn weapon carries no stat at
+-- all) and the candidate's only remaining difference is a word that order does
+-- not carry, compareDPS answered alone — and its "equal" branch is a confident
+-- claim about two weapons, one of which can be measurably better on Hit or Crit.
+-- Card t_7ddbb60a found it on PR #75; it is absorbed here because it is the same
+-- question the wand defect asked: what does a weapon's tooltip actually let you
+-- compare?
+--
+-- SAME ONE EPSILON, NO SECOND THRESHOLD: this spends Verdict.beyondResolution and
+-- Verdict.equalClaimReason — the predicate and the sentence the melee branch
+-- already uses — so the step is still levelWithinResolution's 0.7 / 0.5 rating
+-- and a sub-step difference still reads equal. It takes the parsed stat tables
+-- the caller already has (they are parsed on every stat-led row), so it adds no
+-- parse to the hover path.
+--
+-- The melee branch keeps its own inline block: card t_ee04ad6d's mutation leg
+-- pins that block's exact source, and it spends the same two public functions,
+-- so the rule has one definition and two call sites rather than two rules.
+local function equalClaimOnStats(verdict, reason, tie, candStats, eqStats, spec)
+	if tie ~= "equal" then return verdict, reason end
+	local hidden = Verdict.beyondResolution(candStats, eqStats)
+	if hidden ~= nil then return "UNKNOWN", Verdict.equalClaimReason(hidden) end
+	-- ── AND THEN THE PRICED WORDS (card t_33dd248c, the DD-2 re-cut) ──────────
+	-- The refusal above is card t_d5c915f2's, and it keeps PRIORITY exactly as
+	-- merged: a gap the tooltip can measure but the basis in force cannot PLACE
+	-- (Hit, Crit) still declines and names the word. It is not widened here.
+	--
+	-- What it does not cover is a word the pair's OWN PACK PRICES. DD-2
+	-- (card t_4e1e1b1d) gave Healing and the six school powers words, and
+	-- t_8575389a gave the damage half of the combined sentence its own word, so
+	-- an "of Healing" weapon now parses to Healing 34 + SpellDamage 11 instead of
+	-- suppressing the item. Those words are outside every class ORDER, so the
+	-- dominance walk above could not see them and the row fell through to the
+	-- DPS tie-break — where two weapons that tie on damage per second were
+	-- called "equal weapon damage per second" while one of them carried +34
+	-- Healing. That equality is FALSE, and it is the same defect class
+	-- t_d5c915f2 closed for Hit/Crit, one word family further along.
+	--
+	-- So the pair goes to the ONE weighted layer `Verdict.evaluate` already
+	-- spends (weightedResolution): the pack decides, or nothing does. No second
+	-- threshold, no second price table, no new word list — a word no table
+	-- prices (SpellDamage has no weight key by the owner's ruling) contributes 0
+	-- and leaves the equal claim standing, which is what AC-E of t_8575389a
+	-- already requires of a pack that prices a word at 0.
+	local pv, pr = weightedResolution(candStats, eqStats, spec)
+	if pv ~= nil then return pv, pr end
+	return verdict, reason
 end
 
 -- The weapon gate (§5.1 shape rules) — the ONLY class-specific rule in Tier C,
@@ -6590,16 +7129,46 @@ Verdict.compareDPS = compareDPS
 -- docs/ and no other doc rules this direction. So the mirror stays as it is,
 -- unchanged by this card, and is written down rather than invented.
 
+-- Remove every damage-chrome shape from an already lower-cased and
+-- dash-normalised line, leaving whatever else the line carried. This is the ONLY
+-- stripper: isWeaponChrome decides on its answer, and it strips through the same
+-- WEAPON_RANGE / WEAPON_DAMAGE_SCHOOLS grammar parseWeaponLine reads through.
+--
+-- The school loop is the card's fix (t_d5c915f2). One gsub per school entry is
+-- deliberate: Lua's `|` alternates WHOLE patterns, not sub-expressions, so a
+-- single pattern cannot ask "one of these seven words" — and spelling the seven
+-- schools inline would be a second, silent copy of the list above. The loop
+-- spends the list itself, so adding a school is still one line, in one place.
+local function stripWeaponChrome(low)
+	local rest = low:gsub(WEAPON_RANGE.bare .. "%s+damage", " ")
+	for _, school in ipairs(WEAPON_DAMAGE_SCHOOLS) do
+		rest = rest:gsub(WEAPON_RANGE.bare .. "%s+" .. school .. "%s+damage", " ")
+		-- The parenthesised DPS line can print the school too:
+		-- "(11.3 Arcane damage per second)". Same builder as the reader's.
+		rest = rest:gsub(weaponDpsPattern(school, false), " ")
+	end
+	rest = rest:gsub(weaponDpsPattern("", false), " ")
+	rest = rest:gsub("speed%s*:?%s*[%d]+[%.%,]?%d*", " ")
+	return rest:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
 -- Is this ONE tooltip line nothing but the weapon's own damage arithmetic
--- ("19 - 36 Damage", "19 - 36 Damage  Speed 2.50", "(11.0 damage per second)",
--- "Speed 2.50")? This is the ONLY test that authorises dropping a line before
--- the stat parse, and it is TOTAL: the damage / speed / DPS shapes are removed
--- from the whole line and the line is chrome only when nothing but whitespace is
--- left. A line that also carries a stat (the hypothetical column join
--- "19 - 36 Damage  Speed 2.50  +5 Intellect") leaves "+5 intellect" behind, so
--- it is NOT chrome — it stays in the list and suppresses exactly as it does
--- today. The strip therefore cannot hide a stat: an unplaceable line that is not
--- chrome still reads as UNKNOWN (fail-closed, unchanged).
+-- ("19 - 36 Damage", "19 - 36 Damage  Speed 2.50", "12 - 22 Arcane Damage
+-- Speed 1.50", "(11.0 damage per second)", "Speed 2.50")? This is the ONLY test
+-- that authorises dropping a line before the stat parse, and it is TOTAL: the
+-- damage / speed / DPS shapes are removed from the whole line and the line is
+-- chrome only when nothing but whitespace is left. A line that also carries a
+-- stat (the hypothetical column join "19 - 36 Damage  Speed 2.50  +5 Intellect")
+-- leaves "+5 intellect" behind, so it is NOT chrome — it stays in the list and
+-- suppresses exactly as it does today. The strip therefore cannot hide a stat:
+-- an unplaceable line that is not chrome still reads as UNKNOWN (fail-closed,
+-- unchanged).
+--
+-- A SCHOOL word is chrome, not a stat (card t_d5c915f2): "12 - 22 Arcane Damage"
+-- is the same arithmetic as "12 - 22 Damage" with the school named, so it is
+-- stripped — it is added to the STRIP, never to a blocklist of whole lines. A
+-- school this module has not been shown is left in place on purpose, which keeps
+-- the line unclassifiable and the pair fail-closed.
 local function isWeaponChrome(line)
 	if type(line) ~= "string" then return false end
 	-- The dashes are normalised exactly as parseWeaponLine above does: Lua
@@ -6608,11 +7177,7 @@ local function isWeaponChrome(line)
 	local low = line:gsub("\226\128\147", "-"):gsub("\226\128\148", "-")
 	low = low:lower():gsub("^%s+", ""):gsub("%s+$", "")
 	if low == "" then return false end
-	local rest = low:gsub("%d+%s*%-%s*%d+%s+damage", " ")
-	rest = rest:gsub("%([%d]+[%.%,]?%d*%s*damage%s+per%s+second%)", " ")
-	rest = rest:gsub("speed%s*:?%s*[%d]+[%.%,]?%d*", " ")
-	rest = rest:gsub("^%s+", ""):gsub("%s+$", "")
-	return rest == ""
+	return stripWeaponChrome(low) == ""
 end
 
 -- The stat-side view of a weapon's line list: the same list minus its own
@@ -6632,6 +7197,27 @@ end
 -- the shipped strip rather than a re-implementation of it (and can therefore pin
 -- that a line carrying a stat is never dropped).
 Verdict.weaponStatLines = weaponStatLines
+-- The school list the strip spends is DATA; a test that enumerates it enumerates
+-- the SHIPPED table rather than a copy of it, so a new school cannot pass a
+-- fixture that never asked the module about it (card t_d5c915f2).
+Verdict.weaponDamageSchools = WEAPON_DAMAGE_SCHOOLS
+-- The on-hit recogniser, exposed so the fixture table drives the shipped
+-- predicate rather than a copy of the prefix (card t_d5c915f2).
+Verdict.weaponOnHit = weaponOnHitLine
+
+-- The stat-side view with ON-HIT PROC lines removed (card t_d5c915f2): the
+-- weapon path judges on what is comparable and NAMES the proc as unpriced, so the
+-- proc must not reach the parse's suppression channel. A COPY, like
+-- weaponStatLines above, and the same non-table passthrough.
+local function weaponWithoutOnHit(lines)
+	if type(lines) ~= "table" then return lines end
+	local kept = {}
+	for _, line in ipairs(lines) do
+		if not weaponOnHitLine(line) then kept[#kept + 1] = line end
+	end
+	return kept
+end
+Verdict.weaponWithoutOnHit = weaponWithoutOnHit
 
 -- Is this character's weapon judged as a STAT item, or on its DPS?
 --
@@ -6772,42 +7358,108 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	local candNumbers = weaponNumbers(candLines)
 	local wornNumbers = weaponNumbers(wornLines)
 
-	-- An order-only profile (Retribution today) judges a weapon on the
-	-- same published tiers as armour: Weapon Skill, then Weapon DPS,
-	-- then the rest. DPS-only compareDPS would skip Weapon Skill and
-	-- invent a ranking the source does not give for speed.
+	-- (card t_d5c915f2, the operator's Fishing Pole) AN ON-HIT PROC IS NAMED, NOT
+	-- REFUSED. A "Chance on hit:" effect is not comparable arithmetic and not a
+	-- stat, so nothing on this path can price it — but refusing the weapon for it
+	-- would make the advisor silent on every proc weapon in the game. The pair is
+	-- judged on what IS comparable and the answer carries this clause, so the
+	-- player is told the effect exists and was not priced. `answer` is the ONE
+	-- place the clause is added: with no proc on either side it returns the
+	-- verdict and reason untouched, which is why every existing weapon reason is
+	-- byte-identical.
+	local onHitNote = ""
+	for _, side in ipairs({ candLines, wornLines }) do
+		if type(side) == "table" then
+			for _, line in ipairs(side) do
+				if weaponOnHitLine(line) then
+					onHitNote = " (judged, with an unpriced on-hit effect)"
+					break
+				end
+			end
+		end
+		if onHitNote ~= "" then break end
+	end
+	local function answer(v, r)
+		if onHitNote == "" then return v, r end
+		return v, tostring(r or "") .. onHitNote
+	end
+
+	-- ── AN ORDER-ONLY PACK JUDGES A WEAPON ON ITS PUBLISHED TIERS ───────────
+	-- (card t_24a4c8ea: the pre-30f3d32 patch's hunk 21, re-anchored.) A
+	-- profile with `kind = "order"` and a `tiers` list — Retribution today —
+	-- has no invented numeric weights: the published priority IS the source.
+	-- It walks Weapon Skill, then Weapon DPS & Speed, then the rest, and the
+	-- first tier whose sides differ decides. The DPS comparator below cannot
+	-- see that: two weapons that tie on damage per second while one carries
+	-- +12 Weapon Skill are called "equal weapon damage per second (10.00)",
+	-- and Weapon Skill is the FIRST tier Wowhead publishes for the spec.
+	--
+	-- WHY THE GATES ARE REPEATED HERE. A non-stat-led class never reaches the
+	-- stat-led branch below, so this branch must fail closed on its own terms.
+	-- It spends the SAME predicates that branch spends, in the same order: the
+	-- parse's unknown/proc words refuse BY NAME, an unpriced word refuses
+	-- through Verdict.unpricedWord, and a difference on an unconfirmed unit
+	-- refuses through Verdict.unconfirmedDifference. Nothing here is a second
+	-- rule — this is the one place a weapon pair for an order-only pack is
+	-- decided, so it carries the same refusals instead of skipping them.
+	--
+	-- The parse is upstream's own (chrome stripped by weaponStatLines, on-hit
+	-- lines set aside by weaponWithoutOnHit), and every answer travels through
+	-- `answer` above, so a proc weapon keeps its clause here too. The DPS and
+	-- speed the tooltip PRINTS are folded back in, because the tiers rank them
+	-- (the printed number is the arithmetic; the parse keeps only stats).
 	local orderProfile = type(spec) == "table" and Verdict.profileFor(spec) or nil
 	if Verdict.isOrderProfile(orderProfile) then
-		if type(wornLines) ~= "table" then
-			if wornSlotFilled then
-				return "UNKNOWN", "the equipped weapon could not be read"
-			end
-			return "UPGRADE", "upgrade: fills the weapon slot"
-		end
 		local api = type(apiBySide) == "table" and apiBySide or nil
 		local candWords = api and select(1, apiSideResolve(rawget(api, "candidate"))) or nil
 		local wornWords = api and select(1, apiSideResolve(rawget(api, "worn"))) or nil
-		-- Strip damage-range chrome so "19 - 36 Damage" does not suppress,
-		-- then fold the printed DPS / speed back in.
-		local candStats, candProc, candUnknown = parseSide(weaponStatLines(candLines), "candidate", candWords)
-		local eqStats,   eqProc,   eqUnknown   = parseSide(weaponStatLines(wornLines), "worn",      wornWords)
-		if candProc or candUnknown then
-			return "UNKNOWN", "cannot classify: " .. tostring(candUnknown or candProc)
+		if wornLines == nil then
+			-- The slot is empty: filling it is an upgrade, and a candidate the
+			-- parse cannot place must not be waved in.
+			local fillStats, fillProc, fillUnknown =
+				parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
+			local bad = fillUnknown or fillProc
+			if bad ~= nil then
+				return answer("UNKNOWN", "cannot classify: " .. tostring(bad))
+			end
+			local unpricedFill = Verdict.unpricedWord(fillStats)
+			if unpricedFill ~= nil then
+				return answer("UNKNOWN", Verdict.unpricedWordReason(unpricedFill))
+			end
+			return answer("UPGRADE", "upgrade: fills the weapon slot")
 		end
-		if eqProc or eqUnknown then
-			return "UNKNOWN", "cannot classify: " .. tostring(eqUnknown or eqProc)
+		local tierCand, tierProc, tierUnknown =
+			parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
+		local tierEq, tierEqProc, tierEqUnknown =
+			parseSide(weaponWithoutOnHit(weaponStatLines(wornLines)), "worn", wornWords)
+		local badCand = tierUnknown or tierProc
+		local badEq = tierEqUnknown or tierEqProc
+		if badCand ~= nil then
+			return answer("UNKNOWN", "cannot classify: " .. tostring(badCand))
+		end
+		if badEq ~= nil then
+			return answer("UNKNOWN", "cannot classify: " .. tostring(badEq))
+		end
+		local unpriced = Verdict.unpricedWord(tierCand) or Verdict.unpricedWord(tierEq)
+		if unpriced ~= nil then
+			return answer("UNKNOWN", Verdict.unpricedWordReason(unpriced))
+		end
+		local unconfirmed = Verdict.unconfirmedDifference(tierCand, tierEq)
+		if unconfirmed ~= nil then
+			return answer("UNKNOWN", Verdict.unpricedWordReason(unconfirmed))
 		end
 		if type(candNumbers) == "table" then
-			if candNumbers.dps then candStats.WeaponDps = candNumbers.dps end
-			if candNumbers.speed then candStats.WeaponSpeed = candNumbers.speed end
+			if candNumbers.dps then tierCand.WeaponDps = candNumbers.dps end
+			if candNumbers.speed then tierCand.WeaponSpeed = candNumbers.speed end
 		end
 		if type(wornNumbers) == "table" then
-			if wornNumbers.dps then eqStats.WeaponDps = wornNumbers.dps end
-			if wornNumbers.speed then eqStats.WeaponSpeed = wornNumbers.speed end
+			if wornNumbers.dps then tierEq.WeaponDps = wornNumbers.dps end
+			if wornNumbers.speed then tierEq.WeaponSpeed = wornNumbers.speed end
 		end
-		return Verdict.orderVerdict(candStats, eqStats, spec, nil, orderProfile)
+		local tv, tr, td = Verdict.orderVerdict(tierCand, tierEq, spec, nil, orderProfile)
+		local av, ar = answer(tv, tr)
+		return av, ar, td
 	end
-
 	local statLed = type(spec) == "table"
 		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
 		and type(spec.order) == "table"
@@ -6835,7 +7487,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 				return "UNKNOWN", Verdict.equalClaimReason(hidden)
 			end
 		end
-		return verdict, reason
+		return answer(verdict, reason)
 	end
 
 	-- (card t_4590ab7e, item 2) WHICH ROLE REACHES THE WEAPON PATH. Where the
@@ -6887,10 +7539,15 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 				return "UNKNOWN", Verdict.unpricedWordReason(unpricedFill)
 			end
 		end
-		return "UPGRADE", "upgrade: fills the weapon slot"
+		return answer("UPGRADE", "upgrade: fills the weapon slot")
 	end
 
 	local candSide, eqSide = weaponStatLines(candLines), weaponStatLines(wornLines)
+	-- (card t_d5c915f2) The on-hit proc is set aside from the STAT parse — it is
+	-- named on the answer instead (the `answer` clause above) — so it cannot
+	-- suppress a weapon the way an unplaceable line must. Nothing else about the
+	-- parse changes, and a pair with no proc is byte-identical.
+	candSide, eqSide = weaponWithoutOnHit(candSide), weaponWithoutOnHit(eqSide)
 	-- WHY THIS PARSES THE SIDES *AND* evaluate() PARSES THEM AGAIN. Gate 7 of
 	-- evaluate() reads "a filled slot whose stats yielded nothing" as
 	-- UNREADABLE. For ARMOUR that is right — every armour piece prints Armor, so
@@ -6941,6 +7598,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		outcome = Verdict.dominance(candStats, eqStats, order)
 	end
 
+
 	if not suppressed and next(eqStats) == nil then
 		-- The worn weapon carries NO stat at all: a KNOWN absence (every line on
 		-- it parsed cleanly, so nothing suppressed and no stat is hidden), not a
@@ -6953,14 +7611,20 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 			-- (No `allow` wrapper is needed here: a weapon tooltip names no typed
 			-- armour slot, so lowerArmorReason is nil for every weapon pair.)
 			for _, word in ipairs(order) do
-				if (candStats[word] or 0) > 0 then return "UPGRADE", winReason(word) end
+				if (candStats[word] or 0) > 0 then return answer("UPGRADE", winReason(word)) end
 			end
-			return "UPGRADE", winReason()
+			return answer("UPGRADE", winReason())
 		end
 		-- Nothing the stats can decide on: both weapons carry no stat, or the
 		-- candidate's only stat is outside the role's order (spell power — see
-		-- this section's note). The DPS tie-break is today's answer.
-		return compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		-- this section's note). The DPS tie-break is today's answer — but its
+		-- EQUAL claim is checked against what the pair's stats can measure first
+		-- (card t_d5c915f2): a candidate that is measurably ahead on Hit or Crit
+		-- must not be called "the same" just because the order does not carry
+		-- the word. The gate is the melee branch's own rule, one helper away.
+		local dv, dr, tie = compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		local v, r = equalClaimOnStats(dv, dr, tie, candStats, eqStats, cmpSpec)
+		return answer(v, r)
 	end
 
 	if not suppressed and outcome == nil then
@@ -6968,8 +7632,13 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- both sides): there is no caster-stat difference for DPS to outvote, so
 		-- DPS decides — today's comparator, today's strings. This is the whole of
 		-- option (b)'s "DPS as a minor term": level stats are the only case in
-		-- which DPS is consulted at all.
-		return compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		-- which DPS is consulted at all. The equal claim is gated exactly as it
+		-- is on the melee branch and on the worn-side-empty branch above (card
+		-- t_d5c915f2): level on the ORDER is not the same fact as level on the
+		-- pair.
+		local dv2, dr2, tie2 = compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		local v2, r2 = equalClaimOnStats(dv2, dr2, tie2, candStats, eqStats, cmpSpec)
+		return answer(v2, r2)
 	end
 
 	-- The stats decide — or a line suppressed somewhere, which is fail-closed
@@ -6979,8 +7648,8 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- ONLY in its `order` — and only where the client named TANK (card
 	-- t_4590ab7e, item 2); the weights the layer consults are reached through
 	-- class/role/clientRole, which are carried across unchanged.
-	return Verdict.evaluate({ canUse = canUse, line = candSide },
-		{ line = eqSide }, cmpSpec, api)
+	return answer(Verdict.evaluate({ canUse = canUse, line = candSide },
+		{ line = eqSide }, cmpSpec, api))
 end
 
 -- Tank path (card t_89440dfa): the relevance-set and dominance helpers are
@@ -7125,6 +7794,21 @@ local STAT_LABEL = {
 	-- spell labels with their two words; "Hit" and "Crit" already read as
 	-- themselves.)
 	FeralAttackPower = "Feral AP",
+	-- card t_4e1e1b1d (DD-2): a delta reads "+22 Healing", "+20 Fire". The
+	-- school labels drop the "Power" the token carries — a player says "Fire
+	-- damage", never "FirePower" — and stay one word so a tooltip row keeps
+	-- its width.
+	Healing   = "Healing",
+	HolyPower = "Holy",
+	FirePower = "Fire",
+	FrostPower = "Frost",
+	ShadowPower = "Shadow",
+	NaturePower = "Nature",
+	ArcanePower = "Arcane",
+	-- card t_8575389a: the damage half. Two words because "SpellDmg" is not a
+	-- thing a player reads; the tooltip row stays inside its width ("+14 Spell
+	-- Damage").
+	SpellDamage = "Spell Damage",
 }
 
 function Verdict.statLabel(word)

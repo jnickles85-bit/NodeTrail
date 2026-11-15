@@ -16,6 +16,7 @@ Modules.lua
 Theme.lua
 Modules/Touchstone/Bootstrap.lua
 Modules/Touchstone/Constants.lua
+Modules/Touchstone/Weights.lua
 Modules/Touchstone/UI.lua
 Modules/Touchstone/OptionsTab.lua
 Modules/Touchstone/UpgradesTab.lua

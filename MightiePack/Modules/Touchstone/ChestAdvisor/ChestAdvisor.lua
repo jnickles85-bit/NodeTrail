@@ -1357,10 +1357,49 @@ end
 --   the words. The wrapper and the legacy plain-words shape both resolve
 --   through Verdict's apiSideResolve (the same function in both), so the
 --   display and the verdict never diverge on the read.
+-- ── card t_8575389a: THE ARGUMENT FORM IS PART OF THE READ ──────────────
+-- Measured on the owner's live client (Forever beta, 2026-10-20), same item:
+--   C_Item.GetItemStats("item:18510")                         -> the full table
+--   C_Item.GetItemStats("|Hitem:18510|h[Hide of the Wild]|h") -> EMPTY
+-- An empty return is not "no stats" — it is a SILENTLY UNREAD item, the same
+-- failure mode as a suppressed tooltip line: the reconciler stays silent, the
+-- item loses its explanation, and nothing anywhere says why.
+--
+-- So the ONE funnel every call site goes through normalises the argument to the
+-- form PROVEN to answer: "item:<id>". A number id, a client hyperlink and an
+-- "item:<id>" string all collapse onto that one string.
+--
+-- Call sites audited on this card (it asks for the argument form of every one):
+--   * apiBySideOf(row.id, ...) — the row/diag/vendor walks: a NUMBER id;
+--   * apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil) — numbers;
+--   * pairBothUnreadable(...) -> apiStatsOf(link1) — a client LINK, i.e. exactly
+--     the shape the owner measured returning nothing.
+-- No site BUILDS a link by hand today. The one site that hands over a client
+-- link is normalised here rather than at that caller — one place, so a future
+-- caller cannot reintroduce the bare-link shape by passing what it already has.
+--
+-- A string carrying no item id is NOT normalised and NOT read: an unproven shape
+-- is an empty answer pretending to be a read. nil, exactly like an absent API —
+-- the fail-closed path (AC-B's byte-identical-to-today behaviour).
+local function getItemStatsArg(idOrLink)
+	if type(idOrLink) == "number" then
+		return "item:" .. tostring(math.floor(idOrLink))
+	end
+	if type(idOrLink) ~= "string" then return nil end
+	local id = idOrLink:match("item:(%d+)")
+	if id == nil then return nil end
+	return "item:" .. id
+end
+-- Published for the card's own harness: the argument form is the thing under
+-- test, and a test that re-implemented the normaliser would prove nothing about
+-- the shipped read.
+ChestAdvisor._getItemStatsArg = getItemStatsArg
+
 local function apiStatsOf(idOrLink)
-	if idOrLink == nil then return nil end
+	local arg = getItemStatsArg(idOrLink)
+	if arg == nil then return nil end
 	if not (C_Item and type(C_Item.GetItemStats) == "function") then return nil end
-	local ok, raw = pcall(C_Item.GetItemStats, idOrLink)
+	local ok, raw = pcall(C_Item.GetItemStats, arg)
 	if not ok then return nil end
 	if type(raw) ~= "table" then return nil end
 	if type(issecretvalue) == "function" then

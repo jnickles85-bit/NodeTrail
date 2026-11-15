@@ -57,12 +57,21 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # Pinned, not "main": a sync must reproduce the tree it was reviewed against, and
 # `git clone --branch main` would silently move with upstream. `--ref main` still
 # resolves to whatever main is at run time, for a deliberate catch-up.
-SOURCE_REF = "80accdd47b4db127d929ae1010f5b34a96a74e83"
+SOURCE_REF = "30f3d3263c1ce1556122c107beb9c10a9d2db6b7"
 
 # Order is load-bearing. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).
+# Weights.lua sits directly after Constants.lua and before Verdict.lua: it
+# writes `StatForge.Weights` onto the global Constants.lua creates, and
+# Verdict.weightsFor probes that table AT CALL TIME. Until the 30f3d32 pin the
+# pack shipped without it, so every priced layer the verdict engine has
+# (`weightedResolution`, and the weapon path's priced-word fall-through) found
+# nothing and could not decide — the parity trap: the reader parsed "+34
+# Healing" correctly and still answered "equal weapon damage per second"
+# because no table priced the word. Card t_24a4c8ea.
 LUA_FILES = [
     "Constants.lua",
+    "Weights.lua",
     "UI.lua",
     "OptionsTab.lua",
     "UpgradesTab.lua",

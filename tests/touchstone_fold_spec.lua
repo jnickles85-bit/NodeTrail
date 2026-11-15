@@ -19,10 +19,14 @@ end
 
 local TOUCH = root .. "/MightiePack/Modules/Touchstone/"
 
--- The 11 generated files, in TOC order. Bootstrap.lua is hand-written and is
--- loaded first in every scenario.
+-- The 12 generated files, in TOC order. Bootstrap.lua is hand-written and is
+-- loaded first in every scenario. Weights.lua sits second: it writes the
+-- `StatForge.Weights` table onto the global Constants.lua creates, and
+-- Verdict.weightsFor reads that table at call time (card t_24a4c8ea — the
+-- parity trap: a vendored reader with no weights source cannot price a word).
 local VENDORED = {
   "Constants.lua",
+  "Weights.lua",
   "UI.lua",
   "OptionsTab.lua",
   "UpgradesTab.lua",
@@ -184,10 +188,11 @@ do
     check(start ~= nil, "TOC lists Modules/Touchstone/Bootstrap.lua")
     if start then
       check(body[start + 1] == "Modules/Touchstone/Constants.lua", "TOC: Constants after Bootstrap")
-      check(body[start + 8] == "Modules/Touchstone/ChestAdvisor/Verdict.lua", "TOC: Verdict before ChestAdvisor")
-      check(body[start + 9] == "Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua", "TOC: ChestAdvisor after Verdict")
-      check(body[start + 10] == "Modules/Touchstone/Integration.lua", "TOC: Integration after ChestAdvisor")
-      check(body[start + 11] == "Modules/Touchstone/Core.lua", "TOC: Core last in the block")
+      check(body[start + 2] == "Modules/Touchstone/Weights.lua", "TOC: Weights after Constants")
+      check(body[start + 9] == "Modules/Touchstone/ChestAdvisor/Verdict.lua", "TOC: Verdict before ChestAdvisor")
+      check(body[start + 10] == "Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua", "TOC: ChestAdvisor after Verdict")
+      check(body[start + 11] == "Modules/Touchstone/Integration.lua", "TOC: Integration after ChestAdvisor")
+      check(body[start + 12] == "Modules/Touchstone/Core.lua", "TOC: Core last in the block")
     end
     for _, entry in ipairs(body) do
       check(entry:find("marker.tga", 1, true) == nil, "marker.tga is not a TOC body entry")
