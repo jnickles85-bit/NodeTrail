@@ -6,6 +6,36 @@ project uses semantic-ish versioning: the pack version in `MightiePack.toc`
 Touchstone still carries its own upstream module version, which may appear in
 About and diagnostic lines; the Touchstone window header shows the pack version.
 
+## [Unreleased]
+
+### Planned (0.3.9)
+- **Bag arrows, quest-reward marks and `GearAPI`** — the three surfaces lit by the verdict the reader already produces, with no new scoring underneath. (Slice 1, PR #98.)
+- **An enchant is never a blocker and never priced** — it leaves the stat list like chrome and is disclosed like a proc, on the side that carries it. (Card `t_c65cc350`.)
+- **Weapon fail-closed is not defeated by a `Sell Price:` line** placed before an unreadable one. (Card `t_195a0e07`.)
+- **Rogue weapons** — a dagger-locked spec is not judged against a sword on damage per second alone, and the off-hand is scored rather than refused. (Card `t_1677cd39`.)
+- **Tank coverage** — Hit priced at zero makes `+1 Hit` read equal to `+20 Block`, and the same Block decides one pair and not another. (Card `t_ea260b42`.)
+- **An item the character cannot wear is a definite no, not a cannot-judge** — the requirement, with no gain. (Card `t_8d3af71d`.)
+
+## [0.3.8-beta] - 2026-11-15
+
+The reader carries the fixes; the pack changes nothing but its pin. Touchstone `30f3d32` → `ec947b3`
+(PRs #95, #96 and #97 upstream).
+
+### Changed
+- **The verdict line is drawn with the item's own lines**, immediately under the item's stats and above every third-party block, instead of below them. The answer is the headline. (Card `t_92e703ac`, PR #95.)
+
+### Fixed
+- **A refusal now says which item it is about.** All six `cannot classify:` gates name the side — `(on the hovered item)` / `(on the equipped item)` — because a player reading `cannot classify: Enchanted: Weapon Damage +5` could not tell which weapon carried the line. The refusal was about the worn weapon and said nothing of the kind. (Card `t_fc11dd1c`, PR #96.)
+- **A refusal no longer carries a judged clause.** An `UNKNOWN` verdict used to inherit `(judged, with an unpriced on-hit effect)` from the *other* item's proc line; the clause now rides a judged verdict only, and judged reasons are byte-identical to before.
+- **Weapon reading** (arrives with the pin). A wand's school-named `12 - 22 Arcane Damage` line is recognised as weapon chrome, so the printed damage per second is compared instead of the pair being refused. A weapon's `Chance on hit: …` line is treated as an unpriced effect, named in the disclosure beside the reason, instead of blocking the comparison. `Equip: Increases healing done by up to 34 and damage done by up to 11` is priced as healing. The Lesser Magic Wand over the Novice's Practice Wand now reads **UPGRADE** — 11.30 vs 4.00 damage per second, +1 Spell Power.
+- **CI**: the changed-verdicts sweep pins a named base revision (`96985c3`) instead of resolving `origin/main`, and refuses a base equal to HEAD. On `main` the old form compared the tree with itself, saw no difference, and reported its own allowances as unpinned — a gate that was green only where it could not matter.
+
+### Known issues
+- **An `Enchanted:` line still refuses the pair**, naming the side. An enchant is never a classification blocker and never priced — it is disclosed like a proc, on the side that carries it — from the next release. (Owner ruling; card `t_c65cc350`.)
+- **`Sell Price:` placed before an unreadable line can turn a refusal into a judgement** on the no-API fallback. (Card `t_195a0e07`, fix in review.)
+- **Shapes not covered above can still read `UNKNOWN — cannot classify`** — failing closed is deliberate.
+- **The bag arrows, quest-reward marks and `GearAPI` are not in this build**, nor is the melee re-derivation; both are the next release.
+
 ## [0.3.7-beta] - 2026-11-14
 
 ### Known issues
