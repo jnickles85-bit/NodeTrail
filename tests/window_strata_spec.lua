@@ -133,20 +133,31 @@ if type(bg) == "table" then
     and math.abs(rw.top - rf.top) < 0.5 and math.abs(rw.bottom - rf.bottom) < 0.5
   check(same, ("the fill frame covers exactly the window (SetAllPoints; window %.0f..%.0f x %.0f..%.0f, fill %.0f..%.0f x %.0f..%.0f)")
     :format(rw.left, rw.right, rw.top, rw.bottom, rf.left, rf.right, rf.top, rf.bottom))
+  -- Card t_2d2c37b0: the fill is still opaque, and its COLOUR is now the
+  -- theme's windowBg rather than a literal of the window's own. Asserting the
+  -- token (not a pinned triple) is the point: one palette, checked against the
+  -- one source. The invariant this spec exists for — the fill is opaque, on
+  -- BACKGROUND, and covers the window — is unchanged.
   local alpha = C.FillAlpha(bg)
-  check(alpha ~= nil and math.abs(alpha - 0.96) < 0.001,
-    "the fill still paints the window's own 0.96 dark backdrop (alpha "
-      .. tostring(alpha) .. ") — the colour and alpha did not change, only the frame")
+  check(alpha ~= nil and alpha >= 0.9,
+    "the fill paints an opaque window backdrop (alpha " .. tostring(alpha) .. ")")
   local bd = bg:GetBackdrop() or {}
   check(type(bd.bgFile) == "string" and bd.bgFile:upper():find("WHITE8X8", 1, true) ~= nil,
     "the fill uses the texture that resolves on this client (WHITE8X8), got "
       .. tostring(bd.bgFile))
-  local r, g, b = bg:GetBackdropColor()
-  check(type(r) == "number" and math.abs(r - 0.06) < 0.01
-      and type(g) == "number" and math.abs(g - 0.06) < 0.01
-      and type(b) == "number" and math.abs(b - 0.07) < 0.01,
-    ("the fill is the same dark colour as before (%.2f %.2f %.2f)")
-      :format(tonumber(r) or -1, tonumber(g) or -1, tonumber(b) or -1))
+  local theme = pkg.Theme
+  check(type(theme) == "table" and type(theme.R) == "function",
+    "the window's fill colour comes from the theme (t_2d2c37b0)")
+  if type(theme) == "table" and type(theme.R) == "function" then
+    local tr, tg, tb, ta = theme.R("windowBg")
+    local r, g, b, a = bg:GetBackdropColor()
+    check(r == tr and g == tg and b == tb and math.abs((a or ta) - ta) < 0.001,
+      ("the fill is the theme's windowBg (%.3f %.3f %.3f %.2f), not a second palette")
+        :format(tr, tg, tb, ta))
+    check(math.abs(tr - 0.06) > 0.005 or math.abs(tg - 0.06) > 0.005,
+      "the fill is no longer the old standalone gold-window grey — it moved to the "
+        .. "body's brand")
+  end
 else
   check(false, "without W.bg the fill is back on the window frame, in DIALOG")
 end

@@ -98,9 +98,12 @@ Retired Touchstone words (`/touchstone export`, `/touchstone gear`) print that
 those features are retired; they are not silently ignored.
 
 ## Options
-- Open with `/mp`, `/mpack`, or `/mightiepack`.
+- Open with `/mp`, `/mpack`, or `/mightiepack` — the window opens on Pack Settings.
+- The window has two tabs: **Touchstone** (the product) and **Pack Settings**.
 - Tick a module: turns on immediately, no reload.
 - Untick: confirm popup "Turn off <module>? This needs a UI reload." OK saves it off and runs ReloadUI(); Cancel (or Escape) keeps it on and re-ticks the box.
+- `/up`, `/upgrade`, `/chestadvice`, `/ts`, `/touchstone`, `/sf`, `/statforge` open the window on Touchstone.
+- `/nt` and `/nodetrail` belong to the separate NodeTrail addon. `/mp skindiag` is retired and answers where those diagnostics went.
 
 ## Layout
 Shipping addon (the CurseForge zip contains this folder only):
@@ -109,6 +112,7 @@ Shipping addon (the CurseForge zip contains this folder only):
 MightiePack/MightiePack.toc
 MightiePack/Core.lua
 MightiePack/Modules.lua
+MightiePack/Theme.lua
 MightiePack/Options.lua
 MightiePack/BugReport.lua
 MightiePack/ErrorHandler.lua
@@ -126,7 +130,6 @@ MightiePack/Modules/Touchstone/ChestAdvisor/Verdict.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
 MightiePack/Modules/Touchstone/ChestAdvisor/marker.tga
 MightiePack/Window.lua
-MightiePack/Window/Common.lua
 MightiePack/Window/TouchstoneTab.lua
 ```
 
@@ -138,13 +141,15 @@ Repo-only (not shipped): `README.md`, `tests/`,
 `.pkgmeta`.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 28 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 32 specs:
 - `tests/bugreport_spec.lua`
 - `tests/chestadvisor_diag_spec.lua`
 - `tests/chestadvisor_secret_values_spec.lua`
 - `tests/gear_for_spec.lua`
 - `tests/idea_spec.lua`
 - `tests/no_nodetrail_keys_spec.lua`
+- `tests/pack_settings_spec.lua`
+- `tests/slash_retirement_spec.lua`
 - `tests/slash_spec.lua`
 - `tests/status_meta_spec.lua`
 - `tests/sync_touchstone_patch_spec.lua`
@@ -158,7 +163,9 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 28 specs:
 - `tests/touchstone_tiebreak_spec.lua`
 - `tests/touchstone_tooltip_line_spec.lua`
 - `tests/touchstone_weights_spec.lua`
+- `tests/theme_tokens_spec.lua`
 - `tests/umbrella_spec.lua`
+- `tests/window_chrome_spec.lua`
 - `tests/window_inner_input_spec.lua`
 - `tests/window_list_rows_spec.lua`
 - `tests/window_settings_build_spec.lua`

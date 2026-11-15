@@ -813,6 +813,7 @@ pkg.IsModuleEnabled = pkg.IsModuleEnabled or function(n) return enabledMods[n] =
 pkg.optionsBoxes = nil
 
 if not _G.MightiePackOptionsPanel then
+  loaded(root .. "/MightiePack/Theme.lua", "MightiePack", pkg)
   loaded(root .. "/MightiePack/Options.lua", "MightiePack", pkg)
 end
 
@@ -844,18 +845,34 @@ if boxes and boxes.GearFor then
     "Gear for has a label or button text")
 end
 
--- After Touchstone is on, NodeTrail sits under the Gear-for row (not overlapping).
-if boxes and boxes.GearFor and boxes.NodeTrail then
-  if type(boxes.GearFor.Show) == "function" then boxes.GearFor:Show() end
-  -- Force a layout refresh if Options exposes one; otherwise click-sync.
-  if type(pkg.relayoutOptions) == "function" then pcall(pkg.relayoutOptions) end
-  local ntPts = boxes.NodeTrail.points
-  if type(ntPts) == "table" and #ntPts > 0 then
-    local last = ntPts[#ntPts]
-    check(last[2] == boxes.GearFor or last[2] == boxes.GearForLabel
-        or last[2] == boxes.GearForRow,
-      "NodeTrail is re-anchored under the Gear-for widget when Touchstone is on")
+-- Card t_2d2c37b0: the old "NodeTrail is re-anchored under the Gear-for row"
+-- assertion described a row that no longer exists — the NodeTrail module left
+-- the pack (t_75309c97) and its rows were deleted with this card. What replaces
+-- it is the contract of the row the panel KEPT: "Gear for" is a sub-option of
+-- the Touchstone module row — indented under it, present only while Touchstone
+-- is on, and absent when it is off.
+if boxes and boxes.GearFor then
+  local label = boxes.GearForLabel
+  check(label ~= nil, "Gear for has its own label ('Gear for')")
+  local moduleRow = boxes.Touchstone
+  if moduleRow and label and type(label.points) == "table" and #label.points > 0 then
+    local last = label.points[#label.points]
+    check(last[2] == moduleRow or last[1] == "TOPLEFT",
+      "the Gear-for label is laid out from the module card, not left dangling")
   end
+  if type(pkg.IsModuleEnabled) == "function" then
+    pkg.IsModuleEnabled = function(n) return n == "Touchstone" end
+    pkg.SyncOptionsRows()
+    check(boxes.GearFor:IsShown() == true, "Gear for is visible while Touchstone is on")
+    pkg.IsModuleEnabled = function() return false end
+    pkg.SyncOptionsRows()
+    check(boxes.GearFor:IsShown() == false, "Gear for hides when Touchstone is off")
+    pkg.IsModuleEnabled = function(n) return n == "Touchstone" end
+    pkg.SyncOptionsRows()
+  end
+end
+
+if boxes and boxes.GearFor then
   -- Changing the picker rescans / sets gearFor.
   ChestAdvisor.setGearFor(nil)
   if type(boxes.GearFor.scripts) == "table" and type(boxes.GearFor.scripts.OnClick) == "function" then

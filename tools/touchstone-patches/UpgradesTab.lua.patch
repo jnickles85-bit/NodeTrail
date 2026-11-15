@@ -1,16 +1,27 @@
 --- a/UpgradesTab.lua
 +++ b/UpgradesTab.lua
-@@ -46,10 +46,10 @@
+@@ -46,10 +46,16 @@
  local MARKER_TEXTURE =
    (MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
  
 -local ROW_H   = 34
-+local ROW_H   = 34               -- the LEAST a row may be (a one-line reason)
-+local ROW_PAD = 4                -- inside a row, above the name and below the reason
- local ICON    = 22
- local MARK    = 14
++-- Card t_2d2c37b0: the list's metrics ARE the window's metrics. The pack's
++-- theme publishes them (MightiePack/Theme.lua, T.list) and the literal
++-- fallbacks keep this file loadable on its own — the vendored specs load it
++-- without the pack. ROW_H is a FLOOR, not a pitch: the row model measures the
++-- wrapped reason and grows (card t_4e5ad8a4).
++local LIST = (type(MightiePackTheme) == "table"
++  and type(MightiePackTheme.list) == "table") and MightiePackTheme.list or {}
++local ROW_H     = LIST.rowMin or 34  -- the LEAST a row may be (a one-line reason)
++local ROW_PAD   = LIST.rowPad or 4   -- inside a row, above the name, below the reason
++local ICON      = LIST.icon or 22
++local MARK      = LIST.mark or 14
++local ROW_INSET = LIST.inset or 6
++local NAME_GAP  = LIST.nameGap or 1  -- between a row's name and its reason
+-local ICON    = 22
+-local MARK    = 14
 -local VISIBLE = 12               -- rows that fit the host without scrolling
- local ROW_INSET = 6
+-local ROW_INSET = 6
  
  -- The verdict the advisor reports for a genuine trade-off. Read off the
 @@ -188,6 +188,7 @@
@@ -94,7 +105,7 @@
 +local function rowHeight(row)
 +  local nameH = row.itemName:GetHeight() or 0
 +  local reasonH = row.reason:GetHeight() or 0
-+  local h = ROW_PAD + nameH + 1 + reasonH + ROW_PAD
++  local h = ROW_PAD + nameH + NAME_GAP + reasonH + ROW_PAD
 +  if h < ROW_H then h = ROW_H end
 +  return h
 +end

@@ -111,10 +111,44 @@ end
 
 SLASH_MIGHTIEPACK1 = "/mightiepack"
 SLASH_MIGHTIEPACK2 = "/mpack"
--- t_a5f41944: the card's evidence channel is literally "/mp skindiag".
--- The card's own wording, honored: /mp works, and /mpack skindiag works
--- too (the client matches the longest registered slash first, so /mpack
--- is never shadowed by /mp).
+-- Card t_2d2c37b0 (the reshape): the alias table is now an explicit inventory.
+-- Every slash this pack registers is listed here with the surface it opens, and
+-- every retirement is listed with what replaced it. A dangling alias is worse
+-- than a missing one: the player types the command they have used for months,
+-- gets the generic usage text, and concludes the addon is broken.
+--
+-- Retired by this card (deliberately, listed here so it stays listed):
+--
+--   /nt, /nodetrail     LEFT the pack with NodeTrail (card t_75309c97). The
+--                       standalone addon owns them; the pack registers neither.
+--   /mp skindiag        a SUBCOMMAND, not an alias: it answered for the
+--                       Skinning tab's diagnostics, which left with NodeTrail.
+--                       It is not silently dropped — it answers with where the
+--                       diagnostics went (see the handler below), because a
+--                       player who typed it deserves a sentence, not usage text.
+--
+-- Still live, all of them landing on one of the window's two tabs:
+--
+--   /mp, /mpack, /mightiepack   -> Pack Settings
+--   /up, /upgrade, /chestadvice, /ts,
+--   /touchstone, /sf, /statforge -> Touchstone
+--
+-- The Touchstone aliases are registered by the vendored body and rerouted to
+-- this window by Window/TouchstoneTab.lua's seam; this file does not re-register
+-- them, it only names them, so the inventory and the code cannot disagree
+-- silently (tests/slash_retirement_spec.lua checks both ends).
+pkg.SlashAliases = {
+  { aliases = { "/mightiepack", "/mpack", "/mp" }, tab = "settings", owner = "mightiepack" },
+  { aliases = { "/up", "/upgrade", "/chestadvice", "/ts" }, tab = "touchstone", owner = "chestadvisor" },
+  { aliases = { "/touchstone", "/sf", "/statforge" }, tab = "touchstone", owner = "touchstone" },
+}
+
+pkg.RetiredSlashAliases = {
+  { alias = "/nt", reason = "moved out with NodeTrail (t_75309c97) — the standalone addon owns it" },
+  { alias = "/nodetrail", reason = "moved out with NodeTrail (t_75309c97) — the standalone addon owns it" },
+  { alias = "/mp skindiag", reason = "a subcommand for the Skinning tab's diagnostics, which left with NodeTrail" },
+}
+
 SLASH_MIGHTIEPACK3 = "/mp"
 
 --- Is the standalone NodeTrail addon installed on this client?
@@ -242,6 +276,18 @@ SlashCmdList.MIGHTIEPACK = function(msg)
       pkg.Print("NodeTrail: a separate addon, installed (/nt help for its commands)")
     else
       pkg.Print("NodeTrail: a separate addon, not installed")
+    end
+  elseif first == "skindiag" or first == "herbs" or first == "skinning" then
+    -- Retired by card t_2d2c37b0. These answered for the Herbs and Skinning
+    -- tabs' diagnostics; both tabs left with NodeTrail (t_75309c97). The player
+    -- gets a sentence naming where they went instead of the generic usage text:
+    -- a retired command that shrugs is indistinguishable from a broken one.
+    local nt = type(pkg.NodeTrailInstalled) == "function" and pkg.NodeTrailInstalled() == true
+    pkg.Print("/mp " .. first .. " moved out of the pack with NodeTrail.")
+    if nt then
+      pkg.Print("NodeTrail is installed here: /nt " .. first .. " (or /nt help).")
+    else
+      pkg.Print("Install NodeTrail (separate addon) for the herb and skinning diagnostics.")
     end
   elseif first == "bug" then
     -- Same popup as the options-panel "Report a bug" button.

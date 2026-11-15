@@ -23,18 +23,25 @@
 local _, pkg = ...
 
 local W = pkg.Window
+local T = pkg.Theme
 local SF = rawget(_G, "StatForge")
-local T = {}
-if type(W) == "table" then W.TouchstoneTab = T end
+local TAB = {}
+if type(W) == "table" then W.TouchstoneTab = TAB end
 
 local function body(host)
-  if type(T.body) == "table" then return T.body end
+  if type(TAB.body) == "table" then return TAB.body end
   local C = W and W.UI
   if type(C) ~= "table" or type(host) ~= "table" then return nil end
-  local fs = C.Label(host, "GameFontNormalLarge", "")
+  local fs = C.Label(host, "display", "")
   if type(fs) ~= "table" then return nil end
-  pcall(fs.SetPoint, fs, "TOPLEFT", host, "TOPLEFT", 8, -8)
-  T.body = fs
+  if type(T) == "table" then
+    local r, g, b, a = T.R("textMuted")
+    pcall(fs.SetTextColor, fs, r, g, b, a)
+    pcall(fs.SetPoint, fs, "TOPLEFT", host, "TOPLEFT", T.space.md, -T.space.md)
+  else
+    pcall(fs.SetPoint, fs, "TOPLEFT", host, "TOPLEFT", 8, -8)
+  end
+  TAB.body = fs
   return fs
 end
 
@@ -108,6 +115,9 @@ if type(SF) == "table" and type(W) == "table" then
   end
 
   SF.RefreshActiveTab = function()
+    -- The status line reads live state, so a refresh is exactly when it can
+    -- have changed (a bag open, a rescan, a deferral clearing).
+    if type(W.PaintStatus) == "function" then pcall(W.PaintStatus) end
     if W.IsOn("touchstone") and type(W._sfRefresh) == "function" then
       return W._sfRefresh()
     end
