@@ -82,12 +82,12 @@ W.TAB_LABELS = {
 -- StatForgeDB.ui.* or any other existing position/scale key.
 W.POS_KEY = "windowPos"
 
--- The vendored body's own title bar is 40px tall and its inner strip 32px.
--- These are UPSTREAM geometry, not our design: AttachTouchstone recognises the
--- body's children by them. They live here, named, so nothing else in the file
--- compares against a bare number that looks like a layout choice.
-local VENDORED_TITLE_H = 40
-local VENDORED_STRIP_H = 32
+-- The vendored body's own chrome (a 40px title bar, a close button, a bordered
+-- content frame) is not recognised from here any more (card t_07f778ca, review
+-- 2). The pack tells the body it is hosted — SF.SetHostedChrome(true) — and the
+-- body's own creation path skips that chrome. Matching the title bar by its
+-- measured height was the defect: the harness and the live client disagreed,
+-- and the client kept drawing the title bar and its close button.
 
 local function call(obj, name, ...)
   local f = type(obj) == "table" and obj[name]
@@ -890,21 +890,34 @@ end
 
 -- ── The vendored Touchstone frame becomes the Touchstone tab ──────────────
 --- Move StatForgeMainFrame in whole. Its inner strip (Upgrades / Log /
---- Settings) is untouched: the frame keeps its own tab renderers, its own
---- scale memory (StatForgeDB.ui.scale, applied to this frame) and its own
---- first-use splash. Only its outer chrome goes: the title bar is hidden
---- (the unified window has the only title and the only close button) and the
---- strip is re-anchored to the top of the frame so the hidden band is not a
---- gap.
+--- Settings) stays as navigation: the frame keeps its own tab renderers, its
+--- own scale memory (StatForgeDB.ui.scale, applied to this frame) and its own
+--- first-use splash.
+---
+--- HOSTED, THE BODY DRAWS NO CHROME OF ITS OWN (card t_07f778ca, review 2).
+--- The window owns the only title, the only close button and the only frame, so
+--- the body is told that BEFORE it is created — SF.SetHostedChrome(true), which
+--- the vendored UI reads in its own creation path — and told again on the live
+--- frame, for a body a /ts session had already built. This file no longer hides
+--- a title bar, guesses at the strip or strips the content frame's border: the
+--- body does that itself, from a flag it was given, in the file that owns it.
+--- Matching chrome by measuring a child's height is the defect this replaces —
+--- on the live client the measurement did not hide the bar, and nothing asserted
+--- the rendered result.
 function W.AttachTouchstone()
   local host = W.hosts and W.hosts.touchstone
   if type(host) ~= "table" then return false end
   local SF = rawget(_G, "StatForge")
   if type(SF) ~= "table" then return false end
+  -- Before anything is created: the body's creation path must know it is hosted
+  -- (otherwise it builds a title bar and a close button we would have to find
+  -- and hide afterwards, which is the mistake).
+  local hostedHook = type(SF.SetHostedChrome) == "function" and SF.SetHostedChrome or nil
+  if hostedHook then pcall(hostedHook, true) end
   local main = rawget(_G, "StatForgeMainFrame")
   if type(main) ~= "table" then
-    -- Not created yet: the module was enabled but nobody has opened it. The
-    -- vendored entry point creates it, selects a tab and may show the splash.
+    -- Not created yet: the vendored entry point creates it, selects a tab and
+    -- may show the splash.
     if type(W._sfShowMain) == "function" then
       pcall(W._sfShowMain, "upgrades")
       main = rawget(_G, "StatForgeMainFrame")
@@ -913,6 +926,7 @@ function W.AttachTouchstone()
   if type(main) ~= "table" then return false end
   if W._touchstoneHosted and select(2, call(main, "GetParent")) == host then
     call(main, "Show")
+    if hostedHook then pcall(hostedHook, true) end
     return true
   end
   call(main, "SetParent", host)
@@ -927,51 +941,21 @@ function W.AttachTouchstone()
   -- BACKGROUND-strata frame (W.bg), and this line keeps the body above it.
   call(main, "SetFrameStrata", "MEDIUM")
   call(main, "Show")
-  -- ONE WINDOW, ONE FRAME (card t_07f778ca, PART A2).
-  --
-  -- The body arrived with its OWN bordered backdrop: a 1px box around
-  -- StatForgeMainFrame, drawn inside the window. Hosted, that is a second,
-  -- nested frame — the box the owner saw in the Settings screenshot. The
-  -- window is the only chrome here, so the body's edge goes and its fill
-  -- becomes transparent. Its backdrop TABLE stays (the rows still paint on it,
-  -- and a later SetBackdropColor by the body is a colour, not a frame): what is
-  -- removed is the border and the fill, nothing else.
+  -- ONE WINDOW, ONE FRAME (card t_07f778ca, PART A2). The body's own backdrop
+  -- is claimed here as well: it keeps its backdrop TABLE (the rows still paint
+  -- on it) but paints no border and no fill. This is Part A's approved
+  -- statement of "the window is the only frame"; the body's own hosted mode
+  -- handles its chrome, its content frame and its palette.
   if type(main.SetBackdrop) == "function" then
     call(main, "SetBackdrop", {
       bgFile = T.tex.solid, tile = false, insets = T.inset.zero,
     })
     call(main, "SetBackdropColor", 0, 0, 0, 0)
   end
-  -- Hide the title bar. The frame's children in creation order are titleBar
-  -- (height 40), tabStrip (height 32), contentFrame and, on a first use, the
-  -- splash cover (which fills the frame). Matching on the 40px height picks
-  -- the title bar and nothing else; if the vendored layout ever changes, the
-  -- worst case is a second title bar drawn inside the tab, never a broken tab.
-  local okKids, kids = call(main, "GetChildren")
-  if okKids and type(kids) == "table" then
-    for _, child in ipairs(kids) do
-      if type(child) == "table" and num(child, "GetHeight") == VENDORED_TITLE_H then
-        call(child, "Hide")
-        W._hiddenTitleBar = child
-      end
-    end
-  end
-  -- Re-anchor the inner strip to the top so the hidden title band is not a
-  -- 40px hole. contentFrame hangs off the strip, so it follows.
-  local strip = nil
-  if okKids and type(kids) == "table" then
-    for _, child in ipairs(kids) do
-      if type(child) == "table" and child ~= W._hiddenTitleBar
-        and num(child, "GetHeight") == VENDORED_STRIP_H then
-        strip = child
-      end
-    end
-  end
-  if type(strip) == "table" then
-    call(strip, "ClearAllPoints")
-    call(strip, "SetPoint", "TOPLEFT", main, "TOPLEFT", T.space.sm + T.space.xs, -T.space.sm)
-    call(strip, "SetPoint", "TOPRIGHT", main, "TOPRIGHT", -(T.space.sm + T.space.xs), -T.space.sm)
-  end
+  -- Hosted mode, on the live frame: a body created before the flag existed (a
+  -- /ts session, or a client that loaded the window late) loses its title bar,
+  -- its close button, its border, its fill and its vendored accent here.
+  if hostedHook then pcall(hostedHook, true) end
   if type(UISpecialFrames) == "table" then
     for i = #UISpecialFrames, 1, -1 do
       if UISpecialFrames[i] == "StatForgeMainFrame" then

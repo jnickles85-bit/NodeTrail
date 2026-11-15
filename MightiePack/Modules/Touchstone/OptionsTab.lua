@@ -21,6 +21,12 @@ StatForge = StatForge or {}
 local SF = StatForge
 local C = SF.Colors
 
+-- Hosted, the pack window owns the palette (card t_07f778ca). Every accent
+-- heading below asks SF.UI_SetAccent, which paints the body's own teal when this
+-- tab stands alone and the pack's ledger reading colour when MightiePack hosts
+-- it. The literal SetTextColor(C.accent...) in a heading is exactly the "module
+-- teal" the owner saw inside the window after the pack took the body over.
+
 -- The host the tab last rendered into. Nothing reads it for behaviour; the layout
 -- snapshot (SF.OptionsTabLayout) needs it because the regions live ON the host.
 local currentHost
@@ -190,7 +196,7 @@ local function build(host)
   host.scroll = 0
 
   local title = SF.UI_CreateLabel(content, "Options", "GameFontNormalLarge")
-  title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+  SF.UI_SetAccent(title)
   host.title = title
 
   local hideMini = StatForgeDB and StatForgeDB.minimapHide
@@ -314,7 +320,7 @@ local function build(host)
   -- "What Touchstone shows". Every control writes through the slash handler
   -- that already owns the ChestAdvisorDB key, then syncShown re-reads it.
   local shows = SF.UI_CreateLabel(content, "What Touchstone shows", "GameFontNormal")
-  shows:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+  SF.UI_SetAccent(shows)
   host.showsHeader = shows
 
   local detailLabel = SF.UI_CreateLabel(content, "Tooltip detail", "GameFontHighlight")
@@ -403,7 +409,7 @@ local function build(host)
   host.resetButton = resetBtn
 
   local roleHeader = SF.UI_CreateLabel(content, "Role", "GameFontNormal")
-  roleHeader:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+  SF.UI_SetAccent(roleHeader)
   host.roleHeader = roleHeader
 
   local classLabel = SF.UI_CreateLabel(content, "Class:", "GameFontHighlight")
@@ -457,7 +463,7 @@ local function build(host)
   about:SetWidth(840)
   about:SetJustifyH("LEFT")
   about:SetText(
-    SF.Accent("About") .. "\n\n" ..
+    SF.UI_AccentText("About") .. "\n\n" ..
     (function()
       local packVer
       local pkg = rawget(_G, "MightiePack")
@@ -482,6 +488,16 @@ local function build(host)
   )
   about:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.about = about
+  -- Card t_07f778ca, review 2: this block carries the accent as a COLOUR CODE
+  -- inside the string, which no SetTextColor repaint can reach. Register a
+  -- repaint so a body adopted after this tab was built does not keep the
+  -- module's teal code in its first line.
+  if type(SF.OnAccentRepaint) == "function" and type(SF.UI_AccentText) == "function" then
+    local rest = tostring(about:GetText()):gsub("^|cff%x+About|r", "", 1)
+    SF.OnAccentRepaint(function()
+      about:SetText(SF.UI_AccentText("About") .. rest)
+    end)
+  end
 
   -- The stack, in draw order. Each entry is { region, x, gap, h }:
   --   region — the block's top-left owner (a composite block owns its first row);
