@@ -1878,22 +1878,125 @@ local function tooltipRowFor(tip, data)
 	return nil
 end
 
--- The post-call. Signature matches both shapes the reference uses:
--- AddTooltipPostCall hands us (tooltip, data, ...); the HookScript fallback
--- hands us (tooltip) with no data, so `data` is optional and the displayed item
--- is then resolved from the tooltip itself.
-local function tooltipPostCall(tip, data)
-	if not TOOLTIP_UI.enabled() then return end
-	if type(tip) ~= "table" then return end
+-- What the tooltip should say for the item it is showing, or nil. Shared by
+-- both hook surfaces below, so the pre-call and the post-call fallback can never
+-- disagree about which rows earn a line.
+local function tooltipVerdictFor(tip, data)
 	local row = tooltipRowFor(tip, data)
-	if row == nil then return end
-	if tooltipHasOurLine(tip) then return end
+	if row == nil then return nil end
 	local order
 	do
 		local spec = buildSpec()
 		order = spec and spec.order or nil
 	end
-	local lines = verdictLines(row, order)
+	return verdictLines(row, order)
+end
+
+-- ---------------------------------------------------------------------------
+-- WHERE THE LINE LANDS (card t_92e703ac)
+-- ---------------------------------------------------------------------------
+-- The verdict is the ANSWER, so it belongs immediately under the item's own
+-- stats and ABOVE every third-party block (TSM's General Info / Accounting /
+-- AuctionDB). Measured on this client's own UI source, not guessed:
+--
+--   _client_reference/wow-ui-source-forever-1.60.1.70205/Interface/AddOns/
+--     Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua
+--       :195  TooltipDataProcessor.AddTooltipPreCall(tooltipType, func) exists
+--       :245  InternalProcessInfo: ClearLines -> infoList[1] = info ->
+--             ProcessTooltipPreCalls(tooltipType, self, tooltipData)  (:284)
+--             -> self:ProcessLines()                                  (:292)
+--             -> ProcessTooltipPostCalls(...)                         (:298)
+--             -> self:Show()                                          (:300)
+--       :309  ProcessLines iterates `info.tooltipData.lines` IN ORDER
+--       :338  AddLineDataText renders one lineData (leftText/rightText/
+--             leftColor/wrapText) through GameTooltip_AddColoredLine
+--       :358  RebuildFromTooltipInfo re-processes each info on
+--             TOOLTIP_DATA_UPDATE (re-fetching when the info has a getter)
+--
+-- So the tooltip's own lines ARE `tooltipData.lines`, and every other addon's
+-- content is appended AFTER them (TSM: LibTSMWoW/.../TooltipWrapper.lua:98, a
+-- post-call with embeddedTooltip on; RXPGuides: ItemUpgrades.lua:652 /
+-- QuestLog.lua, an OnTooltipSetItem hook). A line inserted at the END of
+-- `tooltipData.lines` in a PRE-call is therefore drawn with the item's own
+-- block: after its last stat line, before anything a third-party addon adds,
+-- and that is structural — it does not depend on which addon registered its
+-- hook first, which is exactly the dependency the old append-at-the-end post-call
+-- had (it landed under nine lines of TSM data on the owner's client).
+--
+-- The client gives no "insert a line at index N" API for the RENDERED tooltip
+-- (GameTooltip_InsertFrame, SharedTooltipTemplates.lua:203, appends blank lines
+-- and anchors a FRAME at the end), so the data list is the only supported
+-- insertion point. Nothing here reads or patches another addon's files.
+local TOOLTIP_LINE_MARK = "__touchstoneVerdict"
+
+-- A colour object for the client's line-data model: AddLineDataText does
+-- `leftColor:GetRGB()` (AddLineDataText -> GameTooltip_AddColoredLine), so this
+-- is the shape the client actually consumes. The visible colour still comes from
+-- the escape the text already carries (TOOLTIP_GREEN / AMBER / GREY); the triple
+-- is supplied so the rendered line is identical to the AddLine path, not a
+-- different colour source.
+local function dataLineColour(esc)
+	local r, g, b = colorTriple(esc)
+	if type(CreateColor) == "function" then
+		local ok, colour = pcall(CreateColor, r, g, b)
+		if ok and type(colour) == "table" then return colour end
+	end
+	-- A client without CreateColor: the one method the render path calls.
+	return { GetRGB = function() return r, g, b end }
+end
+
+-- THE PRE-CALL — the shipping path. Inserts our lines at the end of the item's
+-- own line list, before the client draws it.
+local function tooltipPreCall(tip, data)
+	if not TOOLTIP_UI.enabled() then return end
+	if type(data) ~= "table" or type(data.lines) ~= "table" then return end
+	-- The item's OWN block only. An appended info section (info.append: a second
+	-- SetX stacked onto this tooltip) goes through the same pre-call, and a line
+	-- there would be a second verdict on someone else's section.
+	if type(tip) == "table" and type(tip.GetPrimaryTooltipData) == "function" then
+		local ok, primary = pcall(tip.GetPrimaryTooltipData, tip)
+		if ok and primary ~= nil and primary ~= data then return end
+	end
+	-- One line per build. A rebuild (TOOLTIP_DATA_UPDATE -> RebuildFromTooltipInfo)
+	-- reuses a CACHED data table when the info carries no getter, so the guard has
+	-- to live in the data itself; a re-fetch hands us a fresh table and the line
+	-- is rebuilt from scratch. Either way: exactly one verdict line, always.
+	local lines = data.lines
+	local at = #lines
+	for i = 1, at do
+		local ld = lines[i]
+		if type(ld) == "table" and ld[TOOLTIP_LINE_MARK] then return end
+	end
+	local built = tooltipVerdictFor(tip, data)
+	if built == nil then return end
+	for i = 1, #built do
+		local l = built[i]
+		lines[at + i] = {
+			leftText = l.text,
+			leftColor = dataLineColour(l.colour == "green" and TOOLTIP_GREEN
+				or l.colour == "amber" and TOOLTIP_AMBER or TOOLTIP_GREY),
+			-- The client's WRAP flag (card t_cf2ad83c, U2/1): without it a long
+			-- reason widens the whole tooltip to fit its longest line.
+			wrapText = true,
+			[TOOLTIP_LINE_MARK] = true,
+		}
+	end
+	-- Never return true: a pre-call that returns true TERMINATES the tooltip.
+end
+
+-- The post-call. Signature matches both shapes the reference uses:
+-- AddTooltipPostCall hands us (tooltip, data, ...); the HookScript fallback
+-- hands us (tooltip) with no data, so `data` is optional and the displayed item
+-- is then resolved from the tooltip itself.
+--
+-- FALLBACK ONLY. It appends, so its place depends on every other addon's hook
+-- order — which is the defect this card fixes. Kept for a client whose
+-- TooltipDataProcessor has post-calls but no pre-calls.
+local function tooltipPostCall(tip, data)
+	if not TOOLTIP_UI.enabled() then return end
+	if type(tip) ~= "table" then return end
+	if tooltipHasOurLine(tip) then return end
+	local lines = tooltipVerdictFor(tip, data)
 	if lines == nil then return end
 	-- AddLine, and nothing else: no Show(), no SetOwner(). pcall keeps a client
 	-- whose tooltip lacks AddLine from taking the whole hover down with it.
@@ -1914,17 +2017,28 @@ end
 -- Install ONCE. The modern path first, the HookScript fallback second — the
 -- reference's own pair, in the reference's own order, because that pair is the
 -- evidence this API surface exists on this client build.
+--
+-- Card t_92e703ac: the PRE-call is preferred — it is the only surface that can
+-- put the line above another addon's (see the block above). The post-call is
+-- kept as the fallback for a client without AddTooltipPreCall, and it is
+-- registered INSTEAD of the pre-call, never both, so the line can never print
+-- twice.
 local tooltipHooked = false
 local function installTooltipHook()
 	if tooltipHooked then return end
 	tooltipHooked = true
-	if type(TooltipDataProcessor) == "table"
-		and type(TooltipDataProcessor.AddTooltipPostCall) == "function"
-		and type(Enum) == "table"
-		and type(Enum.TooltipDataType) == "table"
-		and Enum.TooltipDataType.Item ~= nil then
-		TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, tooltipPostCall)
-		return
+	local processor = TooltipDataProcessor
+	local dataType = type(Enum) == "table" and type(Enum.TooltipDataType) == "table"
+		and Enum.TooltipDataType.Item or nil
+	if type(processor) == "table" and dataType ~= nil then
+		if type(processor.AddTooltipPreCall) == "function" then
+			processor.AddTooltipPreCall(dataType, tooltipPreCall)
+			return
+		end
+		if type(processor.AddTooltipPostCall) == "function" then
+			processor.AddTooltipPostCall(dataType, tooltipPostCall)
+			return
+		end
 	end
 	-- Fallback for unexpected API changes during beta.
 	if GameTooltip and type(GameTooltip.HookScript) == "function" then

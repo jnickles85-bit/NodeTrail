@@ -57,7 +57,20 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # Pinned, not "main": a sync must reproduce the tree it was reviewed against, and
 # `git clone --branch main` would silently move with upstream. `--ref main` still
 # resolves to whatever main is at run time, for a deliberate catch-up.
-SOURCE_REF = "30f3d3263c1ce1556122c107beb9c10a9d2db6b7"
+#
+# Provenance of the pin (v0.3.8-beta):
+#   ec947b39fa00710faec07d75085ab34b3c219b6b
+#   StatForge main, "Merge pull request #97 from jnickles85-bit/wt/t_0153f144"
+#   (2026-11-15). It carries three merged PRs over the previous pin 30f3d32:
+#     #95 / wt/t_92e703ac  the verdict line is drawn with the item's own lines,
+#                          above every third-party block (tooltip placement)
+#     #96 / wt/t_fc11dd1c  every refusal names its side (hovered / equipped) and
+#                          carries no judged on-hit clause
+#     #97 / wt/t_0153f144  the changed-verdict sweep pins its base to a NAMED
+#                          revision instead of origin/main
+#   It does NOT carry Slice 1 (bag arrows, quest marks, GearAPI); that merged
+#   after this cut and is v0.3.9 material.
+SOURCE_REF = "ec947b39fa00710faec07d75085ab34b3c219b6b"
 
 # Order is load-bearing. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).

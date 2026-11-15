@@ -1,28 +1,24 @@
-Card t_24a4c8ea re-cut this patch against StatForge 30f3d32 (the merge that
-carries PR #93's weapon grammar and PR #94's DD-2 healing pricing). Every hunk
-that still anchored at the new pin is byte-identical to the pre-30f3d32 patch;
-the differences are these, and nothing else:
+Card t_f10c53f5 re-cut this patch against StatForge ec947b3 (main at "Merge
+pull request #97" — PR #95 tooltip placement, PR #96 side-named refusals,
+PR #97 the changed-verdicts base fix). Every hunk is regenerated as
+diff(pristine at ec947b3, intended), so nothing here is a hunk read off the
+shipped file.
 
-  * the KNOWN word keys are re-anchored and TRIMMED. HealingPower, SpellDamage,
-    HolyDamage, FireDamage, FrostDamage, ShadowDamage, NatureDamage and
-    ArcaneDamage are DROPPED: DD-2 declares Healing, SpellDamage and the six
-    school powers itself, so the pack's older spellings would have been a second
-    vocabulary for one stat (a duplicate ITEM_MOD key even won silently over
-    DD-2's, which is how "+34 Healing" and "+34 HealingPower" would have split).
-  * the healing / school / damage-only PARSE clauses are DROPPED for the same
-    reason: DD-2 reads those sentences into its own words. What survives is the
-    two sentences DD-2 does not read (spell penetration, shield block value) and
-    the prefix-less spelling of the spell-power sentence, kept verbatim.
-  * the API_WORD_TEXT block is TRIMMED to the words DD-2 has no entry for, and
-    upstream's SpellPower needle list is left as upstream wrote it.
-  * the packs' TIERS name the reader's words (HealingPower -> Healing, school
-    damage -> <School>Power), so the tier that prices a healing line is still
-    the same tier and a Holy paladin's #1 priority still decides.
-  * the order-only WEAPON branch (old hunk 21) is RE-ANCHORED above the statLed
-    split and now spends the same refusal predicates the stat-led path spends
-    (unknown/proc by name, unpriced word, unconfirmed unit), so it cannot bypass
-    the gates #93 added — and every answer still travels through `answer`, so a
-    proc weapon keeps its clause.
+All 22 hunks of the 30f3d32 patch still anchored at the new pin — measured hunk
+by hunk before the bump — and their intended text is unchanged. Two things the
+re-cut carries on top of that:
+
+  * the order-only WEAPON branch (old hunk 21) now spends upstream's own
+    refusal wording. Its three `cannot classify:` gates were pack-local copies
+    that printed the bare line with no side, so on a Ret pair the reader still
+    said "cannot classify: Enchanted: Weapon Damage +5" — the exact sentence
+    card t_fc11dd1c (PR #96) removed everywhere else, because "try another
+    item" and "take the enchant off what you are wearing" are different
+    instructions. They now call cannotClassify("candidate"|"worn", line), the
+    helper that PR #96 spelled once for all six upstream gates, so the pack's
+    branch inherits the same vocabulary instead of a seventh dialect.
+  * nothing else changed: the KNOWN word table, the parse clauses, the API word
+    text, the tiers and the tier walk are byte-identical to the 30f3d32 re-cut.
 
 Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
 
@@ -2085,7 +2081,7 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
  end
  
  -- ⚠ TEST INSTRUMENTATION ONLY, exactly like Verdict.LEGACY_ORDER_DECIDES above.
-@@ -5198,10 +6818,12 @@
+@@ -5231,10 +6851,12 @@
  		end
  	end
  
@@ -2102,7 +2098,7 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
  	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
  	if sp then
  		local v = tonumber((sp:gsub(",", ".")))
-@@ -5762,6 +7384,82 @@
+@@ -5814,6 +7436,82 @@
  		return v, tostring(r or "") .. onHitNote
  	end
  
@@ -2142,7 +2138,7 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
 +				parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
 +			local bad = fillUnknown or fillProc
 +			if bad ~= nil then
-+				return answer("UNKNOWN", "cannot classify: " .. tostring(bad))
++				return answer(cannotClassify("candidate", tostring(bad)))
 +			end
 +			local unpricedFill = Verdict.unpricedWord(fillStats)
 +			if unpricedFill ~= nil then
@@ -2157,10 +2153,10 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
 +		local badCand = tierUnknown or tierProc
 +		local badEq = tierEqUnknown or tierEqProc
 +		if badCand ~= nil then
-+			return answer("UNKNOWN", "cannot classify: " .. tostring(badCand))
++			return answer(cannotClassify("candidate", tostring(badCand)))
 +		end
 +		if badEq ~= nil then
-+			return answer("UNKNOWN", "cannot classify: " .. tostring(badEq))
++			return answer(cannotClassify("worn", tostring(badEq)))
 +		end
 +		local unpriced = Verdict.unpricedWord(tierCand) or Verdict.unpricedWord(tierEq)
 +		if unpriced ~= nil then
@@ -2185,7 +2181,7 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
  	local statLed = type(spec) == "table"
  		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
  		and type(spec.order) == "table"
-@@ -5900,6 +7598,7 @@
+@@ -5952,6 +7650,7 @@
  		outcome = Verdict.dominance(candStats, eqStats, order)
  	end
  

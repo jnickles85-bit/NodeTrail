@@ -5739,6 +5739,39 @@ local function apiSideResolve(side)
 	return side, nil
 end
 
+-- ---- Refusal wording (card t_fc11dd1c) --------------------------------------
+-- "cannot classify: <line>" is the reason this module gives when a suppression
+-- gate stops a pair, and that gate always fires for ONE side. Until this card
+-- the string threw that knowledge away, and the owner read the consequence off
+-- his first live hover: a Fishing Pole (no enchant of its own) compared against
+-- a permanently-enchanted Wolfsbane refused
+--
+--     cannot classify: Enchanted: Weapon Damage +5
+--
+-- which points at the item in the player's bag when the unreadable line is on
+-- the weapon being WORN. That is not cosmetic: "try another item" and "take the
+-- enchant off what you are wearing" are different instructions.
+--
+-- ONE spelling, ONE place. Every suppression gate that names a line calls this
+-- helper — gates 5 and 5a (candidate) and 8 and 8a (equipped) on the armour
+-- path, and the two unmapped-key gates on the weapon path — so the two sides
+-- cannot drift apart, and a gate added later inherits the wording instead of
+-- inventing a sixth dialect.
+--
+-- The vocabulary is the PLAYER's, not this module's: `candidate`/`worn` are
+-- parseSide's internal labels; what the player is looking at is the HOVERED item
+-- and the EQUIPPED one. "item" rather than "weapon" because this helper serves
+-- both comparators, and a weapon is an item.
+local REFUSAL_SIDE_WORD = { candidate = "hovered", worn = "equipped" }
+local function cannotClassify(side, line, qualifier)
+	local which = REFUSAL_SIDE_WORD[side] or tostring(side)
+	local reason = "cannot classify: " .. tostring(line)
+	if qualifier ~= nil then
+		return "UNKNOWN", reason .. " (" .. qualifier .. "; on the " .. which .. " item)"
+	end
+	return "UNKNOWN", reason .. " (on the " .. which .. " item)"
+end
+
 -- `slotWord` (card t_d88b7f28, item 3) is OPTIONAL and is the display word for
 -- the worn slot this pair is judged in ("chest", "legs", "finger"). It is used by
 -- ONE branch — the empty-slot shortcut, gate 6 — so that the reason names the
@@ -5852,8 +5885,8 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	--     alike: an unclassified stat on the candidate wins in both slot
 	--     states, the same AC-E13(a) placement gate 5 itself has.
 	if type(candUnmapped) == "table" and #candUnmapped > 0 then
-		return "UNKNOWN", "cannot classify: " .. candUnmapped[1]
-			.. " (a client stat key this addon has not verified)"
+		return cannotClassify("candidate", candUnmapped[1],
+			"a client stat key this addon has not verified")
 	end
 
 	-- Gate (5) — a suppressing line on the CANDIDATE: a proc line
@@ -5867,7 +5900,7 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	--     comparator's `equal` fall-through, after every suppression gate.)
 	if candProc ~= nil or candUnknown ~= nil then
 		local which = candProc or candUnknown
-		return "UNKNOWN", "cannot classify: " .. which
+		return cannotClassify("candidate", which)
 	end
 
 	-- Gate (5b) — a mapped word whose unit is UNCONFIRMED, on the
@@ -5968,8 +6001,8 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	--     too — the player is not compared against a half-read item, and the
 	--     unknown stat is never priced as the zero it is not.
 	if type(wornUnmapped) == "table" and #wornUnmapped > 0 then
-		return "UNKNOWN", "cannot classify: " .. wornUnmapped[1]
-			.. " (a client stat key this addon has not verified)"
+		return cannotClassify("worn", wornUnmapped[1],
+			"a client stat key this addon has not verified")
 	end
 
 	-- Gate (8) — a suppressing line on the EQUIPPED side: the same proc /
@@ -5978,7 +6011,7 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	--     UNKNOWN (unchanged from the old combined Gate 7).
 	if eqProc ~= nil or eqUnknown ~= nil then
 		local which = eqProc or eqUnknown
-		return "UNKNOWN", "cannot classify: " .. which
+		return cannotClassify("worn", which)
 	end
 
 	-- Gate (8b) — THE SAME gate on the EQUIPPED side (card t_e2603a9c, item
@@ -7354,6 +7387,16 @@ end
 --                           reader cannot place on a weapon line) reaches the
 --                           weapon path's two gates.
 -- Returns verdict, reason — the same contract as compareDPS.
+--
+-- WEAPON_JUDGED (card t_fc11dd1c) — the verdict words this path emits as a
+-- DECISION. Spelled ONCE, here, and read by `answer` below: an UNKNOWN is the one
+-- word this path emits as a REFUSAL, and a refusal must not inherit a clause that
+-- says "and here is what I judged it on". A new verdict word has to be added here
+-- deliberately rather than getting the clause by default. TRADE_OFF is keyed by
+-- its own value (spelled ONCE, at its definition above) so a re-spelling of that
+-- literal cannot silently drop it from the set.
+local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
+
 function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide)
 	local candNumbers = weaponNumbers(candLines)
 	local wornNumbers = weaponNumbers(wornLines)
@@ -7380,7 +7423,16 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		if onHitNote ~= "" then break end
 	end
 	local function answer(v, r)
-		if onHitNote == "" then return v, r end
+		-- (card t_fc11dd1c) ONLY A JUDGED VERDICT CARRIES THE CLAUSE. The note means
+		-- "and here is what I judged it on", which is true of a decision and false
+		-- of a refusal: the owner's first live hover printed
+		--   cannot classify: Enchanted: Weapon Damage +5 (judged, with an unpriced
+		--   on-hit effect)
+		-- , a sentence that says "I could not judge this" and "here is what I
+		-- judged it on" at once. The proc came from the worn weapon's own line and
+		-- the refusal from the next unreadable one; the note must not survive the
+		-- refusal. A judged pair is byte-identical to before this card.
+		if onHitNote == "" or not WEAPON_JUDGED[tostring(v)] then return v, r end
 		return v, tostring(r or "") .. onHitNote
 	end
 
@@ -7420,7 +7472,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 				parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
 			local bad = fillUnknown or fillProc
 			if bad ~= nil then
-				return answer("UNKNOWN", "cannot classify: " .. tostring(bad))
+				return answer(cannotClassify("candidate", tostring(bad)))
 			end
 			local unpricedFill = Verdict.unpricedWord(fillStats)
 			if unpricedFill ~= nil then
@@ -7435,10 +7487,10 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		local badCand = tierUnknown or tierProc
 		local badEq = tierEqUnknown or tierEqProc
 		if badCand ~= nil then
-			return answer("UNKNOWN", "cannot classify: " .. tostring(badCand))
+			return answer(cannotClassify("candidate", tostring(badCand)))
 		end
 		if badEq ~= nil then
-			return answer("UNKNOWN", "cannot classify: " .. tostring(badEq))
+			return answer(cannotClassify("worn", tostring(badEq)))
 		end
 		local unpriced = Verdict.unpricedWord(tierCand) or Verdict.unpricedWord(tierEq)
 		if unpriced ~= nil then
@@ -7509,12 +7561,12 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	local candWords, candUnmapped = apiSideResolve(api and rawget(api, "candidate"))
 	local wornWords, wornUnmapped = apiSideResolve(api and rawget(api, "worn"))
 	if type(candUnmapped) == "table" and #candUnmapped > 0 then
-		return "UNKNOWN", "cannot classify: " .. candUnmapped[1]
-			.. " (a client stat key this addon has not verified)"
+		return cannotClassify("candidate", candUnmapped[1],
+			"a client stat key this addon has not verified")
 	end
 	if type(wornUnmapped) == "table" and #wornUnmapped > 0 then
-		return "UNKNOWN", "cannot classify: " .. wornUnmapped[1]
-			.. " (a client stat key this addon has not verified)"
+		return cannotClassify("worn", wornUnmapped[1],
+			"a client stat key this addon has not verified")
 	end
 
 	-- An EMPTY slot keeps today's exact answer AND reason: filling the main hand
