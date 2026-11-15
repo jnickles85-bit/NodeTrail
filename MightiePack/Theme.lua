@@ -89,7 +89,7 @@ T.pack = {
   tabOff = { base = "black", alpha = 0.0 },
   tabHover = { base = "surfaceHover", alpha = 0.70 },
   tabActive = { base = "bg", alpha = 0.90 },
-  tabUnder = { base = "accent", alpha = 1 },
+  tabUnder = { base = "text", alpha = 1 },   -- the render draws it WHITE, not the body's teal
   -- The status dot, one colour per real state (see Window.Status).
   dotOff = { base = "textDim", alpha = 1 },
   dotMissing = { base = "danger", alpha = 1 },
