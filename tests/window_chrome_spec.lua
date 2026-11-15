@@ -143,6 +143,14 @@ check(strip.height == T.size.tabStrip,
 check(strip.top == band.bottom, "the tab strip starts exactly where the band ends")
 
 local pad = T.space.md
+-- CHANGED by card t_07f778ca (PART B3): the tab's content no longer starts one
+-- step below the TAB STRIP — the summary strip (V4's line, under V1's tab bar)
+-- now sits between them, so the content starts one step below the STRIP'S
+-- SUMMARY BAND. The rule is the same rule (one step of air, then the content);
+-- the frame it measures from is new. The summary band itself is chrome and is
+-- added to the overlap check below.
+local summaryRect = rect(W.summaryFrame)
+local contentTop = summaryRect.bottom - T.space.sm
 for _, id in ipairs(W.TABS) do
   local h = rect(W.hosts[id])
   check(math.abs(h.left - (win.left + pad)) < 0.5,
@@ -154,17 +162,30 @@ for _, id in ipairs(W.TABS) do
   check(math.abs(h.bottom - (win.bottom + pad)) < 0.5,
     (id .. ": the content ends one content-pad above the frame's bottom (%.0f vs %.0f)")
       :format(h.bottom, win.bottom + pad))
-  check(math.abs(h.top - (strip.bottom - T.space.sm)) < 0.5,
-    (id .. ": the content starts one step below the tab strip (%.0f vs %.0f)")
-      :format(h.top, strip.bottom - T.space.sm))
+  check(math.abs(h.top - contentTop) < 0.5,
+    (id .. ": the content starts one step below the summary strip (%.0f vs %.0f)")
+      :format(h.top, contentTop))
   check(h.height % T.space.grid == 0,
     (id .. ": the content height is on the grid (%.0f)")
       :format(h.height))
 end
 
+-- The summary strip is a band of the chrome, measured from the theme like the
+-- rest of them: under the tab strip, above the content, with the V4 meter on it.
+check(type(W.summaryFrame) == "table", "the window carries a summary strip (W.summaryFrame)")
+if type(W.summaryFrame) == "table" then
+  check(math.abs(summaryRect.height - T.size.summaryStrip) < 0.5,
+    ("the summary strip is the theme's height (%.0f, expected %s)")
+      :format(summaryRect.height, tostring(T.size.summaryStrip)))
+  check(math.abs(summaryRect.top - strip.bottom) < 0.5,
+    "the summary strip starts exactly where the tab strip ends")
+  check(T.size.summaryStrip % T.space.grid == 0,
+    "the summary strip's height sits on the 8px grid")
+end
+
 -- Nothing in the chrome overlaps anything else in it. (Overlap is how a band
 -- and a strip become one grey smear in the client.)
-local chrome = { W.titleBar, W.tabStrip, W.hosts[W.TABS[1]], W.hosts[W.TABS[2]] }
+local chrome = { W.titleBar, W.tabStrip, W.summaryFrame, W.hosts[W.TABS[1]], W.hosts[W.TABS[2]] }
 for i = 1, #chrome do
   for j = i + 1, #chrome do
     -- Two content hosts share the same rect by design: only one is visible at

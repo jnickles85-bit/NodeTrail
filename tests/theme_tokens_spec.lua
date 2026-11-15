@@ -181,18 +181,44 @@ check(upg:find("MightiePackTheme", 1, true) ~= nil,
   "the item list reads the pack's theme (MightiePackTheme) for its metrics")
 check(upg:find("local ROW_H   = 34", 1, true) == nil,
   "the item list no longer states ROW_H as a bare literal of its own")
-for _, key in ipairs({ "rowMin", "rowPad", "icon", "mark", "inset", "nameGap" }) do
+-- The keys the LEDGER rows take from the theme (card t_07f778ca, PART B).
+-- rowPad and icon left this list with the ledger: the drawing's row pads top and
+-- bottom by token (11/12), and it has no icon column — an unused metric in the
+-- theme is the start of a second layout.
+local LEDGER_KEYS = {
+  "rowMin", "mark", "inset", "nameGap",
+  "gutter", "change", "padTop", "padBottom", "rule", "nameGapX",
+  "nameSize", "reasonSize", "labelSize",
+}
+for _, key in ipairs(LEDGER_KEYS) do
   check(upg:find("LIST%." .. key) ~= nil,
     "the item list takes " .. key .. " from the theme's T.list")
 end
 if type(T) == "table" and type(T.list) == "table" then
-  for _, key in ipairs({ "rowMin", "rowPad", "icon", "mark", "inset", "nameGap" }) do
+  for _, key in ipairs(LEDGER_KEYS) do
     check(type(T.list[key]) == "number", "the theme publishes T.list." .. key)
   end
 end
 -- And the global is the same table as pkg.Theme: one vocabulary, one name the
 -- vendored file can reach without depending on the body's load order.
 check(MightiePackTheme == T, "MightiePackTheme is the same table as pkg.Theme")
+
+-- ── The outer tab's highlight belongs to the PACK's palette, not the body's ──
+-- Owner retest of 647bedf (2026-11-14): the live window matched the approved
+-- render everywhere except the current tab's underline, still the vendored
+-- body's teal (#66fcf1) where the render draws it white. A token saying
+-- `base = "accent"` resolves against the BODY's brand, so the window inherits
+-- the module's colour with no hex literal anywhere — which is exactly why the
+-- raw-hex scan could not catch it.
+if type(T.R) == "function" and type(T.Dim) == "function" then
+  local ur, ug, ub = T.R("tabUnder")
+  local t = T.Dim("text") or {}
+  local b = T.Dim("accent") or {}
+  check(ur == t[1] and ug == t[2] and ub == t[3],
+    "the current tab's underline is the pack's text token")
+  check(not (ur == b[1] and ug == b[2] and ub == b[3]),
+    "the current tab's underline is NOT the vendored body's accent (teal)")
+end
 
 if failed == 0 then
   print("theme_tokens_spec: ok")

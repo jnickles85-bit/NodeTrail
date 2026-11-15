@@ -416,12 +416,40 @@ for k in pairs(MightiePackDB) do
 end
 check(added == 1, "exactly one new key was written (got " .. tostring(added) .. ")")
 
--- ── 5. Pack Settings hosts the options panel ──
+-- ── 5. Pack Settings hosts the options panel — and only that tab SHOWS it ──
 W.Open("settings")
 local panel = pkg.optionsPanel
 check(type(panel) == "table", "pkg.optionsPanel still exists")
 check(panel and panel:GetParent() == W.hosts.settings,
   "the Pack Settings tab hosts the options panel (its content moved in whole)")
+
+-- PART A3 (card t_07f778ca). The panel used to stay SHOWN for the whole
+-- session: a DIALOG frame over the UIParent, painting nothing until it was
+-- built, and therefore invisible over whatever tab was active — verified in the
+-- harness sitting over the Touchstone body. Invisible is not harmless: a shown
+-- frame above the content is exactly how the strata and input defects started.
+--
+-- The rule, per tab: the options panel is shown iff Pack Settings is the active
+-- tab, and a panel that is shown has something to paint.
+for _, id in ipairs(W.TABS) do
+  W.Open(id)
+  check(panel:IsShown() == (id == "settings"),
+    ("the options panel is shown only on its own tab (%s active, shown=%s)")
+      :format(id, tostring(panel:IsShown())))
+  if panel:IsShown() then
+    local kids = 0
+    for _, kid in ipairs(panel.children or {}) do
+      if kid:IsShown() then kids = kids + 1 end
+    end
+    check(kids > 0,
+      "a shown Pack Settings panel paints something (it has visible widgets)")
+  end
+end
+-- …and it is hidden again the moment the tab is left, not merely unparented.
+W.Open("touchstone")
+check(panel:IsShown() == false,
+  "leaving Pack Settings hides the panel (no shown panel over the Touchstone body)")
+W.Open("settings")
 -- ── 6. the combat rule: UIParent is never touched ───────────────────────
 check(#uiParentCalls == 0,
   "opening, closing and switching tabs never Show/Hide/SetPoint/SetSize UIParent (got "

@@ -141,7 +141,7 @@ Repo-only (not shipped): `README.md`, `tests/`,
 `.pkgmeta`.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 32 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 37 specs:
 - `tests/bugreport_spec.lua`
 - `tests/chestadvisor_diag_spec.lua`
 - `tests/chestadvisor_secret_values_spec.lua`
@@ -166,11 +166,16 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 32 specs:
 - `tests/theme_tokens_spec.lua`
 - `tests/umbrella_spec.lua`
 - `tests/window_chrome_spec.lua`
+- `tests/window_fill_inset_spec.lua`
+- `tests/window_hosted_adoption_spec.lua`
+- `tests/window_hosted_body_spec.lua`
 - `tests/window_inner_input_spec.lua`
+- `tests/window_ledger_spec.lua`
 - `tests/window_list_rows_spec.lua`
 - `tests/window_settings_build_spec.lua`
 - `tests/window_settings_flow_spec.lua`
 - `tests/window_strata_spec.lua`
+- `tests/window_summary_strip_spec.lua`
 - `tests/window_tab_clicks_spec.lua`
 - `tests/window_tabs_spec.lua`
 - `tests/window_touchstone_shade_spec.lua`

@@ -1,30 +1,147 @@
 --- a/UpgradesTab.lua
 +++ b/UpgradesTab.lua
-@@ -46,10 +46,16 @@
+@@ -46,11 +46,56 @@
  local MARKER_TEXTURE =
    (MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
  
 -local ROW_H   = 34
-+-- Card t_2d2c37b0: the list's metrics ARE the window's metrics. The pack's
-+-- theme publishes them (MightiePack/Theme.lua, T.list) and the literal
-+-- fallbacks keep this file loadable on its own — the vendored specs load it
-+-- without the pack. ROW_H is a FLOOR, not a pitch: the row model measures the
-+-- wrapped reason and grows (card t_4e5ad8a4).
-+local LIST = (type(MightiePackTheme) == "table"
-+  and type(MightiePackTheme.list) == "table") and MightiePackTheme.list or {}
-+local ROW_H     = LIST.rowMin or 34  -- the LEAST a row may be (a one-line reason)
-+local ROW_PAD   = LIST.rowPad or 4   -- inside a row, above the name, below the reason
-+local ICON      = LIST.icon or 22
-+local MARK      = LIST.mark or 14
-+local ROW_INSET = LIST.inset or 6
-+local NAME_GAP  = LIST.nameGap or 1  -- between a row's name and its reason
 -local ICON    = 22
 -local MARK    = 14
 -local VISIBLE = 12               -- rows that fit the host without scrolling
 -local ROW_INSET = 6
++-- Card t_2d2c37b0: the list's metrics ARE the window's metrics. The pack's
++-- theme publishes them (MightiePack/Theme.lua, T.list) and the literal
++-- fallbacks keep this file loadable on its own — the vendored specs load it
++-- without the pack. ROW_MIN is a FLOOR, not a pitch: the row model measures the
++-- wrapped reason and grows (card t_4e5ad8a4).
++local LIST = (type(MightiePackTheme) == "table"
++  and type(MightiePackTheme.list) == "table") and MightiePackTheme.list or {}
++local ROW_MIN     = LIST.rowMin or 34     -- the LEAST a row may be (a one-line reason)
++local ROW_INSET   = LIST.inset or 6       -- a row's own inset from the list edge
++local MARK        = LIST.mark or 14       -- the marker glyph
++local NAME_GAP    = LIST.nameGap or 1     -- between a row's name and its reason
++-- The ledger's columns (card t_07f778ca, PART B). Every number here is the
++-- window's token, not a value of this file's own.
++local GUTTER      = LIST.gutter or 88     -- verdict gutter: marker over the word
++local CHANGE_W    = LIST.change or 110    -- the right-aligned change column
++local PAD_TOP     = LIST.padTop or 11
++local PAD_BOTTOM  = LIST.padBottom or 12
++local RULE_H      = LIST.rule or 1        -- the row's hairline
++local NAME_GAP_X  = LIST.nameGapX or 12   -- gutter -> name
++local NAME_SIZE   = LIST.nameSize or 14.5
++local REASON_SIZE = LIST.reasonSize or 12
++local LABEL_SIZE  = LIST.labelSize or 9.5 -- the column-label line, uppercase
++local ROW_W       = 780                   -- the list's own width
++local BODY_PAD    = (type(MightiePackTheme) == "table"
++  and type(MightiePackTheme.size) == "table"
++  and type(MightiePackTheme.size.bodyPad) == "number")
++  and MightiePackTheme.size.bodyPad or 20
++
++-- The pack's palette and type, through ONE read each (card t_07f778ca, PART B).
++-- When the theme is loaded — it is, inside the window — the ledger takes its
++-- colours from T.R("ledger…") and never states one of its own. The fallbacks are
++-- the body's brand, so this file still draws something when a spec loads it
++-- alone; they are not a second palette, they are the same file's old default.
++local THEME = (type(MightiePackTheme) == "table") and MightiePackTheme or nil
++
++local function ledgerColor(token, fallback)
++  if THEME and type(THEME.R) == "function" then
++    local ok, r, g, b, a = pcall(THEME.R, token)
++    if ok and type(r) == "number" then return r, g, b, a or 1 end
++  end
++  local c = fallback or { 1, 1, 1 }
++  return c[1], c[2], c[3], (c[4] or 1)
++end
++
++--- The drawing's type sizes. WoW has no weight axis and no letter-spacing:
++--- SetFont(path, size, flags) is the whole surface, so the size and the colour
++--- carry the hierarchy (see T.SetFont's note in MightiePack/Theme.lua).
++local function ledgerFont(fs, size)
++  if THEME and type(THEME.SetFont) == "function" then pcall(THEME.SetFont, fs, size) end
++end
  
  -- The verdict the advisor reports for a genuine trade-off. Read off the
-@@ -188,6 +188,7 @@
+ -- comparator when it is present (never a second hard-coded truth), with the bare
+@@ -77,28 +122,35 @@
+   return verdictRank(v) <= 2
+ end
+ 
+--- The client's own rarity colour, with a local fallback table so a client that
+--- does not expose GetItemQualityColor still colours the name instead of
+--- crashing. Index 1 is the client's "unknown rarity" (white).
+-local FALLBACK_QUALITY = {
+-  [0] = { 0.62, 0.62, 0.62 },
+-  [1] = { 1.00, 1.00, 1.00 },
+-  [2] = { 0.12, 1.00, 0.00 },
+-  [3] = { 0.00, 0.44, 0.87 },
+-  [4] = { 0.64, 0.21, 0.93 },
+-  [5] = { 1.00, 0.50, 0.00 },
+-  [6] = { 0.90, 0.80, 0.50 },
+-}
+-local function qualityColor(quality)
+-  if type(GetItemQualityColor) == "function" and type(quality) == "number" then
+-    local ok, r, g, b = pcall(GetItemQualityColor, quality)
+-    if ok and type(r) == "number" and type(g) == "number" and type(b) == "number" then
+-      return r, g, b
+-    end
+-  end
+-  local c = FALLBACK_QUALITY[quality or 1] or FALLBACK_QUALITY[1]
+-  return c[1], c[2], c[3]
+-end
++-- The verdict's COLOUR is the information (card t_07f778ca, PART B): green when
++-- equipping is right, amber when it is a trade-off, grey when it is refused.
++-- One function, so the marker glyph and the verdict word beside it can never be
++-- two different colours. The fallback is the body's brand token, for a load
++-- without the pack's theme.
++local function verdictColor(v)
++  if v == "UPGRADE" then return ledgerColor("ledgerUpgrade", C.success) end
++  if v == tradeOffWord() then return ledgerColor("ledgerTradeoff", C.warning) end
++  return ledgerColor("ledgerNoUpgrade", C.textMuted)
++end
++
++-- The player-facing word for a stored verdict token. The mapping lives on the
++-- advisor (ChestAdvisor.tooltipUI.word), so this tab keeps no second vocabulary
++-- — the same rule the Log tab applies. The stored token is the fallback.
++local function verdictWord(token)
++  local ui = ChestAdvisor and ChestAdvisor.tooltipUI
++  if type(ui) == "table" and type(ui.word) == "function" then
++    local word = ui.word(token)
++    if word ~= nil then return tostring(word) end
++  end
++  return tostring(token)
++end
++
++-- NO RARITY COLOUR ON THE NAME (card t_07f778ca, PART B). The drawing's rule is
++-- that "the verdict carries the colour and the weight": a row with a blue item
++-- name AND a green verdict AND an amber trade-off is five colours in three
++-- lines, which is the "panel of panels" look the reshape card ended. The name is
++-- the anchor in the ledger's text colour; the verdict is the only coloured word.
++-- (The rarity is still recorded on the row — `quality` — it is just not painted.)
+ 
+ -- The item's name and rarity from the client's own read. Never fabricated: a
+ -- miss falls back to the link's own bracket text, and only then to a literal.
+@@ -122,16 +174,10 @@
+   return name, quality
+ end
+ 
+--- The item's real client icon (the fallback bag icon — the same one the toast
+--- falls back to — when the client will not answer).
+-local FALLBACK_ICON = "Interface\\Icons\\INV_Misc_Bag_08"
+-local function itemIcon(id)
+-  if C_Item and type(C_Item.GetItemIconByID) == "function" and type(id) == "number" then
+-    local ok, tex = pcall(C_Item.GetItemIconByID, id)
+-    if ok and tex then return tex end
+-  end
+-  return FALLBACK_ICON
+-end
++-- The item's real client icon is NOT drawn in the ledger (card t_07f778ca,
++-- PART B): the drawing is flat and ruled, and an icon column would put a 22px
++-- picture where the verdict's marker belongs. The row's `id` is still recorded —
++-- the tooltip and the bag markers use it — it is simply not painted here.
+ 
+ -- Open the bags so the player can see the cell the row is about. Guarded against
+ -- every name this client family has used; the sweep card owns marker behaviour,
+@@ -188,6 +234,7 @@
    rendered = {},   -- the rows the toggle admits
    pool     = {},   -- one Button per index, created once
    offset   = 0,
@@ -32,7 +149,7 @@
    host     = nil,
    layout   = nil,
  }
-@@ -196,13 +197,13 @@
+@@ -196,13 +243,13 @@
  -- tab exposes what it drew, it does not re-derive it.
  --   * `rows`    — every row, in the card's sort order (the full verdict set);
  --   * `admitted`— the rows the toggle currently admits (a subset of `rows`);
@@ -48,7 +165,7 @@
      offset   = state.offset,
      rows     = {},
      rendered = {},
-@@ -219,11 +220,6 @@
+@@ -219,11 +266,6 @@
        slotWord = r.slotWord, name = r.name, rank = r.rank,
      }
    end
@@ -60,62 +177,204 @@
    return out
  end
  
-@@ -244,12 +240,17 @@
+@@ -240,44 +282,93 @@
+ 
+ -- ---------------------------------------------------------------------------
+ -- One-time widget build. Everything created here is created exactly once.
++--
++-- THE LEDGER ROW (card t_07f778ca, PART B). Three columns, and the row is a
++-- RULED line rather than a card:
++--
++--   verdict gutter (88)      marker glyph ABOVE the verdict word, both in the
++--                            verdict's colour — the widest-reading cell, first
++--   name                     the anchor, on its own line
++--     reason                 beneath the name, muted — never beside it, so a
++--                            long reason grows the row instead of pushing the
++--                            name sideways
++--   change (110, right)      what the verdict would change, dim and quiet
++--
++-- plus a 1px hairline at the row's bottom, which is what makes a run of rows
++-- read as a ledger.
+ -- ---------------------------------------------------------------------------
  local function buildRow(parent, index)
    local row = CreateFrame("Button", "TouchstoneUpgradeRow" .. index, parent)
-   row:SetHeight(ROW_H)
+-  row:SetHeight(ROW_H)
 -  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_H))
 -  row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_H))
-+  -- No pitch baked in here any more (card t_4e5ad8a4). The row's own height is
-+  -- set from its measured text and it is PLACED by the stacking pass
-+  -- (SF.StackRow), so a reason that wraps to three lines pushes the next row
-+  -- down instead of printing over it.
-+  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
- 
-   local icon = row:CreateTexture(nil, "ARTWORK")
-   icon:SetSize(ICON, ICON)
+-
+-  local icon = row:CreateTexture(nil, "ARTWORK")
+-  icon:SetSize(ICON, ICON)
 -  icon:SetPoint("LEFT", ROW_INSET, 0)
-+  -- Anchored to the row's TOP: the name and reason hang below the icon, so the
-+  -- content's bottom is what the row's height is measured against.
-+  icon:SetPoint("TOPLEFT", ROW_INSET, -ROW_PAD)
-   row.icon = icon
+-  row.icon = icon
++  row:SetHeight(ROW_MIN)
++  -- No pitch baked in here (card t_4e5ad8a4). The row's own height is set from
++  -- its measured text and it is PLACED by the stacking pass (SF.StackRow), so a
++  -- reason that wraps to three lines pushes the next row down instead of
++  -- printing over it.
++  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
++
++  -- The gutter is a frame of its own so its width is the TOKEN and not an
++  -- accident of where two labels happen to end.
++  local gutter = CreateFrame("Frame", nil, row)
++  gutter:SetWidth(GUTTER)
++  gutter:SetPoint("TOPLEFT", row, "TOPLEFT", ROW_INSET, -PAD_TOP)
++  row.gutter = gutter
  
    -- The mark. The green arrow is the SAME marker.tga the bag arrow uses; the
-@@ -262,7 +263,11 @@
+-  -- trade-off mark is a plain amber square drawn with SetColorTexture — the
+-  -- identical no-new-art grammar the bag chip uses.
+-  local mark = row:CreateTexture(nil, "OVERLAY")
++  -- trade-off mark is a plain amber square (SetColorTexture) — the identical
++  -- no-new-art grammar the bag chip uses. Both are tinted with the verdict's own
++  -- colour below, so the glyph and the word never disagree.
++  local mark = gutter:CreateTexture(nil, "OVERLAY")
+   mark:SetSize(MARK, MARK)
+-  mark:SetPoint("TOPLEFT", icon, "TOPLEFT", -3, 3)
++  mark:SetPoint("TOPLEFT", gutter, "TOPLEFT", 0, 0)
+   mark:Hide()
    row.mark = mark
  
++  local word = gutter:CreateFontString(nil, "OVERLAY", "GameFontNormal")
++  ledgerFont(word, NAME_SIZE)
++  word:SetPoint("TOPLEFT", gutter, "TOPLEFT", 0, -(MARK + 4))
++  word:SetWidth(GUTTER)
++  word:SetJustifyH("LEFT")
++  row.verdictWord = word
++
++  -- The name and the reason share one column, so they wrap at the same width.
++  local textLeft = GUTTER + NAME_GAP_X
++  local textWidth = ROW_W - ROW_INSET * 2 - textLeft - CHANGE_W - 8
++  if textWidth < 120 then textWidth = 120 end
++
    local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 -  name:SetPoint("LEFT", icon, "RIGHT", 10, 6)
-+  -- The name is anchored to the row's TOP-LEFT block, level with the icon's top.
-+  -- It used to hang off the row's CENTRE (`LEFT`, +6), which puts the reason
-+  -- below the centre: a row sized for that reason would then have to be nearly
-+  -- twice the content's height to contain it.
-+  name:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, 0)
-   name:SetWidth(400)
+-  name:SetWidth(400)
++  ledgerFont(name, NAME_SIZE)
++  -- Anchored to the row's TOP: the reason hangs below the name, so the row's
++  -- height is measured against its content's bottom.
++  name:SetPoint("TOPLEFT", row, "TOPLEFT", textLeft, -PAD_TOP)
++  name:SetWidth(textWidth)
    name:SetJustifyH("LEFT")
    row.itemName = name
-@@ -298,6 +303,18 @@
+ 
+   local reason = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  reason:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -1)
+-  reason:SetWidth(400)
++  ledgerFont(reason, REASON_SIZE)
++  reason:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -NAME_GAP)
++  reason:SetWidth(textWidth)
+   reason:SetJustifyH("LEFT")
+   row.reason = reason
+ 
+-  local slot = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  slot:SetPoint("RIGHT", -10, 0)
+-  slot:SetJustifyH("RIGHT")
+-  slot:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+-  row.slot = slot
++  -- The change column: the same width as the token, right-aligned, dim.
++  local change = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
++  ledgerFont(change, REASON_SIZE)
++  change:SetPoint("TOPRIGHT", row, "TOPRIGHT", -ROW_INSET, -PAD_TOP)
++  change:SetWidth(CHANGE_W)
++  change:SetJustifyH("RIGHT")
++  local dr, dg, db, da = ledgerColor("ledgerDim", C.textDim)
++  change:SetTextColor(dr, dg, db, da)
++  row.change = change
++
++  -- The row rule: one hairline, the ledger's own line token.
++  local rule = row:CreateTexture(nil, "ARTWORK")
++  rule:SetHeight(RULE_H)
++  rule:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", ROW_INSET, 0)
++  rule:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -ROW_INSET, 0)
++  local lr, lg, lb, la = ledgerColor("ledgerLine")
++  rule:SetColorTexture(lr, lg, lb, la)
++  row.rule = rule
+ 
+   -- Hover: the client's own tooltip, on the item's own link. The advisor's
+   -- existing post-call adds the Touchstone verdict line to it on the live
+@@ -298,43 +389,98 @@
    return row
  end
  
-+-- One row's height: its name and its reason, MEASURED (a FontString's GetHeight
-+-- is its rendered height, wrapped lines included), plus the row's own padding.
-+-- ROW_H is a floor, not a pitch: a one-line row keeps the height it always had,
-+-- a three-line reason makes the row taller and the next row starts below it.
++-- One row's height: the TALLEST of its columns, MEASURED (a FontString's
++-- GetHeight is its rendered height, wrapped lines included), plus the row's own
++-- padding and its rule. ROW_MIN is a floor, not a pitch: a one-line row keeps
++-- the floor, a three-line reason makes the row taller and the next row starts
++-- below it — the rule this file must never lose (card t_4e5ad8a4).
 +local function rowHeight(row)
-+  local nameH = row.itemName:GetHeight() or 0
-+  local reasonH = row.reason:GetHeight() or 0
-+  local h = ROW_PAD + nameH + NAME_GAP + reasonH + ROW_PAD
-+  if h < ROW_H then h = ROW_H end
++  local gutterH = MARK + 4 + (row.verdictWord:GetHeight() or 0)
++  local textH = (row.itemName:GetHeight() or 0) + NAME_GAP + (row.reason:GetHeight() or 0)
++  local changeH = row.change:GetHeight() or 0
++  local inner = gutterH
++  if textH > inner then inner = textH end
++  if changeH > inner then inner = changeH end
++  local h = PAD_TOP + inner + PAD_BOTTOM + RULE_H
++  if h < ROW_MIN then h = ROW_MIN end
 +  return h
 +end
 +
  local function build(host)
++  -- The section head: "Upgrades" and the count in the ledger's own words
++  -- ("5 judged · 2 worth taking"), both set from the list at render time.
    local title = SF.UI_CreateLabel(host, "", "GameFontNormalLarge")
-   title:SetPoint("TOPLEFT", 18, -14)
-@@ -324,17 +341,25 @@
-   viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -10)
-   viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -18, 12)
+-  title:SetPoint("TOPLEFT", 18, -14)
+-  title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
++  title:SetPoint("TOPLEFT", BODY_PAD, -BODY_PAD)
++  local tr, tg, tb, ta = ledgerColor("ledgerText", C.text)
++  title:SetTextColor(tr, tg, tb, ta)
+   host.title = title
+ 
+   local count = SF.UI_CreateLabel(host, "", "GameFontNormalSmall")
+-  count:SetPoint("LEFT", title, "RIGHT", 12, -2)
+-  count:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
++  count:SetPoint("LEFT", title, "RIGHT", 12, 0)
++  local mr, mg, mb, ma = ledgerColor("ledgerMuted", C.textMuted)
++  count:SetTextColor(mr, mg, mb, ma)
+   host.count = count
+ 
+   -- The show/hide toggle. Its label states what a click will DO.
+   local toggle = SF.UI_CreateButton(host, "Show all", 130, 24)
+-  toggle:SetPoint("TOPRIGHT", -18, -12)
++  toggle:SetPoint("TOPRIGHT", -BODY_PAD, -(BODY_PAD - 8))
+   toggle:SetScript("OnClick", function()
+     SF.UpgradesTabSetShowAll(not state.showAll)
+   end)
+   host.toggle = toggle
+ 
++  -- The column-label line: VERDICT / ITEM AND REASON / CHANGE, at 9.5px
++  -- uppercase. Uppercase IS the client's substitute for letter-spacing (a
++  -- FontString has none); the labels sit on the same three columns as the rows,
++  -- so a column cannot drift from its heading.
++  local labels = CreateFrame("Frame", "TouchstoneUpgradesColumns", host)
++  labels:SetPoint("TOPLEFT", host, "TOPLEFT", BODY_PAD, -(BODY_PAD + 34))
++  labels:SetPoint("TOPRIGHT", host, "TOPRIGHT", -BODY_PAD, -(BODY_PAD + 34))
++  labels:SetHeight(LABEL_SIZE + 6)
++  local function columnLabel(text, left, width, justify)
++    local fs = labels:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
++    ledgerFont(fs, LABEL_SIZE)
++    fs:SetPoint("TOPLEFT", labels, "TOPLEFT", left, 0)
++    fs:SetWidth(width)
++    fs:SetJustifyH(justify or "LEFT")
++    fs:SetText(text)
++    local r, g, b, a = ledgerColor("ledgerDim", C.textDim)
++    fs:SetTextColor(r, g, b, a)
++    return fs
++  end
++  host.colVerdict = columnLabel("VERDICT", ROW_INSET, GUTTER)
++  host.colItem = columnLabel("ITEM AND REASON", GUTTER + NAME_GAP_X,
++    ROW_W - ROW_INSET * 2 - GUTTER - NAME_GAP_X - CHANGE_W - 8)
++  host.colChange = columnLabel("CHANGE",
++    ROW_W - ROW_INSET * 2 - CHANGE_W, CHANGE_W, "RIGHT")
++  host.columns = labels
++
+   -- The viewport. A plain frame with a wheel handler: no UIPanelScrollFrameTemplate,
+   -- no second named scroll global, no new art. Rows live in a child frame that is
+   -- sized once and re-positioned by the wheel handler.
+   local viewport = CreateFrame("Frame", "TouchstoneUpgradesViewport", host)
+-  viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -10)
+-  viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -18, 12)
++  viewport:SetPoint("TOPLEFT", labels, "BOTTOMLEFT", 0, -6)
++  viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -BODY_PAD, BODY_PAD)
    viewport:EnableMouseWheel(true)
 +  -- A row is admitted to a page only if it fits, but one row taller than the
 +  -- whole viewport is still admitted (SF.PageRows) — clip so that case cannot
@@ -128,7 +387,7 @@
    local rowParent = CreateFrame("Frame", nil, viewport)
    rowParent:SetPoint("TOPLEFT")
 -  rowParent:SetSize(780, VISIBLE * ROW_H)
-+  rowParent:SetWidth(780)
++  rowParent:SetWidth(ROW_W)
    host.rowParent = rowParent
  
    local function scrollBy(delta)
@@ -141,7 +400,7 @@
      state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
      if state.layout then state.layout() end
    end
-@@ -373,14 +398,18 @@
+@@ -373,41 +519,76 @@
      end
    end
  
@@ -161,9 +420,45 @@
 -      if visible then
 +      if r then
          row.__link = r.link
-         row.slot:SetText(r.slotWord)
- 
-@@ -402,12 +431,29 @@
+-        row.slot:SetText(r.slotWord)
+-
+-        local qr, qg, qb = qualityColor(r.quality)
++        -- The change column: what this verdict would change (the advisor's own
++        -- slot word — the same word its tooltip uses), dim and right-aligned.
++        row.change:SetText(r.slotWord or "")
++
++        -- The name is the anchor: one line, the ledger's text colour (PART B).
++        -- The verdict, not the item's rarity, carries the colour.
+         row.itemName:SetText(r.name)
+-        row.itemName:SetTextColor(qr, qg, qb)
++        local nr, ng, nb, na = ledgerColor("ledgerText", C.text)
++        row.itemName:SetTextColor(nr, ng, nb, na)
++
++        -- The reason: its OWN line under the name, muted — secondary, but
++        -- readable; never dimmed into the background and never beside the name.
+         row.reason:SetText(r.reason)
+-
+-        row.icon:SetTexture(itemIcon(r.id))
+-
++        local rr, rg, rb, ra = ledgerColor("ledgerMuted", C.textMuted)
++        row.reason:SetTextColor(rr, rg, rb, ra)
++
++        -- The verdict: word and marker in ONE colour, from ONE read.
++        local vr, vg, vb, va = verdictColor(r.verdict)
++        row.verdictWord:SetText(verdictWord(r.verdict))
++        row.verdictWord:SetTextColor(vr, vg, vb, va)
+         if r.verdict == "UPGRADE" then
+           row.mark:SetTexture(MARKER_TEXTURE)
++          row.mark:SetVertexColor(vr, vg, vb, 1)
+           row.mark:Show()
+         elseif r.verdict == tradeOffWord() then
+           row.mark:SetTexture(nil)
+-          row.mark:SetColorTexture(1, 0.65, 0.15, 0.9)
++          row.mark:SetColorTexture(vr, vg, vb, 0.95)
+           row.mark:Show()
+         else
++          -- No glyph for a refusal: the bag grammar has no mark for one, and the
++          -- verdict word alone is the statement.
            row.mark:Hide()
          end
  
@@ -195,28 +490,46 @@
    end
    state.layout()
  end
-@@ -422,7 +468,8 @@
+@@ -422,22 +603,33 @@
    host.toggle:SetLabel(state.showAll and "Upgrades only" or "Show all")
  
    local total = #state.rows
 -  local shown = #state.rendered
+-  host.title:SetText(SF.Accent("Upgrades"))
 +  local admitted = #state.rendered
 +  local page = state.shown or 0
-   host.title:SetText(SF.Accent("Upgrades"))
++  -- The section head reads in the ledger's own text colour. It is deliberately
++  -- NOT SF.Accent(): that wraps the word in the body's cyan, and the ledger is
++  -- one dark language in which only the verdict carries a colour.
++  host.title:SetText("Upgrades")
    if total == 0 then
-     host.count:SetText("")
-@@ -432,11 +479,11 @@
+-    host.count:SetText("")
++    host.count:SetText("0 judged · 0 worth taking")
+     host.empty:Show()
+     host.viewport:Hide()
+   else
      host.empty:Hide()
      host.viewport:Show()
++    -- The section head's second half, in the ledger's own words: how many rows
++    -- the advisor judged and how many are worth taking. Both are COUNTED from
++    -- the list on this render — never carried over from the last one.
++    local worth = 0
++    for _, r in ipairs(state.rows) do
++      if r.verdict == "UPGRADE" then worth = worth + 1 end
++    end
      local more = ""
 -    if shown > VISIBLE then
-+    if admitted > page and page > 0 then
-       more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
+-      more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
 -        .. tostring(math.min(state.offset + VISIBLE, shown))
-+        .. tostring(math.min(state.offset + page, admitted))
-     end
+-    end
 -    host.count:SetText(tostring(shown) .. " of " .. tostring(total)
-+    host.count:SetText(tostring(admitted) .. " of " .. tostring(total)
-       .. " item" .. (total == 1 and "" or "s") .. more)
+-      .. " item" .. (total == 1 and "" or "s") .. more)
++    if admitted > page and page > 0 then
++      more = " · rows " .. tostring(state.offset + 1) .. "-"
++        .. tostring(math.min(state.offset + page, admitted))
++    end
++    host.count:SetText(tostring(total) .. " judged · " .. tostring(worth)
++      .. " worth taking" .. more)
    end
  end
+ 

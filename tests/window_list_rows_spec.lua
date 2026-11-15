@@ -185,11 +185,19 @@ local function checkList(label, firstRowName, reasonOf, viewportOf, rowsOf, admi
   check(#rows > 1, label .. ": the list has more than one row")
   if #rows < 2 then return end
 
-  -- A1 — the premise.
+  -- A1 — the premise, and the ledger changed what it counts.
+  --
+  -- CHANGED by card t_07f778ca (PART B): the reason used to be pinned to a
+  -- 400-unit column and this fixture wrapped to exactly THREE lines; the ledger
+  -- gives the reason its own column (the list's width minus the 88 verdict
+  -- gutter and the 110 change column), so the SAME fixture now wraps to two.
+  -- The property this leg exists for is "the reason is taller than one line",
+  -- not the number three: a fixture that fits on one line would make A4 (a
+  -- taller row than a one-line row) vacuous.
   local reason = reasonOf(row1)
   local h = reason:GetHeight()
-  check(math.abs(h - 3 * lineHeight()) < 0.01,
-    label .. ": A1 the fixture reason renders THREE lines (got " .. tostring(h)
+  check(h > lineHeight() * 1.5,
+    label .. ": A1 the fixture reason wraps to more than one line (got " .. tostring(h)
       .. ", one line is " .. tostring(lineHeight()) .. ")")
 
   -- A2 — the row contains its own reason.

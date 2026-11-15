@@ -1,9 +1,15 @@
 --- a/OptionsTab.lua
 +++ b/OptionsTab.lua
-@@ -21,6 +21,10 @@
+@@ -21,6 +21,16 @@
  local SF = StatForge
  local C = SF.Colors
  
++-- Hosted, the pack window owns the palette (card t_07f778ca). Every accent
++-- heading below asks SF.UI_SetAccent, which paints the body's own teal when this
++-- tab stands alone and the pack's ledger reading colour when MightiePack hosts
++-- it. The literal SetTextColor(C.accent...) in a heading is exactly the "module
++-- teal" the owner saw inside the window after the pack took the body over.
++
 +-- The host the tab last rendered into. Nothing reads it for behaviour; the layout
 +-- snapshot (SF.OptionsTabLayout) needs it because the regions live ON the host.
 +local currentHost
@@ -11,7 +17,7 @@
  -- The slash handler is the writer. The checkboxes call it and then re-read,
  -- so a click and `/up detail` cannot store two different shapes.
  local function advisorSlash(msg)
-@@ -123,37 +127,76 @@
+@@ -123,37 +133,76 @@
    if host.roleClear then host.roleClear:SetChecked(role == nil) end
  end
  
@@ -48,6 +54,7 @@
 -  -- instead of 8-24.
 -  local title = SF.UI_CreateLabel(host, "Options", "GameFontNormalLarge")
 -  title:SetPoint("TOPLEFT", 20, -4)
+-  title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
 +  -- Card t_4e5ad8a4 (defect 2): THE STACK FLOWS, and it scrolls.
 +  --
 +  -- The offsets this replaces (-24/-60/-94/-135/-152/-203/-258/-293/-309) were
@@ -92,7 +99,7 @@
 +  host.scroll = 0
 +
 +  local title = SF.UI_CreateLabel(content, "Options", "GameFontNormalLarge")
-   title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
++  SF.UI_SetAccent(title)
    host.title = title
  
    local hideMini = StatForgeDB and StatForgeDB.minimapHide
@@ -105,7 +112,7 @@
    l1:SetPoint("LEFT", cb1, "RIGHT", 4, 0)
    cb1:SetScript("OnClick", function(self)
      if not StatForgeDB then return end
-@@ -165,10 +208,9 @@
+@@ -165,10 +214,9 @@
    -- Card t_b7b5f60c (audit U1 §4): diagnostics behind a BUTTON. The panel and
    -- the `/sf diag` / `/up diag` chat commands are unchanged — this is an
    -- additional surface, not a replacement, so the command path keeps working.
@@ -118,7 +125,7 @@
      "GameFontHighlight")
    l2:SetPoint("LEFT", diagBtn, "RIGHT", 10, 0)
    l2:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
-@@ -183,8 +225,7 @@
+@@ -183,8 +231,7 @@
    -- rescales the window under the cursor, so a small drag runs the value to the
    -- end of the track. A drag updates the label only; the scale is applied on
    -- mouse-up. A SetValue that is not a drag still applies immediately.
@@ -128,7 +135,7 @@
    host.scaleLabel = scaleLabel
  
    local lo, hi = 0.5, 1.5
-@@ -192,7 +233,7 @@
+@@ -192,7 +239,7 @@
      lo, hi = SF.WindowScaleBounds()
    end
    local SLIDER_STEP = 0.05
@@ -137,7 +144,7 @@
    slider:SetOrientation("HORIZONTAL")
    slider:SetSize(360, 20)
    slider:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", 0, -3)
-@@ -220,7 +261,7 @@
+@@ -220,7 +267,7 @@
    if type(slider.SetThumbTexture) == "function" then
      slider:SetThumbTexture(thumb)
    end
@@ -146,14 +153,15 @@
    scaleValue:SetPoint("LEFT", slider, "RIGHT", 12, 0)
    host.scaleValue = scaleValue
    host.scaleSlider = slider
-@@ -272,18 +313,20 @@
+@@ -272,18 +319,20 @@
  
    -- "What Touchstone shows". Every control writes through the slash handler
    -- that already owns the ChestAdvisorDB key, then syncShown re-reads it.
 -  local shows = SF.UI_CreateLabel(host, "What Touchstone shows", "GameFontNormal")
 -  shows:SetPoint("TOPLEFT", 20, -135)
+-  shows:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
 +  local shows = SF.UI_CreateLabel(content, "What Touchstone shows", "GameFontNormal")
-   shows:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
++  SF.UI_SetAccent(shows)
    host.showsHeader = shows
  
 -  local detailLabel = SF.UI_CreateLabel(host, "Tooltip detail", "GameFontHighlight")
@@ -174,7 +182,7 @@
    detailFull:SetScript("OnClick", function()
      advisorSlash("detail full")
      syncShown(host)
-@@ -300,38 +343,38 @@
+@@ -300,38 +349,38 @@
    host.detailCompact = detailCompact
    host.detailUpgrades = detailUpgrades
  
@@ -221,7 +229,7 @@
    -- Card t_4ddeae90 (defect 2): ONE command, ONE chat line. This used to fire
    -- the four settings subcommands in a row, and the success echo prints once
    -- per call, so a single click produced four lines ("tooltip detail full",
-@@ -345,19 +388,25 @@
+@@ -345,19 +394,25 @@
      advisorSlash("reset")
      syncShown(host)
    end)
@@ -242,8 +250,9 @@
  
 -  local roleHeader = SF.UI_CreateLabel(host, "Role", "GameFontNormal")
 -  roleHeader:SetPoint("TOPLEFT", 20, -293)
+-  roleHeader:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
 +  local roleHeader = SF.UI_CreateLabel(content, "Role", "GameFontNormal")
-   roleHeader:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
++  SF.UI_SetAccent(roleHeader)
    host.roleHeader = roleHeader
  
 -  local classLabel = SF.UI_CreateLabel(host, "Class:", "GameFontHighlight")
@@ -252,7 +261,7 @@
    host.classLabel = classLabel
    -- The reset control and class label are unnamed, so tests reach them here.
    -- Named checkboxes and the role row register themselves in CreateFrame.
-@@ -366,18 +415,19 @@
+@@ -366,18 +421,19 @@
      classLabel = classLabel,
    }
  
@@ -279,7 +288,7 @@
    roleMelee:SetScript("OnClick", function()
      advisorSlash("role melee")
      syncShown(host)
-@@ -395,29 +445,29 @@
+@@ -395,29 +451,29 @@
    host.roleSpell = roleSpell
    host.roleClear = roleClear
  
@@ -313,8 +322,9 @@
    about:SetWidth(840)
    about:SetJustifyH("LEFT")
    about:SetText(
-     SF.Accent("About") .. "\n\n" ..
+-    SF.Accent("About") .. "\n\n" ..
 -    "Touchstone v" .. SF.VERSION .. "  ·  Classic Era item advisor\n" ..
++    SF.UI_AccentText("About") .. "\n\n" ..
 +    (function()
 +      local packVer
 +      local pkg = rawget(_G, "MightiePack")
@@ -328,10 +338,21 @@
      "Hover a piece of gear in your bags. A green arrow marks an upgrade;\n" ..
      "an amber square marks a trade-off (better on some stats, worse on others).\n" ..
      "On the character sheet, the green arrow means a bag item is an upgrade for that slot.\n" ..
-@@ -433,13 +483,117 @@
+@@ -432,14 +488,128 @@
+   )
    about:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
    host.about = about
- 
++  -- Card t_07f778ca, review 2: this block carries the accent as a COLOUR CODE
++  -- inside the string, which no SetTextColor repaint can reach. Register a
++  -- repaint so a body adopted after this tab was built does not keep the
++  -- module's teal code in its first line.
++  if type(SF.OnAccentRepaint) == "function" and type(SF.UI_AccentText) == "function" then
++    local rest = tostring(about:GetText()):gsub("^|cff%x+About|r", "", 1)
++    SF.OnAccentRepaint(function()
++      about:SetText(SF.UI_AccentText("About") .. rest)
++    end)
++  end
++
 +  -- The stack, in draw order. Each entry is { region, x, gap, h }:
 +  --   region — the block's top-left owner (a composite block owns its first row);
 +  --   x      — the block's left edge, in content units (a COLUMN, not a layout);
@@ -369,7 +390,7 @@
 +    host.scroll = (host.scroll or 0) - (delta or 0) * 24
 +    relayout(host)
 +  end)
-+
+ 
    host.__optionsBuilt = true
 +  relayout(host)
 +end
@@ -446,7 +467,7 @@
    local hideMini = StatForgeDB and StatForgeDB.minimapHide
    if host.minimapCheck then host.minimapCheck:SetChecked(not hideMini) end
    if host.scaleSlider and type(SF.GetWindowScale) == "function" then
-@@ -451,6 +605,11 @@
+@@ -451,6 +621,11 @@
      end
    end
    syncShown(host)
