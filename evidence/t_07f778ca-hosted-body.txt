@@ -1,0 +1,97 @@
+evidence/t_07f778ca-hosted-body.txt — card t_07f778ca, review 2 (Vera, 2026-11-14)
+================================================================================
+
+WHAT THIS RECORD IS
+-------------------
+The owner's live retest of 670c1ef showed the ledger inside the OLD Touchstone
+panel: a bordered box of its own, a second title bar with a close button, and the
+module's teal (title, tab highlights, Settings headings). Vera's probe named
+three separate facts, and Part A2 had only addressed the first of them.
+
+`tools/probe_hosted_body.lua` opens the pack window through the LIVE path
+(`W.Open("touchstone")`, the call the tab renderer makes) and prints every frame
+and fontstring under the body with what decides what a player sees: effectively
+shown, backdrop bgFile/edgeFile, fill, text and text colour. It asserts nothing —
+the specs are the assertions.
+
+BEFORE — harness, at 670c1ef (the head the owner retested)
+----------------------------------------------------------
+body backdrop    : bgFile=WHITE8X8 edgeFile=nil insets=0/0/0/0   <- Part A2 DID this
+child[1]  Frame  selfShown=false shown=false bg=WHITE8x8 edge=WHITE8x8 fill=#13151c@1.00
+  child[1][1]  FontString  ... text="|cff66fcf1Touchstone|r"  color=#66fcf1   <- title
+  child[1][3]  FontString  ... text="Classic-era item advisor" color=#7b8196  <- subtitle
+  child[1][5]  Button      ... (UIPanelCloseButton)                            <- close
+child[2]  Frame  selfShown=true shown=true                                   <- inner strip
+  child[2][1..3] Button ... bg=WHITE8x8 edge=WHITE8x8 fill=#0b0c10@0.60      <- bordered plates
+child[3]  Frame  selfShown=true shown=true bg=WHITE8x8 edge=WHITE8x8 fill=#13151c@0.60
+                                                                             <- THE INNER BOX
+= vendored accent: #66fcf1
+
+Three things at once: (1) the body's outer backdrop was stripped; (2) the
+content frame (child[3]) still painted its own WHITE8x8 border — the box around
+the ledger; (3) the title bar was hidden by matching a child's MEASURED HEIGHT
+(num(child,"GetHeight") == 40), which the harness honoured and the live client
+did not. A shown frame above the content is also how the strata and input defects
+started.
+
+AFTER — same probe, harness, at 7a14c5b
+---------------------------------------
+body backdrop    : bgFile=WHITE8X8 edgeFile=nil insets=0/0/0/0
+child[1]  Frame  selfShown=true shown=true                    <- inner strip, no title bar
+  child[1][1]  Button  bg=WHITE8x8 edge=nil fill=#20242c@1.00  text="Upgrades" color=#eef1f5
+  child[1][2]  Button  bg=WHITE8x8 edge=nil fill=#000000@0.00  text="Log"      color=#a8b2c0
+  child[1][3]  Button  bg=WHITE8x8 edge=nil fill=#000000@0.00  text="Settings" color=#a8b2c0
+child[2]  Frame  selfShown=true shown=true bg=WHITE8x8 edge=nil fill=#000000@0.00
+                                                            <- content frame: one flat plane
+= vendored accent: #66fcf1 (still the body's brand, still unused inside the window)
+
+The title bar and its close button do not exist at all (the body was created in
+hosted mode), the content frame paints no border and no fill, the strip is
+navigation on flat zero-inset plates in the ledger's tokens, and no visible
+string anywhere under the body carries #66fcf1 — by colour value or by colour
+code.
+
+WHAT PINS IT
+------------
+tests/window_hosted_body_spec.lua   — the live path (W.Open). Pass legs: no shown
+  frame under the body paints a backdrop edge; the content frame (SF.ContentFrame)
+  has no edge / transparent fill / zero insets; the chrome (SF.Chrome) is not
+  created and, where it exists, not shown; no visible FontString carries the
+  vendored accent (colour value AND colour code); the inner strip offers and
+  switches Upgrades/Log/Settings; the Settings headings paint in T.Ledger("text").
+  Negative legs: the same checkers must NAME a re-introduced border, a
+  re-introduced teal string, a re-introduced title bar + close button, and the
+  old bordered box put back on the real content frame.
+tests/window_hosted_adoption_spec.lua — the other path: /ts builds the standalone
+  window first (the pre-state is asserted: title bar shown, content frame
+  bordered, accent strings visible), then the pack adopts it, and the same audits
+  must be clean afterwards.
+
+Harness visibility is EFFECTIVE, not own-flag: C.Visible walks the ancestor chain,
+so a FontString under a hidden parent reports hidden. That was the model gap the
+review named; using the child's own IsShown() reports a shown string under a
+hidden title bar.
+
+GATES AT THIS HEAD
+------------------
+CI (run 43657824851, head 7a14c5b3c8c8e6995d6b3af4276faa1f6dcec726): success.
+  20 files syntax-checked (luac -p, Lua 5.1.5)
+  37 spec(s) run, 0 failure(s)
+  luacheck: 0 warnings / 0 errors in 20 files
+python tools/sync_touchstone.py --verify-shipped
+  11 lua files matched shipped; toc ok
+Local, same head, Lua 5.1.5 (%LOCALAPPDATA%\Programs\Lua51\bin\lua5.1.exe):
+  tests/window_hosted_body_spec.lua      ok
+  tests/window_hosted_adoption_spec.lua  ok
+  all 37 specs                           0 failures
+
+NOT CHANGED
+-----------
+Part A's fills and the hosted backdrop claim; the options panel's born-hidden
+state; the ledger and the summary strip. The first-use splash is still created on
+a fresh install (firstUse == nil) and still covers the body at 0.78 — recorded by
+tests/window_touchstone_shade_spec.lua and left as it is; its accent text now
+resolves through the theme, so a fresh install no longer paints teal inside the
+window.
+
+Unmerged, untagged, undeployed: merge is the owner's word after his eyes.
