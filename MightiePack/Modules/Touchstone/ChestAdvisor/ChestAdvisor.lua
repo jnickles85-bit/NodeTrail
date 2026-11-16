@@ -2202,10 +2202,6 @@ end
 -- visible defect. The check reads the client tooltip's own rendered lines — its
 -- <name>TextLeft<i> globals — so it costs nothing and needs no state to go
 -- stale. Never throws: an unreadable tip simply reads as "not appended".
--- Published for the card's own harness (card t_6f0c7eaf): the fixture asks THIS
--- renderer and TOOLTIP_UI.weighted for their lines, so "one helper" is proved on
--- the shipped renderers rather than on a re-implementation of them.
-ChestAdvisor._verdictLines = verdictLines
 local function tooltipHasOurLine(tip)
 	local name = type(tip) == "table" and tip.GetName and select(2, pcall(tip.GetName, tip))
 	if type(name) ~= "string" or name == "" then return false end
