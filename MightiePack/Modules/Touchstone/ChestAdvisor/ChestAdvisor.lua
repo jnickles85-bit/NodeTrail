@@ -1731,6 +1731,55 @@ local function cannotEquipTail(row)
 	return r:sub(#CANNOT_EQUIP_LEAD + 1)
 end
 
+-- ---- The engine's disclosure clause (card t_6f0c7eaf) ------------------------
+--
+-- Verdict.compareWeapon appends its "here is what I could not price" clause to
+-- the REASON as ONE trailing parenthetical:
+--
+--     "upgrade: better on Healing — the weighted gain outweighs the Intellect
+--      loss (judged, with an unpriced on-hit effect and an unpriced enchant on
+--      the equipped weapon)"
+--
+-- It is the ENGINE's sentence, so no renderer may re-spell it and no renderer
+-- may drop it. Two of the three renderers below build their own headline
+-- instead of printing `reason` whole — the UPGRADE one (describeUpgradeParts)
+-- and the TRADE_OFF one — and both used to lose the clause that way, while the
+-- plain-reason branch kept it. That is exactly the owner's live report: the
+-- same pair disclosed the fact in one hover direction and swallowed it in the
+-- other.
+--
+-- So EVERY path asks this one helper and appends what it returns. The clause is
+-- SPLIT OFF the reason — never rebuilt from row fields — so the two renderers
+-- cannot disagree about the wording of one fact.
+--
+-- Returns `sentence` (the reason without the clause) and `clause` (the engine's
+-- exact bytes, including the leading space; "" when the reason carries none, so
+-- every line without a clause stays byte-identical to before).
+local DISCLOSURE_LEAD = " (judged, with "
+local function disclosureClause(reason)
+	if type(reason) ~= "string" then return reason, "" end
+	-- The LAST occurrence is the trailing one: the engine appends the clause
+	-- after whatever the comparator already said.
+	local start
+	local pos = 1
+	while true do
+		local i = reason:find(DISCLOSURE_LEAD, pos, true)
+		if i == nil then break end
+		start = i
+		pos = i + 1
+	end
+	if start == nil then return reason, "" end
+	local clause = reason:sub(start)
+	-- It is ONE parenthetical and it ends the sentence. A reason that merely
+	-- mentions the lead inside a longer sentence is not a clause to split off.
+	if clause:sub(-1) ~= ")" then return reason, "" end
+	if clause:sub(1, -2):find(")", 1, true) then return reason, "" end
+	return reason:sub(1, start - 1), clause
+end
+-- Published for the card's own harness: the SPLIT is the thing under test, and a
+-- test that re-implemented it would prove nothing about the shipped display.
+ChestAdvisor._disclosureClause = disclosureClause
+
 -- The explanation for an UPGRADE row: the arithmetic the card asks for, e.g.
 --     better on Strength (+2 Str, -1 Sta vs Barkeeper's Cloak)
 -- The stat word is read out of the row's OWN reason (evaluate's two win shapes:
@@ -1739,16 +1788,22 @@ end
 -- are the two sides' parsed stat tables subtracted — read values, never weights.
 local function describeUpgradeParts(row, order)
 	local reason = type(row.reason) == "string" and row.reason or "upgrade"
+	-- (card t_6f0c7eaf) The engine's disclosure clause is split OFF the reason
+	-- first, and every head this function returns carries it back at the end.
+	-- This path builds its own "better on <Word>" sentence, and before the
+	-- helper existed that sentence WAS the headline — so the clause the
+	-- comparator appended to `reason` was thrown away here.
+	local sentence, clause = disclosureClause(reason)
 	-- The comparator's own reason carries an "upgrade: " lead-in that reads as a
 	-- stutter once the headline already says "Upgrade — ". Strip it for DISPLAY
 	-- only; the row's stored `reason` is untouched (the Upgrades tab, the
 	-- disagreement log and the diag all read the stored string, not this).
-	local shown = reason:gsub("^%s*upgrade:%s*", "")
+	local shown = sentence:gsub("^%s*upgrade:%s*", "")
 	-- Nothing worn on the other side (an empty slot, or the empty member of a
 	-- finger/trinket pair): the row's own reason already says so, and there is
 	-- no second table to subtract. Do not print a one-sided "delta".
 	if type(row.chestWornLines) ~= "table" or #row.chestWornLines == 0 then
-		return shown, nil
+		return shown .. clause, nil
 	end
 	-- The comparator module is the only writer of stat tables in this addon; if
 	-- it did not resolve at load time (locateVerdict() nil) there is no delta to
@@ -1756,7 +1811,7 @@ local function describeUpgradeParts(row, order)
 	if not (Verdict and type(Verdict.statTable) == "function"
 		and type(Verdict.statDeltas) == "function"
 		and type(Verdict.deltaText) == "function") then
-		return shown, nil
+		return shown .. clause, nil
 	end
 	-- Card t_b91b29f9 (item 7): the reason names the stat in PLAYER words, and
 	-- one of those is TWO words long: "Feral AP", the only entry in Verdict's
@@ -1770,9 +1825,13 @@ local function describeUpgradeParts(row, order)
 	-- need it: a reason prints "SpellPower", the API token, not the tooltip's
 	-- "Spell Power" — STAT_LABEL is the tooltip spelling and REASON_WORD has no
 	-- spell entry, so the token passes through verbatim.)
-	local word = reason:match("^%s*upgrade:%s*better on (.-)%s*—")
-		or reason:match("^%s*upgrade:%s*better on (.-)%s*$")
-		or reason:match("more (%a+) %(")
+	-- (card t_6f0c7eaf) The patterns read `sentence` — the reason WITHOUT the
+	-- engine's clause — so a "better on <Word>" reason that carried the clause
+	-- cannot capture it into the stat word. Without a clause the two strings are
+	-- the same bytes, so every existing head is unchanged.
+	local word = sentence:match("^%s*upgrade:%s*better on (.-)%s*—")
+		or sentence:match("^%s*upgrade:%s*better on (.-)%s*$")
+		or sentence:match("more (%a+) %(")
 	-- Card t_548f0341: the tooltip's arithmetic reads the SAME API-resolved
 	-- tables the verdict was decided on, so a reconciled line cannot print one
 	-- number while the verdict rested on another.
@@ -1786,13 +1845,15 @@ local function describeUpgradeParts(row, order)
 		-- No readable arithmetic on this pair (a weapon row judged on DPS, a
 		-- worn side whose words the parser could not place). The row's own
 		-- reason, verbatim — never a fabricated number.
-		return shown, nil
+		return shown .. clause, nil
 	end
 	local vs = ""
 	if type(row.wornLink) == "string" then
 		vs = " vs " .. itemNameOf(row.wornLink)
 	end
-	return (word and ("better on " .. word) or shown), (dtext .. vs)
+	-- (card t_6f0c7eaf) …and the engine's clause rides the arithmetic headline
+	-- exactly as it rides the reason-only one above.
+	return (word and ("better on " .. word) or shown) .. clause, (dtext .. vs)
 end
 
 -- ---- The partial-read disclosure (card t_b7a9e7a5, AC-E) ---------------------
@@ -2026,8 +2087,17 @@ local function verdictLines(row, order)
 		elseif row.verdict == TRADE_OFF_VERDICT then
 			esc, colour = TOOLTIP_AMBER, "amber"
 		end
+		-- Card t_6f0c7eaf: the engine's disclosure clause rides the WEIGHTED
+		-- headline too. `disclosureClause` is StatForge's own splitter — it splits
+		-- the clause off `reason` and never re-spells it from row fields — so this
+		-- line and the ordinal paths upstream renders cannot carry different words
+		-- for one fact. It is "" on every row that carries no clause, so those
+		-- lines stay byte-identical. `type(...)` rather than a bare call: a re-pin
+		-- that moved the helper would then cost a clause, not every tooltip.
+		local clause = (type(disclosureClause) == "function")
+			and select(2, disclosureClause(row.reason)) or ""
 		out[#out + 1] = {
-			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head,
+			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause,
 			colour = colour,
 		}
 		if weighted.detail and showDetail then
@@ -2051,9 +2121,14 @@ local function verdictLines(row, order)
 		-- the detail line below states in deltas. Both are stripped for DISPLAY
 		-- only (the stored reason is untouched); the headline is the one-line
 		-- answer, the detail is the arithmetic.
-		local reason = type(row.reason) == "string" and row.reason
-			or "better on some stats, worse on others"
-		reason = reason:gsub("^%s*trade%-off:%s*", ""):gsub("%s*%b()%s*$", "")
+		-- (card t_6f0c7eaf) The engine's disclosure clause is split OFF the
+		-- reason FIRST and appended again after the trims below. It is also a
+		-- trailing parenthetical, so before this a trade-off line lost it to the
+		-- "%b()" strip — the clause is the engine's, the raw-values restatement
+		-- is the one being dropped, and the two are told apart by the helper.
+		local sentence, clause = disclosureClause(type(row.reason) == "string" and row.reason
+			or "better on some stats, worse on others")
+		local reason = sentence:gsub("^%s*trade%-off:%s*", ""):gsub("%s*%b()%s*$", "") .. clause
 		local detail = nil
 		if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
 			and Verdict and type(Verdict.statTable) == "function"

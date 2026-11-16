@@ -82,7 +82,7 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 #   It does NOT carry melee (t_f304a91c is verified at 87f59ed and unmerged; its
 #   side-naming clause makes M11 deliberately false, and t_dc1decd1 re-derives
 #   that pin first) — v0.3.10.
-SOURCE_REF = "740f7d53c8c70034a008785589560dcf9b43fcf2"
+SOURCE_REF = "4183aee51fc53e26ed89a3d9c1742c85be32c4cf"
 
 # Order is load-bearing. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).
@@ -1382,8 +1382,17 @@ end
     elseif row.verdict == TRADE_OFF_VERDICT then
       esc, colour = TOOLTIP_AMBER, "amber"
     end
+    -- Card t_6f0c7eaf: the engine's disclosure clause rides the WEIGHTED
+    -- headline too. `disclosureClause` is StatForge's own splitter — it splits
+    -- the clause off `reason` and never re-spells it from row fields — so this
+    -- line and the ordinal paths upstream renders cannot carry different words
+    -- for one fact. It is "" on every row that carries no clause, so those
+    -- lines stay byte-identical. `type(...)` rather than a bare call: a re-pin
+    -- that moved the helper would then cost a clause, not every tooltip.
+    local clause = (type(disclosureClause) == "function")
+      and select(2, disclosureClause(row.reason)) or ""
     out[#out + 1] = {
-      text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head,
+      text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause,
       colour = colour,
     }
     if weighted.detail and showDetail then

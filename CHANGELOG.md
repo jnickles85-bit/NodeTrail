@@ -15,6 +15,7 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 - **Rogue weapons** — a dagger-locked spec is not judged against a sword on damage per second alone, and the off-hand is scored rather than refused. (Card `t_1677cd39`.)
 - **Tank coverage** — Hit priced at zero makes `+1 Hit` read equal to `+20 Block`, and the same Block decides one pair and not another. (Card `t_ea260b42`.)
 - **An item the character cannot wear is a definite no, not a cannot-judge** — the requirement, with no gain. (Card `t_8d3af71d`.)
+- **A trade-off tooltip no longer swallows what it could not price** — the reader's `(judged, with …)` disclosure now rides the pack's own "decided by …" headline as well as the plain-reason one, and names the side that carries the enchant and the proc. One hover direction printed the disclosure and the other did not. Touchstone `740f7d5` → `4183aee` (PR #106 upstream). (Card `t_77debc1f`.)
 
 ## [0.3.8-beta] - 2026-11-15
 
