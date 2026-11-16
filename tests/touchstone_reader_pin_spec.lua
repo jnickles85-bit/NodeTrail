@@ -56,7 +56,7 @@ end
 local syncPath = root .. "/tools/sync_touchstone.py"
 local sf = io.open(syncPath, "r")
 check(sf ~= nil, "tools/sync_touchstone.py is readable")
-local PIN = "740f7d53c8c70034a008785589560dcf9b43fcf2"  -- StatForge "Merge pull request #104"
+local PIN = "4183aee51fc53e26ed89a3d9c1742c85be32c4cf"  -- StatForge "Merge pull request #106"
 if sf then
   local src = sf:read("*a")
   sf:close()
