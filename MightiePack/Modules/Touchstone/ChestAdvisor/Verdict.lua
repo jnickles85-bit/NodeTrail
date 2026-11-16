@@ -5356,6 +5356,65 @@ function Verdict.tradeOffText(gains, losses)
 	return "Trade-off: " .. listed(gains, "+") .. " vs " .. listed(losses, TRADE_OFF_MINUS)
 end
 
+-- THE UNIVERSAL TIEBREAK — Armor, then Block; two-sided; absence NEUTRAL.
+--
+-- (card t_a4124aed) Upstream's gate-9 tail, lifted into ONE named function
+-- because it has TWO callers now:
+--
+--   * the ordinal tail in `Verdict.evaluate` (upstream's own loop: same words,
+--     same order, same sentences — it calls this instead of spelling the rule
+--     out, so there is no second copy to drift);
+--   * the pack's ORDER-ONLY layer, which every shipped profile uses. That layer
+--     answers FIRST (Verdict.weightedVerdict is asked before the ordinal path)
+--     and it answers definitively: no Wowhead order ranks block VALUE — the
+--     Protection (Balanced) list ranks `BlockChance`, a different tooltip word —
+--     and the damage lists do not rank Armor at all. So the order walk found no
+--     ranked difference and returned "no change" for a pair it never looked at,
+--     while upstream's ordinal path answered "upgrade: more Block (20 vs 10) on
+--     an otherwise equal item" for the same +20/+10 Block tie. Two sources of
+--     truth for one judgement, disagreeing: the same item read differently in
+--     the two trees, and only the vendored build is what a player runs.
+--
+-- The rule is the one E2 (t_8bc7d7f2) and Tier B (t_73e20edb) already ruled:
+-- Armor and Block break a REMAINING tie, and only that. A word one side carries
+-- and the other does not is an ABSENCE, not a win (rawget keeps absence
+-- distinguishable from a literal 0, which is a value), and a ranked loss still
+-- makes the pair a trade-off — which is why this is consulted only where nothing
+-- ranked differs, in either path.
+--
+-- `allow` is evaluate's armour-material veto, as in the tail it came from; a
+-- caller that has already wrapped the answer (the order path finishes through
+-- its own `allow`) passes nil and gets the raw tiebreak.
+--
+-- Returns the verdict, the reason, and the deciding word with both values, or
+-- nothing when the pair has no two-sided Armor/Block difference.
+function Verdict.universalTiebreak(candStats, eqStats, order, allow)
+	local cand = (type(candStats) == "table") and candStats or {}
+	local eq   = (type(eqStats)   == "table") and eqStats   or {}
+	for _, word in ipairs(Verdict.relevanceSet(order)) do
+		local c = rawget(cand, word)
+		local e = rawget(eq, word)
+		-- The SAME epsilon floor the ranked walk uses (Verdict.ranksAsDifferent,
+		-- card t_a5de2f16): a difference that layer already called equal must
+		-- not come back as a decision here, so float noise cannot mint an
+		-- upgrade (tests/touchstone_tiebreak_single_rule_spec.lua).
+		if c ~= nil and e ~= nil and Verdict.ranksAsDifferent(e - c) then
+			if c > e then
+				local reason = "upgrade: more " .. word .. " (" .. c .. " vs "
+					.. e .. ") on an otherwise equal item"
+				if type(allow) == "function" then
+					local v, r = allow("UPGRADE", reason)
+					if v ~= "UPGRADE" then return v, r, word, c, e end
+				end
+				return "UPGRADE", reason, word, c, e
+			end
+			return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
+				.. e .. ") on an otherwise equal item", word, c, e
+		end
+	end
+	return nil
+end
+
 -- Walk one order-only profile. Returns the same (verdict, reason, detail)
 -- contract as weightedVerdict.
 --
@@ -5364,7 +5423,12 @@ end
 -- least one. A loss on the first differing ranked tier is a Downgrade,
 -- even if later ranked stats improve (the Ret cloak ruling). A gain on
 -- the first differing tier with a later ranked loss is a Trade-off.
--- Unranked stats (Spirit, Armor on non-tank specs) still do not decide.
+-- Unranked stats never decide a gain or a loss, and they can never overturn
+-- a ranked one — but a TWO-SIDED Armor/Block difference on an otherwise equal
+-- pair is the universal tiebreak's job (Verdict.universalTiebreak, card
+-- t_a4124aed), because no shipped order ranks block VALUE and the damage
+-- orders do not rank Armor, and answering "no change" there would disagree
+-- with upstream for the same pair.
 -- Ranked equality is |signedDelta| <= WEIGHT_EPSILON, so float noise
 -- cannot mint an Upgrade. Intra-tier bundles and cap clamps are
 -- unchanged; only the early return that ignored later ranked losses
@@ -5379,6 +5443,10 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	end
 	local cand = (type(candStats) == "table") and candStats or {}
 	local eq   = (type(eqStats)   == "table") and eqStats   or {}
+	-- The order the universal tiebreak reads its words from. `evaluate` hands
+	-- the same table to the ordinal tail (spec_.order), so the two paths consult
+	-- one relevance set.
+	local order = (type(spec) == "table" and type(spec.order) == "table") and spec.order or {}
 	local src  = type(spec) == "table" and spec.profileSource or nil
 	local pname = orderProfileLabel(profile, src)
 	local speedNote = nil
@@ -5584,7 +5652,19 @@ function Verdict.orderVerdict(candStats, eqStats, spec, allow, profile)
 	end
 
 	if firstKind == nil then
-		-- No ranked tier decided. An unranked speed difference is reported
+		-- No ranked tier decided. A two-sided TIEBREAK-ONLY difference still
+		-- decides (card t_a4124aed): Armor and Block break a REMAINING tie and
+		-- only that, which is why this runs here — where nothing ranked differs —
+		-- and nowhere else. It is the SAME named rule the ordinal tail calls, so a
+		-- +20/+10 Block tie answers one way in this tree and in upstream's, instead
+		-- of "no change" from an order that never ranked the word.
+		local tv, tr, tword, tc, te = Verdict.universalTiebreak(cand, eq, order)
+		if tv ~= nil then
+			local decidedBy = (type(tword) == "string")
+				and (tword .. " (" .. tc .. " vs " .. te .. ")") or nil
+			return finish(tv, tr, decidedBy, (tv == "UPGRADE") and "upgrade" or "downgrade")
+		end
+		-- An unranked speed difference is reported
 		-- but does not become an upgrade or a downgrade.
 		return finish("NOT_UPGRADE",
 			Verdict.orderReason(profile, "no change", nil, src, speedNote),
@@ -6494,18 +6574,13 @@ if Verdict.LEGACY_DOMINANCE_DECIDES then
 	-- from, so the tiebreak order (Armor, Block) has one definition. Iterating
 	-- it after the order's own words have already been proven equal (outcome
 	-- == nil) reaches exactly the Armor/Block tail.
-	for _, word in ipairs(Verdict.relevanceSet(order)) do
-		local c = rawget(candStats, word)
-		local e = rawget(eqStats, word)
-		if c ~= nil and e ~= nil and c ~= e then
-			if c > e then
-				return allow("UPGRADE", "upgrade: more " .. word .. " (" .. c .. " vs "
-					.. e .. ") on an otherwise equal item")
-			end
-			return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
-				.. e .. ") on an otherwise equal item"
-		end
-	end
+	-- (card t_a4124aed) The loop ITSELF is Verdict.universalTiebreak now: the
+	-- pack's ORDER-ONLY layer consults that same rule where no ranked tier
+	-- decides, and one item pair must not read "no change" in that layer and
+	-- "upgrade: more Block" here. One definition, two callers — this tail and
+	-- the order path — so the sentence and the deciding words cannot drift.
+	local uv, ur = Verdict.universalTiebreak(candStats, eqStats, order, allow)
+	if uv ~= nil then return uv, ur end
 	return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 	end
 end

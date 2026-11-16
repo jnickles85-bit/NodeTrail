@@ -1,0 +1,73 @@
+t_a4124aed — the v0.3.9 batch probe RE-RUN on the fixed pack tree
+=====================================================================
+Pin: StatForge 740f7d5 (unchanged — the fix is the pack overlay, not upstream)
+Tree: the card branch nt/t_a4124aed (origin/main 38eae9c + this card)
+Harness: the pin's own wow_stub.lua on fengari, pack vendored files in toc order,
+spec resolved through ChestAdvisorDB.gearFor and Enable() called — the same
+harness as evidence/t_40a96835-batch-measured.txt, which recorded the
+DIVERGENCE this run closes (INFO 3c: pack "no change" vs upstream "more Block").
+
+node t_40a96835-batch-probe.js <pack-tree>
+
+spec resolved: PALADIN/spell profile=Holy order=3
+PASS  1a enchant on the WORN weapon: the pair is JUDGED (not a refusal)
+        NOT_UPGRADE — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+PASS  1b the enchant is named as present-but-unpriced on the EQUIPPED side
+        decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+PASS  1c the enchant clause carries no "can't judge" wording
+        decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+PASS  1d an enchant on the HOVERED item names the hovered side
+        UPGRADE — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the hovered item)
+PASS  1e with no enchant line the clause is gone (the control)
+        NOT_UPGRADE — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect)
+PASS  1f the ITEM TOOLTIP on the owner's hover names the unpriced enchant and its side
+        tip="Fishing Pole\nTwo-Hand  Fishing Pole\n2 - 4 Damage\n(1.0 damage per second)\nSpeed 3.00\nDurability 20 / 20\nSell Price: 4\n|cff9d9d9dNot an upgrade — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)|r"
+PASS  1g the tooltip line is a judgement, not a "can't judge"
+        tip="Fishing Pole\nTwo-Hand  Fishing Pole\n2 - 4 Damage\n(1.0 damage per second)\nSpeed 3.00\nDurability 20 / 20\nSell Price: 4\n|cff9d9d9dNot an upgrade — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)|r"
+PASS  2 arrow on the combined bag view
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on bag 1
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on the bank
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on bank bag 5
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on the reagent bank
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 no arrow on a downgrade
+        mark=none
+PASS  2 no arrow on an equal item
+        mark=none
+PASS  2 no arrow on a refused item
+        mark=none
+PASS  2 quest-reward mark is drawn on the reward button
+        mark=true
+PASS  2 TouchstoneMarks is the ONE mark module
+PASS  3a +1 Hit vs +20 Block is not "equal"
+        UPGRADE — decided by Hit (cap status unknown) [Protection (Balanced)]
+PASS  3b the +1 Hit is what decides it
+        UPGRADE — decided by Hit (cap status unknown) [Protection (Balanced)]
+INFO  3c two-sided Block tie: upstream "more Block", pack "no change" (pre-existing on origin/main, identical before and after this cut) — UPGRADE — upgrade: more Block (20 vs 10) on an otherwise equal item
+PASS  3c the tiebreak still decides what it should: the pack says "no change", not a judged gain
+        UPGRADE — upgrade: more Block (20 vs 10) on an otherwise equal item
+PASS  3d HIT is priced 0.5 on WARRIOR.tank
+PASS  4a the bag row reads cannot equip with the named requirement
+        row=UNKNOWN|cannot equip — requires level 40
+PASS  4b the item tooltip reads "Can't equip — requires level 40"
+        line=|cff9d9d9dCan't equip — requires level 40|r
+PASS  4c the old "eligibility unconfirmed" sentence is gone from this surface
+        tip="Dagger of the Refused\nMain Hand  Dagger\n10 - 19 Damage\nSpeed 2.00\nRequires Level 40\n+3 Agility\n|cff9d9d9dCan't equip — requires level 40|r"
+PASS  4d the quest-reward walk stores a non-answer for the refused weapon
+        stored=UNKNOWN
+PASS  4e the quest-reward tooltip phrases it the same way as the bag tooltip
+        tip="Dagger of the Refused\nMain Hand  Dagger\n10 - 19 Damage\nSpeed 2.00\nRequires Level 40\n+3 Agility\n|cff9d9d9dCan't equip — requires level 40|r"
+
+26 passed, 0 failed
+
+NOTE ON THE "INFO 3c" LINE
+  The probe's INFO label is the PRE-FIX wording ("pack \"no change\""); it is a
+  hard-coded string in the probe. The measured answer printed after the em dash
+  is what the fixed tree returns, and it is upstream's: UPGRADE —
+  "upgrade: more Block (20 vs 10) on an otherwise equal item". The PASS check on
+  the following line accepts either answer, so that INFO line is the
+  MEASUREMENT; tests/touchstone_universal_tiebreak_spec.lua is the assertion.

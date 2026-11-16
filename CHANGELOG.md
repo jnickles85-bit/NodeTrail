@@ -16,6 +16,9 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 - **Tank coverage** — Hit priced at zero makes `+1 Hit` read equal to `+20 Block`, and the same Block decides one pair and not another. (Card `t_ea260b42`.)
 - **An item the character cannot wear is a definite no, not a cannot-judge** — the requirement, with no gain. (Card `t_8d3af71d`.)
 
+### Planned (0.3.10)
+- **A two-sided Armor or Block tie decides, in both trees.** The pack's order-only layer answered before the ordinal tiebreak and answered `no change` for a pair it never ranked — no Wowhead order ranks block *value* (the Protection list ranks `BlockChance`), and the damage lists do not rank Armor — so `+20 Block` vs `+10 Block` read `no change` here and `upgrade: more Block (20 vs 10) on an otherwise equal item` upstream. Both paths now call one named rule, `Verdict.universalTiebreak`; the owner's `+1 Hit` vs `+20 Block` pair does not move. (Card `t_a4124aed`.)
+
 ## [0.3.8-beta] - 2026-11-15
 
 The reader carries the fixes; the pack changes nothing but its pin. Touchstone `30f3d32` → `ec947b3`

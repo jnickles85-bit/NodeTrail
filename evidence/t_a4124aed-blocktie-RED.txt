@@ -1,0 +1,11 @@
+FAIL: the +20/+10 Block tie answers what upstream answers (UPGRADE), got NOT_UPGRADE
+FAIL: and in upstream's own words (upgrade: more Block (20 vs 10) on an otherwise equal item), got no change [Protection (Balanced)]
+FAIL: the row says the tiebreak word and both numbers (got nil)
+FAIL: the universal tiebreak is one named function, Verdict.universalTiebreak
+FAIL: the +120/+100 Armor tie on Retribution is an upgrade (got NOT_UPGRADE)
+FAIL: in upstream's own words (upgrade: more Armor (120 vs 100) on an otherwise equal item), got no change [Retribution]
+touchstone_universal_tiebreak_spec: 6 failure(s)
+block pair: NOT_UPGRADE | no change [Protection (Balanced)]
+owner's pair: UPGRADE | decided by Hit (cap status unknown) [Protection (Balanced)]
+armor pair: NOT_UPGRADE | no change [Retribution]
+trade-off pair: TRADE_OFF | decided by Strength & Attack Power [Retribution] — Trade-off: +Strength vs −Attack Power
