@@ -420,11 +420,17 @@
  	if type(row.tiebreak) == "string" and row.tiebreak ~= "" then
  		-- Card t_c4911603: the damage total was tied and the profile's RANKED
  		-- tiebreaker decided. The line is deliberately a different sentence from
-@@ -1308,6 +1646,7 @@
+@@ -1308,6 +1646,13 @@
  			else word = TOOLTIP_UI.words.NO_CHANGE end
  		end
  	end
 +	end
++	-- Card t_6f0c7eaf: the engine's own disclosure clause rides the headline.
++	-- `disclosureClause` is StatForge's splitter (it splits the clause off
++	-- `reason`; it never re-spells it), so this path and the ordinal paths
++	-- below cannot carry different words for one fact. "" on every row that
++	-- has no clause, so those lines stay byte-identical.
++	head = head .. select(2, disclosureClause(row.reason))
  	local detail = nil
  	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
  		and Verdict and type(Verdict.statTable) == "function"
