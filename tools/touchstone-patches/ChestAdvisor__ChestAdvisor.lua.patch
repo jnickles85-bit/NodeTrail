@@ -331,7 +331,7 @@
  	local role  = resolvedRole(token, si)
  	local order = (Verdict and Verdict.classRoleOrder) and Verdict.classRoleOrder(token, role) or nil
  	-- A hybrid without a resolved role is not "acting as its class token":
-@@ -788,21 +1092,26 @@
+@@ -788,31 +788,32 @@
  	if label == nil and token and not isHybridWithoutRole(token) then
  		label = token
  	end
@@ -351,20 +351,28 @@
 +	-- profileSource is "talents" on the Auto path so the tooltip / Upgrades
 +	-- tab can say so; callers that build a spec table by hand leave it unset
 +	-- and keep the existing "[Retribution]" wording.
+ 	--
+ 	-- `name` and `classDisplay` (card t_1677cd39) are the spec identity the
+ 	-- weapon path needs to ask a SPEC-specific question at all (a rogue's
+ 	-- Assassination is a dagger spec; its Combat build is not, and the triple
+ 	-- above cannot tell them apart). They are the SAME two fields
+ 	-- readOffHandSpec has handed the off-hand gate since t_548f0341 — the spec
+ 	-- name as the client localized it, and the class's own display name, which
+ 	-- is what Verdict.substantiated compares it against so a class-as-spec read
+ 	-- (a level-22 "name=Paladin") never resolves a spec policy. Additive: no
+ 	-- existing reader looks at either key.
  	return { order = order, role = label, class = token, level = level,
--	         clientRole = (si and si.role) or nil }
-+	         clientRole = (si and si.role) or nil,
-+	         name = si and si.name or nil,
+ 	         clientRole = (si and si.role) or nil,
+ 	         name = (si and si.name) or nil,
+-	         classDisplay = classDisplayName() }
 +	         classDisplay = classDisplayName(),
 +	         profileSource = "talents" }
  end
- 
+
 +ChestAdvisor.buildSpec = buildSpec
 +ChestAdvisor.readOffHandSpec = readOffHandSpec
 +
- -- ---- Tooltip surface (card t_ed71a583) ---------------------------------------
- --
- -- WHY THIS EXISTS. The addon computes a verdict and a reason for every in-scope
+ --- Card t_ee6dec52 (GearAPI.GetSpec): the spec identity the verdicts were
 @@ -1275,8 +1584,7 @@
  -- ordinary word for its token is used unchanged ("Upgrade" / "Not an
  -- upgrade"), so the flag is the only difference from a damage verdict.
@@ -481,6 +489,7 @@
  		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
  		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
  		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
+ 		.. "  /up bagmark <on|off>  green up-arrows on upgrades in your bags, the bank and quest rewards (persisted; default on)\n"
 -		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) in one pass\n"
 +		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) and clear a chosen Gear-for spec (back to Auto); does not clear /up role or the log\n"
  		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"

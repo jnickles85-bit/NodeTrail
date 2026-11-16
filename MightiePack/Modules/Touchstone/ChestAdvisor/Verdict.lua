@@ -949,10 +949,21 @@ end
 -- introducer, but it does not model every escape. Another escape form whose
 -- payload carries digits (the client's `|A:coin-silver:14:14:2:0|a` texture
 -- markup) keeps its digits, so such a line still reads as number-carrying and
--- still suppresses — i.e. it fails CLOSED, which is the safe direction. Every
--- digit-bearing chrome line in this repo's corpus is structural-classified
--- before it ever reaches this test (Sell Price / Durability / Requires Level),
--- so the limitation is not reachable from captured shapes.
+-- still suppresses — i.e. it fails CLOSED, which is the safe direction.
+--
+-- ⚠ WHAT THIS TEST IS NOT (card t_195a0e07). This is ONE gate, and the
+-- paragraph above used to be read as more than it says. parseLine_ does place
+-- digit-bearing chrome structurally — but a tooltip's lines reach parseLine_
+-- only through `Verdict.splitForeign`, which runs FIRST and decides WHICH lines
+-- the classifier is ever asked about. While that split set lines aside by
+-- POSITION (anything numbered after a "Sell Price" line), a "+5 Frost
+-- Resistance" the reader could not place was taken out of the set before any
+-- classifier saw it, and the pair JUDGED. So "every digit-bearing chrome line
+-- is structural-classified before it ever reaches this test" was true and was
+-- still not the property that mattered: whether an UNPLACEABLE line reached
+-- the judge is splitForeign's property, and since t_195a0e07 it is a property
+-- of the LINE (another addon's marker), never of where the line sits.
+-- the line sits.
 function Verdict.lineCarriesNumber(line)
 	if type(line) ~= "string" then return false end
 	local low = line:gsub("^%s+", ""):gsub("%s+$", "")
@@ -1475,7 +1486,103 @@ local SCHOOL_POWER_WORD = {
 	arcane = "ArcanePower",
 }
 
-local parseLine_ = function(line)
+-- ---- The weapon TYPE LINE's grammar (card t_1677cd39) -----------------------
+--
+-- ONE grammar, spent by TWO readers, because the second one decides a verdict:
+--
+--   1. `parseLine_` below classifies a weapon's type line as STRUCTURAL CHROME
+--      (it is the item's own chrome, not a stat) — the shipped behaviour;
+--   2. `Verdict.weaponTypeLine` / `Verdict.weaponFamily` read the SUBTYPE out of
+--      the same line, because a spec's weapon policy (added by this card) has to
+--      know WHAT KIND of weapon a candidate is before the comparator prices it.
+--
+-- A second copy of this list is the failure the repo already paid for once (two
+-- strip copies drifting, card t_02877bb4): a classifier that stopped recognising
+-- a subtype would silently stop the family reader too, and the two would answer
+-- different questions about the same line. So the vocabulary lives HERE, once,
+-- and both readers spend it. The list is the client's own subtype vocabulary as
+-- this repo has proven it (the seven schools aside, the words are the ones the
+-- client prints on a weapon type line: "Main Hand  Dagger", "Two-Hand  Sword").
+local WEAPON_TYPE_SLOTS = {
+	{ plain = "ranged",    pat = "ranged" },
+	{ plain = "main hand", pat = "main hand" },
+	{ plain = "two-hand",  pat = "two%-hand" },
+	{ plain = "one-hand",  pat = "one%-hand" },
+	-- The off-hand weapon's own type line ("Off Hand  Dagger"). It is NOT a
+	-- Tier C main-hand row (Verdict.WEAPON_TOKENS deliberately excludes the
+	-- token), but its line is the same shape and the family reader must be able
+	-- to place it: a rogue's off-hand weapon is judged by this card, and its
+	-- subtype is the same fact about the same item.
+	{ plain = "off hand",  pat = "off hand" },
+}
+
+local WEAPON_TYPE_SUBTYPES = {
+	"wand", "bow", "gun", "crossbow", "dagger", "sword", "mace",
+	"staff", "polearm", "axe", "thrown", "miscellaneous",
+	"fist weapon",
+	-- (card t_d5c915f2) "Fishing Pole" is the subtype the client prints on a
+	-- two-hand fishing pole ("Two-Hand  Fishing Pole"). It was the one weapon
+	-- subtype in the owner's vocabulary that this list did not carry, so the
+	-- TYPE LINE fell to the cosmetic path and every pole hover disclosed a
+	-- "partial read: \"Two-Hand Fishing Pole\" ignored" that was the item's own
+	-- chrome. Same clause as the rest, same narrowness: the subtype word plus
+	-- the slot word, nothing wider.
+	"fishing pole",
+}
+
+-- The grammar's ONE matcher. Input is the line as `parseLine_` normalises it
+-- (trimmed, lower-cased, NOT de-coloured — the classifier has always matched
+-- the raw lower-cased line, and a second input here would let the two readers
+-- disagree about the same line).
+--   -> slot word ("main hand" | "one-hand" | "two-hand" | "ranged" | "off hand"), subtype word | nil
+--   -> nil, nil when the line is not a weapon type line at all
+-- A BARE slot word ("Main Hand", the owner's live mace line) returns the slot
+-- and a nil subtype: the item is a weapon, its family is genuinely unreadable
+-- on this tooltip. The caller must not invent a family for it.
+local function weaponTypeLine(low)
+	if type(low) ~= "string" then return nil, nil end
+	for _, slot in ipairs(WEAPON_TYPE_SLOTS) do
+		if low == slot.plain then return slot.plain, nil end
+		for _, sub in ipairs(WEAPON_TYPE_SUBTYPES) do
+			if low:match("^" .. slot.pat .. "%s+" .. sub .. "$") then
+				return slot.plain, sub
+			end
+		end
+	end
+	return nil, nil
+end
+Verdict.weaponTypeLine = weaponTypeLine
+-- The subtype vocabulary, exposed the same way weaponDamageSchools is: a test
+-- enumerates the SHIPPED list rather than a copy of it (card t_1677cd39).
+Verdict.weaponSubtypes = WEAPON_TYPE_SUBTYPES
+
+-- WHAT KIND of weapon is this? Read off the item's own type line, through the
+-- SAME grammar the classifier above spends (card t_1677cd39).
+--   -> the subtype word ("dagger", "sword", "mace", "fist weapon", …), or
+--   -> nil: no weapon type line on this tooltip, OR the line is the BARE slot
+--      word ("Main Hand") the client also prints (the owner's live mace line,
+--      pinned in this file). Both mean "this tooltip does not tell us the
+--      family", and the caller must not guess one.
+function Verdict.weaponFamily(lines)
+	return select(2, Verdict.weaponType(lines))
+end
+
+-- The type line as (slot word, subtype), read off an item's own lines through
+-- the SAME grammar (card t_1677cd39). nil, nil when the tooltip carries no
+-- weapon type line; a bare slot word returns slot, nil (family unreadable).
+function Verdict.weaponType(lines)
+	if type(lines) ~= "table" then return nil, nil end
+	for _, line in ipairs(lines) do
+		if type(line) == "string" then
+			local low = line:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+			local slot, subtype = weaponTypeLine(low)
+			if slot ~= nil then return slot, subtype end
+		end
+	end
+	return nil, nil
+end
+
+local function parseLine_(line)
 	if type(line) ~= "string" then return nil, nil end
 	local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
 	if trimmed == "" then return nil, nil end
@@ -1880,39 +1987,11 @@ local parseLine_ = function(line)
 	-- hyphen is a plain character) for the bare form, and as a pattern
 	-- whose `%-` is an escaped hyphen for the composite form, so
 	-- "Two-Hand  Sword" and "TwoHand  Sword" do not mix.
-	local WEAPON_SLOTS = {
-		{ plain = "ranged",    pat = "ranged" },
-		{ plain = "main hand", pat = "main hand" },
-		{ plain = "two-hand",  pat = "two%-hand" },
-		{ plain = "one-hand",  pat = "one%-hand" },
-	}
-	local WEAPON_SUBTYPES = {
-		"wand", "bow", "gun", "crossbow", "dagger", "sword", "mace",
-		"staff", "polearm", "axe", "thrown", "miscellaneous",
-		"fist weapon",
-		-- (card t_d5c915f2) "Fishing Pole" is the subtype the client prints on a
-		-- two-hand fishing pole ("Two-Hand  Fishing Pole"). It was the one weapon
-		-- subtype in the owner's vocabulary that this list did not carry, so the
-		-- TYPE LINE fell to the cosmetic path and every pole hover disclosed a
-		-- "partial read: \"Two-Hand Fishing Pole\" ignored" that was the item's own
-		-- chrome. Same clause as the rest, same narrowness: the subtype word plus
-		-- the slot word, nothing wider.
-		"fishing pole",
-	}
-	local is_weapon_type = false
-	for _, slot in ipairs(WEAPON_SLOTS) do
-		if low == slot.plain then
-			is_weapon_type = true
-			break
-		end
-		for _, sub in ipairs(WEAPON_SUBTYPES) do
-			if low:match("^" .. slot.pat .. "%s+" .. sub .. "$") then
-				is_weapon_type = true
-				break
-			end
-		end
-		if is_weapon_type then break end
-	end
+	-- ONE grammar, spent twice (card t_1677cd39): this classifier and the
+	-- weapon-family reader below. The reader is what a spec's weapon policy
+	-- asks, so the two must never be two lists — see WEAPON_TYPE_SLOTS.
+	local typeSlot = weaponTypeLine(low)
+	local is_weapon_type = typeSlot ~= nil
 	if is_weapon_type then return nil, nil, "structural" end
 	-- Structural chrome (gate C1, E1, t_7b8f504a). Each of these ships on
 	-- real items in this era (captured in the repo; see the card's WHY
@@ -2352,11 +2431,56 @@ end
 -- otherwise parse as real stats. Dropping the tail is the safe direction — it is
 -- now a REPORTED drop rather than a silent one.
 --
--- Sell price is the item's own terminator. A line after it that carries a number
--- is an addon delta ("-8 Armor") and is foreign; a number-free line is wardrobe
--- chrome and stays, so the cosmetic path can ignore it and say so. A genuine
--- unparsed stat ("+15 Frost Resistance") sits in the item body, before that
--- terminator, and still suppresses (fail-closed stays — the card's constraint).
+-- ⚠ CARD t_195a0e07 — THE SELL-PRICE TERMINATOR DECIDED BY POSITION, AND THAT
+-- FAILED OPEN ON THE ITEM ITSELF. Until this card the rule was: once a
+-- "Sell Price" line had been KEPT, every later line carrying a digit was an
+-- addon delta and was set aside — and the set-aside opened the DROP, so every
+-- line after it went with it. On a real client the sell price IS the item's
+-- last line, so the rule looked harmless; its failure mode was silent, and it
+-- JUDGED rather than refused. With "Sell Price: 7459" printed BEFORE the
+-- item's body, the body's own stat lines were set aside as "addon lines", the
+-- parse saw an item with no stats, and the pair was COMPARED. A "+5 Frost
+-- Resistance" the reader could not place went with them, on the strength of
+-- its POSITION alone, so the pair that must refuse answered NOT_UPGRADE
+-- instead. The same line list, with the same chrome last, refused correctly.
+-- That is the one thing #93/#96 exist to prevent: a verdict claimed over a
+-- line the reader never read.
+--
+-- THE RULE NOW IS A PROPERTY OF THE LINE, NOT OF ITS POSITION. A line is set
+-- aside only when the LINE ITSELF says it is not the item's: another addon's
+-- MARKER (FOREIGN_LINE_HEADERS above), which opens the drop block that follows
+-- it — an annotation, positively identified by its own text, and the one shape
+-- in this corpus that no item tooltip can produce.
+--
+-- ⚠ THERE IS NO SECOND SHAPE, AND THE TEMPTING ONE WAS CHECKED AND REFUSED.
+-- The obvious replacement — "a signed-negative line is another addon's delta
+-- (-8 Armor), not a stat" — is FALSE for this repo's own pinned corpus: case 1
+-- of ChestAdvisor/tests/verdict_cases.lua is an item whose stat line is
+-- "-3 Stamina", and verdict_cases.lua's own sign note records that the parse
+-- reads the MAGNITUDE of a "+N Word" / "-N Word" line. A sign is therefore NOT
+-- a discriminator between another addon's arithmetic and the item's own stat,
+-- and a rule keyed on it would silently set aside a real stat (it did, on this
+-- branch, and the pinned case caught it by name). Position was the only
+-- discriminator available, and position is the thing that failed open. So:
+--   * a MARKER is set aside, and opens the block that follows it;
+--   * EVERYTHING ELSE reaches the classifier, wherever it sits — a numbered
+--     line the classifier cannot place SUPPRESSES, and one it can place is the
+--     item's own, including a "Sell Price:" line (parseLine_ places it as
+--     structural chrome) and including a sign-carrying stat line.
+-- Fail-closed is a property of the LINE SET, not of encounter order.
+--
+-- WHAT THIS COSTS, STATED RATHER THAN IMPLIED: on the no-API fallback, a
+-- THIRD-PARTY line appended after the sell price is now treated like any other
+-- line. If the classifier cannot place it, the pair REFUSES and the reason
+-- NAMES it — the fail-closed direction the owner ruled for ("the answer to 'a
+-- line was skipped' is to refuse, never to judge more confidently"). If the
+-- classifier CAN place it, it is read as the item's own, which is the
+-- pre-existing treatment of a sign-led line everywhere else on the tooltip (see
+-- the sign note above) and is exactly what the old positional rule was written
+-- to prevent; no rule can prevent it without also setting aside the item's own
+-- "-3 Stamina". On the structured read none of this arises at all: another
+-- addon's lines never reach the judge (t_4ff4ebef: the ruling is
+-- C_TooltipInfo; this is the fallback).
 -- ⚠ A healing-only Equip line USED to be the second example here and is not one
 -- any more: card t_4e1e1b1d (DD-2) reads it as the word Healing, so it is a
 -- classified stat now, not an unparsed line. What suppresses a pair carrying it
@@ -2378,6 +2502,8 @@ local function foreignMarker(plain)
 	return false
 end
 
+
+
 -- Split one side's raw lines into the ITEM's own lines and the lines set aside
 -- as foreign. Returns (kept, foreign): two arrays of the raw strings, in the
 -- order they were met. A non-table input passes straight through as
@@ -2386,37 +2512,30 @@ end
 -- This is the ONE definition of "not the item" on the rendered path. No other
 -- file keeps a list of foreign strings: ChestAdvisor.lua's disclosure renders
 -- what THIS returns rather than naming shapes of its own.
+--
+-- CARD t_195a0e07: the decision is a property of the LINE — another addon's
+-- marker, and nothing else — never of where the line sits relative to the sell
+-- price. Everything else stays in the item's own list and is classified, so an
+-- unplaceable line suppresses the pair whatever precedes it, whatever follows
+-- it, and however many structural or cosmetic lines are interleaved.
 function Verdict.splitForeign(lines)
 	if type(lines) ~= "table" then return lines, {} end
 	local kept, foreign = {}, {}
 	local drop = false
-	local seenSell = false
 	for _, line in ipairs(lines) do
 		if type(line) == "string" then
 			local plain = deColour_(line:lower())
 			plain = plain:gsub("^%s+", ""):gsub("%s+$", "")
-			local isForeign = foreignMarker(plain)
-			if not isForeign and seenSell then
-				local epilogue = plain:match('^".*"$')
-					or plain:match("^<made by")
-					or plain:match("^made by%s+")
-				-- A numbered line after the sell price is an addon delta
-				-- ("-8 Armor"). A number-free line is wardrobe chrome; leave
-				-- it so the cosmetic path can ignore it and say so.
-				if not epilogue and plain:find("%d") then isForeign = true end
-			end
-			if drop then
-				-- The block a header opened continues; it is not the item.
-				foreign[#foreign + 1] = line
-			elseif isForeign then
-				drop = true
+			local marker = foreignMarker(plain)
+			if drop or marker then
 				foreign[#foreign + 1] = line
 			else
 				kept[#kept + 1] = line
-				if plain:match("^sell%s*price") or plain:match("^sells for") then
-					seenSell = true
-				end
 			end
+			-- The marker opens the block that follows it; there is no other
+			-- set-aside, because any other rule would be a POSITION rule and a
+			-- position rule is what let one line decide the line set (t_195a0e07).
+			if marker then drop = true end
 		end
 	end
 	return kept, foreign
@@ -2942,6 +3061,11 @@ local WEIGHT_KEYS = { "STR", "AGI", "STA", "INT", "SPI", "ARMOR", "BLOCK",
 -- one of the words above?" — derived from the list so the two cannot disagree.
 local WEIGHT_KEY_SET = {}
 for _, k in ipairs(WEIGHT_KEYS) do WEIGHT_KEY_SET[k] = true end
+-- Card t_ee6dec52: the word list is PUBLIC (GearAPI.GetStatKeys hands out
+-- copies of it for a settings / other-addon display). The live table stays this
+-- file's own — the alias is the same table, so nothing here changes what a
+-- verdict sees; GetStatKeys never returns the alias itself, only a copy.
+Verdict.WEIGHT_KEYS = WEIGHT_KEYS
 local WEIGHT_WORD = {
 	STR = "Strength", AGI = "Agility", STA = "Stamina", INT = "Intellect",
 	SPI = "Spirit", ARMOR = "Armor", BLOCK = "Block",
@@ -2991,6 +3115,18 @@ local WEIGHT_WORD = {
 --     consults DPS exactly when its stats are level; making WeaponDps a stat
 --     term here would let a pack price outvote that ruled tie-break and would
 --     count the same number twice.
+--
+-- AND THE WEIGHTED LAYER DOES NOT SPEND THEM (card t_ea260b42). "Out of the
+-- proof" was only HALF a rule: `Verdict.weightedScore` priced every key, Armor
+-- and Block included, so a price for one of these three could still decide the
+-- moment dominance returned TRADE_OFF. That is how the same 40 Block decided a
+-- trade-off pair ("better on Block — the weighted gain outweighs the Stamina
+-- loss", audit fixture W4f) and was invisible on a one-sided one (W4e) — one
+-- number, two answers. The rule is now ONE shape: these three words decide a
+-- pair ONLY at gate 9's tiebreak — where nothing else moved and BOTH sides carry
+-- the stat — and nowhere else. A tiebreak is still a decision ("+20 Block vs
+-- +10 Block" is an upgrade, W4c); it just cannot be bought by a price, and a
+-- price for one of them can never outweigh a ranked word.
 Verdict.PROOF_EXEMPT = {
 	Armor = true,
 	Block = true,
@@ -3809,20 +3945,32 @@ local function weightedScore(candStats, eqStats, weights, spec)
 	local gainWord, lossWord, gainValue, lossValue = nil, nil, 0, 0
 	for _, k in ipairs(WEIGHT_KEYS) do
 		local word = WEIGHT_WORD[k]
-		local c, e = rawget(cand, word), rawget(eq, word)
-		if c ~= nil or e ~= nil then
-			-- CARD t_43f8cd6f: a hit/crit difference under one tooltip step is
-			-- the tooltip's own rounding, not a stat the player has — see
-			-- Verdict.TOOLTIP_HALF_STEP_PERCENT. Level it here, at the one
-			-- subtraction that prices those two words; every other word's
-			-- comparison is untouched (its resolution is nil).
-			local d = (c or 0) - (e or 0)
-			if Verdict.levelWithinResolution(word, c, e) then d = 0 end
-			local term = weights[k] * d
-			delta  = delta + term
-			disagree = disagree + (term < 0 and -term or term)
-			if term > gainValue then gainValue, gainWord = term, word end
-			if term < lossValue then lossValue, lossWord = term, word end
+		-- CARD t_ea260b42: A PROOF_EXEMPT WORD IS TIEBREAK-ONLY HERE TOO, so its
+		-- price is NOT spent by this subtraction. Armor, Block and WeaponDps are
+		-- exempt from the dominance proof (see `Verdict.PROOF_EXEMPT`), and until
+		-- this card the weighted layer read their prices anyway — which is how the
+		-- same 40 Block came to decide a TRADE-OFF pair ("better on Block — the
+		-- weighted gain outweighs the Stamina loss", fixture W4f) while being
+		-- invisible on a one-sided one (fixture W4e), and how a WeaponDps price
+		-- could be counted twice on the weapon path. The tiebreak at gate 9 is the
+		-- ONE place these words may decide a pair; every other decision, including
+		-- this one, is made on the priced RANKED words only.
+		if not rawget(Verdict.PROOF_EXEMPT, word) then
+			local c, e = rawget(cand, word), rawget(eq, word)
+			if c ~= nil or e ~= nil then
+				-- CARD t_43f8cd6f: a hit/crit difference under one tooltip step is
+				-- the tooltip's own rounding, not a stat the player has — see
+				-- Verdict.TOOLTIP_HALF_STEP_PERCENT. Level it here, at the one
+				-- subtraction that prices those two words; every other word's
+				-- comparison is untouched (its resolution is nil).
+				local d = (c or 0) - (e or 0)
+				if Verdict.levelWithinResolution(word, c, e) then d = 0 end
+				local term = weights[k] * d
+				delta  = delta + term
+				disagree = disagree + (term < 0 and -term or term)
+				if term > gainValue then gainValue, gainWord = term, word end
+				if term < lossValue then lossValue, lossWord = term, word end
+			end
 		end
 	end
 	if disagree == 0 then return nil end
@@ -5772,6 +5920,138 @@ local function cannotClassify(side, line, qualifier)
 	return "UNKNOWN", reason .. " (on the " .. which .. " item)"
 end
 
+-- ---- A DEFINITE NO is not a CANNOT-JUDGE (card t_8d3af71d) ------------------
+-- The client's eligibility answer has two failure shapes, and until this card
+-- they were reported as one:
+--
+--   * `false` — a DECISION the game has already made. This character cannot use
+--     the item. That is a cannot-EQUIP: the requirement the item states, no
+--     gain (there is none to give), no pretence of a comparison.
+--   * nil / the secret sentinel / any non-boolean — an ABSENCE of information.
+--     That stays exactly what it was: "eligibility unconfirmed (fail-closed)",
+--     naming what was unconfirmed. The doctrine does not move.
+--
+-- The audit measured the defect on origin/main (ec947b3, fixture S6b): a Rogue
+-- 20 holding a "Requires Level 40" item read
+--     UNKNOWN — eligibility unconfirmed (fail-closed): client returned false …
+-- where the spec's §15 case 6 asks for the requirement with no gain. The player
+-- was told the addon did not know something the client had in fact settled.
+--
+-- WHAT MAY BE NAMED. Only a requirement the ITEM'S OWN LINES state and that the
+-- character is demonstrably on the wrong side of — the level line against the
+-- player's level, a class list that does not contain the player's class, an
+-- armour material above the best this class can wear at this level. Anything
+-- else is the generic sentence below: the client said no and we will not invent
+-- a reason for it. An ambiguous answer never reaches this function at all —
+-- gate 3 only calls it for `false`.
+--
+-- WHY THE TOKEN STAYS UNKNOWN. The four-token vocabulary is the comparator's
+-- contract (the row's `verdict`, the arrow, GearAPI.IsUpgrade/GetGain). A
+-- definite no offers no gain and no comparison, so it must answer exactly like
+-- every other non-answer to those consumers — nil from GetGain, nil from
+-- IsUpgrade, no arrow. Only the WORDS change, which is what the card asks for,
+-- and it is why a fifth token would be a wider change for a worse contract.
+Verdict.CANNOT_EQUIP = "cannot equip"
+local CANNOT_EQUIP_LEAD = Verdict.CANNOT_EQUIP .. " — "
+
+-- The four armour materials, worst to best — the module's ONE ranking
+-- (Verdict.ARMOR_RANK, above). This section adds no second table: it compares an
+-- item's own material against the best its class can wear (Verdict.bestArmor)
+-- and never prices anything.
+
+-- One line, de-coloured (an unmet requirement ships red on this client),
+-- trimmed and lower-cased. The ONE normaliser every reader here uses.
+local function requirementLine(line)
+	if type(line) ~= "string" then return nil end
+	local plain = deColour_(line):gsub("^%s+", ""):gsub("%s+$", "")
+	if plain == "" then return nil end
+	return plain
+end
+
+-- "Requires Level 40" -> 40. Anchored to the whole line: a requirement quoted
+-- inside a longer sentence is not the item's requirement line.
+local function requiredLevelOf(lines)
+	if type(lines) ~= "table" then return nil end
+	for i = 1, #lines do
+		local plain = requirementLine(lines[i])
+		if plain then
+			local n = plain:lower():match("^requires%s+level%s+(%d+)$")
+			if n then
+				local level = tonumber(n)
+				if level and level > 0 then return level end
+			end
+		end
+	end
+	return nil
+end
+
+-- "Classes: Priest, Mage" -> <display list>, <lower-cased set>. Both nil when
+-- the item states no class restriction. The list is the CLIENT's own words, so
+-- the named requirement is the item's, not ours.
+local function classListOf(lines)
+	if type(lines) ~= "table" then return nil, nil end
+	for i = 1, #lines do
+		local plain = requirementLine(lines[i])
+		if plain then
+			local rest = plain:match("^[Cc]lasses%s*:%s*(.+)$")
+			if rest then
+				local shown, seen, any = {}, {}, false
+				for name in rest:gmatch("[^,]+") do
+					local w = name:gsub("^%s+", ""):gsub("%s+$", "")
+					if w ~= "" then
+						any = true
+						seen[w:lower()] = true
+						shown[#shown + 1] = w
+					end
+				end
+				if any then return table.concat(shown, ", "), seen end
+				return nil, nil
+			end
+		end
+	end
+	return nil, nil
+end
+
+--- The reason for a DEFINITE ineligibility: the requirement the item states,
+--- with no gain. Always prefixed with Verdict.CANNOT_EQUIP, which is the family
+--- marker the tooltip surface keys on (ChestAdvisor.lua's cannotEquipTail).
+---
+--- Grounded facts first (level, then the class list the item carries, then the
+--- material the class cannot wear); the generic sentence when the item states no
+--- requirement we can check. It never returns a refusal word — "unconfirmed" is
+--- the other family's word and the two must not merge. A race restriction is NOT
+--- named: this module is handed no race read, and a race line we cannot check
+--- against the character would be a guess wearing the item's words.
+function Verdict.cannotEquipReason(lines, spec)
+	local s = type(spec) == "table" and spec or {}
+	local playerLevel = type(s.level) == "number" and s.level or nil
+
+	local level = requiredLevelOf(lines)
+	if level ~= nil and playerLevel ~= nil and playerLevel < level then
+		return CANNOT_EQUIP_LEAD .. "requires level " .. tostring(level)
+	end
+
+	local classText, classSet = classListOf(lines)
+	if classText ~= nil and type(s.classDisplay) == "string" then
+		local mine = s.classDisplay:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+		if mine ~= "" and classSet[mine] ~= true then
+			return CANNOT_EQUIP_LEAD .. classText .. " only"
+		end
+	end
+
+	local material = Verdict.tooltipArmorMaterial(lines)
+	if material ~= nil and type(s.class) == "string" and playerLevel ~= nil then
+		local best = Verdict.bestArmor(s.class, playerLevel)
+		local rank = Verdict.ARMOR_RANK or {}
+		if type(best) == "string"
+			and (rank[material] or 0) > (rank[best] or 0) then
+			return CANNOT_EQUIP_LEAD .. "requires " .. material
+		end
+	end
+
+	return CANNOT_EQUIP_LEAD .. "this character cannot use it"
+end
+
 -- `slotWord` (card t_d88b7f28, item 3) is OPTIONAL and is the display word for
 -- the worn slot this pair is judged in ("chest", "legs", "finger"). It is used by
 -- ONE branch — the empty-slot shortcut, gate 6 — so that the reason names the
@@ -5846,8 +6126,8 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	-- Gate (3) — hard eligibility, FAIL CLOSED (blocker A, t_b9c4291e).
 	--     Only a definitive `true` from C_PlayerInfo.CanUseItem may proceed
 	--     to the stat comparison. A nil, false, secret-sentinel, or any
-	--     other non-boolean return reads as "eligibility unconfirmed" and
-	--     returns UNKNOWN whether the chest slot is empty or filled.
+	--     other non-boolean return returns UNKNOWN whether the chest slot is
+	--     empty or filled.
 	--     This single gate precedes the empty-slot shortcut and the
 	--     occupied-slot comparator alike: a strictly-better candidate must
 	--     not read UPGRADE on uncertain eligibility. The previous gate
@@ -5860,14 +6140,26 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 	--     If issecretvalue is missing (older client), we skip it and let
 	--     the `~= true` branch describe the reason with the value's type
 	--     — normal boolean behavior, no false secret claim.
+	--
+	--     CARD t_8d3af71d: the gate answers UNKNOWN either way, but the TWO
+	--     KINDS of "not true" are no longer reported as one. A plain `false`
+	--     is the client's DECISION — this character cannot use the item — and
+	--     reads the requirement with no gain (Verdict.cannotEquipReason). Every
+	--     other shape is an ABSENCE of information and keeps the fail-closed
+	--     "eligibility unconfirmed" wording, byte for byte. The secret check
+	--     comes FIRST: a secret value that compares equal to `false` is not a
+	--     decision we are allowed to read, so it stays unconfirmed.
 	if candExplicit and candCanUse ~= true then
-		local detail
 		if type(issecretvalue) == "function" and issecretvalue(candCanUse) then
-			detail = "client returned the secret-value sentinel"
-		elseif candCanUse == nil then
-			detail = "client returned nil (Could Not Classify)"
+			return "UNKNOWN", "eligibility unconfirmed (fail-closed): client returned the secret-value sentinel"
+				.. " — the client did not affirmatively confirm this character can use this item"
 		elseif candCanUse == false then
-			detail = "client returned false (this character cannot use this item)"
+			-- A definite no: not a cannot-judge.
+			return "UNKNOWN", Verdict.cannotEquipReason(candLines, spec_)
+		end
+		local detail
+		if candCanUse == nil then
+			detail = "client returned nil (Could Not Classify)"
 		else
 			detail = "client returned a non-boolean value of type " .. type(candCanUse)
 		end
@@ -6193,6 +6485,11 @@ if Verdict.LEGACY_DOMINANCE_DECIDES then
 	--   * Their semantics are a two-sided value comparison, absence NEUTRAL
 	--     (never a fabricated 0), a literal 0 a VALUE. rawget keeps absence
 	--     distinguishable from zero (AC-E13(c)/(d)).
+	--   * Card t_ea260b42 makes this the ONLY place their prices can decide:
+	--     `weightedScore` no longer spends a PROOF_EXEMPT word, so the same 40
+	--     Block is silent on a trade-off pair (W4f) exactly as it is on a
+	--     one-sided one (W4e) — and still decides an otherwise-equal two-sided
+	--     pair (W4c), which is the tiebreak doing its one job.
 	-- The universal terms are read from the SAME relevanceSet the set is built
 	-- from, so the tiebreak order (Armor, Block) has one definition. Iterating
 	-- it after the order's own words have already been proven equal (outcome
@@ -6236,6 +6533,18 @@ Verdict.OFF_HAND_TOKENS = {
 	["INVTYPE_SHIELD"]       = true,
 	["INVTYPE_WEAPONOFFHAND"] = true,
 	["INVTYPE_HOLDABLE"]      = true,
+}
+
+-- §2, narrowed (card t_1677cd39): the ONE token that IS the dual-wielder's off
+-- hand. A shield and a held-in-off-hand frill are not weapons; an off-hand weapon
+-- is the item the rogue's slot exists for, and the audit's I3b showed the gate
+-- refusing it ("the off hand is out of scope for ROGUE"). This set is what the
+-- gate consults so a slot whose real content is a weapon is JUDGED rather than
+-- declined — still like-for-like (G4 untouched), still closed by a two-hander in
+-- the main hand (G0 untouched), still a class fact rather than a spec policy
+-- (Verdict.offHandHoldsWeapon).
+Verdict.OFF_HAND_WEAPON_TOKENS = {
+	["INVTYPE_WEAPONOFFHAND"] = true,
 }
 
 -- §2 TWO_HAND class — never an off-hand candidate; a worn MAIN HAND item in
@@ -6414,7 +6723,14 @@ Verdict.OFF_HAND_BUCKETS = {
 	WARLOCK = { roles = { shield = "allowed" } },
 	DRUID   = { roles = { shield = "allowed" } },   -- cannot wear a shield at all (G1)
 	-- `irrelevant` — the off hand is out of scope for these two specs entirely.
-	ROGUE   = { roles = { shield = "irrelevant" } },  -- the off hand holds an off-hand weapon: Tier C's slot
+	-- ROGUE's row carries ANOTHER fact beside the shield policy (card
+	-- t_1677cd39): `offHandWeapon = true` says the slot the rogue's off hand
+	-- actually holds is a WEAPON. That is what made the shipped G2 wrong for an
+	-- off-hand weapon candidate — the audit's I3b: "a rogue off-hand is refused:
+	-- the off hand is out of scope for ROGUE" — and it is the fact the gate now
+	-- reads instead of declining the one item the slot exists for. A SHIELD is
+	-- still out of scope for a rogue (G1 fires: the class cannot wear one).
+	ROGUE   = { roles = { shield = "irrelevant", offHandWeapon = true } },
 	HUNTER  = { roles = { shield = "irrelevant" } },  -- no off-hand item in this era
 	-- Everything else (a class token we do not know) is genuinely absent ->
 	-- no bucket -> G3, which is the correct reason for an unresolved identity.
@@ -6546,6 +6862,135 @@ function Verdict.shieldCapable(spec)
 	return Verdict.SHIELD_CLASSES[spec.class] == true
 end
 
+-- ---- A weapon the SPEC cannot use (card t_1677cd39) -------------------------
+--
+-- THE MEASUREMENT THIS TABLE ANSWERS. Slice 2's audit (fixtures S3a/S3b) asked
+-- whether the dagger lock is per-CLASS or per-SPEC. The answer was measured, not
+-- chosen:
+--
+--   * the spec/role/clientRole triple cannot say it. All three rogue specs read
+--     class = ROGUE, role = "melee", clientRole = "DAMAGER": nothing in that
+--     triple separates Assassination from Combat.
+--   * Verdict.ORDERS agrees — ROGUE is a PURE class there (ONE `melee` order,
+--     the role argument ignored, so the order cannot carry a spec either).
+--   * Weights.lua agrees twice: ROGUE carries ONE key (`melee`) and the
+--     corpus's only rogue pack is rogue-combat.dps, with tabSpecs.ROGUE mapping
+--     all three tabs to it. So a per-CLASS "rogues use daggers" rule would
+--     contradict the very pack the weights layer is built on — and the card's
+--     own premise, that a Combat rogue genuinely uses swords.
+--   * the ONE vocabulary in this module that can speak about a spec BY NAME is
+--     `Verdict.substantiated` + `bucket.byName` in OFF_HAND_BUCKETS (§3, the
+--     warrior Arms/Fury same-role collision). This table uses EXACTLY that —
+--     same class-token + role-word key, same `byName` disambiguator, same
+--     classDisplay guard, same fail-closed rule. No second taxonomy.
+--
+-- So the rule is PER-SPEC, and only where the corpus has RULED it:
+--
+--   Assassination  ROGUE  daggers. Sources: docs/research/deep-dive-weights-
+--                  review-2026-10-17.md ("Mutilate needs two daggers";
+--                  "Daggers in both hands are required for Mutilate. A
+--                  non-dagger off-hand 'upgrade' is a loss for Mutilate
+--                  builds"), and the audit's own fixture S3a, which IS a Rogue
+--                  Assassination.
+--   Combat         NO ROW. The class's only pack (rogue-combat.dps) is the
+--                  sword-and-dagger build and this card has no ruling that
+--                  narrows it: a dagger that loses to a sword on DPS still
+--                  loses for a Combat rogue. That absence is what makes the rule
+--                  per-spec rather than per-class, and the battery pins it as a
+--                  contrast case.
+--   Subtlety       NO ROW. The corpus carries no ruling for it and inventing one
+--                  would be the same second-taxonomy defect wearing a different
+--                  hat — a claim no source makes. Called out as a known
+--                  limitation in the card's report rather than guessed at.
+--
+-- FAIL-CLOSED, exactly like shieldPolicy: an unsubstantiated read (a levelling
+-- rogue whose client returns the class name, or no name at all) resolves NO
+-- policy, so no wieldability claim is made and the row keeps the basis it
+-- already had.
+Verdict.WEAPON_FAMILY_POLICY = {
+	ROGUE = {
+		-- THE KEY IS THE FOLDED ROLE WORD, not the client literal: on the WEAPON
+		-- path `spec.role` is the word the ORDERS table and the WEIGHTS layer both
+		-- key this class on ("melee" — Weights.lua's ROGUE.melee is the class's
+		-- only pack), and `spec.clientRole` is the separate client literal
+		-- ("DAMAGER"). Using the same word the weight pack uses keeps ONE
+		-- vocabulary for "which rogue build is this" instead of a third one.
+		-- (OFF_HAND_BUCKETS is keyed on the client literal because its caller,
+		-- readOffHandSpec, hands over `si.role`; the two tables answer different
+		-- questions and each is keyed by the word its own caller carries.)
+		melee = { byName = {
+			-- The client's own localized spec name, matched as a substring,
+			-- case-insensitively — the §3 rule, borrowed whole.
+			assassination = { dagger = true },
+		} },
+	},
+}
+
+-- The family set a resolved spec uses, or nil when no policy applies.
+-- nil is the ORDINARY answer for every class except the ruled rogue spec, so
+-- every unruled row keeps its shipped basis byte-for-byte.
+function Verdict.weaponFamilies(spec)
+	if type(spec) ~= "table" then return nil end
+	local token, role = spec.class, spec.role
+	if type(token) ~= "string" or type(role) ~= "string" then return nil end
+	local entry = Verdict.WEAPON_FAMILY_POLICY[token]
+	local bucket = type(entry) == "table" and entry[role] or nil
+	if type(bucket) ~= "table" then return nil end
+	-- A spec-specific row is authoritative only when the read IS a real spec
+	-- (defect 1, t_548f0341: at level 22 the client returns the class name).
+	if not Verdict.substantiated(spec) then return nil end
+	if bucket.byName then
+		local name = type(spec.name) == "string" and spec.name:lower() or nil
+		if name == nil then return nil end
+		for needle, set in pairs(bucket.byName) do
+			if name:find(needle, 1, true) then return set end
+		end
+		return nil
+	end
+	return bucket
+end
+
+-- Is this weapon family one the resolved spec uses?
+--   true  — yes.
+--   false — no: the fact that decides the pair BEFORE the comparator.
+--   nil   — no policy resolved, or no family readable: the caller makes NO
+--           claim either way (an absent policy must never widen or narrow a row
+--           it does not govern).
+function Verdict.weaponUsableBySpec(family, spec)
+	local set = Verdict.weaponFamilies(spec)
+	if set == nil then return nil end
+	if type(family) ~= "string" then return nil end
+	return set[family] == true
+end
+
+-- The two rulings in the PLAYER's words. ONE place, so the ledger and the tests
+-- read the same sentence the tip shows. `spec.name` is the client's own
+-- localized string, never a hardcoded English spec name.
+function Verdict.weaponWieldReason(kind, family, wornFamily, spec)
+	local name = "this spec"
+	if type(spec) == "table" and type(spec.name) == "string" and spec.name ~= "" then
+		name = spec.name
+	end
+	if kind == "refuse" then
+		return "not judged: a " .. tostring(family) .. " is not a weapon " .. name .. " uses"
+	end
+	return "upgrade: " .. name .. " uses a " .. tostring(family)
+		.. ", and your " .. tostring(wornFamily) .. " cannot serve this spec"
+end
+
+-- Does this character's OFF HAND hold a WEAPON (a dual-wielder's slot)?
+--
+-- A CLASS capability, like shieldCapable, not a spec policy — and deliberately
+-- WITHOUT a substantiated guard: a level-22 rogue with no spec still dual-wields,
+-- and the sentence this answers ("the off hand holds an off-hand weapon", the
+-- rogue's own comment in OFF_HAND_BUCKETS since Tier B) was always a class fact.
+function Verdict.offHandHoldsWeapon(spec)
+	if type(spec) ~= "table" or type(spec.class) ~= "string" then return false end
+	local entry = Verdict.OFF_HAND_BUCKETS[spec.class]
+	if type(entry) ~= "table" or type(entry.roles) ~= "table" then return false end
+	return entry.roles.offHandWeapon == true
+end
+
 -- The off-hand gate. Pure: every input is an argument, nothing is read from
 -- the environment. Returns nil (judge this row normally) or a decline reason
 -- string (the row is UNKNOWN with that reason, no marker, no tip).
@@ -6622,7 +7067,22 @@ function Verdict.offHandGate(candLoc, wornLoc, mainLoc, spec)
 	-- a more accurate answer than "these two off-hand classes are incomparable",
 	-- even when the worn slot happens to be filled. The §7 no-UPGRADE guarantee
 	-- is satisfied either way — G2 declines unconditionally.
-	if bucket == "irrelevant" then return REASON.G2 end
+	--
+	-- CARD t_1677cd39 AMENDS THAT REASON for the one candidate the sentence
+	-- contradicts. "The off hand is out of scope for ROGUE" is right about a
+	-- SHIELD and wrong about an OFF-HAND WEAPON: the rogue's slot is a weapon
+	-- slot, and refusing the item the slot exists for is the audit's I3b. So G2
+	-- keeps its meaning for every candidate except the class's actual off-hand
+	-- content, which is then judged on the weapon comparator like-for-like. The
+	-- §7 guarantee is untouched: G0 (a two-hander in the main hand) still closes
+	-- the slot first, G1 still refuses a shield the class cannot wear, G4 still
+	-- refuses a worn item of a different off-hand class, and no path here can
+	-- emit UPGRADE on its own — it only declines to decline.
+	if bucket == "irrelevant" then
+		local slotWeapon = Verdict.OFF_HAND_WEAPON_TOKENS[candLoc] == true
+			and Verdict.offHandHoldsWeapon(spec)
+		if not slotWeapon then return REASON.G2 end
+	end
 
 	-- G4 — worn slot 17 is FILLED with an item of a different off-hand class
 	-- than the candidate. THE GUARANTEE (§7). Token inequality alone; no
@@ -6809,6 +7269,59 @@ local function weaponOnHitLine(line)
 	return low:match("^chance on hit") ~= nil
 end
 
+-- ENCHANTS — named, never a blocker, never priced (card t_c65cc350)
+--
+--     Enchanted: Weapon Damage +5
+--
+-- The owner's weapon carries this line, and card t_fc11dd1c measured what it is
+-- worth in the printed arithmetic: NOTHING. The live tooltip of that Wolfsbane
+-- prints 69-105 / 25.6 with the enchant and the template's own 69-105 / 25.6
+-- without it, and 25.6 is exactly (69+105)/2/3.40 — so the printed range EXCLUDES
+-- the enchant, and the +5 is not stated by the client as a comparable number.
+--
+-- t_fc11dd1c therefore refused the pair and named the side. That measurement
+-- STANDS; what the owner overturned on 2026-11-15 is its consequence:
+--
+--   "an enchant line is never a classification blocker and never priced. Judge
+--    the items; name the enchant as present-but-unpriced, with the side that
+--    carries it — the proc doctrine, applied to enchants. It comes out of the
+--    stat list like chrome and into the disclosure like a proc."
+--
+-- The enchant sat on the owner's EQUIPPED weapon, so failing closed meant every
+-- main-hand comparison on that character refused and the advisor went silent on
+-- its primary slot. So, exactly as for an on-hit proc:
+--
+--   1. Is it CHROME? No — `isWeaponChrome` is NOT widened, and its totality rule
+--      is untouched. This is its OWN recogniser; the enchant is removed from the
+--      stat side by weaponDisclosureLines below, beside the proc, not by the
+--      chrome strip.
+--   2. Is it the weapon's ARITHMETIC? No. `+5 / speed` is computable, and that is
+--      precisely why it is refused: the ruling is that an enchant is never
+--      priced, because the printed range excludes it and adding a contribution
+--      the client did not print would invent a comparable number. parseWeaponLine
+--      refuses the line outright, so a payload spelled like a range
+--      ("Enchanted: 5 - 10 Damage") can never become the weapon's range or dps.
+--   3. Is it a STAT? No. The worn side's additive enchant fold (t_ea70928d) is
+--      the ARMOUR rule and stays where it is; on the weapon path the line is out
+--      of the side the parse judges, so it can neither be folded into the score
+--      nor reach the suppression channel.
+--   4. Does it SUPPRESS the pair? No. It is NAMED on the answer, with the side
+--      that carries it — "present but unpriced", the honest form of "we read it
+--      and cannot price it", and the same shape as the on-hit clause.
+--
+-- The recogniser is the PREFIX, like the proc's: what follows "Enchanted:" varies
+-- per enchant (a stat, a weapon damage, a spell power) and no list of payloads
+-- survives contact with real data. Only the prefix is contractual; the payload is
+-- never read, which is what "never priced" means in one line of code.
+local function weaponEnchantLine(line)
+	if type(line) ~= "string" then return false end
+	-- Colour escapes and case are transparent, exactly as in the proc recogniser:
+	-- the tooltip's own read can carry "|cff00ff00Enchanted: ...|r".
+	local low = line:lower():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	low = low:gsub("^%s+", "")
+	return low:match("^enchanted%s*:") ~= nil
+end
+
 -- Parse one tooltip line for weapon numbers. Returns a table of whichever of
 -- {minDamage, maxDamage, speed, dps} the line carries, or nil if it carries
 -- none. `line` may be a plain string; a `nil`/secret/non-string reads as no
@@ -6824,7 +7337,14 @@ local function parseWeaponLine(line)
 	-- range spelling (see the block above): refusing it here is what stops a
 	-- proc's "dealing 5 - 10 Fire damage" from becoming the weapon's dps.
 	if weaponOnHitLine(line) then return nil end
-	-- Normalise the dash characters to the ASCII hyphen BEFORE matching. Lua
+	-- An ENCHANT line never is either (card t_c65cc350): "+5 / speed" would be
+	-- computable, and that is exactly why the ruling forbids it — the printed
+	-- range excludes the enchant, so a contribution added here would be a number
+	-- the client never stated. Refusing the line also means a payload spelled
+	-- like a range ("Enchanted: 5 - 10 Damage") cannot arm a weapon with a range
+	-- and a dps it does not have.
+	if weaponEnchantLine(line) then return nil end
+	-- Normalise the dash characters to the ASCII hyphen BEFORE matching.
 	-- patterns match BYTES, so a character class cannot hold the multi-byte
 	-- UTF-8 en-dash (E2 80 93) / em-dash (E2 80 94) as a single element — the
 	-- class would match one byte at a time and the range match would fail.
@@ -7237,20 +7757,32 @@ Verdict.weaponDamageSchools = WEAPON_DAMAGE_SCHOOLS
 -- The on-hit recogniser, exposed so the fixture table drives the shipped
 -- predicate rather than a copy of the prefix (card t_d5c915f2).
 Verdict.weaponOnHit = weaponOnHitLine
+-- The enchant recogniser, exposed for the same reason (card t_c65cc350).
+Verdict.weaponEnchant = weaponEnchantLine
 
--- The stat-side view with ON-HIT PROC lines removed (card t_d5c915f2): the
--- weapon path judges on what is comparable and NAMES the proc as unpriced, so the
--- proc must not reach the parse's suppression channel. A COPY, like
--- weaponStatLines above, and the same non-table passthrough.
-local function weaponWithoutOnHit(lines)
+-- The stat-side view with the NAMED-NOT-PRICED lines removed — the on-hit proc
+-- (card t_d5c915f2) and the enchant (card t_c65cc350). The weapon path judges on
+-- what is comparable and NAMES what it cannot price, so neither line may reach the
+-- parse's suppression channel; on the WORN side an enchant would otherwise be
+-- FOLDED INTO THE SCORE by the armour rule below, which is the one thing the
+-- owner's ruling forbids outright. A COPY, like weaponStatLines above, and the
+-- same non-table passthrough.
+--
+-- One function, two recognisers: the two shapes share the one property that
+-- matters here (named on the answer, never spent on it), and a second parallel
+-- strip would be a second place for a caller to forget one of them. Which
+-- recogniser matched is decided by the clause builder in compareWeapon, not here.
+local function weaponDisclosureLines(lines)
 	if type(lines) ~= "table" then return lines end
 	local kept = {}
 	for _, line in ipairs(lines) do
-		if not weaponOnHitLine(line) then kept[#kept + 1] = line end
+		if not weaponOnHitLine(line) and not weaponEnchantLine(line) then
+			kept[#kept + 1] = line
+		end
 	end
 	return kept
 end
-Verdict.weaponWithoutOnHit = weaponWithoutOnHit
+Verdict.weaponDisclosureLines = weaponDisclosureLines
 
 -- Is this character's weapon judged as a STAT item, or on its DPS?
 --
@@ -7397,7 +7929,7 @@ end
 -- literal cannot silently drop it from the set.
 local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 
-function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide)
+function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide, ctx)
 	local candNumbers = weaponNumbers(candLines)
 	local wornNumbers = weaponNumbers(wornLines)
 
@@ -7410,18 +7942,53 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- place the clause is added: with no proc on either side it returns the
 	-- verdict and reason untouched, which is why every existing weapon reason is
 	-- byte-identical.
-	local onHitNote = ""
-	for _, side in ipairs({ candLines, wornLines }) do
-		if type(side) == "table" then
-			for _, line in ipairs(side) do
-				if weaponOnHitLine(line) then
-					onHitNote = " (judged, with an unpriced on-hit effect)"
-					break
-				end
+	--
+	-- (card t_c65cc350) AN ENCHANT IS NAMED THE SAME WAY, and with its SIDE. The
+	-- owner's ruling of 2026-11-15 supersedes t_fc11dd1c's fail-closed treatment
+	-- for exactly this shape: an enchant is never a classification blocker and
+	-- never priced, so it comes out of the stat side (weaponDisclosureLines) and
+	-- into the disclosure like a proc — "present but unpriced, on the weapon that
+	-- carries it". The SIDE is the one thing the enchant adds to the proc's
+	-- clause, because an enchant belongs to one item and the player's next move
+	-- depends on which: the weapon they are wearing, or the one under the cursor.
+	--
+	-- ONE CLAUSE, NEVER TWO. Both facts arrive in the same parenthetical, proc
+	-- first and then the enchant, because the two are always about the same
+	-- answer ("here is what I could not price") and two parentheticals on one
+	-- sentence read as two separate remarks. Wording decided once, here, and
+	-- pinned as an exact string in ChestAdvisor/tests/t_c65cc350.js.
+	local seen = { onHit = false, enchant = { candidate = false, worn = false } }
+	for _, side in ipairs({ { candLines, "candidate" }, { wornLines, "worn" } }) do
+		local lines, which = side[1], side[2]
+		if type(lines) == "table" then
+			for _, line in ipairs(lines) do
+				if weaponOnHitLine(line) then seen.onHit = true end
+				if weaponEnchantLine(line) then seen.enchant[which] = true end
 			end
 		end
-		if onHitNote ~= "" then break end
 	end
+	local disclosure = ""
+	do
+		local parts = {}
+		if seen.onHit then parts[#parts + 1] = "an unpriced on-hit effect" end
+		local e = seen.enchant
+		if e.candidate and e.worn then
+			parts[#parts + 1] = "an unpriced enchant on both items"
+		elseif e.worn then
+			parts[#parts + 1] = "an unpriced enchant on the equipped weapon"
+		elseif e.candidate then
+			parts[#parts + 1] = "an unpriced enchant on the hovered item"
+		end
+		if #parts > 0 then
+			disclosure = " (judged, with " .. table.concat(parts, " and ") .. ")"
+		end
+	end
+	-- (card t_1677cd39) The off-hand promotion note, filled in below (before any
+	-- comparison is made) and spent by `answer` — declared HERE because `answer`
+	-- is the ONE place a reason is finalised and Lua closures see only locals
+	-- declared above them.
+	local promotionNote = ""
+
 	local function answer(v, r)
 		-- (card t_fc11dd1c) ONLY A JUDGED VERDICT CARRIES THE CLAUSE. The note means
 		-- "and here is what I judged it on", which is true of a decision and false
@@ -7432,12 +7999,128 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- judged it on" at once. The proc came from the worn weapon's own line and
 		-- the refusal from the next unreadable one; the note must not survive the
 		-- refusal. A judged pair is byte-identical to before this card.
-		if onHitNote == "" or not WEAPON_JUDGED[tostring(v)] then return v, r end
-		return v, tostring(r or "") .. onHitNote
+		--
+		-- (card t_1677cd39) The SAME rule governs the off-hand pair note, and it
+		-- rides ahead of the proc clause because it is the more consequential
+		-- fact: only a judged UPGRADE can carry it, and with no promotion in play
+		-- the string is "" — the two lines below are then byte-for-byte the
+		-- pre-card ones, which is what card t_fc11dd1c's mutation leg anchors on.
+		--
+		-- (card t_c65cc350) BOTH CLAUSES READ THE ONE VARIABLE. The proc-only
+		-- note became `disclosure` (proc and/or enchant, ONE parenthetical), so
+		-- the promotion line concatenates that instead of the removed local; with
+		-- neither fact present it is "" and the bytes are the pre-card ones.
+		if promotionNote ~= "" and tostring(v) == "UPGRADE" then
+			return v, tostring(r or "") .. promotionNote .. disclosure
+		end
+		-- (card t_c65cc350) UNCHANGED RULE, ONE MORE CLAUSE IN IT: a refusal that
+		-- carries an enchant — or both facts — still gets no clause at all.
+		if disclosure == "" or not WEAPON_JUDGED[tostring(v)] then return v, r end
+		return v, tostring(r or "") .. disclosure
+	end
+
+	-- ---- CARD t_1677cd39: A WEAPON THE SPEC CANNOT USE ----------------------
+	--
+	-- THE DECISION IS WIELDABILITY, AND IT COMES BEFORE THE COMPARATOR. The
+	-- audit's S3a is the reason: a worn SWORD at 13.0 dps against a DAGGER at 7.2
+	-- on a Rogue Assassination. No stat weighting can ever reach that verdict —
+	-- the sword wins the DPS channel and the dagger is the weapon the spec
+	-- actually uses — so the fact has to be settled before any number is
+	-- compared, exactly as the card's §1 says.
+	--
+	-- Three answers, and no fourth:
+	--   * no policy resolved (the ordinary case for every class but the ruled
+	--     rogue spec) -> nothing here fires and the pair takes the basis it
+	--     already had, byte-for-byte;
+	--   * the candidate is not a weapon this spec uses -> REFUSE, naming the
+	--     fact. Never "silently equal": the doctrine is that this addon does not
+	--     claim a verdict over a comparison it did not make;
+	--   * the candidate IS the spec's weapon and the WORN one is not -> the
+	--     candidate wins AS THE SPEC'S WEAPON, and the reason says so in the
+	--     player's own words (the spec name is the client's own localized
+	--     string). Comparing the dagger's 7.2 dps to a sword the spec cannot use
+	--     is not a comparison — it is the audit's defect.
+	--
+	-- An unreadable candidate family inside a resolved policy fails CLOSED: the
+	-- spec's requirement is a claim about WHAT KIND of weapon this is, and a
+	-- tooltip that does not say cannot support it. The worn side's family is
+	-- only ever read to make the "your sword cannot serve this spec" claim, so an
+	-- unreadable WORN family simply drops that claim and leaves the comparator's
+	-- own answer in place.
+	local candSlot, candFamily = Verdict.weaponType(candLines)
+	local _, wornFamily = Verdict.weaponType(wornLines)
+	local familySet = Verdict.weaponFamilies(spec)
+	if familySet ~= nil then
+		if candFamily == nil then
+			return answer("UNKNOWN",
+				"not judged: cannot tell what kind of weapon this is (its tooltip names no weapon type)")
+		end
+		if familySet[candFamily] ~= true then
+			return answer("UNKNOWN",
+				Verdict.weaponWieldReason("refuse", candFamily, wornFamily, spec))
+		end
+		if wornFamily ~= nil and familySet[wornFamily] ~= true then
+			return answer("UPGRADE",
+				Verdict.weaponWieldReason("serve", candFamily, wornFamily, spec))
+		end
+	end
+
+	-- ---- CARD t_1677cd39: THE OFF-HAND PROMOTION ----------------------------
+	--
+	-- WHAT WAS WRONG. A one-hander candidate was compared to the worn MAIN HAND
+	-- and nothing else, so the pair the player would actually end up wearing was
+	-- never judged: equipping the candidate displaces the worn main hand into the
+	-- off hand, which is a SECOND hand changing (audit fixture S3c).
+	--
+	-- WHAT IS JUDGED NOW. `ctx` (the caller's off-hand context) says whether slot
+	-- 17 is filled and what it holds. When the candidate is a one-hander this spec
+	-- can wear in either hand, the worn main hand is promoted into the off hand —
+	-- and the pair is judged as a SET, on two channels that are never mixed:
+	--   * the main channel is the comparison this function already makes;
+	--   * the off channel is the PROMOTED WEAPON'S OWN numbers against the worn
+	--     off-hand's own numbers (compareDPS on each weapon's own parse — never
+	--     the main hand's dps borrowed for the off hand, which is the audit's I3b
+	--     defect in its other form).
+	-- The note is only added to a judged UPGRADE (the candidate has to win the
+	-- main hand for anything to move), and the promotion is only claimed when the
+	-- off channel does not LOSE: if the worn off hand is better than the worn main
+	-- hand, nothing is displaced — the player keeps that off-hand weapon and the
+	-- candidate is a plain main-hand swap, which is what the comparator already
+	-- says. The engine must not name a pair it did not judge.
+	--
+	-- No `ctx` (every caller before this card) -> no promotion, no note, no
+	-- change of any kind.
+	local offHandRow = type(ctx) == "table" and ctx.offHand == true
+	promotionNote = ""
+	if type(ctx) == "table" and not offHandRow
+		and (candSlot == "main hand" or candSlot == "one-hand")
+		and Verdict.offHandHoldsWeapon(spec)
+		and type(wornLines) == "table" then
+		-- The weapon that would be promoted has to be one this spec uses: a dagger
+		-- spec does not move a sword into its off hand.
+		local promotedOk = (familySet == nil) or (wornFamily ~= nil and familySet[wornFamily] == true)
+		-- AN EMPTY OFF HAND IS NOT A PROMOTION, and the note says nothing about it:
+		-- nothing is displaced, the worn weapon simply stays equipped one slot
+		-- over, and the comparator's own answer already covers it. The note's
+		-- whole content is "a SECOND hand changes" — which is only true when the
+		-- off hand is filled and the promoted weapon outranks what is in it. That
+		-- is also what keeps every pre-card weapon row byte-identical (AC-B of
+		-- card t_16448f75 pins exactly that class of row).
+		if promotedOk and ctx.offFilled == true then
+			local offNumbers = weaponNumbers(ctx.offLines)
+			local offDpsRead = weaponDPS(offNumbers)
+			local _, _, tie = compareDPS(wornNumbers, offNumbers, true)
+			if offDpsRead ~= nil and (tie == "more" or tie == "equal") then
+				promotionNote = (" (judged as a pair: your equipped weapon moves to your "
+					.. "off hand, ahead of the %.2f dps there)"):format(offDpsRead)
+			end
+		end
 	end
 
 	-- ── AN ORDER-ONLY PACK JUDGES A WEAPON ON ITS PUBLISHED TIERS ───────────
-	-- (card t_24a4c8ea: the pre-30f3d32 patch's hunk 21, re-anchored.) A
+	-- (card t_24a4c8ea; re-cut twice, last for the 740f7d5 pin, where the anchor
+	-- moved from `answer`'s tail — `onHitNote` became `disclosure` — to
+	-- `local statLed`, so the branch still runs after the wieldability refusal.) A
 	-- profile with `kind = "order"` and a `tiers` list — Retribution today —
 	-- has no invented numeric weights: the published priority IS the source.
 	-- It walks Weapon Skill, then Weapon DPS & Speed, then the rest, and the
@@ -7456,7 +8139,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- decided, so it carries the same refusals instead of skipping them.
 	--
 	-- The parse is upstream's own (chrome stripped by weaponStatLines, on-hit
-	-- lines set aside by weaponWithoutOnHit), and every answer travels through
+	-- lines set aside by weaponDisclosureLines), and every answer travels through
 	-- `answer` above, so a proc weapon keeps its clause here too. The DPS and
 	-- speed the tooltip PRINTS are folded back in, because the tiers rank them
 	-- (the printed number is the arithmetic; the parse keeps only stats).
@@ -7469,7 +8152,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 			-- The slot is empty: filling it is an upgrade, and a candidate the
 			-- parse cannot place must not be waved in.
 			local fillStats, fillProc, fillUnknown =
-				parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
+				parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", candWords)
 			local bad = fillUnknown or fillProc
 			if bad ~= nil then
 				return answer(cannotClassify("candidate", tostring(bad)))
@@ -7481,9 +8164,9 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 			return answer("UPGRADE", "upgrade: fills the weapon slot")
 		end
 		local tierCand, tierProc, tierUnknown =
-			parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
+			parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", candWords)
 		local tierEq, tierEqProc, tierEqUnknown =
-			parseSide(weaponWithoutOnHit(weaponStatLines(wornLines)), "worn", wornWords)
+			parseSide(weaponDisclosureLines(weaponStatLines(wornLines)), "worn", wornWords)
 		local badCand = tierUnknown or tierProc
 		local badEq = tierEqUnknown or tierEqProc
 		if badCand ~= nil then
@@ -7532,8 +8215,10 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- only on the equal branch, so every other weapon row costs exactly what
 		-- it cost before this card.
 		if tie == "equal" then
-			local candStats = parseSide(weaponStatLines(candLines), "candidate", nil)
-			local eqStats   = parseSide(weaponStatLines(wornLines), "worn",      nil)
+			-- (card t_c65cc350) the same view the judgement used: an enchant is not
+			-- a word this pair can be equal on, so it must not reach this parse.
+			local candStats = parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", nil)
+			local eqStats   = parseSide(weaponDisclosureLines(weaponStatLines(wornLines)), "worn",      nil)
 			local hidden = Verdict.beyondResolution(candStats, eqStats)
 			if hidden ~= nil then
 				return "UNKNOWN", Verdict.equalClaimReason(hidden)
@@ -7583,7 +8268,9 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- side that does not parse keeps the pre-card shortcut, so a
 		-- suppression never changes answer or reason (the byte-identical rule
 		-- holds for such rows).
-		local fillSide = weaponStatLines(candLines)
+		-- (card t_c65cc350) ... and by the same rule the enchant is out of it, so
+		-- an enchant can never wave a weapon into an empty slot either.
+		local fillSide = weaponDisclosureLines(weaponStatLines(candLines))
 		local fillStats, fillProc, fillUnknown = parseSide(fillSide, "candidate", candWords)
 		if fillProc == nil and fillUnknown == nil then
 			local unpricedFill = Verdict.unpricedWord(fillStats)
@@ -7599,7 +8286,12 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- named on the answer instead (the `answer` clause above) — so it cannot
 	-- suppress a weapon the way an unplaceable line must. Nothing else about the
 	-- parse changes, and a pair with no proc is byte-identical.
-	candSide, eqSide = weaponWithoutOnHit(candSide), weaponWithoutOnHit(eqSide)
+	-- (card t_c65cc350) The enchant goes with it, from BOTH sides: that is what
+	-- keeps it out of the score as well as out of the suppression channel (the
+	-- worn side would otherwise FOLD a placeable payload into its stats, the
+	-- armour rule), and it is what makes the owner's own pair judge instead of
+	-- refusing.
+	candSide, eqSide = weaponDisclosureLines(candSide), weaponDisclosureLines(eqSide)
 	-- WHY THIS PARSES THE SIDES *AND* evaluate() PARSES THEM AGAIN. Gate 7 of
 	-- evaluate() reads "a filled slot whose stats yielded nothing" as
 	-- UNREADABLE. For ARMOUR that is right — every armour piece prints Armor, so

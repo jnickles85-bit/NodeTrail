@@ -2098,12 +2098,11 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
  	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
  	if sp then
  		local v = tonumber((sp:gsub(",", ".")))
-@@ -5814,6 +7436,82 @@
- 		return v, tostring(r or "") .. onHitNote
- 	end
- 
+@@ -6095,3 +6095,79 @@
 +	-- ── AN ORDER-ONLY PACK JUDGES A WEAPON ON ITS PUBLISHED TIERS ───────────
-+	-- (card t_24a4c8ea: the pre-30f3d32 patch's hunk 21, re-anchored.) A
++	-- (card t_24a4c8ea; re-cut twice, last for the 740f7d5 pin, where the anchor
++	-- moved from `answer`'s tail — `onHitNote` became `disclosure` — to
++	-- `local statLed`, so the branch still runs after the wieldability refusal.) A
 +	-- profile with `kind = "order"` and a `tiers` list — Retribution today —
 +	-- has no invented numeric weights: the published priority IS the source.
 +	-- It walks Weapon Skill, then Weapon DPS & Speed, then the rest, and the
@@ -2122,7 +2121,7 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
 +	-- decided, so it carries the same refusals instead of skipping them.
 +	--
 +	-- The parse is upstream's own (chrome stripped by weaponStatLines, on-hit
-+	-- lines set aside by weaponWithoutOnHit), and every answer travels through
++	-- lines set aside by weaponDisclosureLines), and every answer travels through
 +	-- `answer` above, so a proc weapon keeps its clause here too. The DPS and
 +	-- speed the tooltip PRINTS are folded back in, because the tiers rank them
 +	-- (the printed number is the arithmetic; the parse keeps only stats).
@@ -2135,7 +2134,7 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
 +			-- The slot is empty: filling it is an upgrade, and a candidate the
 +			-- parse cannot place must not be waved in.
 +			local fillStats, fillProc, fillUnknown =
-+				parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
++				parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", candWords)
 +			local bad = fillUnknown or fillProc
 +			if bad ~= nil then
 +				return answer(cannotClassify("candidate", tostring(bad)))
@@ -2147,9 +2146,9 @@ Lines before the first hunk are ignored by tools/sync_touchstone.py's applier.
 +			return answer("UPGRADE", "upgrade: fills the weapon slot")
 +		end
 +		local tierCand, tierProc, tierUnknown =
-+			parseSide(weaponWithoutOnHit(weaponStatLines(candLines)), "candidate", candWords)
++			parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", candWords)
 +		local tierEq, tierEqProc, tierEqUnknown =
-+			parseSide(weaponWithoutOnHit(weaponStatLines(wornLines)), "worn", wornWords)
++			parseSide(weaponDisclosureLines(weaponStatLines(wornLines)), "worn", wornWords)
 +		local badCand = tierUnknown or tierProc
 +		local badEq = tierEqUnknown or tierEqProc
 +		if badCand ~= nil then

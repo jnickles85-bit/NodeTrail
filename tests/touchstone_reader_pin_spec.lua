@@ -56,14 +56,18 @@ end
 local syncPath = root .. "/tools/sync_touchstone.py"
 local sf = io.open(syncPath, "r")
 check(sf ~= nil, "tools/sync_touchstone.py is readable")
-local PIN = "ec947b39fa00710faec07d75085ab34b3c219b6b"  -- StatForge "Merge pull request #97"
+local PIN = "740f7d53c8c70034a008785589560dcf9b43fcf2"  -- StatForge "Merge pull request #104"
 if sf then
   local src = sf:read("*a")
   sf:close()
   local ref = src:match('SOURCE_REF%s*=%s*"([^"]+)"')
   check(ref == PIN,
-    ("SOURCE_REF is the 30f3d32 pin this spec measured (%s), got %s")
+    ("SOURCE_REF is the named pin this spec measured (%s), got %s")
       :format(PIN, tostring(ref)))
+  -- The card's own rule (t_0153f144): a MOVING ref is what made the sweep lie,
+  -- so the pin must be a named SHA — never a branch name.
+  check(type(ref) == "string" and ref:match("^%x+$") ~= nil,
+    "SOURCE_REF is a named commit SHA, not a branch (" .. tostring(ref) .. ")")
   check(src:find('"Weights.lua"', 1, true) ~= nil,
     "Weights.lua is in LUA_FILES — the weights the priced legs below need are vendored, not assumed")
 end

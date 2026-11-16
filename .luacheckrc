@@ -51,6 +51,11 @@ globals = {
     SLASH_TOUCHSTONE3 = { other_fields = true }, STUB = { other_fields = true }, Settings = { other_fields = true }, SlashCmdList = { other_fields = true }, StatForge = { other_fields = true },
     StatForgeDB = { other_fields = true }, StaticPopupDialogs = { other_fields = true }, StaticPopup_Show = { other_fields = true },
     TooltipDataProcessor = { other_fields = true }, TooltipUtil = { other_fields = true }, UIParent = { other_fields = true },
+    -- Vendored Touchstone publishes these two handles on _G (card t_ee6dec52):
+    -- the mark module every arrow ask resolves, and the public read surface.
+    -- They are the addon's own globals, not client API — listed here because
+    -- the vendored files cannot carry a `local` without changing upstream.
+    TouchstoneGearAPI = { other_fields = true }, TouchstoneMarks = { other_fields = true },
     UISpecialFrames = { other_fields = true }, UnitAffectingCombat = { other_fields = true }, UnitAttackBothHands = { other_fields = true }, UnitClass = { other_fields = true },
     UnitCreatureType = { other_fields = true }, UnitDefense = { other_fields = true }, UnitExists = { other_fields = true }, UnitGUID = { other_fields = true },
     UnitIsDead = { other_fields = true }, UnitLevel = { other_fields = true }, UnitName = { other_fields = true },

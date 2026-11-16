@@ -112,6 +112,180 @@ ChestAdvisorDB = {
 -- frames read from this; the slash `diag` snapshot reads from here too.
 ChestAdvisor.diag = nil
 
+-- ---- Slice 1 (card t_ee6dec52): ONE decision, ONE store, ONE clock ----------
+--
+-- THE RULE. Every surface in this slice — the bag arrows, the quest-reward
+-- marks and the public GearAPI — reads the verdict that already exists. There
+-- is no second scorer here and no weighted sum beside Verdict.evaluate. What
+-- this block adds is a STORE of the engine's answers, two predicates over that
+-- store, and the invalidation that decides when an answer may be reused.
+--
+-- `_judgements` is keyed by item link and holds the SAME row table the scan
+-- already publishes in `__verdicts` (one table, two readers — not a copy, so
+-- the arrow, /up diag and GearAPI cannot drift). `__epoch` on the row is the
+-- judgement epoch it was decided in; `_invalidateJudgements` bumps the epoch,
+-- and `_judgement` refuses a row from an older epoch. That refusal is what
+-- makes "cache until the engine's own invalidation fires" safe: a stale row is
+-- retained (the disagreement log and /up diag still read it) but is never
+-- served as a current answer.
+--
+-- WHAT INVALIDATES (the card's list, and nothing else): equipment change,
+-- level change, weapon-skill change, and a settings change. A bag refresh, a
+-- bag open/close, a vendor opening or the quest frame re-rendering does NOT
+-- invalidate — those are presentation and are served from the store.
+ChestAdvisor._judgements = {}
+ChestAdvisor._judgeEpoch = 0
+ChestAdvisor._judged = false        -- has a scan judged anything yet (GearAPI's gate)
+ChestAdvisor._verdictMemo = {}      -- engine answers, keyed by pair + context
+ChestAdvisor._engineCalls = 0       -- Verdict.evaluate / compareWeapon calls, lifetime
+ChestAdvisor._engineCallsThisScan = 0
+ChestAdvisor._changeListeners = {}  -- GearAPI.OnChanged registrations
+ChestAdvisor._bankOpen = false      -- BANKFRAME_OPENED / _CLOSED, and the frame read
+
+--- The engine's own answer for a pair, computed at most once per epoch.
+--- The memo is the card's per-item cache at its narrowest and most honest
+--- point: the comparator call itself. Everything a row needs that is NOT the
+--- engine's answer (the row's slot, its raw lines, its anchor diagnostic) is
+--- still rebuilt per scan, so the diag record keeps describing this scan.
+--- `fn` must be a closure returning the comparator's own return values.
+ChestAdvisor._memoVerdict = function(key, fn)
+	local hit = ChestAdvisor._verdictMemo[key]
+	if hit ~= nil then return hit[1], hit[2] end
+	ChestAdvisor._engineCalls = ChestAdvisor._engineCalls + 1
+	ChestAdvisor._engineCallsThisScan = ChestAdvisor._engineCallsThisScan + 1
+	local a, b, c = fn()
+	ChestAdvisor._verdictMemo[key] = { a, b, c }
+	return a, b, c
+end
+
+--- The cache key for one engine answer: the pair, the slot and the spec
+--- identity. Built in ONE place so every call site spells it the same way — a
+--- key that omitted the spec would survive a role or weapon-skill change that
+--- did not bump the epoch, which is the one bug a cache like this invites.
+ChestAdvisor._judgeKey = function(kind, a, b, slot, spec, candLines, wornLines, elig, ctx)
+	local order = type(spec) == "table" and spec.order or nil
+	-- The comparator's inputs are the two READINGS and the ELIGIBILITY answer,
+	-- not just the two links: an item's lines can change under a stable link (a
+	-- fixture swap, a client re-read after a hotfix) and the client's class
+	-- check can change under a stable item (a class read that arrives later),
+	-- and a key naming only the link would serve the previous answer.
+	local function sig(lines)
+		if type(lines) ~= "table" then return "-" end
+		local n = #lines
+		if n > 40 then n = 40 end
+		local parts = {}
+		for i = 1, n do parts[i] = tostring(lines[i]) end
+		return table.concat(parts, "\2")
+	end
+	local key = table.concat({
+		tostring(kind), tostring(a), tostring(b), tostring(slot),
+		tostring(type(spec) == "table" and spec.class or nil),
+		tostring(type(spec) == "table" and spec.role or nil),
+		tostring(type(spec) == "table" and spec.level or nil),
+		tostring(type(spec) == "table" and spec.clientRole or nil),
+		tostring(type(order) == "table" and #order or nil),
+	}, "\1") .. "\3" .. sig(candLines) .. "\3" .. sig(wornLines)
+		.. "\4" .. tostring(elig)
+	-- Card t_1677cd39 (through the t_2b9c5ad7 rebase): the weapon comparator
+	-- now also takes the OFF-HAND CONTEXT — which slot the candidate is, and
+	-- what the worn off hand holds — so the context is an INPUT to the answer
+	-- and belongs in the key by this function's own rule above. A nil ctx (every
+	-- caller that is not a weapon row) appends nothing, so those keys are
+	-- byte-identical to the pre-card key.
+	if type(ctx) == "table" then
+		key = key .. "\5" .. tostring(ctx.offHand == true)
+			.. "\6" .. tostring(ctx.offFilled) .. "\3" .. sig(ctx.offLines)
+	end
+	return key
+end
+
+--- Invalidate every cached judgement. Called by the four triggers the card
+--- names; the event handlers that call it also run a scan, so the store is
+--- repopulated in the same beat. Returns the new epoch (the diag and the tests
+--- read it).
+ChestAdvisor._invalidateJudgements = function(why)
+	ChestAdvisor._judgeEpoch = ChestAdvisor._judgeEpoch + 1
+	ChestAdvisor._verdictMemo = {}
+	ChestAdvisor._lastInvalidation = why
+	return ChestAdvisor._judgeEpoch
+end
+
+--- The stored row for a link, or nil. A row judged in an older epoch is not
+--- an answer about this character any more.
+ChestAdvisor._judgement = function(link)
+	if type(link) ~= "string" then return nil end
+	local row = ChestAdvisor._judgements[link]
+	if type(row) ~= "table" then return nil end
+	if row.__epoch ~= ChestAdvisor._judgeEpoch then return nil end
+	return row
+end
+
+--- THE decision — TRI-STATE, never a binary with a lie in it.
+---   true  — judged better
+---   false — judged, and NOT better (an equal item, a downgrade). This is a
+---           POSITIVE claim: the engine looked and answered.
+---   nil   — no answer: never judged, judged in a superseded epoch, or judged
+---           UNKNOWN. UNKNOWN is "we looked and could not tell"; `false` would
+---           tell a caller "no" when the truth is "no opinion", and another
+---           addon drawing its own arrow would suppress an item over our
+---           refusal. So a can't-judge refuses here too — see GearAPI.GetGain,
+---           which answers nil for the very same row (gate brief item 3, card
+---           t_11035b9f: one row, one answer).
+--- The bag arrow, the quest mark and GearAPI.IsUpgrade all ask THIS function;
+--- none of them re-derives it.
+ChestAdvisor._isUpgrade = function(link)
+	local row = ChestAdvisor._judgement(link)
+	if row == nil then return nil end
+	if row.verdict == "UNKNOWN" then return nil end
+	return row.verdict == "UPGRADE"
+end
+
+--- Which mark a cell carries this scan: "arrow" (UPGRADE), "chip"
+--- (TRADE_OFF), or nil (nothing). One call site for the bag and the quest
+--- surfaces, so the two can never disagree about what a row is.
+ChestAdvisor._markKind = function(link)
+	local row = ChestAdvisor._judgement(link)
+	if row == nil then return nil end
+	if row.verdict == "UPGRADE" then return "arrow" end
+	if row.verdict == TRADE_OFF_VERDICT then return "chip" end
+	return nil
+end
+
+--- Fire every GearAPI.OnChanged listener. The advisor owns the event (it is
+--- the one that re-judges); GearAPI owns registration. One broken consumer
+--- must not stop the scan or the other consumers, so each call is pcall'd.
+ChestAdvisor._fireChanged = function()
+	local list = ChestAdvisor._changeListeners
+	if type(list) ~= "table" then return 0 end
+	local fired = 0
+	for i = 1, #list do
+		local ok = pcall(list[i])
+		if ok then fired = fired + 1 end
+	end
+	return fired
+end
+
+--- The bagMark toggle (card section A). Default ON: only an explicit `false`
+--- turns the green arrows off, so a saved table written before this key
+--- existed still shows them. Trade-off chips, hovers and tooltips are NOT
+--- gated here — the toggle removes arrows and nothing else (AC7).
+ChestAdvisor._bagMarkOn = function()
+	local db = rawget(_G, "ChestAdvisorDB")
+	if type(db) ~= "table" then return true end
+	return db.bagMark ~= false
+end
+
+--- The mark module, resolved at CALL time. In game it is loaded from this
+--- addon's own folder (Touchstone.toc); a harness that loads this file alone
+--- gets nil, and the arrow is simply not drawn — there is no second renderer
+--- behind this door.
+local function marksModule()
+	local m = rawget(_G, "TouchstoneMarks")
+	if type(m) == "table" and type(m.Attach) == "function" then return m end
+	return nil
+end
+
+
 local MARKER_MAX = 64        -- cap on concurrent markers
 
 -- ---- The trade-off chip (card t_89440dfa) ------------------------------------
@@ -346,6 +520,15 @@ local function getFrame()
 		frame:RegisterEvent("MERCHANT_SHOW")
 		frame:RegisterEvent("MERCHANT_UPDATE")
 		frame:RegisterEvent("MERCHANT_CLOSED")
+		-- Card t_ee6dec52 (Slice 1): the invalidation events and the bank
+		-- lifecycle. Each name is a long-standing documented event on every
+		-- client this addon targets (classic era, the Forever beta, modern);
+		-- the PLAYER_EQUIPMENT_UPDATE lesson above is why a name is checked
+		-- before it is registered, and these four are the ones checked.
+		frame:RegisterEvent("PLAYER_LEVEL_UP")      -- level change: verdicts move
+		frame:RegisterEvent("SKILL_LINES_CHANGED")  -- weapon skill learned: ditto
+		frame:RegisterEvent("BANKFRAME_OPENED")     -- the bank surface appears
+		frame:RegisterEvent("BANKFRAME_CLOSED")     -- and goes away again
 		frame:SetScript("OnEvent", function(self, ev, ...)
 			-- B11: the item-data pair. Handled FIRST and separately — these
 			-- must NOT run the equip/scan bookkeeping below (there is no
@@ -395,6 +578,30 @@ local function getFrame()
 				end
 				return
 			end
+			-- Card t_ee6dec52: level and weapon-skill changes move verdicts
+			-- (a higher level unlocks an item; a learned weapon skill changes
+			-- how a weapon is judged), so they invalidate the judgement memo
+			-- and re-scan in the same beat. Presentation events do not.
+			if ev == "PLAYER_LEVEL_UP" or ev == "SKILL_LINES_CHANGED" then
+				ChestAdvisor._invalidateJudgements(ev)
+				ChestAdvisor.scan()
+				return
+			end
+			-- Card t_ee6dec52: the bank surface. Opening it adds the bank's
+			-- containers to the walk (the bank window is now up, so its item
+			-- buttons exist); closing it re-walks WITHOUT them, which is what
+			-- takes the bank's arrows off — a closed bank has no visible
+			-- button to hide, so the scan's teardown is the mechanism.
+			if ev == "BANKFRAME_OPENED" then
+				ChestAdvisor._bankOpen = true
+				ChestAdvisor.scan()
+				return
+			end
+			if ev == "BANKFRAME_CLOSED" then
+				ChestAdvisor._bankOpen = false
+				ChestAdvisor.scan()
+				return
+			end
 			if ev == "PLAYER_LOGIN"
 				or ev == "PLAYER_ENTERING_WORLD"
 				or ev == "BAG_UPDATE_DELAYED"
@@ -428,6 +635,14 @@ local function getFrame()
 				-- (PaperDollInfoDocumentation.lua:386 — payload
 				-- equipmentSlot/hasCurrent). No extra frame, no extra
 				-- handler, no extra scan.
+				-- Card t_ee6dec52: an equip is the first of the four triggers
+				-- that invalidate the judgement memo (the card's own list:
+				-- equipment, level, weapon skill, settings). It runs BEFORE
+				-- the scan below and before the disagreement log, which reads
+				-- the PREVIOUS verdicts to record what the player did.
+				if ev == "PLAYER_EQUIPMENT_CHANGED" then
+					ChestAdvisor._invalidateJudgements("PLAYER_EQUIPMENT_CHANGED")
+				end
 				if ev == "PLAYER_EQUIPMENT_CHANGED"
 					and type(ChestAdvisor._logDisagreement) == "function"
 				then
@@ -1102,15 +1317,45 @@ local function buildSpec()
 	-- profileSource is "talents" on the Auto path so the tooltip / Upgrades
 	-- tab can say so; callers that build a spec table by hand leave it unset
 	-- and keep the existing "[Retribution]" wording.
+	--
+	-- `name` and `classDisplay` (card t_1677cd39) are the spec identity the
+	-- weapon path needs to ask a SPEC-specific question at all (a rogue's
+	-- Assassination is a dagger spec; its Combat build is not, and the triple
+	-- above cannot tell them apart). They are the SAME two fields
+	-- readOffHandSpec has handed the off-hand gate since t_548f0341 — the spec
+	-- name as the client localized it, and the class's own display name, which
+	-- is what Verdict.substantiated compares it against so a class-as-spec read
+	-- (a level-22 "name=Paladin") never resolves a spec policy. Additive: no
+	-- existing reader looks at either key.
 	return { order = order, role = label, class = token, level = level,
 	         clientRole = (si and si.role) or nil,
-	         name = si and si.name or nil,
+	         name = (si and si.name) or nil,
 	         classDisplay = classDisplayName(),
 	         profileSource = "talents" }
 end
 
 ChestAdvisor.buildSpec = buildSpec
 ChestAdvisor.readOffHandSpec = readOffHandSpec
+
+--- Card t_ee6dec52 (GearAPI.GetSpec): the spec identity the verdicts were
+--- judged for, as a COPY. Defined here, after buildSpec, because it calls the
+--- local function — a `_spec` declared above buildSpec would resolve the name
+--- as a global and always answer nil.
+---
+--- `setup` is absent on purpose: this addon has no gear setups (custom setups
+--- are Slice 3 and are parked), so GetSpec reports nil rather than inventing an
+--- identity the engine never used.
+ChestAdvisor._spec = function()
+	local ok, spec = pcall(buildSpec)
+	if not ok or type(spec) ~= "table" then return nil end
+	return {
+		class = spec.class,
+		role = spec.role,
+		level = spec.level,
+		setup = nil,
+		clientRole = spec.clientRole,
+	}
+end
 
 -- ---- Tooltip surface (card t_ed71a583) ---------------------------------------
 --
@@ -1430,13 +1675,20 @@ end
 -- tooltip, an unclassifiable stat word, an unresolved role, a structural
 -- off-hand/weapon decline).
 --
--- The tell is the row's own reason string: for the armour and off-hand rows the
--- comparator emits the "eligibility unconfirmed (fail-closed): ..." family
--- (Verdict.lua gate 3), and the weapon path emits its three named strings. Both
--- emitters are ours, and both strings are stable constants in our files — no
--- client string is matched here.
+-- The tell is the row's own reason string: the comparator emits the
+-- "eligibility unconfirmed (fail-closed): ..." family (Verdict.lua gate 3), and
+-- the weapon path emits its two remaining named strings. All three are ours, and
+-- every string is a stable constant in our files — no client string is matched
+-- here.
+--
+-- Card t_da461166: the weapon path's THIRD named string — "this character cannot
+-- use this weapon" — is intentionally absent. It was never a refusal: the
+-- client had answered `false`, a decision, and such a row now carries the
+-- cannot-equip family below (Verdict.cannotEquipReason, the same phraser the
+-- armour rows use), so it renders "Can't equip — <requirement>" instead of
+-- telling the player we do not know something the game has already decided.
+-- Only the two genuinely-unconfirmed weapon causes stay here, byte for byte.
 local TOOLTIP_ELIGIBILITY_REASONS = {
-	["this character cannot use this weapon"] = true,
 	["the client returned the secret-value sentinel"] = true,
 	["the client could not classify this weapon"] = true,
 }
@@ -1446,6 +1698,37 @@ local function eligibilitySuppressed(row)
 	if type(r) ~= "string" then return false end
 	if r:find("eligibility unconfirmed", 1, true) then return true end
 	return TOOLTIP_ELIGIBILITY_REASONS[r] == true
+end
+
+-- Card t_8d3af71d — the OTHER UNKNOWN: a definite no.
+--
+-- The eligibility gate reports two different facts and used to report them as
+-- one. "We could not confirm eligibility" is the refusal above. "The client
+-- says this character cannot use it" is a decision the game has already made,
+-- and the player should read it as a cannot-EQUIP — the requirement, no gain,
+-- no comparison — not as the addon admitting it does not know.
+--
+-- The family is identified by the reason's own lead (`Verdict.CANNOT_EQUIP`),
+-- which the comparator writes and which is a stable constant in our file: no
+-- client string is matched here, exactly like the refusal table above. The
+-- comparison is byte-prefixed on purpose — the em dash is multi-byte UTF-8, so
+-- a pattern match would have to escape it — and the tail is returned for
+-- display. nil for every other row, including every other UNKNOWN.
+--
+-- WHERE IT IS RENDERED: the item tooltip (verdictLines), which is the surface
+-- every hovered row reaches. The addon's own bag/quest scan tips are NOT a
+-- second surface for this family and do not need to be: anchorMarker (and with
+-- it the hover install) runs only for a row that carries a mark — UPGRADE or
+-- TRADE_OFF — and a definite no carries none, so no such tip is ever built for
+-- it. That is also why a refused row cannot quietly gain an arrow here.
+local CANNOT_EQUIP_WORD = "Can't equip"
+local CANNOT_EQUIP_LEAD = "cannot equip — "
+local function cannotEquipTail(row)
+	if row == nil or row.verdict ~= "UNKNOWN" then return nil end
+	local r = row.reason
+	if type(r) ~= "string" or #r <= #CANNOT_EQUIP_LEAD then return nil end
+	if r:sub(1, #CANNOT_EQUIP_LEAD) ~= CANNOT_EQUIP_LEAD then return nil end
+	return r:sub(#CANNOT_EQUIP_LEAD + 1)
 end
 
 -- The explanation for an UPGRADE row: the arithmetic the card asks for, e.g.
@@ -1797,6 +2080,18 @@ local function verdictLines(row, order)
 		if detail and showDetail then
 			out[#out + 1] = { text = TOOLTIP_GREY .. detail, colour = "grey" }
 		end
+	elseif cannotEquipTail(row) ~= nil then
+		-- Card t_8d3af71d: the client has DECIDED against this character, so the
+		-- line reads as a cannot-EQUIP — the item's requirement, no gain (there
+		-- is none), no comparison. Grey, like every other non-answer: an item
+		-- this character cannot wear must never carry the green or amber verdict
+		-- the arrow draws. Ordered BEFORE the refusal branch below; the two
+		-- families match different reason strings and can never both fire.
+		out[#out + 1] = {
+			text = TOOLTIP_GREY .. TOOLTIP_PREFIX .. CANNOT_EQUIP_WORD .. " — "
+				.. cannotEquipTail(row),
+			colour = "grey",
+		}
 	elseif eligibilitySuppressed(row) then
 		-- AC-D (the previous card's): the eligibility gate's silence is
 		-- explained in words, not left as an absence.
@@ -2342,8 +2637,80 @@ local function findBagButton(bag, slot)
 	if type(_G) == "table" then
 		local legacy = _G["Bag" .. tostring(bag) .. "Slot" .. tostring(slot)]
 		if type(legacy) == "table" and legacy:IsShown() then return legacy end
+		-- Card t_ee6dec52: the BANK's fixed slots are their own globals on the
+		-- classic clients (BankFrameItem<n> — bag -1, the fixed bank). The
+		-- modern client pools bank item buttons like bag slots, which the util
+		-- lookup above already covers; this arm is only reached when that
+		-- lookup missed. A client that names nothing returns nil and the
+		-- marker is suppressed rather than pinned to a guessed position.
+		if bag == -1 then
+			local bankBtn = _G["BankFrameItem" .. tostring(slot)]
+			if type(bankBtn) == "table" and type(bankBtn.IsShown) == "function"
+				and bankBtn:IsShown() then
+				return bankBtn
+			end
+		end
 	end
 	return nil
+end
+
+-- ---- Card t_ee6dec52: which containers this scan walks ------------------------
+-- The walk used to be `for bag = 0, 4`. The card's surface list adds the bank
+-- and the reagent bank, so the walk asks for a LIST instead: the bag containers
+-- always, and the bank's own containers only while the bank window is showing —
+-- the same rule the bag windows already follow (a mark is pinned only to a
+-- visible button, and a closed bank has no visible buttons).
+--
+-- The bank's container IDs are the client's own (Constants.lua, SF.BANK_BAGS:
+-- fixed bank slots -1 plus bank bags 5..11). The reagent bank's id is READ from
+-- the client instead of assumed: Classic Era has no reagent bank at all, so a
+-- build that names none contributes no container rather than scanning a
+-- phantom id. A reagent bank holds materials, which are never in scope, so its
+-- contribution is usually zero rows — the surface is walked anyway, because
+-- "in scope" is a property of the walk, not of today's contents.
+ChestAdvisor._reagentBankBag = function()
+	local c = rawget(_G, "Constants")
+	local ic = type(c) == "table" and c.InventoryConstants or nil
+	if type(ic) == "table" then
+		local v = ic.REAGENTBANK_CONTAINER or rawget(ic, "ReagentbankContainer")
+		if type(v) == "number" then return v end
+	end
+	local v = rawget(_G, "REAGENTBANK_CONTAINER")
+	if type(v) == "number" then return v end
+	return nil
+end
+
+ChestAdvisor._bankShown = function()
+	local bf = rawget(_G, "BankFrame")
+	if type(bf) == "table" and type(bf.IsShown) == "function" then
+		local ok, shown = pcall(bf.IsShown, bf)
+		if ok and shown == true then return true end
+	end
+	return ChestAdvisor._bankOpen == true
+end
+
+ChestAdvisor._bankBags = function()
+	local host = rawget(_G, "StatForge")
+	local list = type(host) == "table" and host.BANK_BAGS or nil
+	if type(list) == "table" then return list end
+	-- Harness shape (no host table loaded): the same list Constants.lua ships.
+	return { -1, 5, 6, 7, 8, 9, 10, 11 }
+end
+
+ChestAdvisor._walkContainers = function()
+	local out = { 0, 1, 2, 3, 4 }
+	if not ChestAdvisor._bankShown() then return out end
+	local bankBags = ChestAdvisor._bankBags()
+	for i = 1, #bankBags do out[#out + 1] = bankBags[i] end
+	local reagent = ChestAdvisor._reagentBankBag()
+	if reagent ~= nil then
+		local dup = false
+		for i = 1, #out do
+			if out[i] == reagent then dup = true break end
+		end
+		if not dup then out[#out + 1] = reagent end
+	end
+	return out
 end
 
 -- Anchor a marker to the bag slot it belongs to.
@@ -2411,49 +2778,67 @@ local function anchorMarker(f, bag, slot, link, slotWordText)
 		-- visible arrow at cell size (§5b permits its continued existence
 		-- for bookkeeping: marker name, f.__arrow reference, the B1/B3
 		-- suppress + shown-count tests).
-		local texture = (button.ChestAdvisorUpgradeMarker and type(button.ChestAdvisorUpgradeMarker) == "table"
-			and button.ChestAdvisorUpgradeMarker.kind == "Texture")
-			and button.ChestAdvisorUpgradeMarker
-			or nil
-		-- Hide any texture a previous pool frame drew on this button before
-		-- re-pointing — a re-marking from a different frame slot must not
-		-- leave a stale visible chip.
-		if texture and texture ~= f.__arrow then
-			pcall(texture.SetShown, texture, false)
-		end
-		-- Card t_89440dfa: ONE namespaced texture per button carries whichever
-		-- mark this row has — the green arrow (marker.tga) for UPGRADE, or the
-		-- amber colour chip for TRADE_OFF. The verdict is re-asserted EVERY
-		-- anchor (not only on creation): a pooled button can be an arrow one
-		-- scan and a chip the next, and a texture left as the arrow would tell
-		-- the player "upgrade" for a trade-off.
+		-- Card t_ee6dec52: the green arrow is the mark module's FRAME (raised
+		-- FrameLevel(button) + 2 so the cooldown swipe and the stack count
+		-- cannot paint over it, with its own §10 geometry and the one shared
+		-- clock), and the amber trade-off chip stays the quiet colour square
+		-- this addon has always drawn. They cannot share a texture any more:
+		-- a texture made on the button is drawn under the button's own
+		-- children, which is exactly what the card forbids for the arrow.
+		--
+		-- The namespaced field `button.ChestAdvisorUpgradeMarker` still means
+		-- "the mark on this button" — it holds the arrow frame for an UPGRADE
+		-- row and the chip texture for a TRADE_OFF row, so every existing
+		-- reader (teardown, hover, the flash, the tests) keeps ONE handle.
+		-- The chip's texture is remembered separately (and only reused as a
+		-- chip) so a cell that flips between the two marks can never show
+		-- both at once.
+		local chip = (type(button.ChestAdvisorChipTexture) == "table")
+			and button.ChestAdvisorChipTexture or nil
 		local isTradeOff = (f.__verdict == TRADE_OFF_VERDICT)
-		if not texture then
-			texture = button:CreateTexture(nil, "OVERLAY", nil, 7)
-		end
-		-- One anchor. The same texture flips between the arrow (TOPRIGHT) and
-		-- the chip (BOTTOMRIGHT). SetPoint adds an anchor; without clearing,
-		-- a cell that changes verdict keeps both and the texture stretches.
-		if type(texture.ClearAllPoints) == "function" then
-			pcall(texture.ClearAllPoints, texture)
-		end
+		local marks = marksModule()
+		local arrowFrame = nil
 		if isTradeOff then
-			-- The chip: a plain solid square, NO texture file (the card forbids
-			-- new art). SetColorTexture is the zero-asset route.
-			if type(texture.SetColorTexture) == "function" then
-				texture:SetColorTexture(TRADEOFF_R, TRADEOFF_G, TRADEOFF_B, TRADEOFF_A)
+			if not chip then
+				chip = button:CreateTexture(nil, "OVERLAY", nil, 7)
+				button.ChestAdvisorChipTexture = chip
 			end
-			texture:SetSize(TRADEOFF_SIZE, TRADEOFF_SIZE)
-			texture:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+			-- One anchor. SetPoint adds an anchor; without clearing, a cell
+			-- that flips marks keeps both and the texture stretches.
+			if type(chip.ClearAllPoints) == "function" then
+				pcall(chip.ClearAllPoints, chip)
+			end
+			-- The chip: a plain solid square, NO texture file (the card
+			-- forbids new art). SetColorTexture is the zero-asset route.
+			if type(chip.SetColorTexture) == "function" then
+				chip:SetColorTexture(TRADEOFF_R, TRADEOFF_G, TRADEOFF_B, TRADEOFF_A)
+			end
+			chip:SetSize(TRADEOFF_SIZE, TRADEOFF_SIZE)
+			chip:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+			if type(chip.SetShown) == "function" then
+				pcall(chip.SetShown, chip, true)
+			end
+			-- A chip cell never carries an arrow.
+			if marks then marks.Detach(button) end
+			f.__arrow = chip
+			button.ChestAdvisorUpgradeMarker = chip
 		else
-			if type(texture.SetTexture) == "function" then
-				texture:SetTexture((MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga"))
+			-- An arrow cell: hide any chip a previous scan left here, then ask
+			-- the mark module for the arrow. With the bagMark toggle OFF the
+			-- arrow is simply not drawn — and nothing else about the cell
+			-- changes (the chip is not an arrow, and neither are the hover and
+			-- the tooltip).
+			if chip and type(chip.SetShown) == "function" then
+				pcall(chip.SetShown, chip, false)
 			end
-			texture:SetSize(18, 18)
-			texture:SetPoint("TOPRIGHT", button, "TOPRIGHT", 1, 1)
+			if marks and ChestAdvisor._bagMarkOn() then
+				arrowFrame = marks.Attach(button)
+			elseif marks then
+				marks.Detach(button)
+			end
+			f.__arrow = arrowFrame
+			button.ChestAdvisorUpgradeMarker = arrowFrame or chip
 		end
-		button.ChestAdvisorUpgradeMarker = texture
-		f.__arrow = texture
 		-- Bookkeeping (pool-frame side): which cell this frame's arrow lives
 		-- on. §5b's frame carries no parent/anchor, so the (frame -> cell)
 		-- pairing — the "each marker pins to its OWN slot" contract the B
@@ -2487,10 +2872,10 @@ local function anchorMarker(f, bag, slot, link, slotWordText)
 		-- cell is an upgrade. The pcall matches the file's own suppress/
 		-- re-anchor guard style (:466-468, :550-554): a client that already
 		-- destroyed the texture cannot abort the anchor walk.
-		if type(texture.SetShown) == "function" then
-			pcall(texture.SetShown, texture, true)
+		if type(f.__arrow) == "table" and type(f.__arrow.SetShown) == "function" then
+			pcall(f.__arrow.SetShown, f.__arrow, true)
 		end
-		ChestAdvisor._paintGlyph(button, isTradeOff and "tradeoff" or "upgrade", texture)
+		ChestAdvisor._paintGlyph(button, isTradeOff and "tradeoff" or "upgrade", f.__arrow)
 		f:SetShown(true)
 		diag = "anchored to: " .. tostring(button.name or button)
 		-- Register in activeMarkers AFTER the anchor decision, so a marker
@@ -2567,6 +2952,14 @@ local function clearMarkers()
 			-- teardown walk. Then drop the f.__button reference so a dead
 			-- handle is not retained past teardown.
 			local btn = f.__button
+			-- Card t_ee6dec52: the green arrow is the mark module's frame, so
+			-- teardown asks the module to take it off the button (hides it and
+			-- unregisters it from the shared clock). The chip texture below is
+			-- still the addon's own namespaced texture.
+			local marks = marksModule()
+			if marks and type(btn) == "table" then
+				marks.Detach(btn)
+			end
 			if type(btn) == "table"
 				and type(btn.ChestAdvisorUpgradeMarker) == "table"
 				and type(btn.ChestAdvisorUpgradeMarker.SetShown) == "function" then
@@ -2646,6 +3039,9 @@ local hookedBagOpenFunctions = {}
 local function anyBagFrameShown()
 	local cb = rawget(_G, "ContainerFrameCombinedBags")
 	if type(cb) == "table" and cb:IsShown() then return true end
+	-- Card t_ee6dec52: the bank is a mark surface now, so an open bank counts
+	-- as "a container window is showing" for the same reason an open bag does.
+	if ChestAdvisor._bankShown() then return true end
 	local container = rawget(_G, "ContainerFrameContainer")
 	if type(container) == "table" and container.ContainerFrames then
 		for _, f in ipairs(container.ContainerFrames) do
@@ -2764,6 +3160,19 @@ local function installRefreshHooks()
 	local classicCount = tonumber(rawget(_G, "NUM_CONTAINER_FRAMES")) or 5
 	for i = 1, classicCount do
 		hookFrameOnShow(rawget(_G, "ContainerFrame" .. i))
+	end
+	-- Card t_ee6dec52: the bank surface. The bank window itself (fixed slots,
+	-- container -1) and the bank's bag windows (5..11) get the same OnShow
+	-- hook, so opening the bank refreshes the marks exactly the way opening a
+	-- bag does. The ids are the host's own list; the negative fixed-slot id is
+	-- not a ContainerFrame and is skipped by the guard.
+	hookFrameOnShow(rawget(_G, "BankFrame"))
+	local bankBags = ChestAdvisor._bankBags()
+	for i = 1, #bankBags do
+		local id = bankBags[i]
+		if type(id) == "number" and id > 0 then
+			hookFrameOnShow(rawget(_G, "ContainerFrame" .. id))
+		end
 	end
 	-- Open functions: the entry points that create-or-show bag windows.
 	hookBagOpenFunction("OpenAllBags")
@@ -3407,8 +3816,27 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 	local isWeaponRow = Verdict
 		and type(Verdict.WEAPON_TOKENS) == "table"
 		and Verdict.WEAPON_TOKENS[loc] == true
+	-- Card t_1677cd39, the quest surface: the SAME routing the bag walk makes, so
+	-- one decision reaches both surfaces (Slice 1's rule). A rogue's off-hand
+	-- weapon reward is judged on the weapon comparator against the worn off-hand
+	-- weapon instead of being refused as "out of scope for this spec".
+	local isOffHandWeaponRow = false
+	if not isWeaponRow and type(loc) == "string"
+		and type(Verdict.OFF_HAND_WEAPON_TOKENS) == "table"
+		and Verdict.OFF_HAND_WEAPON_TOKENS[loc] == true
+		and type(Verdict.offHandHoldsWeapon) == "function" then
+		isOffHandWeaponRow = Verdict.offHandHoldsWeapon(offHandSpec)
+	end
+	if isOffHandWeaponRow then isWeaponRow = true end
 
 	if isWeaponRow then
+		-- The off-hand gate still owns the STRUCTURAL questions about slot 17
+		-- (G0: a two-hander in the main hand closes it), and they outrank the
+		-- judgement — same order as the bag walk.
+		if isOffHandWeaponRow and type(Verdict.offHandGate) == "function" then
+			local ohDecline = Verdict.offHandGate(loc, wornOffLoc, mainHandLoc, offHandSpec)
+			if ohDecline ~= nil then return done("UNKNOWN", ohDecline) end
+		end
 		-- Tier C path. Card t_119d120c: the reader is the ONE item reader —
 		-- weapons were simply its first callers.
 		local candLines = itemLines(link)
@@ -3451,7 +3879,16 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 		local canUseV = canUse(id)
 		if canUseV ~= true then
 			if canUseV == false then
-				return done("UNKNOWN", "this character cannot use this weapon")
+				-- Card t_da461166: `false` is the client's DECISION, not an
+				-- absence of information, so this row carries the SHARED
+				-- cannot-equip family — the requirement the item's own lines
+				-- ground (level against the player's level, a Classes list that
+				-- excludes this class, a material above the best this class can
+				-- wear at this level), otherwise the generic sentence. Same
+				-- phraser as the armour gate (Verdict.cannotEquipReason); this
+				-- path owns no second wording. The two arms below are the
+				-- refusals and keep their sentences byte for byte.
+				return done("UNKNOWN", Verdict.cannotEquipReason(candLines, spec))
 			elseif type(issecretvalue) == "function" and issecretvalue(canUseV) then
 				return done("UNKNOWN", "the client returned the secret-value sentinel")
 			end
@@ -3466,11 +3903,36 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 		local v, reason
 		if type(Verdict.compareWeapon) == "function" then
 			local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
-			v, reason = Verdict.compareWeapon(candLines, wornLinesR, wornSlotFilled,
-				spec, canUseV, api)
+			-- Card t_1677cd39: the same off-hand context the bag walk passes.
+			local wctx = nil
+			if isOffHandWeaponRow then
+				wctx = { offHand = true }
+			elseif w0Notes == nil
+				and type(Verdict.offHandHoldsWeapon) == "function"
+				and Verdict.offHandHoldsWeapon(offHandSpec) then
+				local ohLink = wornLinks[17]
+				wctx = { offFilled = ohLink ~= nil,
+				         offLines = ohLink and itemLines(ohLink) or nil }
+			end
+			-- Card t_2b9c5ad7 (rebase of t_1677cd39 onto the fail-open merge):
+			-- BOTH sides of this hunk are kept. t_195a0e07 wrapped this call in
+			-- _memoVerdict; t_1677cd39 gave it the off-hand context. The wctx is
+			-- computed OUTSIDE the closure and is passed both to the comparator
+			-- and into the cache key, so a memo hit can never answer a different
+			-- off-hand context with this one's verdict.
+			v, reason = ChestAdvisor._memoVerdict(
+				ChestAdvisor._judgeKey("questweapon", link, wornLink, loc, spec, candLines, wornLinesR, canUseV, wctx),
+				function()
+					return Verdict.compareWeapon(candLines, wornLinesR, wornSlotFilled,
+						spec, canUseV, api, wctx)
+				end)
 		else
-			v, reason = Verdict.compareDPS(Verdict.weaponNumbers(candLines),
-				wornLink and Verdict.weaponNumbers(wornLinesR) or nil, wornSlotFilled)
+			v, reason = ChestAdvisor._memoVerdict(
+				ChestAdvisor._judgeKey("questweapondps", link, wornLink, loc, spec, candLines, wornLinesR, canUseV),
+				function()
+					return Verdict.compareDPS(Verdict.weaponNumbers(candLines),
+						wornLink and Verdict.weaponNumbers(wornLinesR) or nil, wornSlotFilled)
+				end)
 		end
 		if type(reason) == "string" and w0Notes ~= nil then
 			for _, n in ipairs(w0Notes) do
@@ -3525,13 +3987,17 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 	-- The row's own slot word (card t_d88b7f28, item 3): the empty-slot reason
 	-- names the slot it fills instead of saying "chest" for every row. Taken from
 	-- the addon's ONE slot vocabulary (slotWord → SLOT_WORD), not a second one.
-	local v, reason, weighted = Verdict.evaluate(
-		{ canUse = canUseV, line = lines },
-		{ line = wornLines },
-		spec,
-		api,
-		slotWord(invSlot)
-	)
+	local v, reason, weighted = ChestAdvisor._memoVerdict(
+		ChestAdvisor._judgeKey("quest", link, wornLink, loc, spec, lines, wornLines, canUseV),
+		function()
+			return Verdict.evaluate(
+				{ canUse = canUseV, line = lines },
+				{ line = wornLines },
+				spec,
+				api,
+				slotWord(invSlot)
+			)
+		end)
 	return done(v, reason, weighted)
 end
 
@@ -3551,6 +4017,11 @@ local function clearQuestMarkers()
 			f:SetShown(false)
 			local btn = f.__button
 			if type(btn) == "table" then
+				-- Card t_ee6dec52: the quest arrow is the mark module's frame
+				-- now, so the teardown asks the module to take it off the
+				-- button before this walk lets go of the handle.
+				local marks = marksModule()
+				if marks then marks.Detach(btn) end
 				local arrow = btn.ChestAdvisorUpgradeMarker
 				if type(arrow) == "table" and type(arrow.SetShown) == "function" then
 					pcall(arrow.SetShown, arrow, false)
@@ -3695,52 +4166,67 @@ local function anchorQuestMarker(f, button, link, slotWordText)
 		f.__anchorDiag = "no reward button for this cell — marker suppressed"
 		return false
 	end
-	-- Our texture, under our own key (AC-D). Do not touch the button's own
-	-- textures or scripts.
-	local marker = (type(button.ChestAdvisorUpgradeMarker) == "table"
-		and button.ChestAdvisorUpgradeMarker.kind == "Texture")
-		and button.ChestAdvisorUpgradeMarker or nil
-	if marker and marker ~= f.__arrow then
-		pcall(marker.SetShown, marker, false)
-	end
-	-- Card t_89440dfa: the quest surface carries the SAME two marks as the bag —
-	-- the green arrow for UPGRADE and the amber chip for TRADE_OFF. Verdict is
-	-- re-asserted every anchor for the same reason as anchorMarker (a pooled
-	-- reward button can change verdict between refreshes).
+	-- Our mark, under our own key (AC-D). Do not touch the button's own textures
+	-- or scripts.
+	--
+	-- Card t_ee6dec52: the reward button carries the SAME two marks as a bag
+	-- cell, drawn the same way — the green arrow is the mark module's frame
+	-- (same §10 geometry, same shared clock, FrameLevel(button) + 2) and the
+	-- amber chip stays the quiet colour square. `ChestAdvisorUpgradeMarker`
+	-- keeps its meaning as "the mark on this button" for both shapes.
+	local chip = (type(button.ChestAdvisorChipTexture) == "table")
+		and button.ChestAdvisorChipTexture or nil
 	local isTradeOff = (f.__verdict == TRADE_OFF_VERDICT)
-	if not marker then
-		marker = button:CreateTexture(nil, "OVERLAY", nil, 7)
-	end
-	-- Same reuse bug as the bag marker: clear the previous anchor before the
-	-- arrow and the chip set different points on one texture.
-	if type(marker.ClearAllPoints) == "function" then
-		pcall(marker.ClearAllPoints, marker)
-	end
+	local marks = marksModule()
+	local arrowFrame = nil
 	if isTradeOff then
-		if type(marker.SetColorTexture) == "function" then
-			marker:SetColorTexture(TRADEOFF_R, TRADEOFF_G, TRADEOFF_B, TRADEOFF_A)
+		if not chip then
+			chip = button:CreateTexture(nil, "OVERLAY", nil, 7)
+			button.ChestAdvisorChipTexture = chip
 		end
-		marker:SetSize(TRADEOFF_SIZE, TRADEOFF_SIZE)
-		marker:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+		-- Same reuse bug as the bag marker: clear the previous anchor before
+		-- the chip re-anchors it.
+		if type(chip.ClearAllPoints) == "function" then
+			pcall(chip.ClearAllPoints, chip)
+		end
+		if type(chip.SetColorTexture) == "function" then
+			chip:SetColorTexture(TRADEOFF_R, TRADEOFF_G, TRADEOFF_B, TRADEOFF_A)
+		end
+		chip:SetSize(TRADEOFF_SIZE, TRADEOFF_SIZE)
+		chip:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+		if type(chip.SetShown) == "function" then
+			pcall(chip.SetShown, chip, true)
+		end
+		if marks then marks.Detach(button) end
+		f.__arrow = chip
+		button.ChestAdvisorUpgradeMarker = chip
 	else
-		if type(marker.SetTexture) == "function" then
-			marker:SetTexture(QUEST_ARROW_TEXTURE)
+		-- Card t_ee6dec52: the quest reward carries the SAME green-up mark the
+		-- bags do — the mark module's frame, same §10 geometry, same shared
+		-- clock — so a reward and a bag cell cannot bob apart or size apart.
+		-- The judgement behind it is unchanged (judgeQuestReward already ran
+		-- the comparator AND the usability gate); this is presentation only.
+		if chip and type(chip.SetShown) == "function" then
+			pcall(chip.SetShown, chip, false)
 		end
-		marker:SetSize(QUEST_ARROW_SIZE, QUEST_ARROW_SIZE)
-		marker:SetPoint("TOPRIGHT", button, "TOPRIGHT", 1, 1)
+		if marks and ChestAdvisor._bagMarkOn() then
+			arrowFrame = marks.Attach(button)
+		elseif marks then
+			marks.Detach(button)
+		end
+		f.__arrow = arrowFrame
+		button.ChestAdvisorUpgradeMarker = arrowFrame or chip
 	end
-	button.ChestAdvisorUpgradeMarker = marker
-	f.__arrow = marker
 	f.__button = button
 	button.__chestAdvisorQuestData = {
 		link = link, verdict = f.__verdict, reason = f.__reason, role = f.__role,
 		slotWord = slotWordText,
 	}
 	installQuestHover(button)
-	if type(marker.SetShown) == "function" then
-		pcall(marker.SetShown, marker, true)
+	if type(f.__arrow) == "table" and type(f.__arrow.SetShown) == "function" then
+		pcall(f.__arrow.SetShown, f.__arrow, true)
 	end
-	ChestAdvisor._paintGlyph(button, isTradeOff and "tradeoff" or "upgrade", marker)
+	ChestAdvisor._paintGlyph(button, isTradeOff and "tradeoff" or "upgrade", f.__arrow)
 	f:SetShown(true)
 	questActiveMarkers[link] = true
 	f.__anchorDiag = "anchored to reward button"
@@ -6023,6 +6509,10 @@ ChestAdvisor.scan = function()
 	end
 	ChestAdvisor._scanDeferred = nil
 	ChestAdvisor._scanRuns = (ChestAdvisor._scanRuns or 0) + 1
+	-- Card t_ee6dec52: the per-scan engine-call counter. A scan that finds every
+	-- answer in the judgement memo leaves this at 0 — that is the AC4 observable
+	-- ("a bag refresh does not re-run the engine").
+	ChestAdvisor._engineCallsThisScan = 0
 
 	-- B17: one tooltip read per item link for THIS call. The same link is
 	-- the candidate in several bag slots and the worn side of every row
@@ -6166,7 +6656,13 @@ ChestAdvisor.scan = function()
 	ChestAdvisor.__verdicts = verdicts
 
 	-- (3) bag walk
-	for bag = 0, 4 do
+	-- Card t_ee6dec52: the walk's container set is not `0..4` any more. The
+	-- card's surface list names bags 1-4, the combined bag view, the bank and
+	-- the reagent bank, so the list comes from the ONE builder
+	-- (_walkContainers): the bag containers always, the bank's own containers
+	-- while the bank window is up. The rest of the walk is unchanged — the
+	-- same scope test, the same caps, the same one-judgement-per-row.
+	for _, bag in ipairs(ChestAdvisor._walkContainers()) do
 		local count = 0
 		if C_Container and C_Container.GetContainerNumSlots then
 			local ok, n = pcall(C_Container.GetContainerNumSlots, bag)
@@ -6275,11 +6771,15 @@ ChestAdvisor.scan = function()
 								-- SAME role-aware spec the row's final verdict uses, so
 								-- no numeric weight is invented, no class is assumed,
 								-- and unknown words read UNKNOWN end-to-end).
-								local v12, _ = Verdict.evaluate(
-									{ canUse = true, line = l1lines },
-									{ line = l2lines },
-									spec
-								)
+								local v12, _ = ChestAdvisor._memoVerdict(
+									ChestAdvisor._judgeKey("pair", l1, l2, nil, spec, l1lines, l2lines),
+									function()
+										return Verdict.evaluate(
+											{ canUse = true, line = l1lines },
+											{ line = l2lines },
+											spec
+										)
+									end)
 								-- v12 == "UPGRADE" means member-1 is strictly better than
 								-- member-2 along the role's stat order (or wins the Armor
 								-- tiebreak) → member-2 is the weaker. Otherwise member-1
@@ -6317,8 +6817,29 @@ ChestAdvisor.scan = function()
 					local isWeaponRow = Verdict
 						and type(Verdict.WEAPON_TOKENS) == "table"
 						and Verdict.WEAPON_TOKENS[loc] == true
+					-- Card t_1677cd39: THE OTHER QUESTION about the same slot.
+					-- An off-hand WEAPON is not a Tier C main-hand row (the token
+					-- is deliberately absent from WEAPON_TOKENS), but for a
+					-- character whose off hand HOLDS a weapon it is the item the
+					-- slot exists for — the audit's I3b. It is judged by the SAME
+					-- weapon comparator, against the worn OFF-HAND weapon, so both
+					-- sides are read on their own numbers (its own stats, its own
+					-- dps) instead of being refused as "out of scope".
+					local isOffHandWeaponRow = false
+					if not isWeaponRow and type(loc) == "string"
+						and type(Verdict.OFF_HAND_WEAPON_TOKENS) == "table"
+						and Verdict.OFF_HAND_WEAPON_TOKENS[loc] == true
+						and type(Verdict.offHandHoldsWeapon) == "function" then
+						isOffHandWeaponRow = Verdict.offHandHoldsWeapon(offHandSpec)
+					end
+					if isOffHandWeaponRow then isWeaponRow = true end
 					local offHandDecline = nil
-					if not isWeaponRow and Verdict
+					-- The gate still runs for the off-hand WEAPON row: G0 (a
+					-- two-hander in the main hand closes the slot) is structural
+					-- and outranks the judgement, and G4 still refuses a worn item
+					-- of another off-hand class. Only G2 has been amended, and only
+					-- for the candidate this class's slot actually holds.
+					if (not isWeaponRow or isOffHandWeaponRow) and Verdict
 						and type(Verdict.offHandGate) == "function" then
 						offHandDecline = Verdict.offHandGate(loc, wornOffLoc, mainHandLoc, offHandSpec)
 					end
@@ -6331,6 +6852,12 @@ ChestAdvisor.scan = function()
 					-- gets must say what is actually true.
 					if pairDecline ~= nil then
 						v, reason = "UNKNOWN", pairDecline
+					elseif isOffHandWeaponRow and offHandDecline ~= nil then
+						-- A structural decline (G0: a two-hander in the main
+						-- hand; G4: the worn slot holds another off-hand class)
+						-- outranks the judgement — the slot is not available, so
+						-- there is nothing to judge. Named reason, no marker.
+						v, reason = "UNKNOWN", offHandDecline
 					elseif isWeaponRow then
 						-- The weapon read is the SAME reader every other
 						-- path uses (card t_119d120c): C_TooltipInfo
@@ -6402,7 +6929,14 @@ ChestAdvisor.scan = function()
 								-- fabricated UPGRADE (AC-C).
 								v = "UNKNOWN"
 								if canUseV == false then
-									reason = "this character cannot use this weapon"
+									-- Card t_da461166: the same DECISION family
+									-- as the quest-reward walk above, through the
+									-- same phraser — one wording for a refused
+									-- weapon on every path. `lines` is this row's
+									-- own candidate read; a nil read degrades to
+									-- the generic sentence inside the phraser
+									-- rather than guessing a requirement.
+									reason = Verdict.cannotEquipReason(lines, spec)
 								elseif type(issecretvalue) == "function"
 									and issecretvalue(canUseV) then
 									reason = "the client returned the secret-value sentinel"
@@ -6422,13 +6956,52 @@ ChestAdvisor.scan = function()
 								-- exactly today's DPS comparator.
 								if type(Verdict.compareWeapon) == "function" then
 									local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
-									v, reason = Verdict.compareWeapon(wlines,
-										wornLines, wornSlotFilled, spec, canUseV, api)
+									-- Card t_1677cd39: the off-hand CONTEXT. The
+									-- comparator is the one place the pair is
+									-- decided, so that is where it is told what
+									-- the off hand holds:
+									--   * an off-hand row passes offHand = true:
+									--     the candidate IS the off hand, compared
+									--     against the worn off-hand weapon;
+									--   * a main-hand row passes the WORN OFF
+									--     HAND (slot 17) so a winning one-hander
+									--     can promote the worn main hand into it
+									--     and judge the pair as a set. Only for a
+									--     character whose off hand holds a weapon:
+									--     nobody else has a slot to promote into.
+									-- nil for every other row, and nil ctx is the
+									-- pre-card call byte-for-byte.
+									local wctx = nil
+									if isOffHandWeaponRow then
+										wctx = { offHand = true }
+									elseif w0Notes == nil
+										and type(Verdict.offHandHoldsWeapon) == "function"
+										and Verdict.offHandHoldsWeapon(offHandSpec) then
+										local ohLink = wornLinks[17]
+										wctx = { offFilled = ohLink ~= nil,
+										         offLines = ohLink and cachedLines(ohLink) or nil }
+									end
+									-- Card t_2b9c5ad7 (rebase of t_1677cd39 onto the fail-open merge):
+									-- BOTH sides of this hunk are kept. t_195a0e07 wrapped this call in
+									-- _memoVerdict; t_1677cd39 gave it the off-hand context. The wctx is
+									-- computed OUTSIDE the closure and is passed both to the comparator
+									-- and into the cache key, so a memo hit can never answer a different
+									-- off-hand context with this one's verdict.
+									v, reason = ChestAdvisor._memoVerdict(
+										ChestAdvisor._judgeKey("weapon", link, wornLink, invSlot, spec, wlines, wornLines, canUseV, wctx),
+										function()
+											return Verdict.compareWeapon(wlines,
+												wornLines, wornSlotFilled, spec, canUseV, api, wctx)
+										end)
 								else
-									v, reason = Verdict.compareDPS(
-										Verdict.weaponNumbers(wlines),
-										wornLink and Verdict.weaponNumbers(wornLines) or nil,
-										wornSlotFilled)
+									v, reason = ChestAdvisor._memoVerdict(
+										ChestAdvisor._judgeKey("weapondps", link, wornLink, invSlot, spec, wlines, wornLines, canUseV),
+										function()
+											return Verdict.compareDPS(
+												Verdict.weaponNumbers(wlines),
+												wornLink and Verdict.weaponNumbers(wornLines) or nil,
+												wornSlotFilled)
+										end)
 								end
 								if type(reason) == "string" and w0Notes ~= nil then
 									for _, n in ipairs(w0Notes) do
@@ -6454,16 +7027,20 @@ ChestAdvisor.scan = function()
 						-- and its rewrite are gone: one vocabulary (SLOT_WORD),
 						-- one place the sentence is built.
 						local v2, r2
-						v2, r2, w2 = Verdict.evaluate(
-							{ canUse = canUseV, line = lines },
-							{ line = wornLines },
-							spec,
-							-- Card t_548f0341 (Defect 2): the client's own
-							-- stat read for both sides; nil when the API
-							-- cannot read them (fail-closed, unchanged).
-							apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil),
-							slotWord(invSlot)
-						)
+						v2, r2, w2 = ChestAdvisor._memoVerdict(
+							ChestAdvisor._judgeKey("armour", link, wornLink, invSlot, spec, lines, wornLines, canUseV),
+							function()
+								return Verdict.evaluate(
+									{ canUse = canUseV, line = lines },
+									{ line = wornLines },
+									spec,
+									-- Card t_548f0341 (Defect 2): the client's own
+									-- stat read for both sides; nil when the API
+									-- cannot read them (fail-closed, unchanged).
+									apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil),
+									slotWord(invSlot)
+								)
+							end)
 						v, reason = v2, r2
 					end
 					-- Card t_d8de0090: WHAT was set aside, recorded at the
@@ -6593,6 +7170,16 @@ ChestAdvisor.scan = function()
 								end)(),
 							}
 						local diagRow = verdicts[link]
+						-- Card t_ee6dec52: the ROW IS THE ANSWER every surface
+						-- reads. It is stamped with the epoch it was judged in
+						-- and filed in the one judgement store; the arrow, the
+						-- quest mark and GearAPI all read this same table
+						-- (through _judgement / _isUpgrade / _markKind), so
+						-- there is no way for the public answer to differ from
+						-- the mark the player sees.
+						diagRow.__epoch = ChestAdvisor._judgeEpoch
+						ChestAdvisor._judgements[link] = diagRow
+						ChestAdvisor._judged = true
 						if canUseV ~= nil and canUseV ~= true and canUseV ~= false then
 							diagRow.canUseString = tostring(canUseV)
 						end
@@ -6620,7 +7207,12 @@ ChestAdvisor.scan = function()
 						-- green arrow for UPGRADE and the amber chip for TRADE_OFF.
 						-- anchorMarker draws whichever the frame's own __verdict
 						-- names, so there is no second mark path and no second cap.
-						if v == "UPGRADE" or v == TRADE_OFF_VERDICT then
+						-- Card t_ee6dec52: the mark's KIND comes from the store
+						-- (_markKind), the same call GearAPI answers from, so a
+						-- row the API calls an upgrade is the row that gets the
+						-- arrow — one decision, three readers.
+						local markKind = ChestAdvisor._markKind(link)
+						if markKind then
 							if markerNext < MARKER_MAX then
 								markerNext = markerNext + 1
 								-- Card t_e9a07624 (B4): pass the ROW's own slot
@@ -6628,7 +7220,8 @@ ChestAdvisor.scan = function()
 								-- verdicts[link].slotWord was written a few lines
 								-- above from this row's own invSlot.
 								local slotWordText = slotWord(invSlot)
-								local f = makeMarker(markerNext, link, v, reason, roleLabel, slotWordText)
+								local markVerdict = (markKind == "chip") and TRADE_OFF_VERDICT or "UPGRADE"
+								local f = makeMarker(markerNext, link, markVerdict, reason, roleLabel, slotWordText)
 								local anchored = anchorMarker(f, bag, slot, link, slotWordText)
 								-- Attach the anchor diagnostic to the verdict so
 								-- /upgrade diag and the tests can explain "why
@@ -6725,6 +7318,14 @@ ChestAdvisor.scan = function()
 	-- rescan cannot leave a vendor mark pointing at a stale verdict.
 	if type(ChestAdvisor.refreshVendorMarkers) == "function" then
 		ChestAdvisor.refreshVendorMarkers()
+	end
+
+	-- Card t_ee6dec52: the arrows have been re-judged (the four triggers all
+	-- invalidate and rescan), so the public OnChanged surface fires once, here,
+	-- after every surface has read the same store. A scan that answered purely
+	-- from the memo re-drew the same marks and is not a change: no fire.
+	if ChestAdvisor._engineCallsThisScan > 0 then
+		ChestAdvisor._fireChanged()
 	end
 
 	return verdicts
@@ -7050,6 +7651,7 @@ local function helpText()
 		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
 		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
 		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
+		.. "  /up bagmark <on|off>  green up-arrows on upgrades in your bags, the bank and quest rewards (persisted; default on)\n"
 		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) and clear a chosen Gear-for spec (back to Auto); does not clear /up role or the log\n"
 		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
 		.. "  /up log clear  empty the disagreement log\n"
@@ -7078,6 +7680,10 @@ local function cmdRole(msg)
 		if token and type(ChestAdvisorDB.role) == "table" then
 			ChestAdvisorDB.role[token] = nil
 		end
+		-- Card t_ee6dec52: a role choice is a JUDGEMENT setting, so it is one
+		-- of the four invalidation triggers (equipment, level, weapon skill,
+		-- settings). Clearing it re-judges rather than re-drawing.
+		ChestAdvisor._invalidateJudgements("role clear")
 		ChestAdvisor.scan()
 		return true, "role cleared for this class"
 	end
@@ -7089,6 +7695,9 @@ local function cmdRole(msg)
 			if table_ and table_[w] then
 				ChestAdvisorDB.role = ChestAdvisorDB.role or {}
 				ChestAdvisorDB.role[token] = w
+				-- Card t_ee6dec52: the role IS the judgement's spec, so recording
+				-- one invalidates the memo before the rescan.
+				ChestAdvisor._invalidateJudgements("role " .. w)
 				ChestAdvisor.scan()
 				return true, "recorded role for this class: " .. w
 			end
@@ -7306,6 +7915,34 @@ local function cmdGlyphs(msg)
 	ChestAdvisorDB.markers.glyphs = (w == "on")
 	if type(ChestAdvisor.scan) == "function" then ChestAdvisor.scan() end
 	return true, "marker glyphs " .. w
+end
+
+-- /up bagmark <on|off> — the green arrows in the bags and on quest rewards.
+-- Card t_ee6dec52, section A: ONE toggle, default ON. A missing key reads as ON
+-- (only an explicit `false` turns the arrows off), so a character whose saved
+-- table predates this key keeps the arrows it has always had.
+--
+-- WHAT IT DOES NOT TOUCH: the judgement (GearAPI.IsUpgrade answers exactly as
+-- before), the amber trade-off chips, the hover explanations and the tooltip
+-- lines. The card's AC7 is "removes every arrow and nothing else", so the only
+-- thing this key gates is the arrow itself — the scan below re-draws every
+-- surface from the same store, so a toggle moves marks and nothing else.
+--
+-- The rescan is a REDRAW, not a re-judge: no epoch bump, so the verdict memo
+-- answers every row and the engine is not run again for a display setting.
+local function cmdBagMark(msg)
+	local word = msg:match("^bagmark%s+(%a+)%s*$")
+	if word == nil then
+		return true, "bag arrows are currently " .. (ChestAdvisor._bagMarkOn() and "on" or "off")
+			.. " — usage: /up bagmark <on|off>"
+	end
+	local w = word:lower()
+	if w ~= "on" and w ~= "off" then
+		return false, "usage: /up bagmark <on|off>"
+	end
+	ChestAdvisorDB.bagMark = (w == "on")
+	if type(ChestAdvisor.scan) == "function" then ChestAdvisor.scan() end
+	return true, "bag arrows " .. w
 end
 
 -- /up reset — restore the four Settings defaults in ONE pass and say so in ONE
@@ -7992,6 +8629,8 @@ local function dispatch(msg)
 		ok, out = cmdDetail(trimmed)
 	elseif subword == "glyphs" then
 		ok, out = cmdGlyphs(trimmed)
+	elseif subword == "bagmark" then
+		ok, out = cmdBagMark(trimmed)
 	elseif subword == "reset" then
 		-- t_4ddeae90: the one-line reset the Settings button calls. Its summary
 		-- is echoed once by the slash wrapper below, like every other

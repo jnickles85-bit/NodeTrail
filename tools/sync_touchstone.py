@@ -58,19 +58,31 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # `git clone --branch main` would silently move with upstream. `--ref main` still
 # resolves to whatever main is at run time, for a deliberate catch-up.
 #
-# Provenance of the pin (v0.3.8-beta):
-#   ec947b39fa00710faec07d75085ab34b3c219b6b
-#   StatForge main, "Merge pull request #97 from jnickles85-bit/wt/t_0153f144"
-#   (2026-11-15). It carries three merged PRs over the previous pin 30f3d32:
-#     #95 / wt/t_92e703ac  the verdict line is drawn with the item's own lines,
-#                          above every third-party block (tooltip placement)
-#     #96 / wt/t_fc11dd1c  every refusal names its side (hovered / equipped) and
-#                          carries no judged on-hit clause
-#     #97 / wt/t_0153f144  the changed-verdict sweep pins its base to a NAMED
-#                          revision instead of origin/main
-#   It does NOT carry Slice 1 (bag arrows, quest marks, GearAPI); that merged
-#   after this cut and is v0.3.9 material.
-SOURCE_REF = "ec947b39fa00710faec07d75085ab34b3c219b6b"
+# Provenance of the pin (v0.3.9-beta):
+#   740f7d53c8c70034a008785589560dcf9b43fcf2
+#   StatForge main, "Merge pull request #104 from jnickles85-bit/wt/t_8d3af71d"
+#   (2026-11-15/16). A NAMED SHA, not `origin/main`: a ref that moves under the
+#   cut is what made the changed-verdict sweep lie (card t_0153f144). It is the
+#   merge of #104 into d5c6eeb, and it carries everything the release batch names:
+#     #98  / 11f9933  Slice 1 — bag arrows, quest-reward marks, GearAPI, on the
+#                      EXISTING verdict (no new scoring underneath)
+#     #99  / 2f502b2  a `Sell Price:` line no longer turns a refusal into a
+#                      judgement (fail-closed is a property of the LINE SET, not
+#                      of encounter order)
+#     #100 / 04df87d  rogue weapons — wieldability is decided BEFORE the
+#                      comparator, and the off hand is judged on its own numbers
+#     #101 / 89bb86f  the enchant pair — an `Enchanted:` line is disclosed as
+#                      present-but-unpriced on its side instead of blocking
+#     #102 / 352e125  tank coverage — WARRIOR.tank prices HIT at 0.5 from its own
+#                      pack, and a tiebreak-only price stops deciding a pair
+#     #105 / d5c6eeb  the stale-view preflight gate (tooling, no shipped byte)
+#     #104 / 740f7d5  a definite "no" reads as a cannot-equip with its named
+#                      requirement (t_8d3af71d), plus the refused-weapon tooltip
+#                      (t_da461166) — one PR, both cards
+#   It does NOT carry melee (t_f304a91c is verified at 87f59ed and unmerged; its
+#   side-naming clause makes M11 deliberately false, and t_dc1decd1 re-derives
+#   that pin first) — v0.3.10.
+SOURCE_REF = "740f7d53c8c70034a008785589560dcf9b43fcf2"
 
 # Order is load-bearing. Verdict.lua must load
 # before ChestAdvisor.lua (ChestAdvisor reads _G.Verdict at load time).
@@ -91,8 +103,17 @@ LUA_FILES = [
     "LogTab.lua",
     "Diagnostics.lua",
     "Probe.lua",
+    # Card t_ee6dec52 (Slice 1) added these two to the pin. Marks.lua is the ONE
+    # arrow renderer every surface asks (`_G.TouchstoneMarks`, resolved by
+    # ChestAdvisor at CALL time) — a cut that left it behind would ship an
+    # advisor that draws no arrows at all, which is why it is vendored HERE now
+    # rather than after the release. GearAPI.lua is the public read surface of
+    # the same card: it scores nothing, it reports the advisor's stored verdict,
+    # and it is listed where upstream lists it (after the advisor).
+    "ChestAdvisor/Marks.lua",
     "ChestAdvisor/Verdict.lua",
     "ChestAdvisor/ChestAdvisor.lua",
+    "GearAPI.lua",
     "Integration.lua",
     "Core.lua",
 ]
@@ -1372,6 +1393,27 @@ end
 """
         ),
     )
+    # The memo carries the comparator's THIRD value (the weighted detail), or a
+    # cache HIT answers the same verdict with a different row: the quest row
+    # quotes `weighted` (card t_3a744b4a), and upstream's `local a, b = fn()`
+    # would drop it on every hit — the tooltip line would come and go between
+    # two renders of one reward. Three values in the store, three returned;
+    # every two-value caller is unaffected.
+    text = replace_once(
+        text,
+        name,
+        "ca.memo-verdict-third-value",
+        (
+            "\tlocal a, b = fn()\n"
+            "\tChestAdvisor._verdictMemo[key] = { a, b }\n"
+            "\treturn a, b\n"
+        ),
+        (
+            "\tlocal a, b, c = fn()\n"
+            "\tChestAdvisor._verdictMemo[key] = { a, b, c }\n"
+            "\treturn a, b, c\n"
+        ),
+    )
     text = replace_once(
         text,
         name,
@@ -1391,42 +1433,42 @@ end
             "\t\treturn v, reason, row"
         ),
     )
+    # Card t_ee6dec52 (Slice 1) memoised the quest walk upstream, so the
+    # comparator call is no longer a bare `Verdict.evaluate(...)` HERE: it is the
+    # closure `_memoVerdict` runs. The third value therefore comes back from the
+    # memo (see ca.memo-verdict-third-value), and the closure needs no edit at
+    # all — `return Verdict.evaluate(...)` is a tail call and passes all three
+    # through. Only the receiver changes.
     text = replace_once(
         text,
         name,
         "ca.quest-evaluate-weighted",
         (
-            "\tlocal v, reason = Verdict.evaluate(\n"
-            "\t\t{ canUse = canUseV, line = lines },\n"
-            "\t\t{ line = wornLines },\n"
-            "\t\tspec,\n"
-            "\t\tapi,\n"
-            "\t\tslotWord(invSlot)\n"
-            "\t)\n"
+            "\tlocal v, reason = ChestAdvisor._memoVerdict(\n"
+            "\t\tChestAdvisor._judgeKey(\"quest\", link, wornLink, loc, spec, lines, wornLines, canUseV),\n"
         ),
         (
-            "\tlocal v, reason, weighted = Verdict.evaluate(\n"
-            "\t\t{ canUse = canUseV, line = lines },\n"
-            "\t\t{ line = wornLines },\n"
-            "\t\tspec,\n"
-            "\t\tapi,\n"
-            "\t\tslotWord(invSlot)\n"
-            "\t)\n"
+            "\tlocal v, reason, weighted = ChestAdvisor._memoVerdict(\n"
+            "\t\tChestAdvisor._judgeKey(\"quest\", link, wornLink, loc, spec, lines, wornLines, canUseV),\n"
         ),
     )
     text = replace_once(
         text,
         name,
         "ca.quest-done-weighted",
-        "\treturn done(v, reason)\nend\n\n-- Clear every quest marker",
-        "\treturn done(v, reason, weighted)\nend\n\n-- Clear every quest marker",
+        "\treturn done(v, reason)\nend\n\n-- Clear every quest marker and every arrow texture",
+        "\treturn done(v, reason, weighted)\nend\n\n-- Clear every quest marker and every arrow texture",
     )
+    # Same Slice-1 memo as the quest walk: the bag armour row's comparator is
+    # upstream's `_memoVerdict` call now, and the weighted detail comes back
+    # through it (ca.memo-verdict-third-value). `v, reason = v2, r2` below is
+    # untouched, and the diag row reads `w2` exactly as before.
     text = replace_once(
         text,
         name,
         "ca.bag-evaluate-weighted",
-        "\t\t\t\t\t\tlocal v2, r2 = Verdict.evaluate(",
-        "\t\t\t\t\t\tlocal v2, r2, w2 = Verdict.evaluate(",
+        "\t\t\t\t\t\tlocal v2, r2 = ChestAdvisor._memoVerdict(",
+        "\t\t\t\t\t\tlocal v2, r2, w2 = ChestAdvisor._memoVerdict(",
     )
     text = replace_once(
         text,
@@ -1665,9 +1707,9 @@ def edit_chestadvisor_weighted_local(text: str) -> str:
         text,
         "ChestAdvisor/ChestAdvisor.lua",
         "ca.weighted-scope-assignment",
-        "\t\t\t\t\t\tlocal v2, r2, w2 = Verdict.evaluate(\n",
+        "\t\t\t\t\t\tlocal v2, r2, w2 = ChestAdvisor._memoVerdict(\n",
         "\t\t\t\t\t\tlocal v2, r2\n"
-        "\t\t\t\t\t\tv2, r2, w2 = Verdict.evaluate(\n",
+        "\t\t\t\t\t\tv2, r2, w2 = ChestAdvisor._memoVerdict(\n",
     )
     return text
 
@@ -2725,10 +2767,25 @@ def audit_outputs(outputs: dict) -> list:
     # t_c2e67619: the addon's own name is not rendered into the tooltip, and the
     # duplicate guard must not still key on the prefix it used to carry.
     advisor = outputs.get("ChestAdvisor/ChestAdvisor.lua", "")
-    if "local v2, r2, w2 = Verdict.evaluate" in advisor:
+    # The call is upstream's memoised one at this pin (Slice 1 wrapped the bag
+    # armour comparator in `_memoVerdict`); the rule is unchanged — `w2` must NOT
+    # be declared inside the branch that assigns it, because the diag row below
+    # reads it, and the memo must hand the third value back or a cache hit would
+    # answer the verdict without the weighted detail.
+    if "local v2, r2, w2 = ChestAdvisor._memoVerdict" in advisor:
         problems.append(
             "ChestAdvisor.lua still declares w2 inside the branch that assigns it; "
             "the diag row below cannot see it"
+        )
+    if "local v2, r2, w2 = Verdict.evaluate" in advisor:
+        problems.append(
+            "ChestAdvisor.lua calls Verdict.evaluate directly where the vendored "
+            "pin memoises it; the fold's w2 edit was re-cut for _memoVerdict"
+        )
+    if "\tlocal a, b, c = fn()" not in advisor:
+        problems.append(
+            "ChestAdvisor.lua's verdict memo still drops the third value; a memo "
+            "HIT would answer the same verdict with no weighted detail"
         )
     if "\t\t\t\t\tlocal w2\n" not in advisor:
         problems.append("ChestAdvisor.lua has no hoisted w2 declaration")

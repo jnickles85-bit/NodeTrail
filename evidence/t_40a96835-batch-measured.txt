@@ -1,0 +1,90 @@
+t_40a96835 — the v0.3.9-beta batch, measured on the PACK'S OWN TREE
+====================================================================
+Pin measured: StatForge 740f7d53c8c70034a008785589560dcf9b43fcf2
+              ("Merge pull request #104 from jnickles85-bit/wt/t_8d3af71d")
+Tree measured: this repo's vendored bytes under
+              MightiePack/Modules/Touchstone/ — NOT the StatForge checkout.
+
+HOW IT WAS RUN
+  The four behaviours the owner tests are exercised through the pin's OWN
+  wow_stub.lua (StatForge ChestAdvisor/tests/wow_stub.lua) on fengari, with the
+  pack's vendored Marks.lua / Verdict.lua / ChestAdvisor.lua / GearAPI.lua /
+  Weights.lua / Constants.lua loaded in the toc's order. A spec is resolved the
+  way a player resolves one (/up spec -> ChestAdvisorDB.gearFor), because the
+  pack scores gear for a chosen profile and refuses to guess one; and Enable()
+  is called, because in game the host core (Modules/Core.lua) is what enables
+  the module and installs the tooltip hook.
+
+  Command (from the probe's directory, harness = the pinned StatForge tests dir):
+    node probe_batch.js <pack-tree-with-ChestAdvisor/{tests/}copied-from-the-pin>
+
+FIXTURES are lifted verbatim from the cards that shipped each behaviour:
+  1  enchant pair             t_c65cc350  (the owner's Fishing Pole / Wolfsbane)
+  2  arrows on the surfaces   t_ee6dec52  (bags 0-4, bank -1, bank bag 5, reagent -3, quest reward)
+  3  the tank pair            t_ea260b42  (+1 Hit vs +20 Block on a Protection tank)
+  4  the out-of-level item    t_da461166  (Warrior 20, dagger, "Requires Level 40", client says no)
+
+ONE RECORDED DIVERGENCE (INFO, not a failure of this cut)
+  A two-sided Block tie (+20 vs +10) answers "no change" on the pack tree where
+  upstream answers "upgrade: more Block". That is the pack's OWN weighted layer
+  deciding before the ordinal tiebreak: it answers identically on origin/main
+  (the pre-cut tree), so this cut did not change it. The card's tank rule
+  ("a tiebreak-only Block stops deciding a pair") is the same direction; the
+  owner's pair (+1 Hit vs +20 Block) is demonstrated below.
+
+--------------------------------------------------------------------------------
+PROBE OUTPUT
+spec resolved: PALADIN/spell profile=Holy order=3
+PASS  1a enchant on the WORN weapon: the pair is JUDGED (not a refusal)
+        NOT_UPGRADE — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+PASS  1b the enchant is named as present-but-unpriced on the EQUIPPED side
+        decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+PASS  1c the enchant clause carries no "can't judge" wording
+        decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+PASS  1d an enchant on the HOVERED item names the hovered side
+        UPGRADE — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the hovered item)
+PASS  1e with no enchant line the clause is gone (the control)
+        NOT_UPGRADE — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect)
+PASS  1f the ITEM TOOLTIP on the owner's hover names the unpriced enchant and its side
+        tip="Fishing Pole\nTwo-Hand  Fishing Pole\n2 - 4 Damage\n(1.0 damage per second)\nSpeed 3.00\nDurability 20 / 20\nSell Price: 4\n|cff9d9d9dNot an upgrade — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)|r"
+PASS  1g the tooltip line is a judgement, not a "can't judge"
+        tip="Fishing Pole\nTwo-Hand  Fishing Pole\n2 - 4 Damage\n(1.0 damage per second)\nSpeed 3.00\nDurability 20 / 20\nSell Price: 4\n|cff9d9d9dNot an upgrade — decided by Intellect [Holy (chosen)] (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)|r"
+PASS  2 arrow on the combined bag view
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on bag 1
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on the bank
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on bank bag 5
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 arrow on the reagent bank
+        mark=true|Interface\AddOns\MightiePack\Modules\Touchstone\ChestAdvisor\marker.tga
+PASS  2 no arrow on a downgrade
+        mark=none
+PASS  2 no arrow on an equal item
+        mark=none
+PASS  2 no arrow on a refused item
+        mark=none
+PASS  2 quest-reward mark is drawn on the reward button
+        mark=true
+PASS  2 TouchstoneMarks is the ONE mark module
+PASS  3a +1 Hit vs +20 Block is not "equal"
+        UPGRADE — decided by Hit (cap status unknown) [Protection (Balanced)]
+PASS  3b the +1 Hit is what decides it
+        UPGRADE — decided by Hit (cap status unknown) [Protection (Balanced)]
+INFO  3c two-sided Block tie: upstream "more Block", pack "no change" (pre-existing on origin/main, identical before and after this cut) — NOT_UPGRADE — no change [Protection (Balanced)]
+PASS  3c the tiebreak still decides what it should: the pack says "no change", not a judged gain
+        NOT_UPGRADE — no change [Protection (Balanced)]
+PASS  3d HIT is priced 0.5 on WARRIOR.tank
+PASS  4a the bag row reads cannot equip with the named requirement
+        row=UNKNOWN|cannot equip — requires level 40
+PASS  4b the item tooltip reads "Can't equip — requires level 40"
+        line=|cff9d9d9dCan't equip — requires level 40|r
+PASS  4c the old "eligibility unconfirmed" sentence is gone from this surface
+        tip="Dagger of the Refused\nMain Hand  Dagger\n10 - 19 Damage\nSpeed 2.00\nRequires Level 40\n+3 Agility\n|cff9d9d9dCan't equip — requires level 40|r"
+PASS  4d the quest-reward walk stores a non-answer for the refused weapon
+        stored=UNKNOWN
+PASS  4e the quest-reward tooltip phrases it the same way as the bag tooltip
+        tip="Dagger of the Refused\nMain Hand  Dagger\n10 - 19 Damage\nSpeed 2.00\nRequires Level 40\n+3 Agility\n|cff9d9d9dCan't equip — requires level 40|r"
+
+26 passed, 0 failed
