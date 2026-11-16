@@ -128,7 +128,10 @@ if MightiePackTouchstoneSkip then return end
 --       adjacent one, it is set at or just below HALF of it (AP -> the arms
 --       pack's 0.45 gives 0.2; Block -> the survival primary 1.0 gives 0.5;
 --       Prot HIT -> the ret pack's 0.7 gives 0.3), which is the most a
---       "direction only" reading can defend;
+--       "direction only" reading can defend. WARRIOR.tank's HIT is NOT one of
+--       those four: card t_ea260b42 prices it from a pack number — the same
+--       spec's own `.dps` block — instead of halving one, so it makes no
+--       DIRECTIONAL claim and is DIFFED like every cited key;
 --   (c) it is enough for the card's own fixture to resolve, with the value
 --       ONE STEP BELOW also measured so the crossing is a number in a test
 --       rather than a claim in a comment. Those measurements are reproduced
@@ -667,8 +670,12 @@ SF.Weights = {
 		-- a raid-tuned one. The ORDER (a melee order) still words the reason;
 		-- these numbers decide a tie.
 		--
-		-- EVERY key below is that ONE pack: nothing here is blended, and
-		-- nothing here is taken from warrior-arms.survival (which happens to
+		-- EVERY key below is that ONE pack — with the single DECLARED BRIDGE named
+		-- at HIT (card t_ea260b42): the survival block carries no hit term, so HIT
+		-- is the same spec's `.dps` hitRating, declared as data in
+		-- ChestAdvisor/tests/weights_citation_packs.json and derived there from the
+		-- dps block. Nothing else here is blended, and nothing is taken from
+		-- warrior-arms.survival (which happens to
 		-- share this pack's 0.3 agility but prices strength at 0.4). STR was
 		-- 0.4 in this file's first revision and was corrected to the cited 0.5
 		-- by card t_6fda2ec5's gate (t_9362815f, F1): 0.4 is a value from a
@@ -693,16 +700,53 @@ SF.Weights = {
 			ARMOR = 0.35,  -- source key: armor 0.35
 			-- DIRECTIONAL: "Shield Slam: Damage scaling from Block Value increased."
 			-- | 0.35 -> 0.5: half the survival primary, so one point of Block is
-			-- worth at most half a point of Stamina, and no shield swap can buy a
-			-- Stamina loss with block value alone. The card's shield fixture (+19
-			-- Block / +5 Strength / equal Armor against +3 Block / +3 Stamina) reads
-			-- TRADE_OFF at the shipped 0.35 and UPGRADE at 0.40 and above -- 0.5 is
-			-- kept as the rounder value with margin to spare, not as a threshold
+			-- worth at most half a point of Stamina. ⚠ CARD t_ea260b42 RETIRED THE
+			-- MEASUREMENT THIS NUMBER WAS RAISED FOR: the old note here said the
+			-- card's shield fixture (+19 Block / +5 Strength / equal Armor against
+			-- +3 Block / +3 Stamina) "reads TRADE_OFF at the shipped 0.35 and
+			-- UPGRADE at 0.40 and above". It no longer does, and it must not: a
+			-- PROOF_EXEMPT price is TIEBREAK-ONLY and the weighted layer does not
+			-- spend it (see the rule below), so that pair is a TRADE_OFF at every
+			-- price. The number stays as DD-5 ruled it and as the coverage record;
+			-- what changed is the layer that was reading it.
 			-- | review item 6 (WARRIOR / Protection: "BLOCK (block value) 0.35 ->
 			-- Up", confidence medium-high on DIRECTION)
 			BLOCK = 0.5,
-			-- card t_795eee9e: priced from its own pack (warrior-prot.survival)
-			HIT   = 0,     -- the pack prices it at nothing (ONE word since card t_9d3273cb)
+			-- ⚠ THE RULE THE BLOCK PRICE OBEYS (card t_ea260b42). It is the
+			-- engine's rule, stated beside the number because this is the table a
+			-- reader will ask about: BLOCK is TIEBREAK-ONLY, with Armor and
+			-- WeaponDps, in `Verdict.PROOF_EXEMPT`. The dominance proof may not
+			-- read it (it cannot overturn a class-order loss), and since
+			-- t_ea260b42 the WEIGHTED LAYER may not SPEND it either. The ONE place
+			-- it can speak is gate 9's tiebreak: a pair where nothing else moved
+			-- and BOTH sides carry the stat. So "+20 Block vs +10 Block" is an
+			-- upgrade (a tiebreak deciding a tie, W4c), while "+1 Hit vs +20 Block"
+			-- is not a comparison of Block at all — the Hit moves and Block is
+			-- silent (W4e), which is exactly what it does on the trade-off pair
+			-- W4f. Before this card the weighted layer DID spend it, so the same
+			-- 40 Block decided a trade-off pair ("better on Block — the weighted
+			-- gain outweighs the Stamina loss") and was invisible on a one-sided
+			-- one: one number, two answers. The number above is unchanged; only
+			-- the layer that was reading it out of turn is.
+			--
+			-- card t_795eee9e, RE-PRICED by card t_ea260b42: HIT is BRIDGED from
+			-- the SAME SPEC's `.dps` block — hitRating 0.5 in
+			-- presets['warrior-prot'].dps. The `.survival` block this table
+			-- otherwise transcribes carries NO hit term at all, so the old `0` here
+			-- was not the pack's number: it was the absence of one, and a warrior
+			-- tank's Hit was therefore never weighed by anything (t_eb6ecf0e's
+			-- W4e: "+1 Hit vs +20 Block" read "equal to what's equipped"). The app
+			-- prices a Protection warrior's hit at 0.5 in its OWN dps block; that
+			-- is the only pack number this spec has for this word, so it is
+			-- CARRIED rather than invented — a tank buys hit for the taunt and the
+			-- threat it carries, which is the reason PALADIN.tank gives for its
+			-- own hit price. The bridge is declared as DATA
+			-- (ChestAdvisor/tests/weights_citation_packs.json carries
+			-- "bridges": { "HIT": "dps" } on this pack), so the citation diff
+			-- DERIVES 0.5 from the dps block instead of being skipped: this is a
+			-- sourced number, not a directional judgement, and it is deliberately
+			-- NOT listed in `directional` below.
+			HIT   = 0.5,
 			CRIT  = 0,     -- the pack prices it at nothing (ONE word since card t_9d3273cb)
 			-- DIRECTIONAL: "Sunder Armor: Threat generated now scales with Attack
 			-- Power." / "Thunder Clap: Now gains significant damage scaling from
@@ -730,7 +774,7 @@ SF.Weights = {
 			SPNATURE = 0,     -- absent from the pack (card t_4e1e1b1d)
 			SPARCANE = 0,     -- absent from the pack (card t_4e1e1b1d)
 			SPOW  = 0,   -- absent from the pack (card t_b7cd07e1)
-			source = MARKER .. ". Cite: statforge-app/src/lib/statWeights.ts presets['warrior-prot'].survival.",
+			source = MARKER .. ". Cite: statforge-app/src/lib/statWeights.ts presets['warrior-prot'].survival; HIT (0.5) is BRIDGED from the same spec's .dps block's hitRating, which the survival block it cites does not carry (card t_ea260b42).",
 			-- card DD-5: the three overrides above, DECLARED so the citation diff
 			-- reports them as DIRECTIONAL instead of diffing them against the
 			-- warrior-prot.survival pack they deliberately leave (every OTHER key in
@@ -846,7 +890,7 @@ SF.Weights = {
 			INT   = 0,     -- absent from the pack
 			SPI   = 0,     -- absent from the pack
 			ARMOR = 0.35,  -- source key: armor 0.35
-			BLOCK = 0.35,  -- source key: blockValue 0.35
+			BLOCK = 0.35,  -- source key: blockValue 0.35 (tiebreak-only — see WARRIOR.tank's BLOCK note, card t_ea260b42)
 			-- card t_795eee9e: priced from its own pack (paladin-prot.survival)
 			-- DIRECTIONAL: "Precision: Now increases chance for all spells and
 			-- attacks to hit ... including the taunt from Seal of Fury's Judgement"

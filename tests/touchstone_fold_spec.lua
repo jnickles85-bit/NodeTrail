@@ -33,8 +33,13 @@ local VENDORED = {
   "LogTab.lua",
   "Diagnostics.lua",
   "Probe.lua",
+  -- Card t_ee6dec52 (Slice 1): the mark module and the public read surface. The
+  -- arrow is drawn by Marks.lua and by nothing else at this pin, so a fold that
+  -- omitted it would ship an advisor that never marks an upgrade.
+  "ChestAdvisor/Marks.lua",
   "ChestAdvisor/Verdict.lua",
   "ChestAdvisor/ChestAdvisor.lua",
+  "GearAPI.lua",
   "Integration.lua",
   "Core.lua",
 }
@@ -189,10 +194,12 @@ do
     if start then
       check(body[start + 1] == "Modules/Touchstone/Constants.lua", "TOC: Constants after Bootstrap")
       check(body[start + 2] == "Modules/Touchstone/Weights.lua", "TOC: Weights after Constants")
-      check(body[start + 9] == "Modules/Touchstone/ChestAdvisor/Verdict.lua", "TOC: Verdict before ChestAdvisor")
-      check(body[start + 10] == "Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua", "TOC: ChestAdvisor after Verdict")
-      check(body[start + 11] == "Modules/Touchstone/Integration.lua", "TOC: Integration after ChestAdvisor")
-      check(body[start + 12] == "Modules/Touchstone/Core.lua", "TOC: Core last in the block")
+      check(body[start + 9] == "Modules/Touchstone/ChestAdvisor/Marks.lua", "TOC: Marks before Verdict")
+      check(body[start + 10] == "Modules/Touchstone/ChestAdvisor/Verdict.lua", "TOC: Verdict before ChestAdvisor")
+      check(body[start + 11] == "Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua", "TOC: ChestAdvisor after Verdict")
+      check(body[start + 12] == "Modules/Touchstone/GearAPI.lua", "TOC: GearAPI after ChestAdvisor")
+      check(body[start + 13] == "Modules/Touchstone/Integration.lua", "TOC: Integration after GearAPI")
+      check(body[start + 14] == "Modules/Touchstone/Core.lua", "TOC: Core last in the block")
     end
     for _, entry in ipairs(body) do
       check(entry:find("marker.tga", 1, true) == nil, "marker.tga is not a TOC body entry")
