@@ -8,7 +8,15 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
-### Planned (0.3.9)
+### Held for 0.3.10
+- **Melee may not claim equality over a line it never read** — the behaviour is verified and unmerged; `t_dc1decd1` re-derives the M11 pin first, because the side-naming clause changed the wording that pin compares.
+- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal tiebreak (`t_a4124aed`; fix written and held).
+- Contract Y (`t_0bf5c207`) — parked, not scheduled. It was superseded by the engine measurement, not by neglect.
+
+## [0.3.9-beta] - 2026-11-16
+
+One re-vendor of settled StatForge main (`740f7d5` → `4183aee`), plus the one fix the owner's live test
+found before the tag. Everything below was measured on the pack's own tree before he tested it in game.
 - **Bag arrows, quest-reward marks and `GearAPI`** — the three surfaces lit by the verdict the reader already produces, with no new scoring underneath. (Slice 1, PR #98.)
 - **An enchant is never a blocker and never priced** — it leaves the stat list like chrome and is disclosed like a proc, on the side that carries it. (Card `t_c65cc350`.)
 - **Weapon fail-closed is not defeated by a `Sell Price:` line** placed before an unreadable one. (Card `t_195a0e07`.)
