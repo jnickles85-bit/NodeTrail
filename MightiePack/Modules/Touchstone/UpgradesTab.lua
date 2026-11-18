@@ -128,14 +128,29 @@ local function verdictColor(v)
   return ledgerColor("ledgerNoUpgrade", C.textMuted)
 end
 
--- The player-facing word for a stored verdict token. The mapping lives on the
--- advisor (ChestAdvisor.tooltipUI.word), so this tab keeps no second vocabulary
--- — the same rule the Log tab applies. The stored token is the fallback.
-local function verdictWord(token)
+-- The player word for a ROW. The mapping lives on the advisor
+-- (ChestAdvisor.tooltipUI), so this tab keeps no second vocabulary — the same
+-- rule the Log tab applies.
+--
+-- Card t_c8970547: ask the ROW, not the stored token. `wordFor` is the one
+-- arbitration-aware word the item tooltip and both mark hovers already read, so
+-- a pair the model answered SIDEGRADE reads "Sidegrade" in the ledger exactly as
+-- it does in the tooltip. A renderer that re-derived the word from `row.verdict`
+-- would say "Trade-off" for that same pair, and would drift the moment the
+-- state -> token map moved. The token map (`word`) stays only as the fallback
+-- for a build whose advisor does not publish `wordFor`; the raw token is last.
+local function verdictWord(row)
   local ui = ChestAdvisor and ChestAdvisor.tooltipUI
-  if type(ui) == "table" and type(ui.word) == "function" then
-    local word = ui.word(token)
-    if word ~= nil then return tostring(word) end
+  local token = type(row) == "table" and row.verdict or row
+  if type(ui) == "table" then
+    if type(ui.wordFor) == "function" then
+      local word = ui.wordFor(row)
+      if word ~= nil then return tostring(word) end
+    end
+    if type(ui.word) == "function" then
+      local word = ui.word(token)
+      if word ~= nil then return tostring(word) end
+    end
   end
   return tostring(token)
 end
@@ -201,6 +216,11 @@ local function buildRows(verdicts)
       rows[#rows + 1] = {
         link     = link,
         verdict  = row.verdict,
+        -- Card t_c8970547: the model's own answer rides into the tab with the
+        -- token. The row WORD is asked of this table (TOOLTIP_UI.wordFor on the
+        -- advisor), never re-derived from the token, and it is nil on every row
+        -- the model did not answer — exactly the shape the advisor records.
+        arbitration = (type(row.arbitration) == "table") and row.arbitration or nil,
         reason   = (type(row.reason) == "string") and row.reason or "",
         slotWord = (type(row.slotWord) == "string") and row.slotWord or "slot",
         id       = row.id,
@@ -543,9 +563,11 @@ local function repopulate(host)
         local rr, rg, rb, ra = ledgerColor("ledgerMuted", C.textMuted)
         row.reason:SetTextColor(rr, rg, rb, ra)
 
-        -- The verdict: word and marker in ONE colour, from ONE read.
+        -- The verdict: word and marker in ONE colour, from ONE read. The WORD is
+        -- the row's (card t_c8970547): an arbitrated pair reads the model's word
+        -- here exactly as it does in the tooltip.
         local vr, vg, vb, va = verdictColor(r.verdict)
-        row.verdictWord:SetText(verdictWord(r.verdict))
+        row.verdictWord:SetText(verdictWord(r))
         row.verdictWord:SetTextColor(vr, vg, vb, va)
         if r.verdict == "UPGRADE" then
           row.mark:SetTexture(SF.AssetPath("marker.tga"))
