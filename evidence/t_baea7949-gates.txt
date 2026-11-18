@@ -1,0 +1,115 @@
+== card t_baea7949 — the log entry's word is the arbitrated word
+== head = tip of nt/baea7949 (pushed before this file was committed)
+== base = origin/main 7ab5d41
+== lua 5.1.5 (PUC-Rio) — the CI target
+
+== DECISION: option A — the entry carries the arbitration state ==
+   A record whose reason field already holds the ARBITRATED sentence must
+   not print the token's word over it. Option B would label the column
+   'as recorded' and keep the mismatch forever.
+
+== 1. the new spec, GREEN — one pair, three surfaces
+$ lua5.1 tests/touchstone_log_entry_word_spec.lua
+new entry: {verdict="TRADE_OFF", arbState="SIDEGRADE", reason="Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)"}
+old entry: {verdict="TRADE_OFF", arbState=nil, link="|cnIQ1:|Hitem:3270::::::::5:1::::::|h[Flax Vest]|h|r"}
+SIDEGRADE · Log tab row word    "Sidegrade"
+SIDEGRADE · window row word     "Sidegrade"
+SIDEGRADE · tooltip headline    "Sidegrade"
+SIDEGRADE · tooltip line        "Sidegrade — raid healing, inside the band on throughput"
+SIDEGRADE · pre-fix token word  "Trade-off"
+OLD entry · Log tab row word    "Trade-off"
+old entry literal: return {["at"]=1794333381,["link"]="|cnIQ1:|Hitem:3270::::::::5:1::::::|h[Flax Vest]|h|r",["reason"]="weighted 12 [Holy] — more Intellect, less Healing",["role"]="PALADIN",["slot"]=5,["slotName"]="chest",["time"]=501332.686,["verdict"]="TRADE_OFF"}
+chat: |cffd79b35Touchstone:|r disagreements logged: 2 (oldest first) | 1) 11-10 17:56  chest  Trade-off role=PALADIN(nil) link=|cnIQ1:|Hitem:3270::::::::5:1::::::|h[Flax Vest]|h|r reason=weighted 12 [Holy] — more Intellect, less Healing | 2) 11-14 22:13  slot  Sidegrade role=PALADIN(nil) link=|cnIQ0:|Hitem:9001::::::::34:1::::::|h[Parity Chest of the Trade]|h|r reason=Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)
+touchstone_log_entry_word_spec: ok
+exit=0
+
+== 2. NON-VACUITY — the Log tab pointed back at the token map (the pre-fix
+==    source). The same spec must redden, and every failure must name the
+==    Log tab. The window and the tooltip stay Sidegrade.
+$ python baea7949_revert.py   # LogTab.playerWord -> TOOLTIP_UI.word(token)
+reverted: LogTab.playerWord now reads TOOLTIP_UI.word(token)
+$ lua5.1 tests/touchstone_log_entry_word_spec.lua
+FAIL: the Log tab reads the model's word: expected "Sidegrade", got "Trade-off"
+FAIL: the Log tab (Trade-off) and the window row (Sidegrade) name the same pair the same way
+FAIL: the Log tab (Trade-off) and the tooltip headline (Sidegrade) name the same pair the same way
+FAIL: the Log tab does NOT print the pre-arbitration word "Trade-off" for a SIDEGRADE entry
+4 check(s) failed
+new entry: {verdict="TRADE_OFF", arbState="SIDEGRADE", reason="Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)"}
+old entry: {verdict="TRADE_OFF", arbState=nil, link="|cnIQ1:|Hitem:3270::::::::5:1::::::|h[Flax Vest]|h|r"}
+SIDEGRADE · Log tab row word    "Trade-off"
+SIDEGRADE · window row word     "Sidegrade"
+SIDEGRADE · tooltip headline    "Sidegrade"
+SIDEGRADE · tooltip line        "Sidegrade — raid healing, inside the band on throughput"
+SIDEGRADE · pre-fix token word  "Trade-off"
+OLD entry · Log tab row word    "Trade-off"
+old entry literal: return {["at"]=1794333381,["link"]="|cnIQ1:|Hitem:3270::::::::5:1::::::|h[Flax Vest]|h|r",["reason"]="weighted 12 [Holy] — more Intellect, less Healing",["role"]="PALADIN",["slot"]=5,["slotName"]="chest",["time"]=501332.686,["verdict"]="TRADE_OFF"}
+chat: |cffd79b35Touchstone:|r disagreements logged: 2 (oldest first) | 1) 11-10 17:56  chest  Trade-off role=PALADIN(nil) link=|cnIQ1:|Hitem:3270::::::::5:1::::::|h[Flax Vest]|h|r reason=weighted 12 [Holy] — more Intellect, less Healing | 2) 11-14 22:13  slot  Sidegrade role=PALADIN(nil) link=|cnIQ0:|Hitem:9001::::::::34:1::::::|h[Parity Chest of the Trade]|h|r reason=Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)
+exit=1
+
+== 2b. RESTORED — the tree is the committed file again (re-derived from the
+==     pin plus the patch, not from a saved copy)
+$ python tools/sync_touchstone.py --src <checkout at eebfba4>
+sync_touchstone: source C:\c\Users\jnick\AppData\Local\hermes\profiles\rowan\cache\scratch\pin-eebfba4@eebfba4
+sync_touchstone: 16 lua files written (8 pristine, 8 patched); toc ok
+$ cmp LogTab.commit.lua MightiePack/Modules/Touchstone/LogTab.lua
+identical
+
+== 3. every shipping file parses
+$ find MightiePack -name "*.lua" | wc -l ; luac5.1 -p each
+25
+luac -p: ok
+
+== 4. luacheck (the CI invocation) — 0 warnings / 0 errors in 25 files
+$ lua54 ~/.luarocks/bin/luacheck MightiePack
+Checking MightiePack\Window.lua                   OK
+Checking MightiePack\Window\TouchstoneTab.lua     OK
+
+Total: 0 warnings / 0 errors in 25 files
+
+== 5. the vendored payload, both lanes (COPY + PATCH)
+$ python tools/sync_touchstone.py --verify-shipped
+sync_touchstone: COPY   8 pristine files are the pin's blobs
+sync_touchstone: PATCH  8 patches reverse to the pin's blobs
+exit=0
+
+== 6. the whole suite at lua5.1 — every spec file, one process each
+$ for f in tests/*.lua; do lua5.1 $f; done
+specs=44 failed=0  (all green)
+
+== 7. WHAT IS LIVE TODAY — measured, not assumed (and the reason this is a
+==    SHAPE fix, not a live three-way disagreement on origin/main)
+==    Verdict.arbitrate has no call site in the shipped tree (the pack's re-cut
+==    removes the C7 seam), so a live trade-off row carries the WEIGHTED detail
+==    in its arbitration field, and all three surfaces already say Trade-off.
+==    The row shape below is the one a restored seam writes; the fix keeps the
+==    log from being the odd surface on that day.
+$ lua5.1 <probe>
+-- LIVE — weighted TRADE_OFF row, exactly what the scan writes
+   row.arbitration.state = nil
+   decoded: weighted=nil decidedBy=Healing Power profile=Holy
+   line 1 [amber] |cffffa616Trade-off: +Healing vs −Intellect — decided by Healing Power [Holy]|r
+   wordFor = Trade-off   word(token) = Trade-off
+arbitrate -> token=TRADE_OFF state=SIDEGRADE
+-- SEAM — the shape a restored arbitration seam writes
+   row.arbitration.state = SIDEGRADE
+   decoded: weighted=nil decidedBy=nil profile=nil
+   line 1 [amber] |cffffa616Sidegrade — raid healing, inside the band on throughput|r
+   line 2 [grey] |cff9d9d9dRaid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)|r
+   line 3 [grey] |cff9d9d9dSurvival: no change to health or damage taken — a wash either way.|r
+   wordFor = Sidegrade   word(token) = Trade-off
+-- OLD entry: entryWord/wordFor with no arbitration and no arbState: Trade-off
+
+== 8. the diff against origin/main 7ab5d41. The commit hash is NOT quoted here:
+==    this file rides in that commit, so a hash written into it is stale the
+==    moment it lands. The head is the tip of nt/baea7949, named in the PR.
+$ git diff --stat origin/main...HEAD
+ CHANGELOG.md                                       |  10 +
+ .../Touchstone/ChestAdvisor/ChestAdvisor.lua       |  33 +-
+ MightiePack/Modules/Touchstone/LogTab.lua          |  34 +-
+ README.md                                          |   3 +-
+ docs/touchstone-divergences.md                     |  37 +++
+ evidence/t_baea7949-gates.txt                      | 100 ++++++
+ tests/touchstone_log_entry_word_spec.lua           | 355 +++++++++++++++++++++
+ .../ChestAdvisor__ChestAdvisor.lua.patch           | 190 +++++++----
+ tools/touchstone-patches/LogTab.lua.patch          | 161 +++++++---
+ 9 files changed, 794 insertions(+), 129 deletions(-)

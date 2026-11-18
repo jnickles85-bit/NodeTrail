@@ -104,6 +104,43 @@ upstream answers.
 
 ---
 
+## 3. The disagreement log records the arbitration state — **pending**
+
+**What differs.** A `ChestAdvisorDB.log` entry written by the pack carries one field
+upstream's writer does not: `arbState`, the state the engine arbitrated that pair to
+(`UPGRADE`, `NOT_UPGRADE`, `SIDEGRADE`), or nil when no model answered. Every reader of
+a stored entry — the Log tab and `/up log` — asks the advisor's
+`TOOLTIP_UI.entryWord`, which reads that field through `wordFor`, the same helper the
+window row and the tooltip headline read (card `t_c8970547`). Upstream stores the token
+only, so its log can only print the token's word.
+
+| surface | `TRADE_OFF` + `arbState = "SIDEGRADE"` |
+|---|---|
+| the window's ledger row | `Sidegrade` |
+| the tooltip headline | `Sidegrade — raid healing, inside the band on throughput` |
+| the Log tab row | `Sidegrade` |
+| `/up log` | `… Sidegrade role=… link=… reason=Raid healing: under the band either way …` |
+
+**Why the record, and not a label.** The log is the player's evidence of what the
+advisor said about the item he wore. Its `reason` field is already the ARBITRATED
+sentence (the engine rewrites it before the row reaches any surface), so a log that
+printed the token's word would name one entry two ways — "Trade-off" over a reason that
+says "under the band either way". Labelling the column instead would have made the log
+permanently apologise for a one-field gap.
+
+**What an old entry does.** An entry written before the field existed has no `arbState`
+key, and `entryWord` then answers the token's word — exactly what that entry recorded,
+never a judgement re-derived from it. There is no migration step: the field is additive
+and every reader tolerates its absence.
+`tests/touchstone_log_entry_word_spec.lua` pins both shapes, and round-trips the old
+one through a save-shaped literal unchanged.
+
+**What it would take to retire.** Upstream recording the arbitration state in its own
+log entry (and reading it back in `LogTab.lua`). Until then the pack's entry carries it.
+
+
+---
+
 ## Keeping this document true
 
 - A new behaviour divergence needs an entry here **in the same commit** as the patch

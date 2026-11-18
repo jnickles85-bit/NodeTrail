@@ -8,6 +8,16 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Fixed
+- **The disagreement log names an arbitrated pair the way the other two surfaces do**
+  (`t_baea7949`). The Log tab and `/up log` printed the token's word, so a pair the
+  window and the tooltip call **Sidegrade** read "Trade-off" in the log — the same
+  defect `t_c8970547` fixed in the window, moved to the record. A log entry now carries
+  the arbitration's own state (`arbState`), and both readers of a stored entry ask the
+  advisor's `entryWord`, which reads it through `wordFor`. An entry written before the
+  field existed has no key and renders the token's word, exactly as recorded; no
+  migration, no re-derivation.
+
 ### Held for the next release
 - **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
   re-derives the M11 pin first.
