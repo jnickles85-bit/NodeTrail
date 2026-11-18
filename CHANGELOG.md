@@ -15,6 +15,15 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   lookups ask for it. `Calibration.lua` stays out on purpose: it is a dev surface and no
   verdict path reads it. Fourteen vendored files became sixteen. (Card `t_13c807af`.)
 
+### Fixed
+- **The window names a pair the way the tooltip does.** The Upgrades ledger row read the
+  stored verdict TOKEN (`TOOLTIP_UI.word`), so a pair the arbitration answered SIDEGRADE
+  printed *Trade-off* in the window while the item tooltip for the same pair headlined
+  *Sidegrade*. The row now asks the ROW (`TOOLTIP_UI.wordFor`, the one arbitration-aware
+  word the tooltip and both mark hovers already read): the arbitration payload rides into
+  the row and no renderer re-derives a word from a token. UPGRADE and NOT_UPGRADE read
+  exactly as before. (Card `t_c8970547`; the patch is `UpgradesTab.lua.patch`.)
+
 ### Held for 0.3.10
 - **Melee may not claim equality over a line it never read** — the behaviour is verified and unmerged; `t_dc1decd1` re-derives the M11 pin first, because the side-naming clause changed the wording that pin compares.
 - **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal tiebreak (`t_a4124aed`; fix written and held).

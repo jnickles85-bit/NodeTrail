@@ -93,7 +93,9 @@ shrinks to the commands and the patch loses the block.
   to a wrapped reason and a page measured to the viewport have nowhere else to live.
 - **The ledger drawing and the row stacks** (`UpgradesTab.lua`, `LogTab.lua`): the
   ranked row stack, the verdict gutter, the change column, the hairline rules.
-  Upstream has no ledger and no seam for one.
+  Upstream has no ledger and no seam for one. The Upgrades row's WORD comes from the
+  row (`TOOLTIP_UI.wordFor`, card `t_c8970547`), not from the stored token: upstream
+  has no arbitration to name, so its ledger could only ever print the token's word.
 - **The Settings flow** (`OptionsTab.lua`): `host.blocks` + `relayout`, and the About
   block's accent repaint. The window owns the layout; upstream ships no hook for it.
 
