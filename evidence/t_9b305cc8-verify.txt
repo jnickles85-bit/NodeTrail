@@ -1,0 +1,138 @@
+== card t_9b305cc8 — parity fixture: 4 Step 3 states, both engines quoted
+== head = tip of nt/t_9b305cc8 (3e38175 + tests/touchstone_arbitration_parity_spec.lua)
+== base = origin/main 52aa25d (the vendoring card t_13c807af is its parent)
+== lua 5.1.5 (PUC-Rio) — the CI target
+
+== the fixture, GREEN
+$ lua5.1 tests/touchstone_arbitration_parity_spec.lua
+
+-- case 1 · Upgrade ---------------------------------------------------------
+   the new chest strictly improves the worn one on both stats the model prices
+   chest   cand { +30 Healing, +12 Intellect }   vs   eq { +20 Healing, +10 Intellect }
+   state   raid · measured mid (level 34, 2060 mana, +36 Healing)
+  (a) StatForge @ eebfba4        UPGRADE
+        margin +0.022906   band +0.002796   driving healing   binding mana   confidence low
+        reason  "Raid healing: an upgrade — the extra healing per cast outruns the smaller pool, and you would run dry after about 20 casts either way. (confidence low: crit multiplier unmeasured)"
+  (b) MightiePack (vendored)      UPGRADE
+        margin +0.022906   band +0.002796   driving healing   binding mana   confidence low
+        reason  "Raid healing: an upgrade — the extra healing per cast outruns the smaller pool, and you would run dry after about 20 casts either way. (confidence low: crit multiplier unmeasured)"
+        token   "UPGRADE"
+
+-- case 2 · Not an upgrade --------------------------------------------------
+   the same two chests, the worn one now in the candidate slot: strictly worse
+   chest   cand { +20 Healing, +10 Intellect }   vs   eq { +30 Healing, +12 Intellect }
+   state   raid · measured mid (level 34, 2060 mana, +36 Healing)
+  (a) StatForge @ eebfba4        NOT_UPGRADE
+        margin -0.022661   band +0.002750   driving healing   binding mana   confidence low
+        reason  "Raid healing: not an upgrade — the mana it costs buys fewer casts than the healing it adds, and you would run dry after about 20 casts. (confidence low: crit multiplier unmeasured)"
+  (b) MightiePack (vendored)      NOT_UPGRADE
+        margin -0.022661   band +0.002750   driving healing   binding mana   confidence low
+        reason  "Raid healing: not an upgrade — the mana it costs buys fewer casts than the healing it adds, and you would run dry after about 20 casts. (confidence low: crit multiplier unmeasured)"
+        token   "NOT_UPGRADE"
+
+-- case 3 · Sidegrade -------------------------------------------------------
+   trades Intellect for Healing; the margin clears the band but not the 1% floor, so the FLOOR calls it
+   chest   cand { +38 Healing, +6 Intellect }   vs   eq { +15 Healing, +12 Intellect }
+   state   raid · measured mid (level 34, 2060 mana, +36 Healing)
+  (a) StatForge @ eebfba4        SIDEGRADE
+        margin +0.007561   band +0.007192   driving healing   binding mana   confidence low
+        reason  "Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)"
+  (b) MightiePack (vendored)      SIDEGRADE
+        margin +0.007561   band +0.007192   driving healing   binding mana   confidence low
+        reason  "Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)"
+        token   "TRADE_OFF"
+
+-- case 4a · Refusal — missing data ---------------------------------------
+   the same pair the sidegrade judged, refused because the numbers never arrived
+   chest   cand { +38 Healing, +6 Intellect }   vs   eq { +15 Healing, +12 Intellect }
+   state   raid · measured mid (level 34, 2060 mana, +36 Healing), totals flagged secret
+  (a) StatForge @ eebfba4        nil
+        margin --   band --   driving nil   binding nil   confidence nil
+        reason  nil
+        why     "totals are secret: the client would not hand them over"
+  (b) MightiePack (vendored)      nil
+        margin --   band --   driving nil   binding nil   confidence nil
+        reason  nil
+        token   nil
+        why     "totals are secret: the client would not hand them over"
+
+-- case 4b · Refusal — a stat the model does not price --------------------
+   a chest that moves Crit: a stat the healer model does not price
+   chest   cand { +10 Crit, +32 Healing, +6 Intellect }   vs   eq { +15 Healing, +12 Intellect }
+   state   raid · measured mid (level 34, 2060 mana, +36 Healing)
+  (a) StatForge @ eebfba4        nil
+        margin --   band --   driving nil   binding nil   confidence nil
+        reason  nil
+        why     "the pair moves Crit, which the healer model does not price"
+  (b) MightiePack (vendored)      nil
+        margin --   band --   driving nil   binding nil   confidence nil
+        reason  nil
+        token   nil
+        why     "the pair moves Crit, which the healer model does not price"
+
+-- StatOrders (context / class / spec) ------------------------------------
+   Raid         PALADIN  Holy         an endgame spec claim
+     (a) WH-holy-pal [4]: Healing Power > Intellect > Critical Strike > Spirit
+     (b) WH-holy-pal [4]: Healing Power > Intellect > Critical Strike > Spirit
+   Dungeon      PALADIN  Holy         the same claim — dungeon resolves through endgame
+     (a) WH-holy-pal [4]: Healing Power > Intellect > Critical Strike > Spirit
+     (b) WH-holy-pal [4]: Healing Power > Intellect > Critical Strike > Spirit
+   Leveling     PALADIN  Holy         a leveling claim (per class: the spec is ignored)
+     (a) MO-pal-lvl [5]: Weapon Damage > Stamina and Spirit > Intellect (Level 40+) > Strength and Spell Power > Healing Power and Agility
+     (b) MO-pal-lvl [5]: Weapon Damage > Stamina and Spirit > Intellect (Level 40+) > Strength and Spell Power > Healing Power and Agility
+   Raid         WARRIOR  Protection   a tank row the Step 3 model never weights
+     (a) WH-prot-war [14]: Stamina > Defense until 440 > Armor > Agility > Defense after 440 > Parry > Dodge > Expertise (6.5%) soft cap > Block Chance > Attack Power/Strength > Hit (8%) melee cap > Crit > Expertise (14%) hard cap > Haste
+     (b) WH-prot-war [14]: Stamina > Defense until 440 > Armor > Agility > Defense after 440 > Parry > Dodge > Expertise (6.5%) soft cap > Block Chance > Attack Power/Strength > Hit (8%) melee cap > Crit > Expertise (14%) hard cap > Haste
+   Raid         PALADIN  Nonexistent  an unknown spec — no neighbouring list is invented
+     (a) nil
+     (b) nil
+   Battleground PALADIN  Holy         an unknown context — no fallback
+     (a) nil
+     (b) nil
+
+92 check(s) passed: 4 Step 3 states, both sides identical
+exit 0
+
+== it can FAIL: three mutations, each restored with `git checkout --` before the next
+== (a fixture that cannot go red proves nothing; the third is the card's "fail loudly
+==  with a diff" — side (a) against side (b), field by field, both values named)
+
+-- 1. the model constant moves: Arbitration.lua:193  A.FLOOR = 0.01 -> 0.005
+FAIL: case 3 · Sidegrade: recorded state = "SIDEGRADE", measured "UPGRADE"
+FAIL: case 3 · Sidegrade: recorded reason = "Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)", measured "Raid healing: an upgrade — the extra healing per cast outruns the smaller pool, and you would run dry after about 19 casts either way. (confidence low: crit multiplier unmeasured)"
+FAIL: case 3 · Sidegrade: (b) token "UPGRADE" is the recorded eebfba4 token "TRADE_OFF"
+FAIL: case 3 · Sidegrade: (b) reason "Raid healing: an upgrade — ..." is the recorded eebfba4 seam reason "Raid healing: under the band either way — pick the one you like. ..."
+exit 1
+
+-- 2. the pack's seam drifts: Verdict.lua:6510  SIDEGRADE = "TRADE_OFF" -> "SIDEGRADE"
+FAIL: case 3 · Sidegrade: (b) token "SIDEGRADE" is the recorded eebfba4 token "TRADE_OFF"
+exit 1
+
+-- 3. the pack's seam perturbs the arbiter's own answer: v.margin = v.margin * 1.01
+FAIL: case 1 · Upgrade diverge on margin
+    (a) +0.022906
+    (b) +0.023135
+FAIL: case 2 · Not an upgrade diverge on margin
+    (a) -0.022661
+    (b) -0.022888
+FAIL: case 3 · Sidegrade diverge on margin
+    (a) +0.007561
+    (b) +0.007637
+exit 1
+
+after all three restores:  git status --short  ->  ?? tests/touchstone_arbitration_parity_spec.lua
+
+== full suite (lua 5.1.5)
+42 spec(s) run, 0 failure(s)          (41 at the parent; this card adds the 42nd)
+
+== luacheck 1.2.0 (CI's version)
+Total: 0 warnings / 0 errors in 25 files        (luacheck MightiePack)
+Total: 0 warnings / 0 errors in 1 file          (tests/touchstone_arbitration_parity_spec.lua)
+
+== byte identity of the two files under test (the leg this fixture does NOT own)
+tools/sync_touchstone.py --verify-shipped runs in the same CI job and hashes both
+against tools/touchstone-patches/pin.txt; the fixture asserts the structural half of
+that claim (no patch file exists for either — a patched file is not the pin's blob)
+plus the manifest entry. sha256 of the committed blobs at this head:
+  Arbitration.lua a3f0bee4f81ebe0fd62d635fb27ed056e6200d2bd653656b39ee0145a0504548
+  StatOrders.lua  6c9a7b8404e9f6b3d6529ba40d14bebb1aefe750698e3dd251a938f9e981d07a
