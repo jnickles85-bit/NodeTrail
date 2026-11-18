@@ -1,0 +1,63 @@
+== card t_c8970547 — the window's row word asks the ROW, not the token
+== head = tip of nt/t_c8970547
+== base = origin/main aa82f70 (the owner's retest build)
+== lua 5.1.5 (PUC-Rio) — the CI target
+
+== 1. the new spec, GREEN — both surfaces quoted, same pair
+$ lua5.1 tests/touchstone_window_row_word_spec.lua
+case 3 · SIDEGRADE   window row word   "Sidegrade"
+case 3 · SIDEGRADE   tooltip headline  "Sidegrade"
+case 3 · SIDEGRADE   tooltip line      "Sidegrade — raid healing, inside the band on throughput"
+case 3 · SIDEGRADE   pre-fix token word "Trade-off"
+case UPGRADE   window row word "Upgrade"   tooltip headline "Upgrade"   token word "Upgrade"
+case NOT_UPGRADE   window row word "Not an upgrade"   tooltip headline "Not an upgrade"   token word "Not an upgrade"
+touchstone_window_row_word_spec: ok
+exit=0
+
+== 2. NON-VACUITY — the same spec with the ledger pointed back at
+==    TOOLTIP_UI.word(row.verdict) (the pre-fix source). Leg 1 must redden
+==    and must NAME the window surface; UPGRADE/NOT_UPGRADE stay green.
+$ sed -i 'row.verdictWord:SetText(verdictWord(r))' -> 'verdictWord(r.verdict)'
+$ lua5.1 tests/touchstone_window_row_word_spec.lua
+FAIL: window ledger row (Trade-off) and tooltip headline (Sidegrade) name the same pair the same way
+FAIL: the window ledger row reads the model's word, not the token's: expected "Sidegrade", got "Trade-off"
+FAIL: the window ledger row does NOT print the pre-arbitration word "Trade-off" for a SIDEGRADE pair
+3 check(s) failed
+case 3 · SIDEGRADE   window row word   "Trade-off"
+case 3 · SIDEGRADE   tooltip headline  "Sidegrade"
+case 3 · SIDEGRADE   tooltip line      "Sidegrade — raid healing, inside the band on throughput"
+case 3 · SIDEGRADE   pre-fix token word "Trade-off"
+case UPGRADE   window row word "Upgrade"   tooltip headline "Upgrade"   token word "Upgrade"
+case NOT_UPGRADE   window row word "Not an upgrade"   tooltip headline "Not an upgrade"   token word "Not an upgrade"
+exit=1
+
+== 2b. restored: the tree is the committed file again
+$ cmp "$SCRATCH/UpgradesTab.commit.lua" MightiePack/Modules/Touchstone/UpgradesTab.lua
+identical
+
+== 3. every shipping file parses
+$ find MightiePack -name '*.lua' | wc -l ; luac -p
+25
+luac -p: ok
+
+== 4. luacheck (the CI invocation)
+$ luacheck MightiePack
+Checking MightiePack\Window\TouchstoneTab.lua     OK
+
+Total: 0 warnings / 0 errors in 25 files
+
+== 5. the vendored payload, both lanes (COPY + PATCH)
+$ python tools/sync_touchstone.py --verify-shipped
+sync_touchstone: COPY   8 pristine files are the pin's blobs
+sync_touchstone: PATCH  8 patches reverse to the pin's blobs
+exit=0
+
+== 6. diffstat against origin/main
+$ git diff --stat origin/main...HEAD
+ CHANGELOG.md                                   |   9 +
+ MightiePack/Modules/Touchstone/UpgradesTab.lua |  40 +++-
+ README.md                                      |   6 +-
+ docs/touchstone-divergences.md                 |   4 +-
+ tests/touchstone_window_row_word_spec.lua      | 255 +++++++++++++++++++++++++
+ tools/touchstone-patches/UpgradesTab.lua.patch |  62 ++++--
+ 6 files changed, 347 insertions(+), 29 deletions(-)
