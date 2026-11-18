@@ -77,8 +77,11 @@ Consequences, stated plainly:
   thin observer on upstream's;
 - `/up toasts`, `/up testtoast` and `/up toastdebug` are the pack's commands; they
   document and drive the pack's toast;
-- 114 anchor lines around those commands are in `ChestAdvisor__ChestAdvisor.lua.patch`
-  and cannot be absorbed by the seam as it stands.
+- 114 anchor lines around those commands — the ruling's measured figure — are in
+  `ChestAdvisor__ChestAdvisor.lua.patch` and cannot be absorbed by the seam as it
+  stands. (The file's patch measures 1,185 added/removed lines in total; the
+  registry, the engine, the fold and this toast block are what makes it the
+  largest of the eight.)
 
 If upstream ever lets a host *own* the toast rather than observe it, this section
 shrinks to the commands and the patch loses the block.

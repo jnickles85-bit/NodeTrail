@@ -3,6 +3,15 @@
 Card `t_37b8b58f`. Measurement only: no pin move, no deploy, no tag, nothing
 merged. Branch `nt/t_37b8b58f` off `origin/main` (`e59ace6`).
 
+> **Superseded in one respect by the closing card (`t_e57570cf`).** This document
+> was written against a tree whose vendored files still carried the pack's own
+> `if MightiePackTouchstoneSkip then return end` guard, so it measures a
+> "pristine + one guard line" shape. At `eebfba4` upstream ships the host opt-out
+> itself, so the six pristine files are now the pin's blobs byte for byte — no
+> guard line — and `Bootstrap.lua` sets `TouchstoneSkip` from the duplicate-load
+> detection. The line counts below are still the measurement they claim to be;
+> only the guard's ownership changed.
+
 **Measured against StatForge `eebfba4`** (the PR #121 merge that carries the four
 seams). The repo's `SOURCE_REF` is `4183aee` (re-vendor #4) — not `6003176`, not
 `eebfba4` — and this branch does **not** change it.
