@@ -1,0 +1,25 @@
+# reason: deferred load
+#
+# The deferred load calls: SF.EnableIntegrations() is the module's one
+# initialisation point instead of a load-time side effect.
+#
+# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# applies to: Integration.lua at that commit. The sync applies this patch to the pin's
+# blob and hashes the result; --verify-shipped reverses it and checks the pin's
+# blob hash, so a patch that stops applying fails BY NAME in CI.
+--- a/Integration.lua
++++ b/Integration.lua
+@@ -109,5 +109,11 @@ function SF.RegisterCompartment()
+   return SF._compartmentRegistered
+ end
+ 
+-SF.RegisterBlizzardSettings()
+-SF.RegisterCompartment()
++-- Fold (MightiePack Touchstone module): registration is deferred to
++-- SF.Enable() in Core.lua, so a disabled module adds no Blizzard settings
++-- category and no addon-compartment entry. Both functions above are
++-- unchanged; only the two calls moved.
++function SF.EnableIntegrations()
++  SF.RegisterBlizzardSettings()
++  SF.RegisterCompartment()
++end

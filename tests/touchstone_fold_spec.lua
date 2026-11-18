@@ -218,18 +218,34 @@ do
   end
 end
 
--- Every generated .lua must start with the skip guard (Bootstrap runs first and
--- sets the flag; a missing guard means the body runs with the module off).
+-- Every generated .lua must carry the host opt-out, and it is UPSTREAM's now
+-- (StatForge card t_4e61b67f, pin eebfba4): three comment lines, then the guard.
+-- That is what lets a vendored file be the pin's blob byte for byte while the
+-- module can still be inert — Bootstrap.lua sets the flag from the duplicate-load
+-- detection. A file vendored without the guard would run its body with the module
+-- off, which is the failure this check exists to catch.
+local OPTOUT = "if TouchstoneSkip then return end"
 for _, name in ipairs(VENDORED) do
   local f = io.open(TOUCH .. name, "r")
   if f then
-    local first = f:read("*l") or ""
+    local head = {}
+    for i = 1, 4 do head[i] = f:read("*l") or "" end
     f:close()
-    check(first == "if MightiePackTouchstoneSkip then return end",
-      name .. " starts with the skip guard, got " .. first)
+    check(head[4] == OPTOUT,
+      name .. " carries the host opt-out (`" .. OPTOUT .. "`), got " .. head[4])
   else
     check(false, "generated file exists: " .. name)
   end
+end
+
+-- …and Bootstrap is the one place that sets it. Without this the guard above is
+-- inert code and the module would run twice.
+do
+  local f = io.open(TOUCH .. "Bootstrap.lua", "r")
+  local bootstrap = f and f:read("*a") or ""
+  if f then f:close() end
+  check(bootstrap:find("TouchstoneSkip = pkg%.TouchstoneDetection%.skip") ~= nil,
+    "Bootstrap.lua sets TouchstoneSkip from the duplicate-load detection")
 end
 
 -- ---- 1. Module disabled: no slash, no frame, no minimap --------------------

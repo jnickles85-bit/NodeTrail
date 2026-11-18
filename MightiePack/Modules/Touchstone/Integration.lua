@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- U6 (card t_6696b35a): the surfaces Blizzard draws for us.
 ---
 --- Two of them, each a no-op when this client does not offer the API:

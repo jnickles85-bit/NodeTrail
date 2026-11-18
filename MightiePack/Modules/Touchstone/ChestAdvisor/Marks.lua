@@ -1,12 +1,7 @@
-if MightiePackTouchstoneSkip then return end
--- Fold: asset paths point at where the module actually lives. Upstream
--- hardcodes Interface\AddOns\Touchstone\... which does not exist once the
--- files are vendored under MightiePack/Modules/Touchstone/ — the bag arrow
--- and the toast arrow then render as nothing and the upgrade never shows.
-local _mpAddonName = ...
-local MIGHTIEPACK_TOUCHSTONE_ASSETS = "Interface\\AddOns\\"
-	.. tostring(_mpAddonName or "MightiePack")
-	.. "\\Modules\\Touchstone\\ChestAdvisor\\"
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 -- Marks.lua — the green-up arrow, its art, and its ONE clock.
 --
 -- Card t_ee6dec52 ("Slice 1"): bag arrows, quest-reward marks and GearAPI ride
@@ -57,8 +52,23 @@ local PERIOD = 1.6                               -- §10 PERIOD (s)
 local GLOW_LOW, GLOW_HIGH = 0.1, 0.35            -- §10 GLOW_LOW / GLOW_HIGH
 local GLOW_OUT = 5                               -- §10 GLOW_OUT (px each side)
 
-local ARROW_TEXTURE =
-	(MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
+--- The marker texture path, resolved at the point of use.
+---
+--- The host core publishes the base (SF.AssetPath) because a host that vendors
+--- these files keeps the art under its own folder. This file reads it when it is
+--- there and falls back to its own installed folder when it is not: in game
+--- Constants.lua loads first, but the advisor suite loads Verdict + ChestAdvisor
+--- alone, with no host core at all, and that case must not throw.
+local function assetPath(name)
+  local sf = rawget(_G, "StatForge")
+  if type(sf) == "table" and type(sf.AssetPath) == "function" then
+    return sf.AssetPath(name)
+  end
+  return "Interface\\AddOns\\Touchstone\\ChestAdvisor\\" .. tostring(name)
+end
+-- The arrow path comes from SF.AssetPath where the texture is SET, not from a
+-- load-time copy: a host that vendors this file keeps the art under its own
+-- folder and sets the base once.
 -- The darkened copy behind the bright arrow. Multiplicative on the same
 -- texture: dark enough to read as a contrast edge, light enough that the
 -- arrow's own shape still registers.
@@ -199,7 +209,7 @@ local function buildArrow(button)
 	-- bright one, so the mark reads against a light item icon as well as a
 	-- dark one. Not a second icon set: one texture, one vertex colour.
 	local dark = f:CreateTexture(nil, "ARTWORK")
-	dark:SetTexture(ARROW_TEXTURE)
+	dark:SetTexture(assetPath("marker.tga"))
 	dark:SetSize(SIZE, SIZE)
 	dark:SetPoint("CENTER", f, "CENTER", 0, 0)
 	if type(dark.SetVertexColor) == "function" then
@@ -211,7 +221,7 @@ local function buildArrow(button)
 
 	-- 3. The arrow itself, the game's up-arrow, untinted.
 	local arrow = f:CreateTexture(nil, "OVERLAY")
-	arrow:SetTexture(ARROW_TEXTURE)
+	arrow:SetTexture(assetPath("marker.tga"))
 	arrow:SetSize(SIZE, SIZE)
 	arrow:SetPoint("CENTER", f, "CENTER", 0, 0)
 	if type(arrow.SetVertexColor) == "function" then
@@ -368,7 +378,7 @@ function Marks.Spec()
 		GLOW_OUT = GLOW_OUT,
 		GLOW_SIZE = GLOW_SIZE,
 		DARKEN = DARKEN,
-		texture = ARROW_TEXTURE,
+		texture = assetPath("marker.tga"),
 	}
 end
 

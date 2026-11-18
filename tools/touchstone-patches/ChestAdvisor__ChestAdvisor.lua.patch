@@ -1,6 +1,17 @@
+# reason: pack product + engine + lifecycle
+#
+# The gear-for-spec registry, the weighted tooltip line and the
+# enable/teardown fold: the pack's own product surface, plus the toast block
+# and its debug/test commands (upstream's OnToast seam is observation-only, so
+# they stay here).
+#
+# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# applies to: ChestAdvisor/ChestAdvisor.lua at that commit. The sync applies this patch to the pin's
+# blob and hashes the result; --verify-shipped reverses it and checks the pin's
+# blob hash, so a patch that stops applying fails BY NAME in CI.
 --- a/ChestAdvisor/ChestAdvisor.lua
 +++ b/ChestAdvisor/ChestAdvisor.lua
-@@ -684,6 +684,245 @@
+@@ -977,6 +977,245 @@ local function playerRole(token)
  	return r
  end
  
@@ -246,7 +257,7 @@
  -- ---- Tier B (t_73e20edb): the client spec read -------------------------------
  --
  -- A shield is a spec commitment, so the off-hand gate needs the character's
-@@ -721,8 +960,18 @@
+@@ -1014,8 +1253,18 @@ end
  -- against, so a class-as-spec read ("name=Paladin" on a paladin) is recognisable
  -- as unsubstantiated and does not resolve a spec-specific policy.
  local function readOffHandSpec()
@@ -266,9 +277,9 @@
  	         name = si and si.name or nil,
  	         classDisplay = classDisplayName() }
  end
-@@ -777,9 +1026,64 @@
- 	return nil, nil
- end
+@@ -1168,9 +1417,64 @@ end
+ ChestAdvisor.context = function() return contextWord() end
+ ChestAdvisor.contextOptions = CONTEXTS
  
 +local function playerLevel()
 +	if type(UnitLevel) == "function" then
@@ -331,7 +342,7 @@
  	local role  = resolvedRole(token, si)
  	local order = (Verdict and Verdict.classRoleOrder) and Verdict.classRoleOrder(token, role) or nil
  	-- A hybrid without a resolved role is not "acting as its class token":
-@@ -788,31 +788,32 @@
+@@ -1179,18 +1483,17 @@ local function buildSpec()
  	if label == nil and token and not isHybridWithoutRole(token) then
  		label = token
  	end
@@ -347,46 +358,93 @@
  	-- ("spell") that the order needs. Nothing else reads this field, and it is
  	-- nil wherever the client does not offer the read — which the weights layer
  	-- treats as "no literal", never as a default.
-+	--
+ 	--
 +	-- profileSource is "talents" on the Auto path so the tooltip / Upgrades
 +	-- tab can say so; callers that build a spec table by hand leave it unset
 +	-- and keep the existing "[Retribution]" wording.
- 	--
++	--
  	-- `name` and `classDisplay` (card t_1677cd39) are the spec identity the
  	-- weapon path needs to ask a SPEC-specific question at all (a rogue's
  	-- Assassination is a dagger spec; its Combat build is not, and the triple
- 	-- above cannot tell them apart). They are the SAME two fields
- 	-- readOffHandSpec has handed the off-hand gate since t_548f0341 — the spec
- 	-- name as the client localized it, and the class's own display name, which
- 	-- is what Verdict.substantiated compares it against so a class-as-spec read
- 	-- (a level-22 "name=Paladin") never resolves a spec policy. Additive: no
- 	-- existing reader looks at either key.
- 	return { order = order, role = label, class = token, level = level,
+@@ -1209,9 +1512,13 @@ local function buildSpec()
  	         clientRole = (si and si.role) or nil,
  	         name = (si and si.name) or nil,
--	         classDisplay = classDisplayName() }
-+	         classDisplay = classDisplayName(),
-+	         profileSource = "talents" }
+ 	         classDisplay = classDisplayName(),
++	         profileSource = "talents",
+ 	         context = contextWord() }
  end
-
+ 
 +ChestAdvisor.buildSpec = buildSpec
 +ChestAdvisor.readOffHandSpec = readOffHandSpec
 +
  --- Card t_ee6dec52 (GearAPI.GetSpec): the spec identity the verdicts were
-@@ -1275,8 +1584,7 @@
- -- ordinary word for its token is used unchanged ("Upgrade" / "Not an
- -- upgrade"), so the flag is the only difference from a damage verdict.
- function TOOLTIP_UI.weighted(row, order)
--	if type(row) ~= "table" or type(row.weighted) ~= "number" then return nil end
--	local total = row.weighted
+ --- judged for, as a COPY. Defined here, after buildSpec, because it calls the
+ --- local function — a `_spec` declared above buildSpec would resolve the name
+@@ -1261,7 +1568,12 @@ end
+ -- additive helpers in Verdict.lua — no second parser lives here). The reason
+ -- text is the row's own stored reason, inherited rather than re-derived.
+ 
+-local TOOLTIP_PREFIX = "Touchstone: "
++-- Fold (MightiePack, t_c2e67619): the addon's own name is not
++-- written into the player's tooltip. The verdict word leads the
++-- line. Every rendered surface reads this one constant, so they all
++-- lose the name together. The duplicate guard below needs a marker
++-- of its own now — see ca.tooltip-duplicate-guard.
++local TOOLTIP_PREFIX = ""
+ local TOOLTIP_GREEN  = "|cff00ff00"
+ local TOOLTIP_GREY   = "|cff9d9d9d"
+ -- Card t_89440dfa: the trade-off line's own colour — amber, matching the chip
+@@ -1306,6 +1618,12 @@ local TOOLTIP_UI = {
+ 		UPGRADE     = "Upgrade",
+ 		NOT_UPGRADE = "Not an upgrade",
+ 		UNKNOWN     = "Can't judge",
++		-- Card t_3a744b4a: two DISPLAY words, not two new tokens. A weighted
++		-- row is still NOT_UPGRADE; which of these the player sees comes from
++		-- the sign of the weighted total. They live in this closed table so the
++		-- duplicate guard (tooltipHasOurLine) recognises them as our own line.
++		DOWNGRADE   = "Downgrade",
++		NO_CHANGE   = "No change",
+ 	},
+ 	detailDefault = "full",
+ 	details = { full = true, compact = true, upgrades = true },
+@@ -2189,6 +2507,118 @@ local function colorTriple(esc)
+ 	return tonumber(r, 16) / 255, tonumber(g, 16) / 255, tonumber(b, 16) / 255
+ end
+ 
++-- The weighted line (card t_3a744b4a). One rule: a row that carries a
++-- weighted total renders ITS number and ITS profile, so the verdict can be
++-- checked against the arithmetic beside it:
++--
++--     Downgrade — weighted -16 vs Lambent Scale Cloak [Retribution]
++--     -4 Str, +3 Sta, -3 Armor, -2 Spi
++--
++-- The word comes from the sign of the total (NOT_UPGRADE stays the token; a loss
++-- is a "Downgrade" and a weighted zero is "No change"); the profile is quoted so
++-- a wrong one is visible instead of silent. The detail line is the same
++-- statDeltas arithmetic every other branch prints, and it lists EVERY differing
++-- stat — a zero-weight stat like Stamina is supporting detail here, never the
++-- reason for the verdict above it.
++--
++-- Returns nil for a row with no weighted total (a weapon row, a legacy persisted
++-- row, an UNKNOWN), so every existing line renders byte-identically.
++--
++-- A row that carries `tiebreak` (card t_c4911603) was decided by the ranked
++-- survivability tiebreakers because the damage total was tied. Its sentence is
++-- "tiebreaker (+64 Armor, +2 Stamina)" — the signed deltas, candidate minus
++-- equipped — and NOT a weighted number, because the gain is not damage. The
++-- ordinary word for its token is used unchanged ("Upgrade" / "Not an
++-- upgrade"), so the flag is the only difference from a damage verdict.
++function TOOLTIP_UI.weighted(row, order)
 +	if type(row) ~= "table" then return nil end
- 	local vs = nil
- 	if type(row.wornLink) == "string" then
- 		vs = " vs " .. itemNameOf(row.wornLink)
-@@ -1286,6 +1594,36 @@
- 		profile = " [" .. row.profile .. "]"
- 	end
- 	local word, head
++	local vs = nil
++	if type(row.wornLink) == "string" then
++		vs = " vs " .. itemNameOf(row.wornLink)
++	end
++	local profile = nil
++	if type(row.profile) == "string" then
++		profile = " [" .. row.profile .. "]"
++	end
++	local word, head
 +	-- Order-only profiles have no numeric total; the deciding tier is the
 +	-- sentence (e.g. "decided by Hit (below 9% cap)").
 +	if type(row.decidedBy) == "string" and row.decidedBy ~= "" then
@@ -417,29 +475,774 @@
 +		return nil
 +	else
 +	local total = row.weighted
- 	if type(row.tiebreak) == "string" and row.tiebreak ~= "" then
- 		-- Card t_c4911603: the damage total was tied and the profile's RANKED
- 		-- tiebreaker decided. The line is deliberately a different sentence from
-@@ -1308,6 +1646,7 @@
- 			else word = TOOLTIP_UI.words.NO_CHANGE end
++	if type(row.tiebreak) == "string" and row.tiebreak ~= "" then
++		-- Card t_c4911603: the damage total was tied and the profile's RANKED
++		-- tiebreaker decided. The line is deliberately a different sentence from
++		-- an ordinary weighted upgrade — "tiebreaker (+64 Armor, +2 Stamina)"
++		-- rather than a number — because the gain is survivability, not damage.
++		-- The deltas are signed from the candidate's side, so the same text says
++		-- which way the tie broke in both directions. A NOT_UPGRADE keeps the
++		-- card's own word ("Not an upgrade"), never "Downgrade": no damage was
++		-- lost here, the equipped piece simply won the tiebreak.
++		head = "tiebreaker (" .. row.tiebreak .. ")" .. (vs or "") .. (profile or "")
++		word = (row.verdict == "UPGRADE") and TOOLTIP_UI.words.UPGRADE
++			or TOOLTIP_UI.words.NOT_UPGRADE
++	else
++		local number = (Verdict and type(Verdict.numText) == "function")
++			and Verdict.numText(total) or tostring(total)
++		head = "weighted " .. number .. (vs or "") .. (profile or "")
++		word = TOOLTIP_UI.word(row.verdict)
++		if row.verdict == "NOT_UPGRADE" then
++			if total < 0 then word = TOOLTIP_UI.words.DOWNGRADE
++			else word = TOOLTIP_UI.words.NO_CHANGE end
++		end
++	end
++	end
++	local detail = nil
++	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
++		and Verdict and type(Verdict.statTable) == "function"
++		and type(Verdict.statDeltas) == "function"
++		and type(Verdict.deltaText) == "function" then
++		local api = apiBySideOf(row.id, type(row.wornLink) == "string"
++			and itemIDOf(row.wornLink) or nil)
++		local cand = Verdict.statTable(row.lines, "candidate", api and api.candidate or nil)
++		local eq = Verdict.statTable(row.chestWornLines, "worn", api and api.worn or nil)
++		-- The row's own stat order when this caller did not pass one: the bag walk
++		-- stores the character's class and role word, so the arithmetic reads in the
++		-- order the player's profile ranks — "-4 Str, +3 Sta, -3 Armor, -2 Spi" —
++		-- instead of alphabetically. classRoleOrder is the one resolver; there is no
++		-- second copy of the order here.
++		local deltaOrder = order
++		if deltaOrder == nil and type(row.class) == "string"
++			and Verdict and type(Verdict.classRoleOrder) == "function" then
++			deltaOrder = Verdict.classRoleOrder(row.class, row.role)
++		end
++		local dtext = Verdict.deltaText(Verdict.statDeltas(cand, eq, deltaOrder), TOOLTIP_DELTA_MAX)
++		if dtext ~= "" then detail = dtext end
++	end
++	return { word = word, head = head, detail = detail }
++end
++
+ -- One verdict, as the tooltip renders it: a coloured HEADLINE (the verdict in
+ -- the player's own words + the leading reason) and, when the setting allows, a
+ -- muted DETAIL line (the read arithmetic). Two lines rather than one wall —
+@@ -2218,7 +2648,32 @@ local function verdictLines(row, order)
+ 	local note = partialReadSuffix(row)
+ 
+ 	local out = {}
+-	if type(row.arbitration) == "table" then
++	local weighted = TOOLTIP_UI.weighted(row, order)
++	if weighted ~= nil then
++		local esc = TOOLTIP_GREY
++		local colour = "grey"
++		if row.verdict == "UPGRADE" then
++			esc, colour = TOOLTIP_GREEN, "green"
++		elseif row.verdict == TRADE_OFF_VERDICT then
++			esc, colour = TOOLTIP_AMBER, "amber"
++		end
++		-- Card t_6f0c7eaf: the engine's disclosure clause rides the WEIGHTED
++		-- headline too. `disclosureClause` is StatForge's own splitter — it splits
++		-- the clause off `reason` and never re-spells it from row fields — so this
++		-- line and the ordinal paths upstream renders cannot carry different words
++		-- for one fact. It is "" on every row that carries no clause, so those
++		-- lines stay byte-identical. `type(...)` rather than a bare call: a re-pin
++		-- that moved the helper would then cost a clause, not every tooltip.
++		local clause = (type(disclosureClause) == "function")
++			and select(2, disclosureClause(row.reason)) or ""
++		out[#out + 1] = {
++			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause,
++			colour = colour,
++		}
++		if weighted.detail and showDetail then
++			out[#out + 1] = { text = TOOLTIP_GREY .. weighted.detail, colour = "grey" }
++		end
++	elseif type(row.arbitration) == "table" then
+ 		-- Card t_8e171c28: an ARBITRATED row — the model answered it, so the
+ 		-- three branches below (which render the ordinal comparator's own
+ 		-- sentences) must not speak for it. First, deliberately: an arbitrated
+@@ -2343,13 +2798,22 @@ local function tooltipHasOurLine(tip)
+ 	for i = n, math.max(1, n - 3), -1 do
+ 		local fs = _G[name .. "TextLeft" .. i]
+ 		local ok2, text = pcall(function() return fs and fs.GetText and fs:GetText() end)
+-		-- The prefix is searched for ANYWHERE in the line, not at position 1:
+-		-- our line opens with a colour escape ("|cff...Touchstone: ..."), so the
+-		-- text never starts at the prefix. (The client renders the escape, so on
+-		-- screen the prefix IS the first visible word.)
+-		if ok2 and type(text) == "string"
+-			and text:find(TOOLTIP_PREFIX, 1, true) ~= nil then
+-			return true
++		-- Fold (MightiePack, t_c2e67619): the rendered line carries no
++		-- addon name any more, so this guard cannot look for one. It looks
++		-- for what the line DOES lead with: a verdict word followed by the
++		-- headline separator, read from the same vocabulary the renderer
++		-- uses, so render and detection cannot drift. The colour escape the
++		-- line opens with is stripped first (the client hands back the
++		-- marked-up string), and the comparison is anchored at position 1 —
++		-- a verdict word appearing inside some other line never matches.
++		if ok2 and type(text) == "string" then
++			local plain = text:gsub("^%|c%x%x%x%x%x%x%x%x", ""):gsub("^%|r", "")
++			for _, word in pairs(TOOLTIP_UI.words) do
++				local marker = word .. " — "
++				if plain:sub(1, #marker) == marker then
++					return true
++				end
++			end
  		end
  	end
-+	end
- 	local detail = nil
- 	if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
- 		and Verdict and type(Verdict.statTable) == "function"
-@@ -2889,6 +3228,10 @@
- 		if type(weighted) == "table" then
- 			row.weighted = weighted.total
- 			row.profile = weighted.profile
+ 	return false
+@@ -3394,8 +3858,9 @@ ChestAdvisor.refreshOnBagOpen = function()
+ 	return ChestAdvisor._onContentRefresh()
+ end
+ 
+--- Install the hooks at load time.
+-installRefreshHooks()
++-- Fold (MightiePack Touchstone module): hook installation is deferred to
++-- ChestAdvisor.Enable(). The function is already exposed as
++-- ChestAdvisor._installRefreshHooks above.
+ 
+ -- ---- Quest reward arrows (t_c3fe7d1d) ---------------------------------------
+ --
+@@ -3995,14 +4460,24 @@ ChestAdvisor._twoHandCombinedWorn = twoHandCombinedWorn
+ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mainHandLoc, wornOffLoc)
+ 	local invSlot = wornSlotFor(loc)
+ 	local row = { link = link }
+-	local function done(v, reason, detail)
++	local function done(v, reason, weighted)
+ 		row.verdict = v
+ 		row.reason = reason
+-		-- Card t_8e171c28: the arbitration's own answer, when the model gave
+-		-- one. nil for every refusal, every non-trade-off and every pair judged
+-		-- without totals — which is what keeps the tooltip's pre-card branches
+-		-- reachable. The row is the ONE store; the surface reads this field.
+-		row.arbitration = type(detail) == "table" and detail or nil
++		-- Card t_3a744b4a: the number and the profile the verdict came from,
++		-- so the reward-panel tooltip can quote both. nil when the outcome did
++		-- not come from the weights (a decline, an unresolved profile).
++		if type(weighted) == "table" then
++			row.weighted = weighted.total
++			row.profile = weighted.profile
 +			row.decidedBy = weighted.decidedBy
 +			row.orderOutcome = weighted.orderOutcome
 +			row.caveat = weighted.caveat
 +			row.tradeOffText = weighted.tradeOffText
- 			-- Card t_c4911603: nil on every ordinary outcome; the signed
- 			-- ranked deltas when the tiebreaker decided, so the line can say
- 			-- "tiebreaker (...)" instead of "weighted 0".
-@@ -5506,10 +5849,22 @@
++			-- Card t_c4911603: nil on every ordinary outcome; the signed
++			-- ranked deltas when the tiebreaker decided, so the line can say
++			-- "tiebreaker (...)" instead of "weighted 0".
++			row.tiebreak = weighted.tiebreak
++		end
+ 		return v, reason, row
+ 	end
+ 	if not invSlot then
+@@ -4191,7 +4666,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
+ 	-- The row's own slot word (card t_d88b7f28, item 3): the empty-slot reason
+ 	-- names the slot it fills instead of saying "chest" for every row. Taken from
+ 	-- the addon's ONE slot vocabulary (slotWord → SLOT_WORD), not a second one.
+-	local v, reason, arbDet = ChestAdvisor._memoVerdict(
++	local v, reason, weighted = ChestAdvisor._memoVerdict(
+ 		ChestAdvisor._judgeKey("quest", link, wornLink, loc, spec, lines, wornLines, canUseV),
+ 		function()
+ 			return Verdict.evaluate(
+@@ -4203,7 +4678,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
+ 				(ChestAdvisor._totals())
+ 			)
+ 		end)
+-	return done(v, reason, arbDet)
++	return done(v, reason, weighted)
+ end
+ 
+ -- Clear every quest marker and every arrow texture we drew on a reward button.
+@@ -4759,7 +5234,9 @@ ChestAdvisor._installQuestHooks = installQuestHooks
+ ChestAdvisor._judgeQuestReward = judgeQuestReward
+ ChestAdvisor._readWornLinks = readWornLinks
+ end
+-initQuestSurface()
++-- Fold (MightiePack Touchstone module): the quest surface owns
++-- ChestAdvisor_QuestFrame and the reward hooks; Enable() installs it.
++ChestAdvisor._initQuestSurface = initQuestSurface
+ end
+ 
+ 
+@@ -5142,8 +5619,16 @@ end
+ 
+ -- Same function objects the quest surface just published. Bound once,
+ -- so the vendor walk calls the quest walk's judge rather than a copy.
+-local readWornLinks = ChestAdvisor._readWornLinks
+-local judgeQuestReward = ChestAdvisor._judgeQuestReward
++-- Fold (load order): these are published by Enable(); capture them at
++-- call time so a disabled-then-enabled module cannot leave nil behind.
++local function readWornLinks(...)
++	local f = ChestAdvisor._readWornLinks
++	if type(f) == "function" then return f(...) end
++end
++local function judgeQuestReward(...)
++	local f = ChestAdvisor._judgeQuestReward
++	if type(f) == "function" then return f(...) end
++end
+ 
+ local function refreshVendorMarkers()
+ 	-- Clear FIRST: this refresh is the only author of a vendor mark, so clearing
+@@ -5317,9 +5802,8 @@ ChestAdvisor._installMerchantHooks = function()
+ 	end)
+ end
+ 
+--- Install at load, then again on every scan event (the frames are created lazily).
+-ChestAdvisor._installPaperDollHooks()
+-ChestAdvisor._installMerchantHooks()
++-- Fold (MightiePack Touchstone module): deferred to ChestAdvisor.Enable(),
++-- then re-attempted on every scan event (the frames are created lazily).
+ 
+ -- ---- Toast (t_632f27e9): the "Upgrade found!" notification layer -------------
+ --
+@@ -5392,15 +5876,21 @@ local TOAST_GOOD = { 0.33, 1.0, 0.33 }
+ --                 how long a toast may outlive its stated lifetime.
+ local TOAST = {
+ 	accent = { 0.400, 0.988, 0.945 },   -- #66FCF1, the window's own accent
+-	fadeIn = 0.25,
+-	fadeOut = 1.0,
++	-- Fold: the toast's timing is the module's shipped contract (and what
++	-- tests/toast_test_spec.lua + tests/toast_trace_spec.lua grade), so the
++	-- vendored copy keeps its own fade-in/fade-out lengths.
++	fadeIn = 0.18,
++	fadeOut = 0.25,
+ 	slide = 18,
+ 	tick = 0.25,
+ }
+ 
+ -- The persisted setting lives on the EXISTING per-character SavedVariables store
+ -- (AC-E: do not add a new store). Default ON — a missing key reads as ON.
+-local TOAST_DEFAULTS = { enabled = true, lifetime = 6 }
++-- Fold: 3.5 s is the lifetime this module ships and the one its specs
++-- measure. Upstream's own default (6 s) is a different panel; the
++-- player-facing number stays the fold's.
++local TOAST_DEFAULTS = { enabled = true, lifetime = 3.5 }
+ local function toastIsEnabled()
+ 	local t = ChestAdvisorDB and ChestAdvisorDB.toast
+ 	if type(t) ~= "table" then return TOAST_DEFAULTS.enabled end
+@@ -5458,6 +5948,17 @@ local toastRT = {
+ 	current = nil, hovered = false, lifetimeLeft = 0,
+ 	held = {}, deferred = false,
+ 	fadeIn = nil, fadeOut = nil, ticker = nil, afterId = 0,
++	-- t_fe7a636a: the show's deadline in the client's own clock, and
++	-- the counters for the repairs below. `deadline` is refreshed by the
++	-- countdown every tick, so a finish step can require that the
++	-- configured lifetime really elapsed instead of trusting whichever
++	-- animation callback arrived.
++	deadline = nil, fadeArmedAt = nil, lastTickPrinted = nil,
++	revived = 0, alphaRestored = 0,
++	-- t_4bae0617: the measurement. `shownAt` is GetTime() at the show;
++	-- showMs and lastEnd are the measured on-screen time and the word
++	-- for how that show ended (nil until one has).
++	shownAt = nil, showMs = nil, lastEnd = nil,
+ }
+ 
+ -- Stop whichever countdown driver is running. ONE stop path, used by arming, by
+@@ -5477,7 +5978,91 @@ local function toastStopTimer()
+ 	toastRT.afterId = (toastRT.afterId or 0) + 1
+ end
+ 
+-local drawToast, advanceToast, showToastItem, toastFinishShow
++-- ---- t_fe7a636a: the toast's own trace ---------------------------------
++--
++-- A toast can end from the countdown, the fade-out group's OnFinished,
++-- that group's fallback timer, a right-click, or a scan that runs while
++-- one is up. A tester who reports "it is a flash" leaves exactly one
++-- question: WHICH transition ran early. This prints all of them with the
++-- client's own clock (GetTime, three decimals). It is OFF until
++-- /up toastdebug turns it on, and it writes nothing until then.
++--
++-- Vocabulary, one line per transition, `t=` always last:
++--   show id=<n>                      showToastItem starts drawing
++--   shown id=<n> alpha=<a>           after f:Show()
++--   fadeIn play id=<n>               the fade-in group was played
++--   animation finished: group=<fadeIn|fadeOut> id=<n> fadeFor=<nil|id>
++--   tick id=<n> left=<seconds>       at most once per second
++--   expire id=<n> reason=<timer|dismiss|rescan|other>
++--   finish id=<n> reason=<fadeOnFinished|fadeTimer|dismiss|rescan>
++--      lifeLeft=<seconds>
++-- plus what the fix adds, so a flash is diagnosed from the text:
++--   finish refused: id=<n> reason=<r> left=<seconds>
++--   alpha restore id=<n> was=<a>     the fade-in left the panel at 0
++--   revive id=<n> left=<seconds>     a hidden panel was shown again
++local TRACE = { on = false, buf = {}, max = 80 }
++function TRACE.now()
++	if type(GetTime) == "function" then
++		local ok, t = pcall(GetTime)
++		if ok and type(t) == "number" then return t end
++	end
++	return 0
++end
++function TRACE.fmt(num)
++	return string.format("%.3f", tonumber(num) or 0)
++end
++function TRACE.sec(num)
++	return string.format("%.2f", tonumber(num) or 0)
++end
++function TRACE.line(msg, at)
++	if not TRACE.on then return end
++	local line = tostring(msg) .. " t=" .. TRACE.fmt(at or TRACE.now())
++	TRACE.buf[#TRACE.buf + 1] = line
++	while #TRACE.buf > TRACE.max do table.remove(TRACE.buf, 1) end
++	-- Straight to the chat frame: this is a raw trace a tester copies
++	-- back, not one of the addon's own messages, so it carries no
++	-- "Touchstone:" wrapper and no colour on the payload.
++	if DEFAULT_CHAT_FRAME and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
++		pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME,
++			"|cff66fcf1toast debug|r " .. line)
++	elseif type(print) == "function" then
++		pcall(print, "toast debug " .. line)
++	end
++end
++-- The switch behind /up toastdebug: `on|off|dump`, and a bare call
++-- toggles. Turning it ON clears the buffer, so the lines a tester reads
++-- back describe the toast they are about to raise and not an old one.
++ChestAdvisor.toastDebug = function(mode)
++	local m = type(mode) == "string" and mode:lower() or ""
++	if m == "dump" then
++		if #TRACE.buf == 0 then
++			return true, "no trace lines yet — /up toastdebug on, then /up toasts"
++		end
++		return true, table.concat(TRACE.buf, "\n")
++	end
++	if m == "on" then
++		TRACE.on = true
++		TRACE.buf = {}
++	elseif m == "off" then
++		TRACE.on = false
++	else
++		TRACE.on = not TRACE.on
++		if TRACE.on then TRACE.buf = {} end
++	end
++	return true, "toast debug is " .. (TRACE.on and "ON" or "off")
++		.. " — /up toasts raises one; /up toastdebug dump prints the last "
++		.. tostring(TRACE.max) .. " lines"
++end
++
++local drawToast, advanceToast, showToastItem, toastFinishShow, toastMeasure
++toastMeasure = function()
++	if type(toastRT.shownAt) ~= "number" or type(GetTime) ~= "function" then
++		return nil
++	end
++	local ok, now = pcall(GetTime)
++	if not ok or type(now) ~= "number" then return nil end
++	return math.floor((now - toastRT.shownAt) * 1000 + 0.5)
++end
+ 
+ -- ---- The toast emit point (host seam) -------------------------------------
+ --
+@@ -5646,13 +6231,29 @@ end
+ -- Fade+slide the panel in. Both animation groups live on the frame and are
+ -- re-used forever; only their offsets are rewritten per show, so a rotation
+ -- through TOAST_MAX toasts does not leak an animation object per toast.
+-local function toastPlayFadeIn(f)
++local function toastPlayFadeIn(f, showId)
+ 	toastStopAnimations()
+ 	if type(f.SetAlpha) ~= "function" then return end
+ 	pcall(f.SetAlpha, f, 0)
+ 	if type(toastRT.fadeIn) == "table" and type(toastRT.fadeIn.Play) == "function" then
+ 		local played = pcall(toastRT.fadeIn.Play, toastRT.fadeIn)
+ 		if played then
++			TRACE.line("fadeIn play id=" .. tostring(showId))
++			-- t_fe7a636a: `Play` can succeed and the group still never
++			-- start (this client drops a group that was Stopped and Played
++			-- in one frame). The alpha this function set to 0 is then the
++			-- panel's resting alpha, and the restore below is the only
++			-- thing making the show visible — so name that repair, with the
++			-- alpha it rescued, instead of leaving a flash unexplained.
++			local running = true
++			if type(toastRT.fadeIn.IsPlaying) == "function" then
++				local okp, playing = pcall(toastRT.fadeIn.IsPlaying, toastRT.fadeIn)
++				if okp then running = (playing == true) end
++			end
++			if not running then
++				toastRT.alphaRestored = (toastRT.alphaRestored or 0) + 1
++				TRACE.line("alpha restore id=" .. tostring(showId) .. " was=0.000")
++			end
+ 			-- THE RESTING ALPHA, set the moment the animation takes over. A
+ 			-- finished Alpha animation restores the frame's OWN alpha — the one
+ 			-- this function just set to 0 — and the classic client drops a
+@@ -5714,6 +6315,21 @@ local function toastBuildAnimations(f)
+ 				end
+ 			end)
+ 		end
++		-- t_fe7a636a: the fade-IN group reports its own OnFinished to the
++		-- trace — and CHAINS to whatever the build above installed (the
++		-- alpha restore this file needs when a finished Alpha animation
++		-- would otherwise restore the frame's own alpha). Chaining, not
++		-- replacing: the trace must not undo the upstream fix it explains.
++		if type(ag.SetScript) == "function" then
++			local prior = type(ag.GetScript) == "function"
++				and ag:GetScript("OnFinished") or nil
++			ag:SetScript("OnFinished", function()
++				TRACE.line("animation finished: group=fadeIn id="
++					.. tostring(toastRT.showId)
++					.. " fadeFor=" .. tostring(toastRT.fadeFor))
++				if type(prior) == "function" then pcall(prior) end
++			end)
++		end
+ 		toastRT.fadeIn = ag
+ 	end
+ 	do
+@@ -5736,7 +6352,10 @@ local function toastBuildAnimations(f)
+ 		-- must not leave the panel up. toastExpire also arms a timer.
+ 		if type(ag.SetScript) == "function" then
+ 			ag:SetScript("OnFinished", function()
+-				pcall(toastFinishShow, toastRT.fadeId, "fade")
++				TRACE.line("animation finished: group=fadeOut id="
++					.. tostring(toastRT.showId)
++					.. " fadeFor=" .. tostring(toastRT.fadeId))
++				pcall(toastFinishShow, toastRT.fadeId, "fadeOnFinished")
+ 			end)
+ 		end
+ 		toastRT.fadeOut = ag
+@@ -5849,6 +6468,21 @@ local function buildToastFrame()
+ 					id = type(item) == "table" and item.id or nil,
+ 					name = type(item) == "table" and item.name or nil,
+ 				})
++				-- t_4bae0617: the measured time this show was up, and the word
++				-- for how it ended, taken BEFORE the clock stamp is cleared.
++				local dismissedMs = toastMeasure and toastMeasure() or nil
++				if dismissedMs then toastRT.showMs = dismissedMs end
++				toastRT.shownAt = nil
++				toastRT.lastEnd = "dismissed"
++				-- t_fe7a636a: a dismiss is the one end that may come before the
++				-- deadline (the player asked for it). It is traced as both an
++				-- expire and a finish so every end reads in the same vocabulary.
++				TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=dismiss")
++				TRACE.line("finish id=" .. tostring(toastRT.showId)
++					.. " reason=dismiss lifeLeft=" .. TRACE.sec(0))
++				toastRT.deadline = nil
++				toastRT.fadeArmedAt = nil
++				toastRT.fadeFor = nil
+ 				-- Dismiss THIS toast. Anything still queued is a DIFFERENT upgrade
+ 				-- the player has not seen, and it is already marked "told" — so
+ 				-- dropping the queue here would lose it silently. Continue the
+@@ -5983,10 +6617,46 @@ local function toastStartTimer(showId)
+ 	toastRT.ticker = C_Timer.NewTicker(TOAST.tick, function()
+ 		if not toastActive then return end
+ 		if showId ~= nil and toastRT.showId ~= showId then return end
++		local now = TRACE.now()
++		-- t_fe7a636a: the panel must be ON SCREEN while this show is live.
++		-- If anything outside this block took it away (an animation quirk, a
++		-- client-side hide, a path nobody has found yet) the show would run
++		-- invisibly — which is exactly what "a flash, then nothing" looks
++		-- like from the outside. Put it back, and say so.
++		if toastRT.fadeFor == nil and (toastRT.lifetimeLeft or 0) > 0
++			and type(toastFrame) == "table" then
++			local tf = toastFrame
++			local shownNow = true
++			if type(tf.IsShown) == "function" then
++				local okS, s = pcall(tf.IsShown, tf)
++				if okS then shownNow = (s ~= false) end
++			end
++			if not shownNow then
++				if type(tf.Show) == "function" then pcall(tf.Show, tf) end
++				tf.shown = true
++				if type(tf.SetAlpha) == "function" then pcall(tf.SetAlpha, tf, 1) end
++				tf.alpha = 1
++				toastRT.revived = (toastRT.revived or 0) + 1
++				TRACE.line("revive id=" .. tostring(showId) .. " left="
++					.. TRACE.sec(toastRT.lifetimeLeft), now)
++			end
++		end
+ 		if toastRT.hovered or (toastFrame and toastFrame.dragging) then return end
+ 		toastRT.lifetimeLeft = toastRT.lifetimeLeft - TOAST.tick
++		-- The deadline the finish step obeys. Refreshed from the clock on
++		-- every tick, so the countdown and the finish cannot disagree even
++		-- when a tick is late (and a hover pause moves it with the pause).
++		toastRT.deadline = now + toastRT.lifetimeLeft
++		if (toastRT.lifetimeLeft or 0) > 0 and TRACE.on then
++			local whole = math.floor(toastRT.lifetimeLeft)
++			if toastRT.lastTickPrinted ~= whole then
++				toastRT.lastTickPrinted = whole
++				TRACE.line("tick id=" .. tostring(showId) .. " left="
++					.. TRACE.sec(toastRT.lifetimeLeft), now)
++			end
++		end
+ 		if toastRT.lifetimeLeft <= 0 then
+-			toastExpire()
++			toastExpire("timer")
+ 		end
+ 	end)
+ end
+@@ -6002,6 +6672,36 @@ toastFinishShow = function(showId, reason)
+ 	-- time a host could read it back.
+ 	local finished = toastRT.current
+ 	reason = reason or "finish"
++	-- t_fe7a636a: the configured lifetime is the authority. Only a
++	-- right-click dismiss may end a show early; every callback-driven end
++	-- (the fade-out's OnFinished, its fallback timer, a scan repair) waits
++	-- for the deadline the countdown published. A client that reports
++	-- OnFinished early — or delivers a stale Stop() after the fade-out was
++	-- armed — therefore cannot eat a live toast, and the trace names the
++	-- attempt instead of hiding it.
++	local now = TRACE.now()
++	reason = reason or "other"
++	if reason ~= "dismiss" and type(toastRT.deadline) == "number"
++		and now + 0.001 < toastRT.deadline then
++		TRACE.line("finish refused: id=" .. tostring(showId)
++			.. " reason=" .. reason .. " left="
++			.. TRACE.sec(toastRT.deadline - now), now)
++		return
++	end
++	local lifeLeft = tonumber(toastRT.lifetimeLeft) or 0
++	if lifeLeft < 0 then lifeLeft = 0 end
++	TRACE.line("finish id=" .. tostring(showId) .. " reason=" .. reason
++		.. " lifeLeft=" .. TRACE.sec(lifeLeft), now)
++	-- t_4bae0617: the measurement this end just made, kept for /up diag
++	-- and the specs. `shownAt` is cleared so a later read cannot measure
++	-- a show that is already gone.
++	local ms = toastMeasure()
++	if ms then toastRT.showMs = ms end
++	toastRT.shownAt = nil
++	toastRT.fadeFor = nil
++	toastRT.deadline = nil
++	toastRT.fadeArmedAt = nil
++	toastRT.lastTickPrinted = nil
+ 	toastRT.showId = (toastRT.showId or 0) + 1
+ 	local f = toastFrame
+ 	toastActive = false
+@@ -6041,11 +6741,21 @@ end
+ -- OnFinished on the classic client while the alpha still runs, which is the
+ -- stuck near-transparent "...und!" panel. A timer finishes the show anyway, and
+ -- so does a finish step that errors.
+-toastExpire = function()
++toastExpire = function(reason)
+ 	toastStopTimer()
+ 	if not toastActive then return end
+ 	local showId = toastRT.showId
++	toastRT.lastEnd = "expired"
++	TRACE.line("expire id=" .. tostring(showId) .. " reason="
++		.. tostring(reason or "timer"))
+ 	toastRT.fadeId = showId
++	-- t_fe7a636a: the fade-out is now in flight for THIS show. The
++	-- guard is the fold's own marker (upstream's fadeId names the show
++	-- the group was armed for, not whether a fade is still running), and
++	-- toastFinishShow clears it, so a scan can tell "a show whose
++	-- lifetime is spent but whose fade is still playing" from a dead one.
++	toastRT.fadeFor = showId
++	toastRT.fadeArmedAt = TRACE.now()
+ 	local f = toastFrame
+ 	local fade = toastRT.fadeOut
+ 	local fadeFinishes = type(fade) == "table" and type(fade.Play) == "function"
+@@ -6060,12 +6770,12 @@ toastExpire = function()
+ 		if played and type(C_Timer) == "table" and type(C_Timer.After) == "function" then
+ 			local delay = (TOAST.fadeOut or 0.25) + 0.05
+ 			C_Timer.After(delay, function()
+-				pcall(toastFinishShow, showId, "lifetime")
++				pcall(toastFinishShow, showId, "fadeTimer")
+ 			end)
+ 			return
+ 		end
+ 	end
+-	pcall(toastFinishShow, showId, "lifetime")
++	pcall(toastFinishShow, showId, "fadeTimer")
+ end
+ 
+ -- Put ONE item on screen. The single place a toast becomes visible, so the
+@@ -6073,6 +6783,7 @@ end
+ showToastItem = function(item)
+ 	toastRT.showId = (toastRT.showId or 0) + 1
+ 	local showId = toastRT.showId
++	TRACE.line("show id=" .. tostring(showId))
+ 	local f = ensureToast()
+ 	if type(f) ~= "table" then
+ 		toastActive = false
+@@ -6125,6 +6836,16 @@ showToastItem = function(item)
+ 		-- the screen under a stationary mouse) the pointer never left the panel — so
+ 		-- clearing it would silently un-pause the new toast.
+ 		toastRT.lifetimeLeft = toastLifetime()
++		-- t_4bae0617: the show's own clock stamp. The measured on-screen
++		-- time is then the client's number, not the addon's opinion.
++		toastRT.shownAt = TRACE.now()
++		-- t_fe7a636a: the deadline this show must survive to, on the same
++		-- clock the countdown ticks on. The finish step refuses to end a
++		-- show before it.
++		toastRT.deadline = toastRT.shownAt + toastRT.lifetimeLeft
++		toastRT.fadeArmedAt = nil
++		toastRT.fadeFor = nil
++		toastRT.lastTickPrinted = nil
+ 		-- Re-anchor from the persisted position on every show: the panel may have
+ 		-- been dragged since it was built, and the resting point is what is saved.
+ 		if type(f.dragging) ~= "boolean" or not f.dragging then
+@@ -6137,8 +6858,41 @@ showToastItem = function(item)
+ 			phase = "show", showId = showId, link = item.link,
+ 			id = item.id, name = item.name,
+ 		})
+-		toastPlayFadeIn(f)
++		local alphaAtShow = 1
++		if type(f.GetAlpha) == "function" then
++			local okA, av = pcall(f.GetAlpha, f)
++			if okA and type(av) == "number" then alphaAtShow = av end
++		end
++		TRACE.line("shown id=" .. tostring(showId) .. " alpha="
++			.. TRACE.sec(alphaAtShow))
++		toastPlayFadeIn(f, showId)
+ 		toastStartTimer(showId)
++		-- t_fe7a636a: the fade-in must not be the only thing that makes the
++		-- panel visible. The alpha was just set to 0 and this client can drop
++		-- a group that was Stopped and Played in one frame (the behaviour the
++		-- fade-out's guard already exists for); the toast would then be an
++		-- invisible show whose only visible frame is the one before the set.
++		-- One timer puts the alpha back if the animation did not.
++		if type(C_Timer) == "table" and type(C_Timer.After) == "function" then
++			C_Timer.After((TOAST.fadeIn or 0.18) + 0.05, function()
++				if not toastActive or toastRT.showId ~= showId then return end
++				if toastRT.fadeFor ~= nil then return end
++				local tf = toastFrame
++				if type(tf) ~= "table" or type(tf.SetAlpha) ~= "function" then return end
++				local cur = 1
++				if type(tf.GetAlpha) == "function" then
++					local okA, av = pcall(tf.GetAlpha, tf)
++					if okA and type(av) == "number" then cur = av end
++				end
++				if cur < 0.98 then
++					pcall(tf.SetAlpha, tf, 1)
++					tf.alpha = 1
++					toastRT.alphaRestored = (toastRT.alphaRestored or 0) + 1
++					TRACE.line("alpha restore id=" .. tostring(showId)
++						.. " was=" .. TRACE.sec(cur))
++				end
++			end)
++		end
+ 	end)
+ 	if not ok then
+ 		if type(f.Hide) == "function" then pcall(f.Hide, f) end
+@@ -6155,7 +6909,9 @@ end
+ -- showToastItem/toastExpire, so this is a thin shim over the same two paths.
+ advanceToast = function()
+ 	if toastActive then
+-		toastExpire()
++		-- t_fe7a636a: not the countdown and not a scan — `other` is the
++		-- honest word for this path in the trace vocabulary.
++		toastExpire("other")
+ 		return
+ 	end
+ 	local item = table.remove(toastQueue, 1)
+@@ -6177,6 +6933,12 @@ end
+ local function maybeToastUpgrades(verdicts)
+ 	if not toastIsEnabled() then
+ 		toastQueue = {}
++		-- t_fe7a636a: this path takes a live toast off screen because the
++		-- SETTING says off. It is traced, because a bad SavedVariables value
++		-- would look exactly like a flash from the outside.
++		if toastActive then
++			TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=other")
++		end
+ 		if toastFrame then toastFrame:Hide() end
+ 		toastActive = false
+ 		return
+@@ -6238,8 +7000,17 @@ local function maybeToastUpgrades(verdicts)
+ 	-- A toast whose lifetime already elapsed must not stay up. OnFinished is
+ 	-- supposed to hide it; if that step never ran, toastActive would block
+ 	-- every later upgrade behind a faded panel.
+-	if toastActive and (toastRT.lifetimeLeft or 0) <= 0 then
+-		pcall(toastFinishShow, toastRT.showId, "expired-unfinished")
++	--
++	-- t_fe7a636a: but a scan must NEVER cut a live toast short. The old test
++	-- (`lifetimeLeft <= 0`) is true for the whole fade-out window, so a scan
++	-- landing there finished the show on the spot and cut the fade — and this
++	-- is the path the card asked about, so it is traced. Only a show that is
++	-- past its deadline AND has no fade-out in flight is repaired here; the
++	-- fade's own OnFinished/fallback timer owns the normal end.
++	if toastActive and toastRT.fadeFor == nil
++		and (toastRT.lifetimeLeft or 0) <= -TOAST.tick then
++		TRACE.line("expire id=" .. tostring(toastRT.showId) .. " reason=rescan")
++		pcall(toastFinishShow, toastRT.showId, "rescan")
+ 	end
+ 	-- Draw now only if nothing is on screen; otherwise the queue drains as each
+ 	-- toast's lifetime expires.
+@@ -6349,8 +7120,64 @@ ChestAdvisor.toastState = function()
+ 		lifetime = toastLifetime(),
+ 		held = #toastRT.held,
+ 		deferred = toastRT.deferred,
++		-- t_4bae0617: the measurement, read by /up diag and the specs.
++		-- showMs is nil until a show has ended; lastEnd is the word for
++		-- how that end happened ("expired" / "dismissed").
++		showMs = toastRT.showMs,
++		lastEnd = toastRT.lastEnd,
++		-- t_fe7a636a: the trace switch and the repairs the fix performed.
++		-- Read by /up diag only; nothing on the panel ever shows them.
++		debug = TRACE.on,
++		deadlineLeft = (toastActive and type(toastRT.deadline) == "number")
++			and math.max(0, toastRT.deadline - TRACE.now()) or nil,
++		revived = toastRT.revived or 0,
++		alphaRestored = toastRT.alphaRestored or 0,
+ 	}
+ end
++-- ---- t_4bae0617: the deterministic test toast ---------------------------
++--
++-- An upgrade toast otherwise needs a real bag item the scan happens to judge
++-- an UPGRADE, which can take an hour of play — so nothing about its lifetime,
++-- fade or dismiss behaviour could be checked on demand. `/up toasts` raises
++-- one through the REAL path: the entry is queued exactly where a scan queues
++-- one and drawn by showToastItem (no second renderer, no second queue), and
++-- the message is built by buildToastMessage like any other show.
++--
++-- The synthetic entry carries NO link and NO item id, which is the point: the
++-- icon falls back cleanly through the same `tex or TOAST_FALLBACK_ICON` the
++-- real path uses, and buildToastMessage takes its documented fallback
++-- wording. It touches NOTHING the scan owns — no toastedLinks (so the dedupe
++-- set is not polluted), no ChestAdvisorDB.log (written only by a verdict), and
++-- no baseline flag (toastSeenFirstScan is only ever set by
++-- maybeToastUpgrades).
++--
++-- Returns { started, queued, dropped }: the first call draws immediately, the
++-- second while one is up JOINS THE QUEUE (a rotation, never a second panel),
++-- and the tail past TOAST_MAX is a stated drop like the scan's own.
++local TOAST_TEST_NAME = "Test Upgrade"
++ChestAdvisor.testToast = function(n)
++	n = tonumber(n) or 1
++	if n < 1 then n = 1 end
++	local started, queued, dropped = 0, 0, 0
++	for _ = 1, math.floor(n) do
++		local entry = { name = TOAST_TEST_NAME, test = true }
++		-- The cap is the same one a scan batch obeys, so a tester cannot use
++		-- this to grow a queue the real path could never grow.
++		if #toastQueue >= TOAST_MAX then
++			toastDropped = toastDropped + 1
++			dropped = dropped + 1
++		else
++			toastQueue[#toastQueue + 1] = entry
++			queued = queued + 1
++			if not toastActive then
++				showToastItem(table.remove(toastQueue, 1))
++				queued = queued - 1
++				started = started + 1
++			end
++		end
++	end
++	return { started = started, queued = queued, dropped = dropped }
++end
+ ChestAdvisor._maybeToastUpgrades = maybeToastUpgrades
+ ChestAdvisor._toastIsEnabled = toastIsEnabled
+ -- The lifetime as a SETTING (card t_d88b7f28, item 4). The slash handler lives
+@@ -6370,7 +7197,9 @@ end
+ ChestAdvisor._toastLifetimeMin = TOAST_LIFETIME_MIN
+ ChestAdvisor._toastLifetimeMax = TOAST_LIFETIME_MAX
+ end
+-initToastSurface()
++-- Fold (MightiePack Touchstone module): the toast panel/frame is created by
++-- Enable() on first enabled load, not at file load.
++ChestAdvisor._initToastSurface = initToastSurface
+ end
+ 
+ 
+@@ -6393,16 +7222,35 @@ end
+ --   6. Draw the marker for UPGRADE; explain the reason for every row.
+ -- Captured once, here, under the names scan already calls. These are the
+ -- function objects the surfaces published above, not live lookups.
+-local maybeToastUpgrades = ChestAdvisor._maybeToastUpgrades
+-local refreshQuestMarkers = ChestAdvisor.refreshQuestMarkers
++-- Fold (load order): same reason as above — Enable() publishes these.
++local function maybeToastUpgrades(...)
++	local f = ChestAdvisor._maybeToastUpgrades
++	if type(f) == "function" then return f(...) end
++end
++local function refreshQuestMarkers(...)
++	local f = ChestAdvisor.refreshQuestMarkers
++	if type(f) == "function" then return f(...) end
++end
+ ChestAdvisor.scan = function()
  	-- B17 (card t_6696b35a): defer the scan while the client is in combat.
  	-- type() == "function" (not a bare `and` call) so this guard cannot be
  	-- the same text as the toast hold below — that hold is a different
@@ -466,26 +1269,71 @@
  		ChestAdvisor._scanDeferred = true
  		return ChestAdvisor.__verdicts or {}
  	end
-@@ -5997,6 +6352,10 @@
- 							-- not come from the weights (a weapon row, a decline).
- 							weighted = w2 and w2.total or nil,
- 							profile = w2 and w2.profile or nil,
+@@ -6616,6 +7464,10 @@ ChestAdvisor.scan = function()
+ 					itemsWalked = itemsWalked + 1
+ 					local v, reason, arbDet
+ 					local canUseV
++					-- Fold: the diag row this fold builds below reads the weighted
++					-- result, and the fold's own edit declares it inside the else
++					-- branch that assigns it — out of the row's scope. Declared here.
++					local w2
+ 					local ulevel = (UnitLevel and UnitLevel("player")) or nil
+ 					-- Card t_119d120c: every judged row's lines come from the
+ 					-- ONE item reader. A third-party annotation on the rendered
+@@ -6925,7 +7777,8 @@ ChestAdvisor.scan = function()
+ 						-- equipped; …" at the SOURCE. The frozen gate-6 sentinel
+ 						-- and its rewrite are gone: one vocabulary (SLOT_WORD),
+ 						-- one place the sentence is built.
+-						local v2, r2, d2 = ChestAdvisor._memoVerdict(
++						local v2, r2
++						v2, r2, w2 = ChestAdvisor._memoVerdict(
+ 							ChestAdvisor._judgeKey("armour", link, wornLink, invSlot, spec, lines, wornLines, canUseV),
+ 							function()
+ 								return Verdict.evaluate(
+@@ -6940,7 +7793,7 @@ ChestAdvisor.scan = function()
+ 									(ChestAdvisor._totals())
+ 								)
+ 							end)
+-						v, reason, arbDet = v2, r2, d2
++						v, reason, arbDet = v2, r2, w2
+ 					end
+ 					-- Card t_d8de0090: WHAT was set aside, recorded at the
+ 					-- read the verdict was decided on. AC-D: the raw
+@@ -6985,6 +7838,21 @@ ChestAdvisor.scan = function()
+ 							-- the scan, exactly like `lines`/`api` above).
+ 							arbitration = (type(arbDet) == "table") and arbDet or nil,
+ 							role = roleLabel,
++							-- Card t_3a744b4a: the weighted total this row was decided on
++							-- and the profile that supplied the weights. Two scalars, so a
++							-- persisted diag row stays small; nil on every outcome that did
++							-- not come from the weights (a weapon row, a decline).
++							weighted = w2 and w2.total or nil,
++							profile = w2 and w2.profile or nil,
 +							decidedBy = w2 and w2.decidedBy or nil,
 +							orderOutcome = w2 and w2.orderOutcome or nil,
 +							caveat = w2 and w2.caveat or nil,
 +							tradeOffText = w2 and w2.tradeOffText or nil,
- 							-- Card t_c4911603: the signed ranked deltas when a
- 							-- tiebreaker decided the row, nil otherwise (same
- 							-- two-scalar economy as `weighted`/`profile`: one
-@@ -6528,6 +6887,7 @@
++							-- Card t_c4911603: the signed ranked deltas when a
++							-- tiebreaker decided the row, nil otherwise (same
++							-- two-scalar economy as `weighted`/`profile`: one
++							-- short string, and only on tiebroken rows).
++							tiebreak = w2 and w2.tiebreak or nil,
+ 							-- The richer diag row (t_9ad3d462 part 3): everything plan s4
+ 							-- PASS/FIX/KILL grades from, per item. Raw stat lines (<=30, already
+ 							-- capped by TooltipLines), raw CanUseItem type+value, the player level
+@@ -7535,15 +8403,19 @@ local function helpText()
  		.. "  A green arrow marks an upgrade. An amber square marks a trade-off (better on some stats, worse on others). On the character sheet the arrow means a bag item is an upgrade for that slot.\n"
  		.. "  /up role <r>   record the focus role for a hybrid class (melee|spell; the client spec read is used automatically when unset)\n"
  		.. "  /up role clear clear the recorded role for this class\n"
 +		.. "  /up spec [key|name|auto]  which spec Touchstone scores gear for (overrides talents and /up role; auto follows talents)\n"
+ 		.. "  /up context <leveling|dungeon|raid>  what the advice is judged for (persisted per character; default leveling)\n"
  		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
  		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
- 		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real path\n"
-@@ -6537,7 +6897,7 @@
+-		.. "  /up toast lifetime <s>  seconds the toast stays up, 1-30 (persisted; default 6)\n"
++		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real path\n"
++		.. "  /up toast lifetime <s>  seconds the toast stays up, 1-30 (persisted; default 3.5)\n"
++		.. "  /up toastdebug [on|off|dump]  print every transition of one toast with GetTime stamps\n"
++		.. "                 (off by default; /up toasts raises one, dump prints the last lines)\n"
  		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
  		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
  		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
@@ -495,7 +1343,7 @@
  		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
  		.. "  /up log clear  empty the disagreement log\n"
  		.. "  /up rescan     re-scan your bags now — the marks are drawn from a fresh read (an upgrade, a trade-off, or no mark)\n"
-@@ -6586,6 +6946,56 @@
+@@ -7599,6 +8471,56 @@ local function cmdRole(msg)
  	return false, "usage: /up role <melee|spell|clear>"
  end
  
@@ -549,10 +1397,51 @@
 +	return false, "rejected: '" .. rest .. "' is not a spec for this class — options: " .. listText()
 +end
 +
- -- /up toast <on|off> — persist the notification setting on the EXISTING
- -- per-character store (AC-E). A missing key reads as ON (toastIsEnabled treats
- -- anything but an explicit `false` as enabled), so an existing character with no
-@@ -6758,13 +7168,18 @@
+ -- /up context — WHAT the advice is judged for (card t_1c9d5a17). Bare prints the
+ -- current context and its one-line meaning, because "is it still on leveling?"
+ -- is the question a player actually types; a word sets it, in any casing.
+@@ -7684,6 +8606,40 @@ local function cmdToast(msg)
+ 	return true, "toast " .. w
+ end
+ 
++-- /up toasts (alias /up testtoast) — t_4bae0617: raise the upgrade toast on
++-- demand, so its lifetime, fade and dismiss can be checked without waiting
++-- for a real upgrade to drop. It goes through ChestAdvisor.testToast, which
++-- queues and shows through the REAL path.
++local function cmdTestToast()
++	if type(ChestAdvisor.testToast) ~= "function" then
++		return false, "the toast surface is not loaded (is the Touchstone module off?)"
++	end
++	if not toastIsEnabled() then
++		return false, "the toast is off — /up toast on, then /up toasts"
++	end
++	ChestAdvisor.testToast(1)
++	local st = type(ChestAdvisor.toastState) == "function"
++		and ChestAdvisor.toastState() or {}
++	return true, string.format(
++		"test toast: %s | queued: %s | lifetime: %.1fs — /up diag reports fired and the measured time",
++		st.shown and "showing" or "not showing", tostring(st.queue or 0),
++		tonumber(st.lifetime) or 0)
++end
++
++-- /up toastdebug [on|off|dump] — t_fe7a636a: the toast's transition trace.
++-- Off by default. Every line is the client's own GetTime at three decimals,
++-- and `dump` prints the last lines back because a toast is on screen for
++-- seconds: the point is to read the trace AFTER it is gone.
++local function cmdToastDebug(msg)
++	local word = (msg:match("^toastdebug%s+(%a+)%s*$") or ""):lower()
++	if type(ChestAdvisor.toastDebug) ~= "function" then
++		return false, "the toast surface is not loaded (is the Touchstone module off?)"
++	end
++	if word == "" then word = nil end
++	local ok, out = ChestAdvisor.toastDebug(word)
++	return ok ~= false, out
++end
++
+ -- /up tooltip <on|off> — the sibling of /up toast, on the SAME per-character
+ -- store (AC-F: no new store). A missing key reads as ON (TOOLTIP_UI.enabled treats
+ -- anything but an explicit `false` as enabled), so a fresh character sees the
+@@ -7791,13 +8747,18 @@ end
  -- has exactly one place its values are spelled, and it returns one summary. The
  -- four writers' own confirmations are discarded on purpose: their writes are the
  -- point, the line below is what the player sees.
@@ -572,12 +1461,157 @@
  end
  
  -- /ts scale <0.5-1.5> — the window scale the Settings slider also writes.
-@@ -7408,6 +7823,8 @@
- 	local ok, out
- 	if subword == "role" then
- 		ok, out = cmdRole(trimmed)
+@@ -8075,6 +9036,36 @@ local function cmdDiag()
+ 	-- the token is what identifies WHY something was skipped (a weapon
+ 	-- skip is a different skip from a neck skip and both should read
+ 	-- differently on this line).
++	local ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil
++	if type(ts) == "table" then
++		local measured = "not shown yet"
++		if type(ts.showMs) == "number" then
++			measured = string.format("%.2fs", ts.showMs / 1000)
++				.. " (" .. tostring(ts.lastEnd or "?") .. ")"
++		end
++		summary = summary .. "\n--- toast ---"
++				.. "\nenabled: " .. tostring(ts.enabled)
++				.. " | shown: " .. tostring(ts.shown)
++				.. " | fired: " .. tostring(ts.fired)
++				.. " | queued: " .. tostring(ts.queue)
++				.. " | told this session: " .. tostring(ts.told)
++				.. " | cap-dropped: " .. tostring(ts.dropped)
++				.. "\nhovered: " .. tostring(ts.hovered)
++				.. " | lifetime left: " .. tostring(ts.lifetimeLeft)
++				.. " | held for combat: " .. tostring(ts.held)
++				.. " | deferred: " .. tostring(ts.deferred)
++				.. "\nconfigured lifetime: "
++				.. string.format("%.2fs", tonumber(ts.lifetime) or 0)
++				.. " | last show on screen: " .. measured
++				-- t_fe7a636a: the trace switch and the repairs, so a flash
++				-- report comes with the numbers that explain it.
++				.. " | trace: " .. (ts.debug and "ON" or "off")
++				.. "\nrevived this session: " .. tostring(ts.revived)
++				.. " | alpha restored: " .. tostring(ts.alphaRestored)
++				.. " | deadline left: "
++				.. (tonumber(ts.deadlineLeft)
++					and string.format("%.2fs", ts.deadlineLeft) or "-")
++		end
+ 	if type(d.ledger) == "table" then
+ 		local ld = d.ledger
+ 		summary = summary
+@@ -8087,21 +9078,6 @@ local function cmdDiag()
+ 		-- t_632f27e9: the toast's own state — the notification layer's behaviour
+ 		-- belongs in the DIAG path (a human explicitly asking), never in the
+ 		-- toast itself, which carries no suppression/debug text (AC-E2).
+-		local ts = ChestAdvisor.toastState and ChestAdvisor.toastState() or nil
+-		if type(ts) == "table" then
+-			summary = summary .. "\n--- toast ---"
+-					.. "\nenabled: " .. tostring(ts.enabled)
+-					.. " | shown: " .. tostring(ts.shown)
+-					.. " | queued: " .. tostring(ts.queue)
+-					.. " | told this session: " .. tostring(ts.told)
+-					.. " | cap-dropped: " .. tostring(ts.dropped)
+-					-- t_cf2ad83c (U3): the behaviour this card added, so a human
+-					-- asking for diagnostics can see the hold and the hover pause.
+-					.. "\nhovered: " .. tostring(ts.hovered)
+-					.. " | lifetime left: " .. tostring(ts.lifetimeLeft)
+-					.. " | held for combat: " .. tostring(ts.held)
+-					.. " | deferred: " .. tostring(ts.deferred)
+-		end
+ 		-- t_c3fe7d1d: the quest-reward surface's own state, same reasoning as the
+ 		-- toast block above — the reward arrows' behaviour belongs in the diag
+ 		-- path (a human asking), never as on-screen debug text.
+@@ -8429,10 +9405,16 @@ local function dispatch(msg)
+ 	elseif subword == "context" then
+ 		-- t_1c9d5a17: what the advice is judged for (leveling | dungeon | raid).
+ 		ok, out = cmdContext(trimmed)
 +	elseif subword == "spec" then
 +		ok, out = cmdSpec(trimmed)
  	elseif subword == "probe" then
  		ok, out = cmdProbe()
  	elseif subword == "toast" then
+ 		ok, out = cmdToast(trimmed)
++	elseif subword == "toasts" or subword == "testtoast" then
++		ok, out = cmdTestToast()
++	elseif subword == "toastdebug" then
++		ok, out = cmdToastDebug(trimmed)
+ 	elseif subword == "tooltip" then
+ 		ok, out = cmdTooltip(trimmed)
+ 	elseif subword == "detail" then
+@@ -8520,7 +9502,15 @@ SlashCmdList["CHESTADVISOR"] = function(msg)
+ 	return ok, out
+ end
+ end
+-initLogAndSlash()
++-- Fold (MightiePack Touchstone module): initLogAndSlash() registers the
++-- four slash strings, the /up,/upgrade,/chestadvice,/ts handler and the
++-- disagreement log hooks. Its body below is unchanged; only the CALL is
++-- deferred to ChestAdvisor.Enable().
++ChestAdvisor._initLogAndSlash = function()
++	if ChestAdvisor._slashAndLogEnabled then return end
++	ChestAdvisor._slashAndLogEnabled = true
++	initLogAndSlash()
++end
+ end
+ 
+ 
+@@ -8577,25 +9567,38 @@ if frame then
+ 	frame:RegisterEvent("MERCHANT_UPDATE")
+ 	frame:RegisterEvent("MERCHANT_CLOSED")
+ end
+--- Ensure the frame exists at load time.
+-getFrame()
+-local loginFrame = getFrame()
+-loginFrame:RegisterEvent("PLAYER_LOGIN")
+-loginFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+-loginFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+-loginFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+--- B11 (card t_e9a07624): registered on the scan frame too — the same frame
+--- getFrame() returns, so this is idempotent in game and explicit for the tests.
+-loginFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+-loginFrame:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+--- U3/5 (card t_cf2ad83c): the combat-hold release. The same frame again.
+-loginFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+--- U5 (card t_c01331a2): the merchant lifecycle. The same frame again.
+-loginFrame:RegisterEvent("MERCHANT_SHOW")
+-loginFrame:RegisterEvent("MERCHANT_UPDATE")
+-loginFrame:RegisterEvent("MERCHANT_CLOSED")
+-
+--- Card t_ed71a583: install the item-tooltip verdict line ONCE, at load. Nothing
+--- here reads the world — the hook is a passive post-call that resolves its row
+--- when a tooltip is built, so there is no ordering dependency on the first scan.
+-installTooltipHook()
++-- Fold (MightiePack Touchstone module): every load-time surface is installed
++-- here, in the order the file used to install them at load, and only when the
++-- module is enabled. The handlers above are unchanged.
++function ChestAdvisor.Enable()
++	if ChestAdvisor._enabled then return end
++	ChestAdvisor._enabled = true
++	ChestAdvisor._installRefreshHooks()
++	ChestAdvisor._initQuestSurface()
++	ChestAdvisor._installPaperDollHooks()
++	ChestAdvisor._installMerchantHooks()
++	ChestAdvisor._initToastSurface()
++	ChestAdvisor._initLogAndSlash()
++	-- Ensure the scan frame exists once the module is enabled.
++	getFrame()
++	local loginFrame = getFrame()
++	loginFrame:RegisterEvent("PLAYER_LOGIN")
++	loginFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
++	loginFrame:RegisterEvent("BAG_UPDATE_DELAYED")
++	loginFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
++	-- B11 (card t_e9a07624): registered on the scan frame too — the same frame
++	-- getFrame() returns, so this is idempotent in game and explicit for the tests.
++	loginFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
++	loginFrame:RegisterEvent("ITEM_DATA_LOAD_RESULT")
++	-- U3/5 (card t_cf2ad83c): the combat-hold release. The same frame again.
++	loginFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
++	-- U5 (card t_c01331a2): the merchant lifecycle. The same frame again.
++	loginFrame:RegisterEvent("MERCHANT_SHOW")
++	loginFrame:RegisterEvent("MERCHANT_UPDATE")
++	loginFrame:RegisterEvent("MERCHANT_CLOSED")
++
++	-- Card t_ed71a583: install the item-tooltip verdict line ONCE, on first enable. Nothing
++	-- here reads the world — the hook is a passive post-call that resolves its row
++	-- when a tooltip is built, so there is no ordering dependency on the first scan.
++	installTooltipHook()
++end

@@ -1,14 +1,25 @@
+# reason: no upstream model
+#
+# The measured row stack and the ledger drawing: every row grows to its reason
+# and the page is measured to the viewport. Upstream has no row model to hang
+# this on, so the tab keeps its own.
+#
+# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# applies to: UpgradesTab.lua at that commit. The sync applies this patch to the pin's
+# blob and hashes the result; --verify-shipped reverses it and checks the pin's
+# blob hash, so a patch that stops applying fails BY NAME in CI.
 --- a/UpgradesTab.lua
 +++ b/UpgradesTab.lua
-@@ -46,11 +46,56 @@
- local MARKER_TEXTURE =
-   (MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
+@@ -40,11 +40,57 @@ local C = SF.Colors
+ -- path comes from SF.AssetPath, resolved where the texture is set: a host that
+ -- vendors these files keeps them under its own folder and sets the base once.
  
 -local ROW_H   = 34
 -local ICON    = 22
 -local MARK    = 14
 -local VISIBLE = 12               -- rows that fit the host without scrolling
 -local ROW_INSET = 6
++
 +-- Card t_2d2c37b0: the list's metrics ARE the window's metrics. The pack's
 +-- theme publishes them (MightiePack/Theme.lua, T.list) and the literal
 +-- fallbacks keep this file loadable on its own — the vendored specs load it
@@ -62,7 +73,7 @@
  
  -- The verdict the advisor reports for a genuine trade-off. Read off the
  -- comparator when it is present (never a second hard-coded truth), with the bare
-@@ -77,28 +122,35 @@
+@@ -71,29 +117,36 @@ local function isMarked(v)
    return verdictRank(v) <= 2
  end
  
@@ -84,10 +95,6 @@
 -    if ok and type(r) == "number" and type(g) == "number" and type(b) == "number" then
 -      return r, g, b
 -    end
--  end
--  local c = FALLBACK_QUALITY[quality or 1] or FALLBACK_QUALITY[1]
--  return c[1], c[2], c[3]
--end
 +-- The verdict's COLOUR is the information (card t_07f778ca, PART B): green when
 +-- equipping is right, amber when it is a trade-off, grey when it is refused.
 +-- One function, so the marker glyph and the verdict word beside it can never be
@@ -107,20 +114,23 @@
 +  if type(ui) == "table" and type(ui.word) == "function" then
 +    local word = ui.word(token)
 +    if word ~= nil then return tostring(word) end
-+  end
+   end
+-  local c = FALLBACK_QUALITY[quality or 1] or FALLBACK_QUALITY[1]
+-  return c[1], c[2], c[3]
 +  return tostring(token)
-+end
-+
+ end
+ 
 +-- NO RARITY COLOUR ON THE NAME (card t_07f778ca, PART B). The drawing's rule is
 +-- that "the verdict carries the colour and the weight": a row with a blue item
 +-- name AND a green verdict AND an amber trade-off is five colours in three
 +-- lines, which is the "panel of panels" look the reshape card ended. The name is
 +-- the anchor in the ledger's text colour; the verdict is the only coloured word.
 +-- (The rarity is still recorded on the row — `quality` — it is just not painted.)
- 
++
  -- The item's name and rarity from the client's own read. Never fabricated: a
  -- miss falls back to the link's own bracket text, and only then to a literal.
-@@ -122,16 +174,10 @@
+ local function itemIdentity(link)
+@@ -116,16 +169,10 @@ local function itemIdentity(link)
    return name, quality
  end
  
@@ -141,7 +151,7 @@
  
  -- Open the bags so the player can see the cell the row is about. Guarded against
  -- every name this client family has used; the sweep card owns marker behaviour,
-@@ -188,6 +234,7 @@
+@@ -182,6 +229,7 @@ local state = {
    rendered = {},   -- the rows the toggle admits
    pool     = {},   -- one Button per index, created once
    offset   = 0,
@@ -149,7 +159,7 @@
    host     = nil,
    layout   = nil,
  }
-@@ -196,13 +243,13 @@
+@@ -190,13 +238,13 @@ local state = {
  -- tab exposes what it drew, it does not re-derive it.
  --   * `rows`    — every row, in the card's sort order (the full verdict set);
  --   * `admitted`— the rows the toggle currently admits (a subset of `rows`);
@@ -165,7 +175,7 @@
      offset   = state.offset,
      rows     = {},
      rendered = {},
-@@ -219,11 +266,6 @@
+@@ -213,11 +261,6 @@ function SF.UpgradesTabState()
        slotWord = r.slotWord, name = r.name, rank = r.rank,
      }
    end
@@ -177,7 +187,7 @@
    return out
  end
  
-@@ -240,44 +282,93 @@
+@@ -234,44 +277,93 @@ end
  
  -- ---------------------------------------------------------------------------
  -- One-time widget build. Everything created here is created exactly once.
@@ -292,7 +302,7 @@
  
    -- Hover: the client's own tooltip, on the item's own link. The advisor's
    -- existing post-call adds the Touchstone verdict line to it on the live
-@@ -298,43 +389,98 @@
+@@ -292,43 +384,98 @@ local function buildRow(parent, index)
    return row
  end
  
@@ -400,7 +410,7 @@
      state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
      if state.layout then state.layout() end
    end
-@@ -373,41 +519,76 @@
+@@ -367,41 +514,76 @@ local function repopulate(host)
      end
    end
  
@@ -421,34 +431,32 @@
 +      if r then
          row.__link = r.link
 -        row.slot:SetText(r.slotWord)
--
--        local qr, qg, qb = qualityColor(r.quality)
 +        -- The change column: what this verdict would change (the advisor's own
 +        -- slot word — the same word its tooltip uses), dim and right-aligned.
 +        row.change:SetText(r.slotWord or "")
-+
+ 
+-        local qr, qg, qb = qualityColor(r.quality)
 +        -- The name is the anchor: one line, the ledger's text colour (PART B).
 +        -- The verdict, not the item's rarity, carries the colour.
          row.itemName:SetText(r.name)
 -        row.itemName:SetTextColor(qr, qg, qb)
+-        row.reason:SetText(r.reason)
 +        local nr, ng, nb, na = ledgerColor("ledgerText", C.text)
 +        row.itemName:SetTextColor(nr, ng, nb, na)
-+
+ 
+-        row.icon:SetTexture(itemIcon(r.id))
 +        -- The reason: its OWN line under the name, muted — secondary, but
 +        -- readable; never dimmed into the background and never beside the name.
-         row.reason:SetText(r.reason)
--
--        row.icon:SetTexture(itemIcon(r.id))
--
++        row.reason:SetText(r.reason)
 +        local rr, rg, rb, ra = ledgerColor("ledgerMuted", C.textMuted)
 +        row.reason:SetTextColor(rr, rg, rb, ra)
-+
+ 
 +        -- The verdict: word and marker in ONE colour, from ONE read.
 +        local vr, vg, vb, va = verdictColor(r.verdict)
 +        row.verdictWord:SetText(verdictWord(r.verdict))
 +        row.verdictWord:SetTextColor(vr, vg, vb, va)
          if r.verdict == "UPGRADE" then
-           row.mark:SetTexture(MARKER_TEXTURE)
+           row.mark:SetTexture(SF.AssetPath("marker.tga"))
 +          row.mark:SetVertexColor(vr, vg, vb, 1)
            row.mark:Show()
          elseif r.verdict == tradeOffWord() then
@@ -490,7 +498,7 @@
    end
    state.layout()
  end
-@@ -422,22 +603,33 @@
+@@ -416,22 +598,33 @@ local function render(host)
    host.toggle:SetLabel(state.showAll and "Upgrades only" or "Show all")
  
    local total = #state.rows
@@ -521,13 +529,12 @@
 -    if shown > VISIBLE then
 -      more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
 -        .. tostring(math.min(state.offset + VISIBLE, shown))
--    end
--    host.count:SetText(tostring(shown) .. " of " .. tostring(total)
--      .. " item" .. (total == 1 and "" or "s") .. more)
 +    if admitted > page and page > 0 then
 +      more = " · rows " .. tostring(state.offset + 1) .. "-"
 +        .. tostring(math.min(state.offset + page, admitted))
-+    end
+     end
+-    host.count:SetText(tostring(shown) .. " of " .. tostring(total)
+-      .. " item" .. (total == 1 and "" or "s") .. more)
 +    host.count:SetText(tostring(total) .. " judged · " .. tostring(worth)
 +      .. " worth taking" .. more)
    end

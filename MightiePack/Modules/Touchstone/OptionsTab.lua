@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- StatForge Options (Settings) tab.
 ---
 --- Card t_adf556d6: the "Auto-export on logout" control is retired with the
@@ -103,6 +106,26 @@ local function glyphsOn()
   return false
 end
 
+-- Card t_1c9d5a17: the CONTEXT, read from the advisor's own table so this tab
+-- cannot hold a second copy of the three words or of what they mean. Returns
+-- the option array, the word in force and its one-line meaning; an advisor
+-- that did not resolve returns nothing and the section degrades to its header.
+local function contextState()
+  local advisor = rawget(_G, "ChestAdvisor")
+  local options = type(advisor) == "table" and advisor.contextOptions or nil
+  if type(options) ~= "table" then return nil, nil, nil end
+  local word = "leveling"
+  if type(advisor.context) == "function" then
+    local ok, w = pcall(advisor.context)
+    if ok and type(w) == "string" then word = w end
+  end
+  local meaning = nil
+  for _, opt in ipairs(options) do
+    if opt.word == word then meaning = opt.meaning break end
+  end
+  return options, word, meaning
+end
+
 local function syncShown(host)
   if not host then return end
   local detail = currentDetail()
@@ -131,6 +154,17 @@ local function syncShown(host)
   if host.roleMelee then host.roleMelee:SetChecked(role == "melee") end
   if host.roleSpell then host.roleSpell:SetChecked(role == "spell") end
   if host.roleClear then host.roleClear:SetChecked(role == nil) end
+
+  -- Card t_1c9d5a17: exactly one context box is checked, always. The stored word
+  -- is the truth and a click only ASKS the slash handler to change it, so a
+  -- refused word leaves the tab showing the setting the player actually has.
+  local options, word = contextState()
+  if host.contextChecks then
+    for _, opt in ipairs(options or {}) do
+      local cb = host.contextChecks[opt.word]
+      if cb then cb:SetChecked(opt.word == word) end
+    end
+  end
 end
 
 local function labelledCheck(parent, name, text)
@@ -451,41 +485,124 @@ local function build(host)
   host.roleSpell = roleSpell
   host.roleClear = roleClear
 
-  -- Card t_4e5ad8a4 (defect 2): the About block FLOWS under the role row. It used
-  -- to be anchored to the content frame's BOTTOM edge (t_4ddeae90 did that
-  -- because nobody could measure the client's rendered line height), which is a
-  -- bet on the body's height: at 515 units it cleared the role row by 10, and in
-  -- the unified window's 441-unit body it climbed 74 units into Role/Class.
-  -- The measured metrics on the owner's screenshot are 12 units per
-  -- GameFontHighlight line, so the block is 11 lines = 132 and it needs the
-  -- bottom of whatever is above it, not the bottom of the panel.
-  local about = SF.UI_CreateLabel(content, "", "GameFontHighlight")
+  -- Card t_1c9d5a17: the CONTEXT — what the advice is judged for. It is the
+  -- other per-character judgement setting (the role picks WHICH stat order the
+  -- character is judged by; the context picks what the character is doing), so
+  -- it shares this section's rows instead of opening a section of its own: the
+  -- tab's vertical budget was spent in full by t_4ddeae90 (432 of the 515 units
+  -- are widget height), and a row of its own would push the About block off the
+  -- panel. The right-hand column beside the role is empty, so the heading and
+  -- the three boxes live there and no existing widget moves.
+  --
+  -- WHY x 560. The role note (an 820-wide label) is one short sentence on the
+  -- same row as the heading; the context column has to start to the right of it
+  -- without guessing at glyph widths. The bound is taken from this tab's own
+  -- shipped layout: the tooltip-detail hint is 115 characters inside a declared
+  -- 820 units on ONE line (its chain height is 12), i.e. at most 7.13 units per
+  -- character. The role note's longest sentence is 60 characters — 428 by that
+  -- measure — and even a 7.5/character face would put it at 450, so x 560 clears
+  -- it by 110 units. The same arithmetic (110-unit slots, the last label ending
+  -- by 843 in a 891-unit content frame) is asserted in
+  -- tests/t_1c9d5a17-settings.js rather than left as a hope.
+  --
+  -- The three words, their labels and their meanings come from the advisor's
+  -- table (ChestAdvisor.contextOptions): the command and this tab cannot drift.
+  -- A host whose advisor did not resolve draws the heading and no boxes rather
+  -- than a second, hand-copied list of words.
+  local contextHeader = SF.UI_CreateLabel(host, "Context", "GameFontNormal")
+  contextHeader:SetPoint("TOPLEFT", 560, -293)
+  -- Fold (MightiePack host): the heading is painted with the accent IN FORCE and
+  -- registered for the host's late repaint through the pin's own hook. In force
+  -- means the host's claimed palette when one was claimed (SF.SetTheme), and the
+  -- module's own teal otherwise — so standalone this paints exactly the colour the
+  -- pin paints, and hosted it never leaves one teal heading inside a themed window.
+  local function paintContextHeader()
+    local ac = (type(SF.ThemeAccent) == "function" and SF.ThemeAccent()) or C.accent
+    contextHeader:SetTextColor(ac[1], ac[2], ac[3])
+  end
+  paintContextHeader()
+  if type(SF.OnAccentRepaint) == "function" then
+    SF.OnAccentRepaint(paintContextHeader)
+  end
+  host.contextHeader = contextHeader
+
+  host.contextChecks = {}
+  local contextOptions = contextState()
+  local contextX = 560
+  for _, opt in ipairs(contextOptions or {}) do
+    local cb = labelledCheck(host, "TouchstoneOptContext" .. opt.label, opt.label, contextX, -309)
+    cb:SetScript("OnClick", function()
+      advisorSlash("context " .. opt.word)
+      syncShown(host)
+    end)
+    -- The one-line meaning, where a player looks for it: on the control. The
+    -- checked box already says WHICH context is in force; the hover says what
+    -- that situation means for the advice.
+    cb:SetScript("OnEnter", function(self)
+      if not GameTooltip then return end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:AddLine("Context: " .. opt.label,
+        C.accent[1], C.accent[2], C.accent[3])
+      GameTooltip:AddLine(opt.meaning, 0.85, 0.85, 0.85, true)
+      GameTooltip:AddLine("The situation your gear advice is judged for.",
+        0.6, 0.6, 0.6, true)
+      GameTooltip:Show()
+    end)
+    cb:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    host.contextChecks[opt.word] = cb
+    contextX = contextX + 110
+  end
+  -- The heading is unnamed, so a test reaches it the way it reaches the reset
+  -- button and the class label.
+  if type(SF.optionControls) == "table" then
+    SF.optionControls.contextHeader = contextHeader
+    SF.optionControls.contextChecks = host.contextChecks
+  end
+
+  -- Card t_4ddeae90 (defect 1): the About block is anchored to the content
+  -- frame's BOTTOM edge, not to the role row above it. It used to chain off
+  -- roleRow's BOTTOM (-18, y -494); its 11 rendered lines need 132 units, so
+  -- it ended 111 units below the 515-unit content frame and -- with no clip and
+  -- no scroll anywhere in this tab -- the tail (/up diag and the Tip line) was
+  -- drawn over the panel's border in open space.
+  --
+  -- Two things fix it. The stack above is compressed (see build()'s header),
+  -- which is where the room came from; and the block's own bottom is now
+  -- DECLARED (515 - 4 = 511) instead of "wherever the stack above happens to
+  -- end". The audit could not measure the client's rendered line height, so a
+  -- top-anchored fix would be only as safe as that guess -- a bottom anchor
+  -- cannot fall outside the panel at any line height. With the evidence-based
+  -- metrics (GameFontHighlight = FRIZQT__.TTF height 12, spacing 0) the stack
+  -- above ends at 369, leaving 10 units of clearance to the role row and 6 to
+  -- the bottom of its 32-tall checkboxes.
+  local about = SF.UI_CreateLabel(host, "", "GameFontHighlight")
+  about:SetPoint("BOTTOMLEFT", host, "BOTTOMLEFT", 20, 4)
   about:SetWidth(840)
   about:SetJustifyH("LEFT")
-  about:SetText(
-    SF.UI_AccentText("About") .. "\n\n" ..
-    (function()
-      local packVer
-      local pkg = rawget(_G, "MightiePack")
-      if type(pkg) == "table" and type(pkg.PackVersion) == "function" then
-        local ok, v = pcall(pkg.PackVersion)
-        if ok and type(v) == "string" and v ~= "" then packVer = v end
-      end
-      local pack = packVer and ("MightiePack v" .. packVer) or "MightiePack"
-      return pack .. "  ·  Touchstone module v" .. SF.VERSION .. "  ·  Classic Era item advisor\n"
-    end)() ..
-    "Hover a piece of gear in your bags. A green arrow marks an upgrade;\n" ..
-    "an amber square marks a trade-off (better on some stats, worse on others).\n" ..
-    "On the character sheet, the green arrow means a bag item is an upgrade for that slot.\n" ..
-    "The Upgrades tab lists every item the advisor has judged; the Log tab\n" ..
-    "shows the times you equipped an item it called not an upgrade.\n" ..
-    -- B12 (card t_4412b04b): the command list named /sf and the retired
-    -- /statforge but omitted the canonical /touchstone and the /ts the player
-    -- types. Both command surfaces (here and the minimap tooltip) now agree.
-    "Commands:  |cffffffff/touchstone|r  ·  |cffffffff/ts|r  ·  |cffffffff/sf|r" ..
-    "  ·  |cffffffff/up|r  ·  |cffffffff/ts help|r  ·  |cffffffff/up role|r  ·  |cffffffff/up log|r  ·  |cffffffff/up diag|r\n\n" ..
-    "Tip: run |cffffffff/sf diag|r when a verdict looks wrong; it reports this client's API surface."
-  )
+  -- The heading carries the accent as a colour CODE inside the string, so no
+  -- SetTextColor can repaint it. It is built through ONE function that a host's
+  -- palette repaint (SF.RepaintAccent) re-runs, which is what makes a theme
+  -- claimed after this tab was built reach the About block too.
+  local function aboutText()
+    return
+      SF.Accent("About") .. "\n\n" ..
+      "Touchstone v" .. SF.VERSION .. "  ·  Classic Era item advisor\n" ..
+      "Hover a piece of gear in your bags. A green arrow marks an upgrade;\n" ..
+      "an amber square marks a trade-off (better on some stats, worse on others).\n" ..
+      "On the character sheet, the green arrow means a bag item is an upgrade for that slot.\n" ..
+      "The Upgrades tab lists every item the advisor has judged; the Log tab\n" ..
+      "shows the times you equipped an item it called not an upgrade.\n" ..
+      -- B12 (card t_4412b04b): the command list named /sf and the retired
+      -- /statforge but omitted the canonical /touchstone and the /ts the player
+      -- types. Both command surfaces (here and the minimap tooltip) now agree.
+      "Commands:  |cffffffff/touchstone|r  ·  |cffffffff/ts|r  ·  |cffffffff/sf|r" ..
+      "  ·  |cffffffff/up|r  ·  |cffffffff/ts help|r  ·  |cffffffff/up role|r  ·  |cffffffff/up log|r  ·  |cffffffff/up diag|r\n\n" ..
+      "Tip: run |cffffffff/sf diag|r when a verdict looks wrong; it reports this client's API surface."
+  end
+  about:SetText(aboutText())
+  if type(SF.OnAccentRepaint) == "function" then
+    SF.OnAccentRepaint(function() about:SetText(aboutText()) end)
+  end
   about:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
   host.about = about
   -- Card t_07f778ca, review 2: this block carries the accent as a COLOUR CODE

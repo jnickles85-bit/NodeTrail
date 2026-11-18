@@ -1,12 +1,7 @@
-if MightiePackTouchstoneSkip then return end
--- Fold: asset paths point at where the module actually lives. Upstream
--- hardcodes Interface\AddOns\Touchstone\... which does not exist once the
--- files are vendored under MightiePack/Modules/Touchstone/ — the bag arrow
--- and the toast arrow then render as nothing and the upgrade never shows.
-local _mpAddonName = ...
-local MIGHTIEPACK_TOUCHSTONE_ASSETS = "Interface\\AddOns\\"
-	.. tostring(_mpAddonName or "MightiePack")
-	.. "\\Modules\\Touchstone\\ChestAdvisor\\"
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 -- ChestAdvisor.lua — t_3c1256ec: a per-slot upgrade advisor.
 --
 -- Scope today: the armour slots (head, shoulders, chest, back, wrists, hands,
@@ -148,9 +143,16 @@ ChestAdvisor._bankOpen = false      -- BANKFRAME_OPENED / _CLOSED, and the frame
 --- engine's answer (the row's slot, its raw lines, its anchor diagnostic) is
 --- still rebuilt per scan, so the diag record keeps describing this scan.
 --- `fn` must be a closure returning the comparator's own return values.
+---
+--- THREE VALUES (card t_8e171c28). The comparator's third return is the
+--- arbitration's detail table, present only when the model answered a
+--- trade-off. It is cached beside the verdict and the reason so a memo hit and
+--- a fresh call cannot disagree about WHAT was decided — the surface reads the
+--- detail off the row, and a hit that dropped it would render a Sidegrade as a
+--- plain trade-off one scan in three.
 ChestAdvisor._memoVerdict = function(key, fn)
 	local hit = ChestAdvisor._verdictMemo[key]
-	if hit ~= nil then return hit[1], hit[2] end
+	if hit ~= nil then return hit[1], hit[2], hit[3] end
 	ChestAdvisor._engineCalls = ChestAdvisor._engineCalls + 1
 	ChestAdvisor._engineCallsThisScan = ChestAdvisor._engineCallsThisScan + 1
 	local a, b, c = fn()
@@ -184,6 +186,12 @@ ChestAdvisor._judgeKey = function(kind, a, b, slot, spec, candLines, wornLines, 
 		tostring(type(spec) == "table" and spec.level or nil),
 		tostring(type(spec) == "table" and spec.clientRole or nil),
 		tostring(type(order) == "table" and #order or nil),
+		-- Card t_8e171c28: the healing context is an INPUT to an arbitrated
+		-- trade-off (the model prices three of them), so it belongs in the key
+		-- by this function's own rule. A context change also bumps the epoch,
+		-- which drops the whole memo; this line is the second lock, and it is
+		-- free. A nil context appends nothing, so pre-card keys are unchanged.
+		tostring(type(spec) == "table" and spec.context or nil),
 	}, "\1") .. "\3" .. sig(candLines) .. "\3" .. sig(wornLines)
 		.. "\4" .. tostring(elig)
 	-- Card t_1677cd39 (through the t_2b9c5ad7 rebase): the weapon comparator
@@ -208,6 +216,42 @@ ChestAdvisor._invalidateJudgements = function(why)
 	ChestAdvisor._verdictMemo = {}
 	ChestAdvisor._lastInvalidation = why
 	return ChestAdvisor._judgeEpoch
+end
+
+-- ---- The totals triggers (card t_8e171c28) ----------------------------------
+--
+-- THE SAME RULE, A DIFFERENT BURST SHAPE. The seven events that move the
+-- character's own numbers (doc §3) are as loud as the item-data pair: a raid
+-- buff, a stance flip or a talent change fires UNIT_AURA / UNIT_STATS in bursts
+-- of dozens, and a scan per event would walk every bag dozens of times. So the
+-- epoch bump and the rescan are DEBOUNCED exactly as rescanForItemData is —
+-- one `C_Timer.After` pass per burst (0.10 s), re-armed rather than stacked, and
+-- a superseded pass bails out on its generation number.
+--
+-- WHAT IS *NOT* DEBOUNCED is the rule itself: the epoch really does move, so
+-- every row judged against the old totals reads nil to every reader (arrow,
+-- chip, GearAPI, tooltip) until the scan repopulates the store. A row that
+-- cannot be proved about this character is not served — the same invariant
+-- _invalidateJudgements has always had, and this card does not move it.
+--
+-- The totals cache is keyed on that same epoch (ChestAdvisor._totals), so a
+-- bump drops the cached totals too: the next judgement re-reads them.
+local totalsGen = 0
+ChestAdvisor._invalidateTotals = function(why)
+	totalsGen = totalsGen + 1
+	local myGen = totalsGen
+	local function pass()
+		if myGen ~= totalsGen then return end
+		ChestAdvisor._invalidateJudgements(why)
+		if type(ChestAdvisor.scan) == "function" then
+			ChestAdvisor.scan()
+		end
+	end
+	if C_Timer and type(C_Timer.After) == "function" then
+		C_Timer.After(0.10, pass)
+	else
+		pass()
+	end
 end
 
 --- The stored row for a link, or nil. A row judged in an older epoch is not
@@ -529,6 +573,22 @@ local function getFrame()
 		frame:RegisterEvent("SKILL_LINES_CHANGED")  -- weapon skill learned: ditto
 		frame:RegisterEvent("BANKFRAME_OPENED")     -- the bank surface appears
 		frame:RegisterEvent("BANKFRAME_CLOSED")     -- and goes away again
+		-- Card t_8e171c28 (Step 3 C7): THE TOTALS TRIGGERS. The arbitration
+		-- layer reads the character's own numbers, so those numbers are a new
+		-- input to a verdict and belong in the invalidation set (scoping doc
+		-- §3 — the same list Blizzard's own character sheet refreshes on).
+		-- Each is registered on THIS frame, handled by the ONE arm below, and
+		-- bumps the epoch exactly like a level change: a row judged against the
+		-- old totals is not an answer about this character any more. Nothing
+		-- else changes about the rule — a stale row still reads nil to every
+		-- reader until the next scan repopulates the store.
+		frame:RegisterEvent("UNIT_STATS")                 -- a stat total moved
+		frame:RegisterEvent("UNIT_MAXHEALTH")             -- Stamina/HP per point moved
+		frame:RegisterEvent("SPELL_POWER_CHANGED")        -- bonus healing/damage moved
+		frame:RegisterEvent("COMBAT_RATING_UPDATE")       -- crit/haste rating moved
+		frame:RegisterEvent("UNIT_AURA")                  -- buffs on/off (posBuff)
+		frame:RegisterEvent("PLAYER_TALENT_UPDATE")        -- talents (coef, mana break)
+		frame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED") -- the spec the model assumes
 		frame:SetScript("OnEvent", function(self, ev, ...)
 			-- B11: the item-data pair. Handled FIRST and separately — these
 			-- must NOT run the equip/scan bookkeeping below (there is no
@@ -585,6 +645,24 @@ local function getFrame()
 			if ev == "PLAYER_LEVEL_UP" or ev == "SKILL_LINES_CHANGED" then
 				ChestAdvisor._invalidateJudgements(ev)
 				ChestAdvisor.scan()
+				return
+			end
+			-- Card t_8e171c28 (Step 3 C7): the totals triggers. Three of the
+			-- seven carry a UNIT TOKEN, and the token may be somebody else's —
+			-- a party member's buff is not a fact about this character, so a
+			-- non-player token returns WITHOUT invalidating anything (it must
+			-- still return, or it would fall through to the equip/scan arms
+			-- below and scan the bags on every group aura). The other four are
+			-- player-scoped by definition and carry no unit argument.
+			if ev == "UNIT_STATS" or ev == "UNIT_MAXHEALTH" or ev == "UNIT_AURA" then
+				local unit = ...
+				if unit ~= "player" then return end
+				ChestAdvisor._invalidateTotals(ev)
+				return
+			end
+			if ev == "SPELL_POWER_CHANGED" or ev == "COMBAT_RATING_UPDATE"
+				or ev == "PLAYER_TALENT_UPDATE" or ev == "ACTIVE_TALENT_GROUP_CHANGED" then
+				ChestAdvisor._invalidateTotals(ev)
 				return
 			end
 			-- Card t_ee6dec52: the bank surface. Opening it adds the bank's
@@ -1241,6 +1319,104 @@ local function resolvedRole(token, si)
 	return nil, nil
 end
 
+-- ---- The player's context (card t_1c9d5a17) ----------------------------------
+--
+-- WHAT IT IS. The context is the situation the advice is for: leveling, a
+-- dungeon run, or a raid. It is stored ONCE PER CHARACTER on the store this
+-- file already owns — `ChestAdvisorDB`, the per-character variable the toc
+-- declares — and it is read once per spec build, so every spec the comparator
+-- is handed names the context it assumed. Step 3's arbitration (C5/C7) is what
+-- will SPEND it; this card carries and displays it, and no verdict reads it.
+--
+-- The context is NOT the role. The role says which stat order the character is
+-- judged by (which is why it is per-class); the context says what the character
+-- is doing, which is per-character and changes with the evening's plan.
+--
+-- THE WORDS. The stored value is the lower-case word — "leveling", "dungeon",
+-- "raid" — and it is the only spelling this file ever writes. The slash and the
+-- settings tab take what the player typed or clicked and normalize it here, so
+-- "/up context RAID" and a click on "Raid" cannot become two settings.
+--
+-- ABSENT IS NOT BROKEN. A character saved before this key existed has no
+-- `context` at all, and that is the NORMAL first-run state: absent READS as
+-- "leveling", and a read does not create the key (looking at a saved table must
+-- not rewrite it). A value that IS present but is not one of the three is a
+-- broken setting, not a fourth context: it reads as "leveling" at once, and the
+-- read REPAIRS it in place. The repair has to live somewhere — a wrong value
+-- nobody repairs stays wrong forever, and the window and the next spec build
+-- would otherwise disagree about what this character's context is.
+--
+-- ADD-ONLY. Only `ChestAdvisorDB.context` is ever assigned. `role`, `tooltip`,
+-- `toast`, `markers`, `log`, `probe` and the C3 measurement store are never
+-- rewritten by any path here, and no SavedVariables declaration is added or
+-- re-keyed: the key lands in an existing per-character table.
+local CONTEXT_DEFAULT = "leveling"
+-- ONE table: the command's options, the tab's three controls, the labels and the
+-- one-line meanings all read this, so the three surfaces cannot drift. The order
+-- is the order they are offered in.
+local CONTEXTS = {
+	{ word = "leveling", label = "Leveling",
+	  meaning = "short fights, equal-level targets, you drink between pulls" },
+	{ word = "dungeon", label = "Dungeon",
+	  meaning = "pulls, no drinking mid-fight" },
+	{ word = "raid", label = "Raid",
+	  meaning = "a five-minute mana budget" },
+}
+local CONTEXT_BY_WORD = {}
+for _, c in ipairs(CONTEXTS) do CONTEXT_BY_WORD[c.word] = c end
+
+--- The canonical word for whatever the caller handed over, or nil. Case and
+--- surrounding space are the caller's business: a player types words, not keys.
+local function normalizeContext(word)
+	if type(word) ~= "string" then return nil end
+	local s = word:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+	if CONTEXT_BY_WORD[s] then return s end
+	return nil
+end
+
+--- The context in force for this character. Never nil, never an error, for any
+--- stored shape: a missing key, a nil store and an unreadable value all answer
+--- the default. A present-but-invalid value is repaired here (see the block
+--- note) so the next reader gets the same answer this one did.
+local function contextWord()
+	local db = rawget(_G, "ChestAdvisorDB")
+	if type(db) ~= "table" then return CONTEXT_DEFAULT end
+	local stored = db.context
+	local word = normalizeContext(stored)
+	if word ~= nil then return word end
+	if stored ~= nil then db.context = CONTEXT_DEFAULT end
+	return CONTEXT_DEFAULT
+end
+
+--- The ONE writer, and the only place `ChestAdvisorDB.context` is assigned
+--- outside the repair above. Returns the stored word, or nil when the word is
+--- not a context — REFUSED, never coerced: a mistaken `/up context heroic`
+--- must not quietly leave the player in Dungeon.
+---
+--- A real change is a SETTINGS change (the context is part of the spec once the
+--- arbitration reads it), so it drops the verdict memo and re-judges, exactly as
+--- `/up role` does. Nothing spends the new value yet, so the recomputed rows are
+--- the same verdicts from the same readings — the sweep's 0 moved rows is the
+--- evidence, not the claim.
+local function setContextWord(word)
+	local s = normalizeContext(word)
+	if s == nil then return nil end
+	local db = rawget(_G, "ChestAdvisorDB")
+	if type(db) ~= "table" then return nil end
+	local changed = db.context ~= s
+	db.context = s
+	if changed then
+		ChestAdvisor._invalidateJudgements("context " .. s)
+		ChestAdvisor.scan()
+	end
+	return s
+end
+
+-- Read surface for the settings tab (it never writes the key itself: the slash
+-- command is the writer, the house pattern every other option follows).
+ChestAdvisor.context = function() return contextWord() end
+ChestAdvisor.contextOptions = CONTEXTS
+
 local function playerLevel()
 	if type(UnitLevel) == "function" then
 		local ok, lv = pcall(UnitLevel, "player")
@@ -1327,11 +1503,17 @@ local function buildSpec()
 	-- is what Verdict.substantiated compares it against so a class-as-spec read
 	-- (a level-22 "name=Paladin") never resolves a spec policy. Additive: no
 	-- existing reader looks at either key.
+	--
+	-- `context` (card t_1c9d5a17) is the situation this spec was built FOR —
+	-- "leveling" | "dungeon" | "raid", never nil. It rides on the spec so a
+	-- verdict can name the context it assumed instead of the arbitration layer
+	-- having to remember one beside the spec. No comparator reads it yet (C5).
 	return { order = order, role = label, class = token, level = level,
 	         clientRole = (si and si.role) or nil,
 	         name = (si and si.name) or nil,
 	         classDisplay = classDisplayName(),
-	         profileSource = "talents" }
+	         profileSource = "talents",
+	         context = contextWord() }
 end
 
 ChestAdvisor.buildSpec = buildSpec
@@ -1474,6 +1656,182 @@ function TOOLTIP_UI.worthALine(row)
 	if type(row) ~= "table" then return false end
 	return row.verdict == "UPGRADE" or row.verdict == TRADE_OFF_VERDICT
 end
+
+-- ---- STEP 3 C7 (card t_8e171c28): THE ARBITRATED SURFACE ---------------------
+--
+-- WHAT CHANGES. A trade-off pair the model could judge is no longer worded as
+-- "Trade-off"; it is answered. Three states, one vocabulary, all of it read off
+-- the row's own `arbitration` table (Verdict.arbitrate's detail — the model's
+-- answer, never a second decision):
+--
+--   UPGRADE      "Upgrade"        — the green line and the green arrow (the arrow
+--                                   is the token's, not this renderer's)
+--   NOT_UPGRADE  "Not an upgrade" — grey, no mark
+--   SIDEGRADE    "Sidegrade"      — amber, the chip; the model's word for "inside
+--                                   the band", which is NOT the ordinal
+--                                   "Trade-off" (that word survives for the pairs
+--                                   no model can judge, §7's last row)
+--
+-- WHAT EACH LINE IS. One verdict line (the word + the context + the single
+-- driving term), one reason line (the model's own sentence, verbatim — it is
+-- the engine's prose and no renderer may re-spell it), and, for a Sidegrade
+-- only, a survival line. The numbers (margin, band, context, confidence) are
+-- behind the modifier key in EVERY toolbar mode, including Full: the card asks
+-- for them behind Shift, and a raw percentage is not a headline.
+--
+-- WHY SURVIVAL ONLY SPEAKS ON A SIDEGRADE (§4.4). Survival is a separate axis
+-- and never overrides a decisive throughput answer — a pair the model already
+-- decided is not re-decided by hit points. When throughput is a wash the
+-- survival line MAY decide, and the ENGINE (Verdict.arbitrate) has already
+-- applied that rule: `arb.survivalVerdict` is "candidate", "equipped" or nil,
+-- and the reason line was rewritten to match before it reached this renderer.
+-- This renderer only prints it.
+TOOLTIP_UI.words.SIDEGRADE = "Sidegrade"
+
+--- The player word for a ROW, arbitration-aware: a Sidegrade reads "Sidegrade",
+--- everything else reads through the one words table. Used by the item tooltip
+--- and both mark hovers so the three surfaces cannot drift.
+function TOOLTIP_UI.wordFor(row)
+	if type(row) == "table" and type(row.arbitration) == "table"
+		and row.arbitration.state == "SIDEGRADE" then
+		return TOOLTIP_UI.words.SIDEGRADE
+	end
+	return TOOLTIP_UI.word(type(row) == "table" and row.verdict or row)
+end
+
+--- The parenthetical a mark hover puts after the word. A Sidegrade says what it
+--- is (inside the band) instead of promising the ordinal trade-off's "your
+--- call" on a pair the model actually answered.
+function TOOLTIP_UI.tradeOffTail(row)
+	if type(row) == "table" and type(row.arbitration) == "table"
+		and row.arbitration.state == "SIDEGRADE" then
+		return " (inside the band either way — your call)"
+	end
+	return " (better on some stats, worse on others — your call)"
+end
+
+--- The situation, in player words, from the model's own context table. Never a
+--- second label table: Arbitration.CONTEXTS is where a context is named, and a
+--- copy here could name a context the model does not price.
+function TOOLTIP_UI.contextLabel(key)
+	local A = type(Arbitration) == "table" and Arbitration or nil
+	local ctx = type(A) == "table" and type(A.CONTEXTS) == "table" and A.CONTEXTS[key] or nil
+	local label = type(ctx) == "table" and ctx.label or nil
+	if type(label) ~= "string" or label == "" then return tostring(key or "this situation") end
+	-- The model's own phrasing ("Dungeon healing: ..."), so the headline and the
+	-- reason line name the situation the same way.
+	return label:lower() .. " healing"
+end
+
+--- The single driving term, in player words (§7's "decided by" discipline).
+--- `driving` is the model's measurement (the largest of the three log terms), so
+--- this table only translates — it never decides which term it was.
+function TOOLTIP_UI.drivingPhrase(driving)
+	if driving == "healing" then return "the healing per cast" end
+	if driving == "crit" then return "the crit chance it carries" end
+	if driving == "mana" then return "the mana pool" end
+	if driving == "clock" then return "the cast count the clock allows" end
+	return "its own margin"
+end
+
+--- One percentage, one decimal, signed where a sign is meaningful. No thousands
+--- separator games: a band is a small number and a margin is smaller.
+function TOOLTIP_UI.pct(v)
+	local n = tonumber(v)
+	if n == nil then return nil end
+	if n ~= n then return nil end
+	local text = ("%.1f"):format(n * 100)
+	return text
+end
+
+--- The numbers, behind the modifier key: margin, band, context, confidence.
+function TOOLTIP_UI.detailLine(arb)
+	local margin = TOOLTIP_UI.pct(arb.margin)
+	local band = TOOLTIP_UI.pct(arb.band)
+	local parts = {}
+	if margin ~= nil then parts[#parts + 1] = "margin " .. margin .. " %" end
+	if band ~= nil then parts[#parts + 1] = "band ±" .. band .. " %" end
+	parts[#parts + 1] = TOOLTIP_UI.contextLabel(arb.context)
+	parts[#parts + 1] = "confidence " .. tostring(arb.confidence or "low")
+	local line = "Details: " .. table.concat(parts, ", ")
+	-- The confidence REASON rides with the word, because "low" alone tells the
+	-- player nothing about which reading is thin (the model states it).
+	if arb.confidence == "low" and type(arb.lowWhy) == "table" and #arb.lowWhy > 0 then
+		line = line .. " (" .. table.concat(arb.lowWhy, "; ") .. ")"
+	end
+	return line
+end
+
+--- The survival line — its own line, SIDEGRADE only (§4.4). Numbers in player
+--- units: hit points and the change in damage taken. A tie says so in the
+--- model's own words rather than inventing a winner.
+function TOOLTIP_UI.survivalLine(arb)
+	if type(arb) ~= "table" or arb.state ~= "SIDEGRADE" then return nil end
+	local s = type(arb.survival) == "table" and arb.survival or nil
+	if s == nil then return nil end
+	local hp = tonumber(s.dHP)
+	local mit = tonumber(s.dMitigation)
+	if hp == nil and mit == nil then return nil end
+	local parts = {}
+	if hp ~= nil and hp ~= 0 then
+		local n = ("%.0f"):format(math.abs(hp))
+		parts[#parts + 1] = (hp > 0 and "+" or "-") .. n .. " health"
+	end
+	if mit ~= nil and mit ~= 0 then
+		local n = ("%.1f"):format(math.abs(mit) * 100)
+		parts[#parts + 1] = n .. " % " .. (mit > 0 and "less" or "more") .. " damage taken"
+	end
+	local text = "Survival: "
+	if #parts == 0 then
+		text = text .. "no change to health or damage taken"
+	else
+		text = text .. table.concat(parts, ", ")
+	end
+	if arb.survivalVerdict == "candidate" then
+		text = text .. " — the hovered item keeps you standing."
+	elseif arb.survivalVerdict == "equipped" then
+		text = text .. " — the equipped item keeps you standing."
+	else
+		text = text .. " — a wash either way."
+	end
+	return text
+end
+
+--- Every line an ARBITRATED row renders: verdict, reason, [survival], [numbers].
+--- `note` is the partial-read disclosure, which rides the REASON line here (it is
+--- a fact about the read, and the lines after it are numbers).
+function TOOLTIP_UI.arbitratedLines(row, showDetail, note)
+	local arb = row.arbitration
+	local out = {}
+	local word, esc, colour = TOOLTIP_UI.words.SIDEGRADE, TOOLTIP_AMBER, "amber"
+	if arb.state == "UPGRADE" then
+		word, esc, colour = TOOLTIP_UI.words.UPGRADE, TOOLTIP_GREEN, "green"
+	elseif arb.state == "NOT_UPGRADE" then
+		word, esc, colour = TOOLTIP_UI.words.NOT_UPGRADE, TOOLTIP_GREY, "grey"
+	end
+	local head = TOOLTIP_PREFIX .. word .. " — " .. TOOLTIP_UI.contextLabel(arb.context)
+	if arb.state == "SIDEGRADE" then
+		head = head .. ", inside the band on throughput"
+	else
+		head = head .. ", decided by " .. TOOLTIP_UI.drivingPhrase(arb.driving)
+	end
+	out[1] = { text = esc .. head, colour = colour }
+	local reason = type(row.reason) == "string" and row.reason or "no reason recorded"
+	out[2] = { text = TOOLTIP_GREY .. reason .. (type(note) == "string" and note or ""),
+		colour = "grey" }
+	local surv = TOOLTIP_UI.survivalLine(arb)
+	if surv ~= nil then out[#out + 1] = { text = TOOLTIP_GREY .. surv, colour = "grey" } end
+	if showDetail then
+		out[#out + 1] = { text = TOOLTIP_GREY .. TOOLTIP_UI.detailLine(arb), colour = "grey" }
+	end
+	return out
+end
+
+--- The surface's READ-ONLY handle (card t_8e171c28). The item tooltip, both
+--- mark hovers and every harness answer from THIS table, so publishing it lets a
+--- test drive the wording without a bag scan — and it is the table a diagnostic
+--- would read to name an arbitrated word. Nothing writes through it.
+ChestAdvisor._tooltipUI = TOOLTIP_UI
 
 -- The tooltip-line toggle's persisted setting. It rides the EXISTING
 -- per-character store (AC-F: no new store, exactly like the toast). Default ON,
@@ -1729,6 +2087,212 @@ local function cannotEquipTail(row)
 	if type(r) ~= "string" or #r <= #CANNOT_EQUIP_LEAD then return nil end
 	if r:sub(1, #CANNOT_EQUIP_LEAD) ~= CANNOT_EQUIP_LEAD then return nil end
 	return r:sub(#CANNOT_EQUIP_LEAD + 1)
+end
+
+-- ---- Step 3 C7 (card t_8e171c28): THE TOTALS SNAPSHOT ----------------------
+--
+-- WHAT THIS IS. The impure edge of the arbitration layer: the character's own
+-- numbers, read ONCE, cached per judgement epoch, and handed down to
+-- Verdict.evaluate/compareWeapon as the `totals` argument. The model itself
+-- reads nothing (Arbitration.lua's own header), so every number in a judged
+-- trade-off arrives here or not at all.
+--
+-- WHY IT IS NOT Calibration.read(). Calibration is a DEV surface and card
+-- t_520b482e's P3 asserts in code that no verdict path names it. Reusing it
+-- would have been less code and a worse contract: the day a calibration
+-- reading is renamed, the verdict surface refuses every trade-off in the game.
+-- So the readings the model consumes are taken here, narrowly, from the same
+-- client APIs the census (docs §3) names — and only those.
+--
+-- THE RULES, in the order they matter:
+--   1. OUT OF COMBAT ONLY. The client's restricted map hands back secrets for
+--      every one of these inputs in combat; a reading taken there is worthless
+--      and a retry loop there is worse. In combat this returns nil and the
+--      judge refuses — the player sees today's trade-off bytes, unchanged.
+--   2. SECRET IS REFUSAL, NOT ZERO. Every returned value is passed through
+--      issecretvalue BEFORE it is compared, added or stored (the module already
+--      has that helper: safeIsSecret). Any secret input returns the sentinel
+--      `{ secret = true }` — a TOTALS SHAPE, not nil — so Arbitration's refusal
+--      ladder answers "totals are secret: the client would not hand them over"
+--      instead of "no totals". No arithmetic ever touches a secret here: the
+--      value is dropped at the door.
+--   3. ONE READ PER EPOCH. The cache is keyed by ChestAdvisor._judgeEpoch, the
+--      same epoch `_judgement` refuses stale rows on, so a totals reading can
+--      never outlive the judgements it produced. New inputs bump that epoch
+--      (the event list in the frame's registration block below).
+--   4. THE SPELL IS THE MODEL'S OWN. `Arbitration.SPELL_RECORDS` is the
+--      measured record set (§5a); the edge reads the record for THIS level when
+--      there is one (else the first, which the model treats as an extrapolation
+--      and flags low-confidence) and asks the client only for the two numbers
+--      the record does not carry: the mana cost and the base cast time. With no
+--      record, or no resolvable cost/cast time, `spell` is nil and the judge
+--      refuses — it never invents a spell.
+ChestAdvisor._totalsCache = nil
+ChestAdvisor._totalsWhy = nil
+
+local function readTotals()
+	local function inCombat()
+		if type(InCombatLockdown) ~= "function" then return false end
+		local ok, v = pcall(InCombatLockdown)
+		if not ok then return true end
+		return v == true
+	end
+	if inCombat() then
+		return nil, "in combat: the totals are read out of combat only"
+	end
+
+	local secret = false
+	local t = { stats = {} }
+	local function numOf(v)
+		if safeIsSecret(v) then secret = true; return nil end
+		if type(v) == "number" and v == v then return v end
+		return nil
+	end
+
+	-- UnitStat("player", i) -> current, effective, posBuff, negBuff. Index order
+	-- is the client's LE_UNIT_STAT_*: 1 Str, 2 Agi, 3 Sta, 4 Int, 5 Spi.
+	local statWord = { "Strength", "Agility", "Stamina", "Intellect", "Spirit" }
+	if type(UnitStat) ~= "function" then return nil, "the client has no UnitStat" end
+	for i = 1, 5 do
+		local ok, cur, eff, pos, neg = pcall(UnitStat, "player", i)
+		if not ok then return nil, "UnitStat raised while reading stat " .. tostring(i) end
+		-- Every one of the four returns is screened, including the two this
+		-- module does not use: a secret in the tuple means the client has
+		-- restricted this stat, and the whole snapshot is then untrustworthy.
+		numOf(cur)
+		local effN = numOf(eff)
+		local posN = numOf(pos)
+		numOf(neg)
+		if effN ~= nil then
+			t.stats[statWord[i]] = effN
+			-- §3: any posBuff > 0 on a stat the model uses sets the warning.
+			-- The model prices Int (pool + the mana-per-Int break) and Spirit
+			-- (regen) and reports Stamina (the survival line); Strength and
+			-- Agility are never read by it, so a Strength buff is not a warning.
+			if posN ~= nil and posN > 0 and (i == 3 or i == 4 or i == 5) then
+				t.buffed = true
+			end
+		end
+	end
+	if secret then return { secret = true }, "totals are secret: the client would not hand them over" end
+
+	local manaType = 0
+	do
+		local enum = rawget(_G, "Enum")
+		local pt = type(enum) == "table" and enum.PowerType or nil
+		if type(pt) == "table" and type(pt.Mana) == "number" then manaType = pt.Mana end
+	end
+	if type(UnitPowerMax) == "function" then
+		local ok, pool = pcall(UnitPowerMax, "player", manaType, false)
+		if ok then t.pool = numOf(pool) end
+	end
+	if type(GetManaRegen) == "function" then
+		local ok, base, casting = pcall(GetManaRegen)
+		if ok then
+			numOf(base)
+			t.regenCasting = numOf(casting)
+		end
+	end
+	if type(GetSpellCritChance) == "function" then
+		local ok, crit = pcall(GetSpellCritChance)
+		if ok then t.crit = numOf(crit) end
+	end
+	if type(GetSpellBonusHealing) == "function" then
+		local ok, heal = pcall(GetSpellBonusHealing)
+		if ok then t.bonusHealing = numOf(heal) end
+	end
+	if type(UnitSpellHaste) == "function" then
+		local ok, haste = pcall(UnitSpellHaste, "player")
+		if ok then t.haste = numOf(haste) end
+	end
+	if type(UnitLevel) == "function" then
+		local ok, lvl = pcall(UnitLevel, "player")
+		if ok then t.level = numOf(lvl) end
+	end
+	if type(UnitHPPerStamina) == "function" then
+		local ok, hps = pcall(UnitHPPerStamina, "player")
+		if ok then t.hpPerStamina = numOf(hps) end
+	end
+	-- Armour is a SURVIVAL input, not a throughput term: the model only reads it
+	-- through the mitigation closure below, and only to report the survival line.
+	if type(UnitArmor) == "function" then
+		local ok, baseArmor, effArmor = pcall(UnitArmor, "player")
+		if ok then
+			numOf(baseArmor)
+			local effN = numOf(effArmor)
+			if effN ~= nil then t.stats.Armor = effN end
+		end
+	end
+	do
+		local pdi = rawget(_G, "C_PaperDollInfo")
+		local fn = type(pdi) == "table" and pdi.GetArmorEffectiveness or nil
+		if type(fn) == "function" and type(t.level) == "number" then
+			t.mitigation = function(armor)
+				local ok, v = pcall(fn, armor, t.level)
+				if not ok or safeIsSecret(v) or type(v) ~= "number" then return nil end
+				return v
+			end
+		end
+	end
+	if secret then return { secret = true }, "totals are secret: the client would not hand them over" end
+
+	-- The representative spell: the model's own measured record for this level,
+	-- else its first record (the extrapolation the model flags low-confidence).
+	local A = rawget(_G, "Arbitration")
+	-- §8.8: the Spirit -> regen slope is measured for ONE character at ONE level
+	-- (the §5a record). `regenMeasured` may only say so AT that level; away from
+	-- it a Spirit-moving pair is refused rather than guessed, and the refusal
+	-- says which assumption is missing.
+	if type(A) == "table" and type(A.MEASURED) == "table"
+		and type(t.level) == "number" and t.level == A.MEASURED.level then
+		t.regenMeasured = true
+	end
+	local recs = type(A) == "table" and A.SPELL_RECORDS or nil
+	local rec = nil
+	if type(recs) == "table" then
+		for i = 1, #recs do
+			local r = recs[i]
+			if type(r) == "table" and (rec == nil or (type(t.level) == "number" and r.level == t.level)) then
+				rec = r
+				if type(t.level) == "number" and r.level == t.level then break end
+			end
+		end
+	end
+	if rec ~= nil and type(rec.spellID) == "number" then
+		local spell = { id = rec.spellID, name = rec.name, rank = rec.rank }
+		local cs = rawget(_G, "C_Spell")
+		if type(cs) == "table" and type(cs.GetSpellPowerCost) == "function" then
+			local ok, costs = pcall(cs.GetSpellPowerCost, rec.spellID)
+			local c = ok and type(costs) == "table" and costs[1] or nil
+			if type(c) == "table" then spell.cost = numOf(c.cost) end
+		end
+		if type(cs) == "table" and type(cs.GetSpellInfo) == "function" then
+			local ok, info = pcall(cs.GetSpellInfo, rec.spellID)
+			if ok and type(info) == "table" then spell.castTimeMs = numOf(info.castTime) end
+		end
+		if secret then return { secret = true }, "totals are secret: the client would not hand them over" end
+		t.spell = spell
+	end
+	return t, nil
+end
+
+--- The character's totals for THIS epoch, or (nil, why).
+---
+--- Cached per epoch on purpose: the read is ~15 client calls and a fight does
+--- not move any of these numbers without an event that bumps the epoch. A
+--- failed read is cached too (including the in-combat refusal) so a scan cannot
+--- retry it once per bag row; the next epoch re-reads.
+function ChestAdvisor._totals()
+	local epoch = ChestAdvisor._judgeEpoch
+	local c = ChestAdvisor._totalsCache
+	if type(c) == "table" and c.epoch == epoch then
+		return c.value, c.why
+	end
+	local ok, value, why = pcall(readTotals)
+	if not ok then value, why = nil, "the totals read raised: " .. tostring(value) end
+	ChestAdvisor._totalsCache = { epoch = epoch, value = value, why = why }
+	ChestAdvisor._totalsWhy = why
+	return value, why
 end
 
 -- ---- The engine's disclosure clause (card t_6f0c7eaf) ------------------------
@@ -2077,6 +2641,12 @@ local function verdictLines(row, order)
 	-- only while Shift is held. The HEADLINE is never gated on Shift.
 	local showDetail = (setting ~= "compact") or TOOLTIP_UI.shiftHeld()
 
+	-- The partial-read disclosure is a fact about the READ, not about the word,
+	-- so it is computed once here and attached by whichever branch renders (the
+	-- arbitrated branch attaches it to its reason line, because the lines after
+	-- that one are numbers).
+	local note = partialReadSuffix(row)
+
 	local out = {}
 	local weighted = TOOLTIP_UI.weighted(row, order)
 	if weighted ~= nil then
@@ -2103,6 +2673,19 @@ local function verdictLines(row, order)
 		if weighted.detail and showDetail then
 			out[#out + 1] = { text = TOOLTIP_GREY .. weighted.detail, colour = "grey" }
 		end
+	elseif type(row.arbitration) == "table" then
+		-- Card t_8e171c28: an ARBITRATED row — the model answered it, so the
+		-- three branches below (which render the ordinal comparator's own
+		-- sentences) must not speak for it. First, deliberately: an arbitrated
+		-- UPGRADE is still row.verdict == "UPGRADE", and its headline names the
+		-- context and the driving term instead of the ordinal "beats what you
+		-- have" arithmetic.
+		--
+		-- The numbers stay behind Shift in EVERY mode — `showDetail` above is
+		-- the read-arithmetic rule (Full shows it, Compact hides it), while the
+		-- model's margin/band/confidence is a different class of detail and the
+		-- card puts it behind the modifier key without exception.
+		out = TOOLTIP_UI.arbitratedLines(row, showDetail and TOOLTIP_UI.shiftHeld(), note)
 	elseif row.verdict == "UPGRADE" then
 		local head, detail = describeUpgradeParts(row, order)
 		out[#out + 1] = {
@@ -2187,8 +2770,9 @@ local function verdictLines(row, order)
 	-- The partial-read disclosure rides the LAST line we are about to emit (it
 	-- is a fact about the read, not about the verdict word). It is "" when
 	-- nothing was skipped, so a fully-read tooltip is byte-identical to before.
-	local note = partialReadSuffix(row)
-	if note ~= "" then
+	-- (Card t_8e171c28: the arbitrated branch already attached it to its reason
+	-- line, where the disclosure belongs — its later lines are numbers.)
+	if note ~= "" and type(row.arbitration) ~= "table" then
 		out[#out].text = out[#out].text .. note
 	end
 	-- Close EVERY line with the reset. Each line opens with its own colour
@@ -2670,14 +3254,17 @@ local function installOnEnter(btn)
 					-- one table the item tooltip also reads, so the two hover
 					-- surfaces cannot drift. The tokens themselves (d.verdict)
 					-- are the comparator's contract and are unchanged.
+					-- Card t_8e171c28: the word is asked of the ROW (wordFor /
+					-- tradeOffTail), so an arbitrated Sidegrade is not described
+					-- on this surface as the ordinal trade-off it is not.
 					if d.verdict == TRADE_OFF_VERDICT then
-						explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.word(d.verdict)
-							.. " (better on some stats, worse on others — your call)")
+						explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.wordFor(d)
+							.. TOOLTIP_UI.tradeOffTail(d))
 					elseif d.verdict == "UPGRADE" then
-						explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.word(d.verdict)
+						explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.wordFor(d)
 							.. " (this " .. slotWordText .. " beats what you have)")
 					else
-						explainLine(tip, TOOLTIP_UI.word(d.verdict)
+						explainLine(tip, TOOLTIP_UI.wordFor(d)
 							.. " (this " .. slotWordText .. ")")
 					end
 					tip:Show()
@@ -2832,7 +3419,7 @@ local function anchorMarker(f, bag, slot, link, slotWordText)
 		-- surface and the visible arrow is a texture whose relative is the
 		-- BUTTON — the geometry pinned in §5b's corrected table:
 		--   button:CreateTexture(nil, "OVERLAY", nil, 7)
-		--   SetTexture((MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga"))
+		--   SetTexture("Interface\\AddOns\\Touchstone\\ChestAdvisor\\marker.tga")
 		--   SetSize(18, 18)
 		--   SetPoint("TOPRIGHT", button, "TOPRIGHT", 1, 1)
 		-- The arrow is stored on the button under ChestAdvisor's own
@@ -3333,8 +3920,22 @@ end
 -- walks. Kept at chunk scope so those later walks call them by name;
 -- the quest block captures them as upvalues.
 local QUEST_ARROW_SIZE = 18         -- bag-marker parity (§5b geometry)
-local QUEST_ARROW_TEXTURE =
-	(MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
+--- The marker texture path, resolved at the point of use.
+---
+--- The host core publishes the base (SF.AssetPath) because a host that vendors
+--- these files keeps the art under its own folder. This file reads it when it is
+--- there and falls back to its own installed folder when it is not: in game
+--- Constants.lua loads first, but the advisor suite loads Verdict + ChestAdvisor
+--- alone, with no host core at all, and that case must not throw.
+local function assetPath(name)
+  local sf = rawget(_G, "StatForge")
+  if type(sf) == "table" and type(sf.AssetPath) == "function" then
+    return sf.AssetPath(name)
+  end
+  return "Interface\\AddOns\\Touchstone\\ChestAdvisor\\" .. tostring(name)
+end
+-- Resolved at each SetTexture call (SF.AssetPath), so a host that vendors these
+-- files keeps the marker art under its own folder without editing this file.
 
 -- Is this frame shown right now? nil / non-frame / a throwing IsShown all read
 -- as "not shown" (a hidden panel must never draw).
@@ -3577,7 +4178,10 @@ local function questWornLink(loc, invSlot, wornLinks, spec)
 	local v12 = Verdict.evaluate(
 		{ canUse = true, line = itemLines(l1) },
 		{ line = itemLines(l2) },
-		spec
+		spec,
+		nil,
+		nil,
+		(ChestAdvisor._totals())
 	)
 	return (v12 == "UPGRADE") and l2 or l1
 end
@@ -3975,7 +4579,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 		-- drift. Guarded like the gates beside it: a Verdict.lua that predates
 		-- this card has no compareWeapon and degrades to exactly today's DPS
 		-- comparator.
-		local v, reason
+		local v, reason, arbDet
 		if type(Verdict.compareWeapon) == "function" then
 			local api = apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil)
 			-- Card t_1677cd39: the same off-hand context the bag walk passes.
@@ -3995,11 +4599,11 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 			-- computed OUTSIDE the closure and is passed both to the comparator
 			-- and into the cache key, so a memo hit can never answer a different
 			-- off-hand context with this one's verdict.
-			v, reason = ChestAdvisor._memoVerdict(
+			v, reason, arbDet = ChestAdvisor._memoVerdict(
 				ChestAdvisor._judgeKey("questweapon", link, wornLink, loc, spec, candLines, wornLinesR, canUseV, wctx),
 				function()
 					return Verdict.compareWeapon(candLines, wornLinesR, wornSlotFilled,
-						spec, canUseV, api, wctx)
+						spec, canUseV, api, wctx, (ChestAdvisor._totals()))
 				end)
 		else
 			v, reason = ChestAdvisor._memoVerdict(
@@ -4014,7 +4618,7 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 				reason = reason .. " " .. n
 			end
 		end
-		return done(v, reason)
+		return done(v, reason, arbDet)
 	end
 
 	local offHandDecline = nil
@@ -4070,7 +4674,8 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 				{ line = wornLines },
 				spec,
 				api,
-				slotWord(invSlot)
+				slotWord(invSlot),
+				(ChestAdvisor._totals())
 			)
 		end)
 	return done(v, reason, weighted)
@@ -4210,14 +4815,16 @@ local function installQuestHover(button)
 			-- Card t_89440dfa: the shared installer is verdict-aware, same as the
 			-- bag surface (installOnEnter). U2/b (t_cf2ad83c): it also reads the
 			-- SAME player-word table, so the quest hover cannot drift either.
+			-- Card t_8e171c28: arbitration-aware wording, the same two helpers
+			-- the bag hover uses — one vocabulary across all three surfaces.
 			if d.verdict == TRADE_OFF_VERDICT then
-				explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.word(d.verdict)
-					.. " (better on some stats, worse on others — your call)")
+				explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.wordFor(d)
+					.. TOOLTIP_UI.tradeOffTail(d))
 			elseif d.verdict == "UPGRADE" then
-				explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.word(d.verdict) .. " (this "
+				explainLine(tip, TOOLTIP_PREFIX .. TOOLTIP_UI.wordFor(d) .. " (this "
 					.. tostring(d.slotWord or "slot") .. " beats what you have)")
 			else
-				explainLine(tip, TOOLTIP_UI.word(d.verdict)
+				explainLine(tip, TOOLTIP_UI.wordFor(d)
 					.. " (this " .. tostring(d.slotWord or "slot") .. ")")
 			end
 			-- Card t_e9a07624 (B5): the raw `role: / verdict: / reason:`
@@ -4850,7 +5457,7 @@ local function refreshPaperDollHints()
 				local ok, tex = pcall(btn.CreateTexture, btn, nil, "OVERLAY", nil, 7)
 				if ok and type(tex) == "table" then
 					if type(tex.SetTexture) == "function" then
-						tex:SetTexture(QUEST_ARROW_TEXTURE)
+						tex:SetTexture(assetPath("marker.tga"))
 					end
 					tex:SetSize(QUEST_ARROW_SIZE, QUEST_ARROW_SIZE)
 					tex:SetPoint("TOPRIGHT", btn, "TOPRIGHT", 1, 1)
@@ -5100,7 +5707,7 @@ local function refreshVendorMarkers()
 						local okTex, tex = pcall(btn.CreateTexture, btn, nil, "OVERLAY", nil, 7)
 						if okTex and type(tex) == "table" then
 							if type(tex.SetTexture) == "function" then
-								tex:SetTexture(QUEST_ARROW_TEXTURE)
+								tex:SetTexture(assetPath("marker.tga"))
 							end
 							tex:SetSize(QUEST_ARROW_SIZE, QUEST_ARROW_SIZE)
 							tex:SetPoint("TOPRIGHT", btn, "TOPRIGHT", 1, 1)
@@ -5241,8 +5848,7 @@ local TOAST_MAX   = 3                -- queued single-item toasts per batch
 local TOAST_HEADER = "Upgrade found!"
 local TOAST_FALLBACK_SUB = "Better item in your bags"
 local TOAST_FALLBACK_ICON = "Interface\\Icons\\INV_Misc_Bag_08"
-local TOAST_ARROW_TEXTURE =
-	(MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
+-- Resolved where the texture is set, like every other marker path here.
 -- The item name is neutral text (white) and the sub line keeps the mock's ruled
 -- green — neither is Touchstone's own chrome. The one ACCENT lives on the TOAST
 -- table above; these two are what is left of the mock's own palette.
@@ -5456,6 +6062,51 @@ toastMeasure = function()
 	local ok, now = pcall(GetTime)
 	if not ok or type(now) ~= "number" then return nil end
 	return math.floor((now - toastRT.shownAt) * 1000 + 0.5)
+end
+
+-- ---- The toast emit point (host seam) -------------------------------------
+--
+-- The toast is the one surface a host cannot observe: it appears, plays and
+-- leaves entirely inside this block, and a host that wants to trace it (a
+-- pack logging why a toast ended early) has no way in. This is that way in,
+-- and it is the whole of it: one callback, the two transitions the panel has,
+-- and nothing else. Unclaimed — no host called OnToast — emitToast returns on
+-- its first line and no branch below changes what the toast does.
+--
+-- `phase = "show"`  fires when an item is actually ON SCREEN (after Show, the
+--                   same point toastFired counts), with link / id / name;
+-- `phase = "end"`   fires when it leaves, with a `reason`:
+--                   "lifetime" (the countdown expired — the normal end),
+--                   "fade" (the fade-out finished first), "dismiss" (the
+--                   right-click), "expired-unfinished" (a lifetime that had
+--                   already run out when the next scan looked).
+--
+-- A host callback must never break the toast: it runs under pcall, and after
+-- the first error this block stops calling it for the session (a trace hook
+-- that throws on every toast would otherwise turn a cosmetic problem into a
+-- scanner that errors once per item).
+local toastHook = nil
+local toastHookFailed = false
+
+local function emitToast(phase, payload)
+	if toastHook == nil or toastHookFailed then return end
+	local ok = pcall(toastHook, payload)
+	if not ok then toastHookFailed = true end
+end
+
+--- Observe the toast. `fn` is called with one table per transition (see
+--- above); `nil` removes the observer. Returns true when the call is accepted.
+--- One observer, not a list: this is the pack's trace, not an event bus.
+function ChestAdvisor.OnToast(fn)
+	if fn == nil then
+		toastHook = nil
+		toastHookFailed = false
+		return true
+	end
+	if type(fn) ~= "function" then return false end
+	toastHook = fn
+	toastHookFailed = false
+	return true
 end
 
 -- The persisted position (U3/4). Same discipline as the window's own
@@ -5747,7 +6398,7 @@ local function buildToastFrame()
 	local arrow = f:CreateTexture("ChestAdvisorToastArrow", "OVERLAY")
 	arrow:SetSize(TOAST_ARROW, TOAST_ARROW)
 	arrow:SetPoint("TOPRIGHT", icon, "TOPRIGHT", 5, 5)
-	arrow:SetTexture(TOAST_ARROW_TEXTURE)
+	arrow:SetTexture(assetPath("marker.tga"))
 	f.arrow = arrow
 	local header = f:CreateFontString("ChestAdvisorToastHeader", "ARTWORK",
 		"GameFontNormalLarge")
@@ -5811,6 +6462,12 @@ local function buildToastFrame()
 				toastRT.current = nil
 				toastRT.hovered = false
 				toastRT.lifetimeLeft = 0
+				emitToast("end", {
+					phase = "end", reason = "dismiss",
+					link = type(item) == "table" and item.link or nil,
+					id = type(item) == "table" and item.id or nil,
+					name = type(item) == "table" and item.name or nil,
+				})
 				-- t_4bae0617: the measured time this show was up, and the word
 				-- for how it ended, taken BEFORE the clock stamp is cleared.
 				local dismissedMs = toastMeasure and toastMeasure() or nil
@@ -6010,6 +6667,11 @@ end
 toastFinishShow = function(showId, reason)
 	if showId ~= nil and toastRT.showId ~= showId then return end
 	if not toastActive then return end
+	-- Captured before the state below is cleared: the end event names the item
+	-- that left, and a rotation has already replaced toastRT.current by the
+	-- time a host could read it back.
+	local finished = toastRT.current
+	reason = reason or "finish"
 	-- t_fe7a636a: the configured lifetime is the authority. Only a
 	-- right-click dismiss may end a show early; every callback-driven end
 	-- (the fade-out's OnFinished, its fallback timer, a scan repair) waits
@@ -6053,6 +6715,12 @@ toastFinishShow = function(showId, reason)
 		f.shown = false
 		if type(f.SetAlpha) == "function" then pcall(f.SetAlpha, f, 1) end
 	end
+	emitToast("end", {
+		phase = "end", showId = showId, reason = reason,
+		link = type(finished) == "table" and finished.link or nil,
+		id = type(finished) == "table" and finished.id or nil,
+		name = type(finished) == "table" and finished.name or nil,
+	})
 	local nxt = table.remove(toastQueue, 1)
 	if nxt then
 		local ok = pcall(showToastItem, nxt)
@@ -6186,6 +6854,10 @@ showToastItem = function(item)
 		f:Show()
 		toastActive = true
 		toastFired = toastFired + 1
+		emitToast("show", {
+			phase = "show", showId = showId, link = item.link,
+			id = item.id, name = item.name,
+		})
 		local alphaAtShow = 1
 		if type(f.GetAlpha) == "function" then
 			local okA, av = pcall(f.GetAlpha, f)
@@ -6790,7 +7462,7 @@ ChestAdvisor.scan = function()
 				-- for the slot it fills.
 				if link and invSlot and id and type(id) == "number" and not equippedLink then
 					itemsWalked = itemsWalked + 1
-					local v, reason
+					local v, reason, arbDet
 					local canUseV
 					-- Fold: the diag row this fold builds below reads the weighted
 					-- result, and the fold's own edit declares it inside the else
@@ -6852,7 +7524,10 @@ ChestAdvisor.scan = function()
 										return Verdict.evaluate(
 											{ canUse = true, line = l1lines },
 											{ line = l2lines },
-											spec
+											spec,
+											nil,
+											nil,
+											(ChestAdvisor._totals())
 										)
 									end)
 								-- v12 == "UPGRADE" means member-1 is strictly better than
@@ -7062,11 +7737,12 @@ ChestAdvisor.scan = function()
 									-- computed OUTSIDE the closure and is passed both to the comparator
 									-- and into the cache key, so a memo hit can never answer a different
 									-- off-hand context with this one's verdict.
-									v, reason = ChestAdvisor._memoVerdict(
+									v, reason, arbDet = ChestAdvisor._memoVerdict(
 										ChestAdvisor._judgeKey("weapon", link, wornLink, invSlot, spec, wlines, wornLines, canUseV, wctx),
 										function()
 											return Verdict.compareWeapon(wlines,
-												wornLines, wornSlotFilled, spec, canUseV, api, wctx)
+												wornLines, wornSlotFilled, spec, canUseV, api, wctx,
+												(ChestAdvisor._totals()))
 										end)
 								else
 									v, reason = ChestAdvisor._memoVerdict(
@@ -7113,10 +7789,11 @@ ChestAdvisor.scan = function()
 									-- stat read for both sides; nil when the API
 									-- cannot read them (fail-closed, unchanged).
 									apiBySideOf(id, wornLink and itemIDOf(wornLink) or nil),
-									slotWord(invSlot)
+									slotWord(invSlot),
+									(ChestAdvisor._totals())
 								)
 							end)
-						v, reason = v2, r2
+						v, reason, arbDet = v2, r2, w2
 					end
 					-- Card t_d8de0090: WHAT was set aside, recorded at the
 					-- read the verdict was decided on. AC-D: the raw
@@ -7150,6 +7827,16 @@ ChestAdvisor.scan = function()
 							bag = bag, slot = slot, id = id,
 							verdict = v,
 							reason = reason,
+							-- Card t_8e171c28: the arbitration's own answer for a
+							-- trade-off the model could judge — state, driving
+							-- term, margin, band, context, confidence, survival,
+							-- flip and the buff flag. nil on every other row, so
+							-- a pre-card row shape is unchanged and the tooltip's
+							-- pre-card branches stay reachable. NOT persisted into
+							-- SavedVariables (diagHistory keeps headers only —
+							-- card t_6696b35a — so this table lives and dies with
+							-- the scan, exactly like `lines`/`api` above).
+							arbitration = (type(arbDet) == "table") and arbDet or nil,
 							role = roleLabel,
 							-- Card t_3a744b4a: the weighted total this row was decided on
 							-- and the profile that supplied the weights. Two scalars, so a
@@ -7717,6 +8404,7 @@ local function helpText()
 		.. "  /up role <r>   record the focus role for a hybrid class (melee|spell; the client spec read is used automatically when unset)\n"
 		.. "  /up role clear clear the recorded role for this class\n"
 		.. "  /up spec [key|name|auto]  which spec Touchstone scores gear for (overrides talents and /up role; auto follows talents)\n"
+		.. "  /up context <leveling|dungeon|raid>  what the advice is judged for (persisted per character; default leveling)\n"
 		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
 		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
 		.. "  /up toasts / /up testtoast  raise one \"Test Upgrade\" toast NOW — the real panel and the real path\n"
@@ -7831,6 +8519,32 @@ local function cmdSpec(msg)
 		return true, "gearing for " .. ((e and e.name) or parsed) .. " (chosen)"
 	end
 	return false, "rejected: '" .. rest .. "' is not a spec for this class — options: " .. listText()
+end
+
+-- /up context — WHAT the advice is judged for (card t_1c9d5a17). Bare prints the
+-- current context and its one-line meaning, because "is it still on leveling?"
+-- is the question a player actually types; a word sets it, in any casing.
+--
+-- The unknown-word path REFUSES and changes nothing: a mistyped word must not
+-- land the player in a different situation than the one they are in (the
+-- rejected word is quoted back, and the three options are named).
+local function cmdContext(msg)
+	local lower = msg:lower()
+	local word = lower:match("^context%s+(%S+)%s*$")
+	if word == nil then
+		if lower:match("^context%s*$") ~= nil then
+			local cur = contextWord()
+			return true, "context is " .. cur .. " — " .. CONTEXT_BY_WORD[cur].meaning
+				.. "  (change with /up context leveling|dungeon|raid)"
+		end
+		return false, "usage: /up context <leveling|dungeon|raid>"
+	end
+	local stored = setContextWord(word)
+	if stored == nil then
+		return false, "context must be one of: leveling, dungeon, raid (got '" .. word
+			.. "'); nothing changed"
+	end
+	return true, "context " .. stored .. " — " .. CONTEXT_BY_WORD[stored].meaning
 end
 
 -- /up toast <on|off> — persist the notification setting on the EXISTING
@@ -8688,6 +9402,9 @@ local function dispatch(msg)
 	local ok, out
 	if subword == "role" then
 		ok, out = cmdRole(trimmed)
+	elseif subword == "context" then
+		-- t_1c9d5a17: what the advice is judged for (leveling | dungeon | raid).
+		ok, out = cmdContext(trimmed)
 	elseif subword == "spec" then
 		ok, out = cmdSpec(trimmed)
 	elseif subword == "probe" then

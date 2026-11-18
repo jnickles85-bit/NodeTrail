@@ -1,0 +1,71 @@
+# reason: lifecycle
+#
+# The SF.Enable lifecycle fold and slash gating: the module registers its
+# slashes and builds its event frame on enable, not at load.
+#
+# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# applies to: Core.lua at that commit. The sync applies this patch to the pin's
+# blob and hashes the result; --verify-shipped reverses it and checks the pin's
+# blob hash, so a patch that stops applying fails BY NAME in CI.
+--- a/Core.lua
++++ b/Core.lua
+@@ -30,18 +30,12 @@ local function initDB()
+   -- minimap state, deep-probe history), so nothing purges it.
+ end
+ 
+-local events = CreateFrame("Frame")
+-events:RegisterEvent("ADDON_LOADED")
+-events:RegisterEvent("PLAYER_LOGIN")
+-events:SetScript("OnEvent", function(_, event, arg1)
+-  if event == "ADDON_LOADED" and arg1 == SF.ADDON_NAME then
+-    initDB()
+-  elseif event == "PLAYER_LOGIN" then
+-    initDB()
+-    SF.CreateMinimapButton()
+-    SF.UpdateMinimapButton()
+-  end
+-end)
++-- Fold (MightiePack Touchstone module): the ADDON_LOADED / PLAYER_LOGIN
++-- event frame that used to live here is gone. MightiePack fires
++-- ADDON_LOADED for its own name after SavedVariables exist and calls
++-- SF.Enable() (defined at the end of this file). initDB above keeps its
++-- body unchanged. A disabled module creates no frame and no minimap
++-- button. SF.ADDON_NAME is no longer a behavioural gate anywhere.
+ 
+ -- Card t_916be2d9: the addon is now Touchstone. The slash handler keeps its
+ -- single implementation; the global is renamed to match the addon identity.
+@@ -54,7 +48,9 @@ end)
+ -- by t_6696b35a). The client strips the slash word, so a second registration
+ -- of the string "/ts" on this handler would either steal it from the advisor
+ -- or be the dead copy. /ts stays SLASH_CHESTADVISOR4, exactly once.
+-function SlashCmdList.TOUCHSTONE(msg)
++-- Fold: the handler stays here, unchanged in body; only its
++-- registration moved into SF.Enable() below.
++local function touchstoneSlash(msg)
+   local arg = (msg or ""):match("^%s*(.-)%s*$"):lower()
+   -- NOTE (card t_adf556d6): the `debug` arm is gone too. It called
+   -- SF.DebugContainers, which lived in the deleted Snapshot.lua and reported
+@@ -104,6 +100,20 @@ function SlashCmdList.TOUCHSTONE(msg)
+   end
+   SF.ToggleMain()
+ end
+-SLASH_TOUCHSTONE1 = "/touchstone"
+-SLASH_TOUCHSTONE2 = "/sf"
+-SLASH_TOUCHSTONE3 = "/statforge"
++-- Fold (MightiePack Touchstone module): the single registration point.
++-- Called by the module once, after SavedVariables exist. The three slash
++-- strings and the handler registration live here so a disabled module
++-- answers no slash at all. Integration's surfaces are registered here too.
++function SF.Enable()
++  initDB()
++  SF.CreateMinimapButton()
++  SF.UpdateMinimapButton()
++  -- Integration.lua defines this and loads before Core.lua.
++  if type(SF.EnableIntegrations) == "function" then
++    SF.EnableIntegrations()
++  end
++  SLASH_TOUCHSTONE1 = "/touchstone"
++  SLASH_TOUCHSTONE2 = "/sf"
++  SLASH_TOUCHSTONE3 = "/statforge"
++  SlashCmdList.TOUCHSTONE = touchstoneSlash
++end

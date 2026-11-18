@@ -1,13 +1,23 @@
 -- Asset-path invariant for the vendored Touchstone.
 --
--- Upstream hardcodes the art path as Interface\AddOns\Touchstone\... , which is
--- where the standalone addon lived. Once the files are vendored under
--- MightiePack/Modules/Touchstone/, that path resolves to nothing: the bag arrow
--- and the toast arrow render as empty textures, so an upgrade is judged (the
--- item tooltip says "Touchstone: Upgrade") but never marked in the bags.
+-- Upstream used to hardcode the art path as Interface\AddOns\Touchstone\..., which
+-- is where the standalone addon lived. Once the files are vendored under
+-- MightiePack/Modules/Touchstone/, that path resolves to nothing: the bag arrow and
+-- the toast arrow render as empty textures, so an upgrade is judged (the item
+-- tooltip says "Touchstone: Upgrade") but never marked in the bags.
 --
--- Every vendored file must therefore build the path from the addon name it was
--- loaded with, via MIGHTIEPACK_TOUCHSTONE_ASSETS.
+-- THE MECHANISM MOVED UPSTREAM (StatForge card t_a875a586, pin eebfba4): every
+-- texture is now resolved at USE time through SF.AssetPath, and a host points the
+-- root at its own folder once with SF.SetAssetRoot. So the invariant is no longer
+-- "the file defines a constant" — it is:
+--
+--   1. no vendored file builds a marker texture path of its own;
+--   2. every file that names marker.tga resolves it through SF.AssetPath (or the
+--      pin's own assetPath() helper), never by concatenating a literal;
+--   3. the pack claims the root, once, from Modules.lua, and the root is the
+--      folder these files actually live in;
+--   4. the retired pack constant (MIGHTIEPACK_TOUCHSTONE_ASSETS) is gone: a file
+--      that still carried it would be a second source of truth for the same path.
 --
 -- Fails on build 51656e0, which still hardcoded the standalone path.
 
@@ -31,9 +41,6 @@ local function readAll(p)
   f:close()
   return s
 end
-
--- The literal, as bytes: AddOns\\Touchstone (two backslashes inside the string).
-local HARDCODED = "AddOns\\\\Touchstone"
 
 local files = {}
 -- GNU find on CI (Linux). A Windows checkout has no GNU find — `find` there is a
@@ -63,23 +70,32 @@ for _, path in ipairs(files) do
   check(src ~= nil, "readable: " .. path)
   if src then
     local short = path:match("([^/\\]+)$")
-    check(not src:find(HARDCODED, 1, true),
-      short .. ": no hardcoded AddOns\\Touchstone asset path")
+    check(src:find("MIGHTIEPACK_TOUCHSTONE_ASSETS", 1, true) == nil,
+      short .. ": does not carry the retired pack asset constant "
+        .. "(the pin resolves paths through SF.AssetPath)")
     if src:find("marker.tga", 1, true) then
       usesMarker = usesMarker + 1
-      check(src:find("MIGHTIEPACK_TOUCHSTONE_ASSETS", 1, true) ~= nil,
-        short .. ": marker.tga is built from MIGHTIEPACK_TOUCHSTONE_ASSETS")
-      check(src:find("local MIGHTIEPACK_TOUCHSTONE_ASSETS%s*=") ~= nil,
-        short .. ": defines MIGHTIEPACK_TOUCHSTONE_ASSETS before use")
+      local viaSeam = src:find("SF.AssetPath(", 1, true) ~= nil
+        or src:find("assetPath(", 1, true) ~= nil
+      check(viaSeam,
+        short .. ": marker.tga is resolved through SF.AssetPath, not concatenated")
     end
   end
 end
-check(usesMarker >= 2, "at least the bag/toast file and the upgrades tab reference marker.tga")
+check(usesMarker >= 2,
+  "at least the bag/toast file and the upgrades tab reference marker.tga (got "
+    .. usesMarker .. ")")
 
--- The constant must resolve to the vendored folder, not the standalone one.
-local probe = readAll(dir .. "/ChestAdvisor/ChestAdvisor.lua") or ""
-check(probe:find('"\\\\Modules\\\\Touchstone\\\\ChestAdvisor\\\\"') ~= nil,
-  "asset root appends Modules\\Touchstone\\ChestAdvisor\\")
+-- The pack claims the root, once, and it is the folder these files live in.
+local modules = readAll(root .. "/MightiePack/Modules.lua") or ""
+check(modules:find("sf%.SetAssetRoot", 1) ~= nil,
+  "Modules.lua claims the asset root through the pin's SF.SetAssetRoot")
+check(modules:find("Modules\\\\Touchstone\\\\ChestAdvisor\\\\", 1, true) ~= nil,
+  "the claimed root is the vendored folder (Modules\\Touchstone\\ChestAdvisor\\)")
+
+-- A claim that is never reached is not a claim: the module's Enable() must call it.
+check(modules:find("claimPresentation%(%)", 1) ~= nil,
+  "the module's Enable() calls claimPresentation()")
 
 if fails == 0 then
   print("touchstone_assets_spec: ok")
