@@ -82,6 +82,10 @@ local env = {
   -- The fold's guard is the first statement: the permissive stub would make it
   -- truthy and the chunk would return before defining anything.
   MightiePackTouchstoneSkip = false,
+  -- The pin's own opt-out name (StatForge card t_4e61b67f). The permissive __index
+  -- below would answer `true` for anything missing, and the chunk's first statement
+  -- would then return before defining anything — so it is named here, explicitly.
+  TouchstoneSkip = false,
   GetTime = function() return 0 end,
   GetLocale = function() return "enUS" end,
   UnitClass = function() return "Paladin", "PALADIN" end,

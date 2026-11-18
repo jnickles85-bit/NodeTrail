@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- StatForge deep probe: direct-value reads for a client we cannot interrogate
 --- interactively (WoW: Forever beta).
 ---

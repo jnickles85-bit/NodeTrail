@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 -- Verdict.lua — the t_3c1256ec upgrade verdict.
 --
 -- Two pure pieces of knowledge, with no UI, no client dependency, and no
@@ -1279,8 +1282,82 @@ Verdict.PERCENT_TO_RATING = {
 	BlockChance = Verdict.BLOCK_CHANCE_RATING_PER_PERCENT,
 }
 
+-- ── CARD t_9d718a77: THE SPELLINGS THE CLIENT PRINTS FOR THOSE WORDS ──────
+-- The equal-damage-per-second gate reads Hit and Crit through
+-- Verdict.beyondResolution, which compares the keys of PERCENT_TO_RATING. That
+-- gate was STARVED: the parser placed exactly ONE spelling of each word — the
+-- bare "+12 Crit" / "+10 Hit" the generic clause already read — and every other
+-- shape the client prints fell into the unknown bucket, where the weapon path
+-- DROPPED it instead of refusing. Measured at c7b7997 on a Retribution paladin,
+-- both weapons at 10.00 dps with only the candidate's stat line changing:
+--
+--     +12 Crit Rating   -> NOT_UPGRADE — equal weapon damage per second (10.00)
+--     +1% Crit          -> NOT_UPGRADE — equal weapon damage per second (10.00)
+--     +1% Hit           -> NOT_UPGRADE — equal weapon damage per second (10.00)
+--     +12 Crit          -> UNKNOWN — cannot judge: Crit (the two weapons tie ...)
+--
+-- So a confident "the same" went out over lines the parse never understood.
+--
+-- WHAT IS ACCEPTED, AND WHY EACH ONE. The two WORDS are the scale's own, so the
+-- only question this table answers is which tooltip text names them:
+--
+--   "crit", "hit"                     — already read by the generic "+N Word"
+--                                      clause; listed so this table is the WHOLE
+--                                      vocabulary of the two words rather than a
+--                                      patch beside one spelling.
+--   "crit rating", "hit rating"       — the client's own key names (the verified
+--                                      ITEM_MOD_HIT_RATING / ITEM_MOD_CRIT_RATING
+--                                      and their MELEE/RANGED/SPELL siblings), and
+--                                      the rendered lines this repo has captured:
+--                                      "4 Hit Rating" / "6 Crit Rating" on the
+--                                      owner's Reliquary Mantle read.
+--   "critical strike", "critical
+--    strike rating"                  — the client's own word for the stat, taken
+--                                      from its own sentence ("...get a critical
+--                                      strike...") which this file already reads,
+--                                      plus the same rating suffix.
+--   the melee/ranged/spell prefixes  — the remaining verified key stems
+--                                      (ITEM_MOD_HIT_MELEE_RATING, …_RANGED_…,
+--                                      …_SPELL_…, and CRIT likewise). They are the
+--                                      same stat by the client's own recap, quoted
+--                                      verbatim under WEIGHT_KEYS ("Spell, melee,
+--                                      and ranged hit chance are combined, as are
+--                                      spell, melee, and ranged critical chance"),
+--                                      which is also why ITEM_STAT_KEYS folds all
+--                                      eight keys onto the two words.
+--
+-- A PERCENT sign on the line ("+1% Crit") is the same stat in the unit the
+-- tooltip prints, and the rating-tip clause lifts it through the ONE
+-- conversion (ratingFromPercent) exactly as the four sentences do.
+--
+-- WHAT IS NOT ACCEPTED, DELIBERATELY: every other spelling — the spell/melee
+-- prefixes, "chance to", a school-scoped variant, and "Weapon Skill" above all.
+-- The first group has no measured rendering on this tree, and Weapon Skill is a
+-- WORD THE SCALE DOES NOT CARRY: pricing it is a vocabulary decision for the
+-- owner (card t_9d718a77's question, not its step). An unlisted spelling does
+-- not go quiet any more — the rating-tip clause below places nothing, the line
+-- stays digit-bearing and unplaceable, and the equal claim REFUSES on it (see
+-- the unread-line rule in compareWeapon). Widening this table is therefore
+-- always safe; narrowing it can only produce an honest UNKNOWN.
+Verdict.STAT_TIP_SPELLINGS = {
+	["crit"]                         = "Crit",
+	["crit rating"]                  = "Crit",
+	["critical strike"]              = "Crit",
+	["critical strike rating"]       = "Crit",
+	["melee crit rating"]            = "Crit",
+	["ranged crit rating"]           = "Crit",
+	["spell crit rating"]            = "Crit",
+	["spell critical strike rating"] = "Crit",
+	["hit"]                          = "Hit",
+	["hit rating"]                   = "Hit",
+	["melee hit rating"]             = "Hit",
+	["ranged hit rating"]            = "Hit",
+	["spell hit rating"]             = "Hit",
+}
+
 -- THE conversion: a tooltip's percent -> the rating unit of record. ONE
--- definition, ONE multiply, ONE call site (parseLine_'s sentence clause). A
+-- definition, ONE multiply, and TWO call sites, both inside parseLine_ (the four
+-- sentence clauses and the rating-tip clause card t_9d718a77 added). A
 -- word with no entry passes through untouched, which is why this is not a
 -- second branch a future reader has to keep in sync with a table.
 --
@@ -1688,6 +1765,46 @@ local function parseLine_(line)
 		local rw = ratingWordOf(rrest)
 		if rw then return tonumber(rnum), rw end
 	end
+	-- ── card t_9d718a77: THE RATING-TIP SPELLINGS OF THE TWO SCALE WORDS ────
+	-- The generic clause above reads "+12 Crit" / "+10 Hit" and nothing else,
+	-- so every OTHER spelling the client prints for the same two words —
+	-- "+12 Crit Rating", "+1% Crit", "+10 Hit Rating" — parsed as nothing. On
+	-- the armour path that refused the item (the line was digit-bearing and
+	-- unplaceable); on the weapon path's equal-DPS branch it did NOT, and the
+	-- pair was called "the same" over a number that had never been read (the
+	-- measurement is quoted under Verdict.STAT_TIP_SPELLINGS above).
+	--
+	-- Two shapes, one table. A line that carries a PERCENT is the tooltip's own
+	-- unit and lifts through Verdict.ratingFromPercent; a line that carries a
+	-- bare count is already the rating the client's read returns. Which words
+	-- each shape may name is the table's business, never this clause's — so
+	-- the vocabulary is data a card can enumerate, and a spelling the table does
+	-- not carry falls through to the unplaceable tail below (fail-closed, and
+	-- since this card no longer silent on the weapon path). rawget so a cleared
+	-- table is a real absence, the same reason PERCENT_TO_RATING uses it.
+	--
+	-- READ AGAINST `plain`, NOT `stat_sentence`, AND DELIBERATELY: the "Equip:"
+	-- prefix belongs to the PROC channel — "Equip: +3 Crit" is an on-equip effect
+	-- the client prints, not a stat line, and the clause below the proc reader is
+	-- where this one belongs (t_02877bb4 AC-C and t_ed71a583 AC-C both pin that
+	-- reading, and the first cut of this clause broke them by lifting it). A stat
+	-- line prints as "+12 Crit Rating", unprefixed.
+	local tipSpellings = rawget(Verdict, "STAT_TIP_SPELLINGS")
+	if type(tipSpellings) == "table" then
+		local tipPct, tipPctTail = plain:match("^%+?%s*(%d+%.?%d*)%%%s+(.+)$")
+		if tipPct then
+			local tipWord = rawget(tipSpellings, tipPctTail)
+			if tipWord ~= nil then
+				return Verdict.ratingFromPercent(tipWord, tonumber(tipPct)), tipWord
+			end
+		end
+		local tipNum, tipNumTail = plain:match("^%+?%s*(%d+)%s+(.+)$")
+		if tipNum then
+			local tipWord = rawget(tipSpellings, tipNumTail)
+			if tipWord ~= nil then return tonumber(tipNum), tipWord end
+		end
+	end
+	-- proc line:  "Equip: +X Foo"
 	-- Multi-word "Equip: +N Hit Rating" first (a trailing word would
 	-- otherwise be captured as the proc form "Equip:Hit").
 	local epnum, eprest = trimmed:match("^%s*Equip:%s*%+%s*(%d+%.?%d*)%s+(.+)$")
@@ -1695,7 +1812,6 @@ local function parseLine_(line)
 		local ew = ratingWordOf(eprest)
 		if ew then return tonumber(epnum), ew end
 	end
-	-- proc line:  "Equip: +X Foo" (original shape, no end-anchor — a
 	-- trailing period is still a Strength/etc. proc, not a suppression).
 	local pnum, pword = trimmed:match("^%s*Equip:%s*%+%s*(%d+)%s+(%a+)")
 	if pnum and pword then
@@ -1779,6 +1895,9 @@ local function parseLine_(line)
 	-- conversion above): a one-decimal percent cannot recover the client's
 	-- exact rating count, so the comparison treats a difference smaller than
 	-- one tooltip step as LEVEL instead of pricing the tooltip's rounding.
+	-- (card t_9d718a77: the rating-tip clause above reads `plain`, not this view,
+	-- because the "Equip:" prefix belongs to the proc channel — so nothing
+	-- outside these four sentences needs the sentence normalisation.)
 	local stat_sentence = plain:gsub("^equip:%s*", ""):gsub("%s*%.$", "")
 	-- ALL FOUR clauses read `%d+%.?%d*` and all four lift through
 	-- Verdict.ratingFromPercent — the ONE conversion site. Card t_9d3273cb: the
@@ -2937,28 +3056,13 @@ end
 local TRADE_OFF = "TRADE_OFF"
 Verdict.TRADE_OFF = TRADE_OFF
 
--- The trade-off reason: the card asks for "the exact deltas in the tooltip".
--- The deltas themselves are computed by the UI (Verdict.statDeltas/deltaText —
--- the additive helpers shipped by t_ed71a583), which reads the SAME parsed
--- tables. This builds the comparator-side line: the first (in relevance-set
--- order) term on which the sides differ, named by the ORDER's own wording
--- grammar, plus the two-sided terms that moved so a caller without the UI layer
--- still has the arithmetic.
---
--- A one-sided term (present on exactly one side) is reported as "absent", never
--- as 0 — the AC-F rule, made visible in the words rather than hidden.
-local function tradeOffReason(candStats, eqStats, firstDiff)
-	local cand = type(candStats) == "table" and candStats or {}
-	local eq   = type(eqStats)   == "table" and eqStats   or {}
-	local head = "trade-off: better on some stats, worse on others"
-	if type(firstDiff) == "string" then
-		local c, e = rawget(cand, firstDiff), rawget(eq, firstDiff)
-		local cs = (c ~= nil) and tostring(c) or "absent"
-		local es = (e ~= nil) and tostring(e) or "absent"
-		head = head .. " (" .. firstDiff .. " " .. cs .. " vs " .. es .. ")"
-	end
-	return head
-end
+-- The trade-off reason lives with the ORDERED VERDICT below (card t_0bf5c207),
+-- because it needs the pack's priced words as well as the order: the sentence
+-- names BOTH SIDES of the trade in the order's own ranking, and the priced words
+-- are declared further down this file. The old first-diff-only sentence is gone
+-- with the dominance read it served: it named the loss and never the stat that
+-- paid for it (the Ret belt read "(Strength absent vs 10)" with the crit that
+-- bought the trade nowhere in the sentence).
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- (card t_984bc8ac) THE WEIGHTED RESOLUTION LAYER — the owner's supersede.
@@ -3167,6 +3271,288 @@ function Verdict.proofTerms(order, weights)
 		end
 	end
 	return terms
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- (card t_0bf5c207, Touchstone Step 1) THE ORDERED VERDICT
+--
+-- ONE cascade, in ONE place, and THE ORDER IS AN INPUT. Nothing below reads
+-- Verdict.ORDERS: the caller hands over `spec.order`, so the same pair judged
+-- against a leveling order and against an endgame order gets different answers
+-- from the same code. That is a requirement of the product, not a nicety: Step 2
+-- swaps the list per character, and any code that assumes WHICH list is in force
+-- would have to be rewritten for it.
+--
+-- WHY THE OLD READING HAD TO GO. Gate 9 asked `Verdict.dominance` over
+-- `proofTerms` — the order's words, then every word the pack prices. That makes
+-- a priced stat the ORDER DOES NOT RANK (Crit on a Retribution paladin) a term of
+-- equal standing with the order's first word, so a belt that loses Strength and
+-- gains crit came out green whenever the price liked the trade. The owner ruled
+-- (2026-11-12, reaffirmed 2026-11-13) that this is a trade-off, not an upgrade:
+-- a green arrow must mean "equal or better on every stat this spec ranks".
+--
+-- THE CASCADE — top to bottom, first match wins:
+--
+--   0. no order for this class/role            -> UNKNOWN, refuse (never guess)
+--   1. nothing moves anywhere                  -> "equal" (the caller then lets
+--                                                 the Armor/Block tiebreak speak,
+--                                                 and only then)
+--   2. MIXED movement — something favourable and something unfavourable, over
+--      the order's words (IN) and the pack's priced words the order does not
+--      rank (OFF)                              -> TRADE_OFF, both sides named
+--   3. uniformly unfavourable (nothing moves for) -> DOWNGRADE, naming the
+--                                                 highest ranked IN word that
+--                                                 differs, else the OFF word
+--   4. uniformly favourable                    -> UPGRADE (the only green)
+--
+-- GREEN IS PARETO. Rule 4 needs NO priced stat unfavourable and at least one
+-- favourable, over both channels. A weight is a SUPPORT SET here (does this spec
+-- care about the word at all), never an amount: no margin, no threshold and no
+-- weighted total can turn rule 2 into a green arrow. That is the loophole this
+-- card closes — +40 crit against -10 Strength used to clear the 0.5 threshold and
+-- read green, and the owner ruled it must not (ruling 2026-11-13, clause A).
+--
+-- MIXED BEFORE DOWNGRADE, and that order is load-bearing: if "worse on the top
+-- ranked word" outranked "mixed", the same pair under the same order would read
+-- DOWNGRADE or TRADE_OFF depending only on whether the pack prices the word it
+-- gains — a price shaping a Step 1 verdict, which clause B forbids in both
+-- directions. DOWNGRADE therefore means "uniformly worse", never "mixed".
+--
+-- STATE, not just verdict. The three player-facing marks are UPGRADE, TRADE_OFF
+-- and no-mark; DOWNGRADE and "equal" are both no-mark today, and they are NOT the
+-- same answer ("worse than what you wear" and "the same as what you wear" are
+-- different things to say). This returns both: the verdict string the rest of the
+-- module and the UI already speak, and a `state` word that the tests and any
+-- later surface can tell apart. `state` is one of
+--   "upgrade" | "downgrade" | "trade_off" | "equal" | "unresolved"
+-- and `verdict` is "UNKNOWN" for "unresolved" (the caller refuses).
+--
+-- DOWNGRADE IS ORDER-RELATIVE. Which words move at all is decided by the list in
+-- force, so the same pair flips DOWNGRADE <-> UPGRADE on a different list with
+-- no code change — that is what makes the order a parameter (Step 2).
+--
+-- EPSILON. "level" is `termSign` — `Verdict.levelWithinResolution`, the module's
+-- ONE epsilon rule, no second threshold anywhere in this cascade.
+--
+-- PROOF_EXEMPT words (Armor, Block, WeaponDps) are not IN and not OFF: each has
+-- its own two-sided ruler and they form the tiebreak channel, consulted only when
+-- nothing else moves. E2's "armour is never a win, only a tiebreak" is what stops
+-- armour ever buying or blocking a verdict here.
+Verdict.RANKED_STATES = {
+	upgrade = true, downgrade = true, trade_off = true, equal = true,
+	unresolved = true,
+}
+
+-- The order's words as a set. The order is data the caller owns; this never
+-- caches it across calls, so a caller that changes list between rows is heard.
+local function orderWordSet(order)
+	local set = {}
+	for _, word in ipairs(type(order) == "table" and order or {}) do
+		if type(word) == "string" then set[word] = true end
+	end
+	return set
+end
+
+-- The words a trade-off may name, in PRIORITY order: the order's own words
+-- first (a leveling list ranks Crit above Strength if it says so), then the
+-- pack's priced words the order does not name, in WEIGHT_KEYS order. Used only
+-- to WORD a reason — it never decides anything.
+local function priorityWords(order, weights)
+	local words, seen = {}, {}
+	local function add(word)
+		if type(word) ~= "string" or seen[word] then return end
+		seen[word] = true
+		words[#words + 1] = word
+	end
+	for _, word in ipairs(type(order) == "table" and order or {}) do add(word) end
+	if type(weights) == "table" then
+		for _, key in ipairs(WEIGHT_KEYS) do
+			local w = rawget(weights, key)
+			local word = WEIGHT_WORD[key]
+			if type(w) == "number" and w > 0 and word ~= nil
+				and not rawget(Verdict.PROOF_EXEMPT, word) then
+				add(word)
+			end
+		end
+	end
+	return words
+end
+
+-- The trade-off reason (card t_0bf5c207). The card asks for BOTH SIDES, in
+-- priority order: the stat given up and the stat gained, with the pair's own
+-- numbers. Before this card the sentence named only the FIRST differing term,
+-- which on the Ret belt read "(Strength absent vs 10)" — the loss, with the crit
+-- that paid for it nowhere in the sentence.
+--
+-- A one-sided term (present on exactly one side) is reported as "absent", never
+-- as 0 — the AC-F rule, made visible in the words rather than hidden.
+local function tradeOffReason(candStats, eqStats, order, weights)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+	local head = "trade-off: better on some stats, worse on others"
+	local better, worse = nil, nil
+	local betterAt, worseAt = nil, nil
+	local words = priorityWords(order, weights)
+	for i, word in ipairs(words) do
+		local sign = termSign(word, rawget(cand, word), rawget(eq, word))
+		if sign > 0 and better == nil then better, betterAt = word, i end
+		if sign < 0 and worse == nil then worse, worseAt = word, i end
+	end
+	local function clause(word, direction)
+		local c, e = rawget(cand, word), rawget(eq, word)
+		local cs = (c ~= nil) and tostring(c) or "absent"
+		local es = (e ~= nil) and tostring(e) or "absent"
+		return direction .. " on " .. playerWord(word)
+			.. " (" .. cs .. " vs " .. es .. ")"
+	end
+	local parts = {}
+	if better ~= nil then parts[#parts + 1] = { at = betterAt, text = clause(better, "better") } end
+	if worse ~= nil then parts[#parts + 1] = { at = worseAt, text = clause(worse, "worse") } end
+	if #parts == 2 and parts[2].at < parts[1].at then
+		parts[1], parts[2] = parts[2], parts[1]
+	end
+	local said = {}
+	for _, part in ipairs(parts) do said[#said + 1] = part.text end
+	if #said > 0 then head = head .. " (" .. table.concat(said, ", ") .. ")" end
+	return head
+end
+
+-- THE RANKED HALF of the cascade (rules 2-5): the order's own words, walked
+-- once. Pure, order-in, no pack consulted TO DECIDE. `weights` is optional and
+-- is read for WORDING only (the trade-off sentence may name a priced word the
+-- order does not rank), never to change an answer.
+--
+-- Public because the off-order rule in gate 9 has to ask it "what does the
+-- RANKED comparison say about this pair?" before it lets a price speak — that is
+-- how a green arrow stays impossible on a pair that gives up a ranked stat.
+--
+-- Returns verdict, reason, state: "upgrade" | "downgrade" | "trade_off";
+-- "equal" (which the caller then resolves through the Armor/Block tiebreak).
+function Verdict.rankedCore(candStats, eqStats, order, weights)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+
+	if type(order) ~= "table" or #order == 0 then
+		return "UNKNOWN", "not judged: no stat order resolved for this class and role",
+			"unresolved"
+	end
+
+	-- THE MOVEMENT, in two channels:
+	--   IN  — the order's own words, in the order's priority;
+	--   OFF — every word the pack PRICES at a non-zero weight that the order does
+	--         not rank, EXCEPT the tiebreak channel (PROOF_EXEMPT: Armor, Block,
+	--         WeaponDps keep their own two-sided rules, and E2's "armour is never
+	--         a win, only a tiebreak" is what stops armour ever buying or blocking
+	--         a verdict here).
+	-- "Priced" is the pack's SUPPORT SET, not a number: a pack that prices a word
+	-- at 0 is saying this spec does not care about it, so that word cannot make a
+	-- pair non-green. No margin, no threshold, and no weighted total takes part in
+	-- any answer below — that is card t_0bf5c207 clause B, and it is why
+	-- `weightedResolution` no longer appears in this path (it stays, public, as the
+	-- Step 3 engine).
+	local inOrder = orderWordSet(order)
+	local offFor, offAgainst = {}, {}
+	if type(weights) == "table" then
+		for _, key in ipairs(WEIGHT_KEYS) do
+			local w = rawget(weights, key)
+			local word = WEIGHT_WORD[key]
+			if type(w) == "number" and w > 0 and word ~= nil
+				and not inOrder[word]
+				and not rawget(Verdict.PROOF_EXEMPT, word) then
+				local sign = termSign(word, rawget(cand, word), rawget(eq, word))
+				if sign > 0 then
+					offFor[#offFor + 1] = word
+				elseif sign < 0 then
+					offAgainst[#offAgainst + 1] = word
+				end
+			end
+		end
+	end
+
+	-- `firstDiff` is the HIGHEST-RANKED order word that differs; `gained`/`lost`
+	-- are the highest-ranked order word each way.
+	local firstDiff = nil
+	local gained, lost = nil, nil
+	for _, word in ipairs(order) do
+		local sign = termSign(word, rawget(cand, word), rawget(eq, word))
+		if sign ~= 0 then
+			if firstDiff == nil then firstDiff = word end
+			if sign > 0 and gained == nil then gained = word end
+			if sign < 0 and lost == nil then lost = word end
+		end
+	end
+
+	local offMoved = (#offFor + #offAgainst) > 0
+	local anyFor = (gained ~= nil) or offMoved and #offFor > 0
+	local anyAgainst = (lost ~= nil) or offMoved and #offAgainst > 0
+
+	if firstDiff == nil and not offMoved then
+		-- Rule 1 — nothing moved at all. The Armor/Block tiebreak is the caller's
+		-- (E2: it breaks a remaining tie, and only that).
+		return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement",
+			"equal"
+	end
+
+	-- The two movement rules are read over BOTH channels at once, and the ORDER
+	-- OF THESE TWO BRANCHES IS THE CONTRACT:
+	--
+	--   mixed movement  -> TRADE_OFF     (something for, something against)
+	--   uniformly worse -> DOWNGRADE     (nothing for, something against)
+	--
+	-- Why mixed comes first, in one sentence: if "worse on the top ranked word"
+	-- outranked "mixed", then the SAME pair, under the SAME order, would read
+	-- DOWNGRADE or TRADE_OFF depending only on whether the pack happens to price
+	-- the word it gains — a price shaping a Step 1 verdict, which clause B
+	-- forbids in BOTH directions. With mixed first, that pair is a trade-off
+	-- either way, and the price cannot move the label. It is also what keeps the
+	-- owner's cloak (loses Stamina, gains Strength) an amber chip instead of
+	-- silently unmarked. DOWNGRADE is therefore reserved for uniformly-worse
+	-- pairs, and it stays order-relative: which words move at all is decided by
+	-- the list in force, so the same pair flips DOWNGRADE <-> UPGRADE on a
+	-- different list with no code change (AC-8).
+	if anyFor and anyAgainst then
+		return TRADE_OFF, tradeOffReason(cand, eq, order, weights), "trade_off"
+	end
+
+	if anyAgainst then
+		-- Uniformly worse. Rule 4's naming rule: the HIGHEST-RANKED word of the
+		-- order that differs if one does, otherwise the priced off-order word
+		-- that moved against.
+		return "NOT_UPGRADE",
+			loseReason(firstDiff or offAgainst[1]), "downgrade"
+	end
+
+	-- Uniformly favourable — rule 5. The only path to a green arrow, and it names
+	-- the word that decided it (the owner's permanent "decided by <stat>" line):
+	-- the highest-ranked order word that moved, else the priced off-order word.
+	return "UPGRADE", winReason(gained or offFor[1]), "upgrade"
+end
+
+-- THE CASCADE ITSELF. Pure: two parsed stat tables, an order, a weights table.
+-- Returns verdict, reason, state (see the block comment for the state words).
+-- Public because the card's tests drive THIS function, and because Step 2 must be
+-- able to hand it a different order without touching this file.
+function Verdict.rankedVerdict(candStats, eqStats, order, weights)
+	local cand = type(candStats) == "table" and candStats or {}
+	local eq   = type(eqStats)   == "table" and eqStats   or {}
+
+	-- Rule 0 — an order that cannot be resolved is not a guess (C1b's rule:
+	-- "stay UNKNOWN instead of reading a guessed arrow").
+	if type(order) ~= "table" or #order == 0 then
+		return "UNKNOWN", "not judged: no stat order resolved for this class and role",
+			"unresolved"
+	end
+
+	-- NO HAND-OFF. The Oct 19 off-order rule used to stop the ordinal read here
+	-- and hand the pair to the weight pack. The owner's ruling of 2026-11-13
+	-- supersedes that ON THE VERDICT PATH (declared on the card, not slipped in):
+	-- a priced stat off the order is now READ BY THE CASCADE ITSELF — it counts as
+	-- movement, so a pair that gains crit and loses Strength is MIXED and reads
+	-- TRADE_OFF however the price adds up. The direction of that supersede is
+	-- strictly fewer greens, never more, which is the Oct 19 ruling's own intent.
+	-- weightedResolution stays reachable and tested (it is the Step 3 engine); it
+	-- just cannot decide a Step 1 verdict.
+	return Verdict.rankedCore(cand, eq, order, weights)
 end
 
 -- ── THE NAMED THRESHOLD ────────────────────────────────────────────────────
@@ -5920,6 +6306,31 @@ local function cannotClassify(side, line, qualifier)
 	return "UNKNOWN", reason .. " (on the " .. which .. " item)"
 end
 
+-- ── CARD t_9d718a77: SILENCE IS NOT "NOTHING THERE" ───────────────────────
+-- The equal-damage-per-second claim is a claim ABOUT THE READ: "these two
+-- weapons are the same" is only sayable over two tooltips that were both
+-- understood. A digit-bearing line the parser could not place is not a line
+-- with nothing in it — it is a line nobody read — and a confident "equal" over
+-- one of those is the same fail-open shape the Sell Price rule closed (a claim
+-- may never rest on a line you did not read).
+--
+-- So the weapon path's equal branch asks THIS question before it claims
+-- sameness, and names the line it could not place. The sentence is
+-- cannotClassify's — ONE refusal grammar in this file, so a reader who has seen
+-- "cannot classify: <line>" elsewhere already knows what it means — with a
+-- qualifier that states both halves of what the tool really knows: the tie on
+-- damage per second (which IS true), and the line that stopped the pair from
+-- being called the same. The side is named because a player looking at the
+-- tooltip needs to know which item carried the line.
+function Verdict.unreadEqualReason(line, side)
+	-- ONE value out of cannotClassify: the sentence, not its (verdict, sentence)
+	-- pair — a two-value return here would expand into the caller's return list
+	-- and hand the verdict slot the word "UNKNOWN" as the reason.
+	local _, reason = cannotClassify(side, line,
+		"the weapons tie on damage per second, but that line could not be placed")
+	return reason
+end
+
 -- ---- A DEFINITE NO is not a CANNOT-JUDGE (card t_8d3af71d) ------------------
 -- The client's eligibility answer has two failure shapes, and until this card
 -- they were reported as one:
@@ -6059,7 +6470,127 @@ end
 -- table on purpose: ChestAdvisor's SLOT_WORD (which agrees with WoWAI's
 -- EQUIP_SLOT and StatForge's SLOT_NAMES) stays the ONLY slot vocabulary, and a
 -- caller that cannot name its slot passes nothing rather than inventing one.
-function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
+-- ---- Step 3 C7 (card t_8e171c28): THE SEAM ----------------------------------
+--
+-- WHAT THIS IS. The one place the arbitration layer may speak: it narrows
+-- exactly one of the comparator's outcomes — TRADE_OFF — and only when the
+-- caller supplied the character's own totals.
+--
+-- WHERE IT SITS, and how that moved. The scoping doc (§2.1) cut this seam at
+-- `weightedResolution`'s decline, in an `outcome == "trade-off"` arm that no
+-- longer exists: card t_3319dc9d (C1) replaced that layer with
+-- `Verdict.rankedVerdict`, and the shipped path reaches the trade-off wording
+-- through `state == "trade_off"`. The INTENT is identical and is what this hook
+-- preserves — the cascade has its say first, the arbitration is consulted
+-- second, the trade-off wording is the fall-through — so the seam lives at that
+-- one point in `Verdict.evaluate` (search TRADE_OFF_SEAM).
+--
+-- THE CONTRACT, in three parts:
+--   1. `totals` is an ARGUMENT, never a read. This module stays pure (see the
+--      module header): the impure edge is ChestAdvisor.lua's snapshot, handed
+--      down the path `apiBySide` already travels.
+--   2. A nil from the judge changes NOTHING — absent module, no judge, a raise,
+--      or a refusal all return nil here and the caller falls through to the
+--      bytes the player sees today. Asserted against a pre-card tree by
+--      t_8e171c28-nonvacuity.js, not claimed.
+--   3. The ARMOUR-MATERIAL trade-off is not served (§1.3). Those pairs reach
+--      TRADE_OFF through the `allow()` softening, which runs AFTER this hook —
+--      so a material pair cannot be overturned by the model, and if the model
+--      DID answer, `allow` would soften its answer by the same rule.
+--
+-- THE TOKENS. The judge's SIDEGRADE ("inside the band") maps to this module's
+-- TRADE_OFF token, not to a fifth token: every consumer of the four-token
+-- vocabulary (the arrow, the chip, GearAPI.IsUpgrade/GetGain, the row's own
+-- `verdict`) then agrees without a second switch. The player-facing word
+-- "Sidegrade" is a RENDERED word (ChestAdvisor.lua's TOOLTIP_UI), exactly as
+-- UPGRADE renders as "Upgrade".
+local ARBITRATION_STATE_TOKEN = {
+	UPGRADE     = "UPGRADE",
+	NOT_UPGRADE = "NOT_UPGRADE",
+	SIDEGRADE   = "TRADE_OFF",
+}
+Verdict.ARBITRATION_STATE_TOKEN = ARBITRATION_STATE_TOKEN
+
+-- The buff warning the doc's §3 names, verbatim. Appended by `Verdict.arbitrate`
+-- (one place) so every surface that reads the reason carries it. No number: it
+-- is a statement about the reading, not a finding about the pair.
+Verdict.BUFF_WARNING = "judged with buffs on — a buff can fake a cap and inflate a pool"
+
+--- The arbitration's answer for a trade-off pair, or nil.
+---
+--- Returns (token, reason, detail): token is UPGRADE / NOT_UPGRADE / TRADE_OFF,
+--- nil when the layer has no opinion. `detail` is the judge's own table
+--- (state, driving, margin, band, context, confidence, bandSource, binding,
+--- survival, flip, buffed, lowWhy, byContext) — data for the surface, never a
+--- second decision.
+---
+--- `Arbitration` is resolved at CALL time through the global (the toc loads
+--- Verdict.lua before it, and the fengari VMs load the two separately). A
+--- module that is absent, has no judge, or raises is SILENCE: this function
+--- must never be able to change a row by failing.
+--
+--- SURVIVAL (§4.4) is applied HERE, not in the renderer, because it is a
+--- decision: survival is its own axis, it may decide ONLY when the throughput
+--- model lands inside the band, and when it does the reason line says so. The
+--- model itself never sets `decides` — its survival block is data — so the gate
+--- has exactly one owner and a decisive throughput answer can never be
+--- overridden by hit points. A pair that ties on survival as well keeps the
+--- model's own sentence ("under the band either way — pick the one you like"),
+--- which is the tie the doc asks for.
+local TIE_SENTENCE = "under the band either way — pick the one you like."
+local SURVIVAL_SENTENCE = {
+	candidate = "under the band on throughput — survival decides for the hovered item,"
+		.. " which keeps you standing.",
+	equipped = "under the band on throughput — survival decides for the equipped item,"
+		.. " which keeps you standing.",
+}
+
+--- "candidate" | "equipped" | nil, from the model's survival block.
+---
+--- A survival call needs BOTH axes pointing the same way. More health with worse
+--- mitigation (the crossing case) is a genuine tie, and a tie is never invented
+--- into a winner: the player gets the model's "pick the one you like" instead.
+local function survivalVerdict(s)
+	if type(s) ~= "table" then return nil end
+	local hp, mit = tonumber(s.dHP), tonumber(s.dMitigation)
+	if hp == nil or mit == nil then return nil end
+	if hp >= 0 and mit >= 0 and (hp > 0 or mit > 0) then return "candidate" end
+	if hp <= 0 and mit <= 0 and (hp < 0 or mit < 0) then return "equipped" end
+	return nil
+end
+
+function Verdict.arbitrate(candStats, eqStats, spec, totals)
+	if type(totals) ~= "table" then return nil end
+	local A = rawget(_G, "Arbitration")
+	if type(A) ~= "table" or type(A.judge) ~= "function" then return nil end
+	local ok, v = pcall(A.judge, candStats, eqStats, spec, totals)
+	if not ok or type(v) ~= "table" then return nil end
+	local token = ARBITRATION_STATE_TOKEN[v.state]
+	if token == nil then return nil end
+	local reason = type(v.reason) == "string" and v.reason or ""
+	-- §4.4, in ONE place: the survival axis may only speak inside the band.
+	if v.state == "SIDEGRADE" then
+		local sv = survivalVerdict(v.survival)
+		v.survivalVerdict = sv
+		if sv ~= nil then
+			local pos = reason:find(TIE_SENTENCE, 1, true)
+			if pos ~= nil then
+				reason = reason:sub(1, pos - 1) .. SURVIVAL_SENTENCE[sv]
+					.. reason:sub(pos + #TIE_SENTENCE)
+			end
+			-- No anchor found means the model reworded its tie sentence. Then
+			-- NO survival claim is made at all (the reason and the survival
+			-- line would otherwise contradict each other) — the battery pins
+			-- the anchor so the reword is caught in CI, not in a hover.
+		end
+	end
+	if v.buffed == true then
+		reason = reason .. " " .. Verdict.BUFF_WARNING .. "."
+	end
+	return token, reason, v
+end
+
+function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord, totals)
 	local function norm(side)
 		-- Returns: explicit (bool), canUse (nil|true|false), lines (nil|table)
 		-- Three distinct shapes:
@@ -6347,18 +6878,18 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord)
 
 	-- Gate (9) — the verdict.
 	--
-	-- Tank path (card t_89440dfa): the ORDER no longer decides. The verdict comes
-	-- from the three-outcome dominance test (Verdict.dominance) over the PROOF's
-	-- term list (Verdict.proofTerms, card t_da23ec75): the class/role's order
-	-- first — it is what words the reason — and then every word the pair's own
-	-- pack prices at a non-zero weight. Armor and Block are the tiebreak, not
-	-- terms (PROOF_EXEMPT). The order is then used ONLY to word the reason, via
-	-- the first term on which the two sides differ (dominance's second return).
+	-- The answer comes from ONE ordered cascade, Verdict.rankedVerdict above:
+	-- the class/role's order in force, then the words the pair's own pack prices
+	-- and the order does not rank. A weight is a SUPPORT SET there — "does this
+	-- spec care about the word at all" — never an amount: no threshold, no
+	-- margin, no weighted total can turn a mixed pair green. `dominance` /
+	-- `proofTerms` are no longer consulted on this path (they still describe the
+	-- weapon path and the Step 3 engine; card t_0bf5c207 clauses A/B).
 	--
-	--   dominant  -> UPGRADE              (>= everywhere, > somewhere; green arrow)
-	--   trade-off -> TRADE_OFF            (its own non-green mark + deltas)
-	--   dominated -> NOT_UPGRADE          (no mark)
-	--   equal     -> NOT_UPGRADE          (unchanged "equal" fall-through)
+	--   UPGRADE   (green arrow)  nothing priced moves against, something moves for
+	--   TRADE_OFF (amber chip)   movement both ways, both sides named
+	--   downgrade (no mark)      uniformly worse; the highest ranked word names it
+	--   equal     (no mark)      nothing moves; the Armor/Block tiebreak may speak
 	--
 	-- ⚠ THE LEGACY SWITCH (Verdict.LEGACY_ORDER_DECIDES): `true` restores HEAD's
 	-- exact behaviour, byte-for-byte, so the AC-C/AC-D harness can run every
@@ -7929,7 +8460,7 @@ end
 -- literal cannot silently drop it from the set.
 local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 
-function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide, ctx)
+function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide, ctx, totals)
 	local candNumbers = weaponNumbers(candLines)
 	local wornNumbers = weaponNumbers(wornLines)
 
@@ -7989,7 +8520,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- declared above them.
 	local promotionNote = ""
 
-	local function answer(v, r)
+	local function answer(v, r, d)
 		-- (card t_fc11dd1c) ONLY A JUDGED VERDICT CARRIES THE CLAUSE. The note means
 		-- "and here is what I judged it on", which is true of a decision and false
 		-- of a refusal: the owner's first live hover printed
@@ -8011,12 +8542,12 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- the promotion line concatenates that instead of the removed local; with
 		-- neither fact present it is "" and the bytes are the pre-card ones.
 		if promotionNote ~= "" and tostring(v) == "UPGRADE" then
-			return v, tostring(r or "") .. promotionNote .. disclosure
+			return v, tostring(r or "") .. promotionNote .. disclosure, d
 		end
 		-- (card t_c65cc350) UNCHANGED RULE, ONE MORE CLAUSE IN IT: a refusal that
 		-- carries an enchant — or both facts — still gets no clause at all.
-		if disclosure == "" or not WEAPON_JUDGED[tostring(v)] then return v, r end
-		return v, tostring(r or "") .. disclosure
+		if disclosure == "" or not WEAPON_JUDGED[tostring(v)] then return v, r, d end
+		return v, tostring(r or "") .. disclosure, d
 	end
 
 	-- ---- CARD t_1677cd39: A WEAPON THE SPEC CANNOT USE ----------------------
@@ -8217,8 +8748,26 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		if tie == "equal" then
 			-- (card t_c65cc350) the same view the judgement used: an enchant is not
 			-- a word this pair can be equal on, so it must not reach this parse.
-			local candStats = parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", nil)
-			local eqStats   = parseSide(weaponDisclosureLines(weaponStatLines(wornLines)), "worn",      nil)
+			-- (card t_9d718a77) AND THE PARSE'S SILENCE IS NOW HEARD. Until this
+			-- card only the FIRST return was kept, so a digit-bearing line the
+			-- parser could not place vanished from this branch entirely: both
+			-- sides parsed to an empty table, beyondResolution found no gap
+			-- between two empties, and a confident "equal weapon damage per
+			-- second" went out over a stat line nothing had read (the measured
+			-- matrix is under Verdict.STAT_TIP_SPELLINGS). The unread line is now
+			-- the FIRST question asked, because the gap question rests on the
+			-- read being complete: a pair with an unplaced line declines and
+			-- names it, before any claim about what the placed lines say.
+			local candStats, _, candUnknown =
+				parseSide(weaponDisclosureLines(weaponStatLines(candLines)), "candidate", nil)
+			local eqStats,   _, eqUnknown   =
+				parseSide(weaponDisclosureLines(weaponStatLines(wornLines)), "worn",      nil)
+			if candUnknown ~= nil then
+				return "UNKNOWN", Verdict.unreadEqualReason(candUnknown, "candidate")
+			end
+			if eqUnknown ~= nil then
+				return "UNKNOWN", Verdict.unreadEqualReason(eqUnknown, "worn")
+			end
 			local hidden = Verdict.beyondResolution(candStats, eqStats)
 			if hidden ~= nil then
 				return "UNKNOWN", Verdict.equalClaimReason(hidden)
@@ -8392,8 +8941,14 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- ONLY in its `order` — and only where the client named TANK (card
 	-- t_4590ab7e, item 2); the weights the layer consults are reached through
 	-- class/role/clientRole, which are carried across unchanged.
-	return answer(Verdict.evaluate({ canUse = canUse, line = candSide },
-		{ line = eqSide }, cmpSpec, api))
+	--
+	-- (card t_8e171c28) `totals` rides through to the same TRADE_OFF_SEAM the
+	-- armour path uses, so a weapon trade-off is arbitrated by the same model,
+	-- in the same place, with the same nil-means-today's-bytes rule. The third
+	-- return is the judge's detail; `answer` passes it out without reading it.
+	local ev, er, ed = Verdict.evaluate({ canUse = canUse, line = candSide },
+		{ line = eqSide }, cmpSpec, api, nil, totals)
+	return answer(ev, er, ed)
 end
 
 -- Tank path (card t_89440dfa): the relevance-set and dominance helpers are

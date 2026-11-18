@@ -1,6 +1,15 @@
+# reason: no upstream model
+#
+# The measured row stack plus the ledger palette: the Log tab draws with the
+# window's tokens and grows each row to its text.
+#
+# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# applies to: LogTab.lua at that commit. The sync applies this patch to the pin's
+# blob and hashes the result; --verify-shipped reverses it and checks the pin's
+# blob hash, so a patch that stops applying fails BY NAME in CI.
 --- a/LogTab.lua
 +++ b/LogTab.lua
-@@ -16,8 +16,52 @@
+@@ -19,8 +19,52 @@ StatForge = StatForge or {}
  local SF = StatForge
  local C = SF.Colors
  
@@ -55,7 +64,7 @@
  
  -- The wall-clock stamp the log entry carries (`at`). The advisor's formatter
  -- is the one the chat print uses. This fallback is the same rule for a host
-@@ -67,13 +111,12 @@
+@@ -70,13 +114,12 @@ local function itemName(link)
  end
  
  -- Which verdict colour: a recorded disagreement is a named negative, so it is
@@ -74,7 +83,7 @@
  end
  
  -- The player-facing word for a stored verdict token. The mapping lives on the
-@@ -92,6 +135,7 @@
+@@ -95,6 +138,7 @@ local state = {
    rows   = {},
    pool   = {},
    offset = 0,
@@ -82,16 +91,14 @@
    host   = nil,
    layout = nil,
  }
-@@ -141,82 +185,177 @@
+@@ -144,82 +188,177 @@ function SF.LogTabClear()
  end
  
  function SF.LogTabState()
 -  return { total = #state.rows, offset = state.offset }
--end
--
 +  return { total = #state.rows, offset = state.offset, shown = state.shown or 0 }
-+end
-+
+ end
+ 
 +-- ---------------------------------------------------------------------------
 +-- THE LEDGER ROW (card t_07f778ca, PART B) — the same three columns as Upgrades,
 +-- so the two lists read as one drawing:
@@ -113,6 +120,13 @@
 -  row:SetHeight(ROW_H)
 -  row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_H))
 -  row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_H))
+-
+-  local stamp = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  stamp:SetPoint("LEFT", 6, 0)
+-  stamp:SetWidth(84)
+-  stamp:SetJustifyH("LEFT")
+-  stamp:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+-  row.stamp = stamp
 +  row:SetHeight(ROW_MIN)
 +  -- No pitch (card t_4e5ad8a4): the row's height comes from its own measured
 +  -- cells and the stacking pass places it (SF.StackRow).
@@ -135,29 +149,47 @@
 +  verdict:SetWidth(GUTTER)
 +  verdict:SetJustifyH("LEFT")
 +  row.verdictWord = verdict
-+
+ 
+-  local slot = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  slot:SetPoint("LEFT", stamp, "RIGHT", 8, 0)
+-  slot:SetWidth(76)
+-  slot:SetJustifyH("LEFT")
+-  slot:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
+-  row.slot = slot
 +  local textLeft = GUTTER + NAME_GAP_X
 +  local textWidth = ROW_W - ROW_INSET * 2 - textLeft - CHANGE_W - 8
 +  if textWidth < 120 then textWidth = 120 end
-+
+ 
+-  local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  name:SetPoint("LEFT", slot, "RIGHT", 6, 0)
+-  name:SetWidth(190)
 +  local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 +  ledgerFont(name, NAME_SIZE)
 +  name:SetPoint("TOPLEFT", row, "TOPLEFT", textLeft, -PAD_TOP)
 +  name:SetWidth(textWidth)
-+  name:SetJustifyH("LEFT")
+   name:SetJustifyH("LEFT")
 +  local nr, ng, nb, na = ledgerColor("ledgerText", C.text)
 +  name:SetTextColor(nr, ng, nb, na)
-+  row.itemName = name
-+
-+  local reason = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+   row.itemName = name
+ 
+-  local verdict = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  verdict:SetPoint("LEFT", name, "RIGHT", 8, 0)
+-  verdict:SetWidth(96)
+-  verdict:SetJustifyH("LEFT")
+-  row.verdict = verdict
+-
+   local reason = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  reason:SetPoint("LEFT", verdict, "RIGHT", 6, 0)
+-  reason:SetWidth(360)
 +  ledgerFont(reason, REASON_SIZE)
 +  reason:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -NAME_GAP)
 +  reason:SetWidth(textWidth)
-+  reason:SetJustifyH("LEFT")
+   reason:SetJustifyH("LEFT")
+-  reason:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
 +  local rr, rg, rb, ra = ledgerColor("ledgerMuted", C.textMuted)
 +  reason:SetTextColor(rr, rg, rb, ra)
-+  row.reason = reason
-+
+   row.reason = reason
+ 
 +  local change = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 +  ledgerFont(change, REASON_SIZE)
 +  change:SetPoint("TOPRIGHT", row, "TOPRIGHT", -ROW_INSET, -PAD_TOP)
@@ -166,45 +198,16 @@
 +  local dr, dg, db, da = ledgerColor("ledgerDim", C.textDim)
 +  change:SetTextColor(dr, dg, db, da)
 +  row.change = change
- 
-   local stamp = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
--  stamp:SetPoint("LEFT", 6, 0)
--  stamp:SetWidth(84)
--  stamp:SetJustifyH("LEFT")
--  stamp:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
++
++  local stamp = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 +  ledgerFont(stamp, REASON_SIZE)
 +  stamp:SetPoint("TOPRIGHT", change, "BOTTOMRIGHT", 0, -NAME_GAP)
 +  stamp:SetWidth(CHANGE_W)
 +  stamp:SetJustifyH("RIGHT")
 +  local sr, sg, sb, sa = ledgerColor("ledgerDim", C.textDim)
 +  stamp:SetTextColor(sr, sg, sb, sa)
-   row.stamp = stamp
- 
--  local slot = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
--  slot:SetPoint("LEFT", stamp, "RIGHT", 8, 0)
--  slot:SetWidth(76)
--  slot:SetJustifyH("LEFT")
--  slot:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
--  row.slot = slot
--
--  local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
--  name:SetPoint("LEFT", slot, "RIGHT", 6, 0)
--  name:SetWidth(190)
--  name:SetJustifyH("LEFT")
--  row.itemName = name
--
--  local verdict = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
--  verdict:SetPoint("LEFT", name, "RIGHT", 8, 0)
--  verdict:SetWidth(96)
--  verdict:SetJustifyH("LEFT")
--  row.verdict = verdict
--
--  local reason = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
--  reason:SetPoint("LEFT", verdict, "RIGHT", 6, 0)
--  reason:SetWidth(360)
--  reason:SetJustifyH("LEFT")
--  reason:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
--  row.reason = reason
++  row.stamp = stamp
++
 +  local rule = row:CreateTexture(nil, "ARTWORK")
 +  rule:SetHeight(RULE_H)
 +  rule:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", ROW_INSET, 0)
@@ -212,10 +215,10 @@
 +  local lr, lg, lb, la = ledgerColor("ledgerLine")
 +  rule:SetColorTexture(lr, lg, lb, la)
 +  row.rule = rule
- 
-   return row
-+end
 +
+   return row
+ end
+ 
 +-- One row's height: the TALLEST column, measured (wrapped lines included), plus
 +-- the row's padding and its rule. ROW_MIN is a floor, not a pitch: a three-line
 +-- reason grows the row and the next entry starts below it (card t_4e5ad8a4).
@@ -229,8 +232,8 @@
 +  local h = PAD_TOP + inner + PAD_BOTTOM + RULE_H
 +  if h < ROW_MIN then h = ROW_MIN end
 +  return h
- end
- 
++end
++
  local function build(host)
    local title = SF.UI_CreateLabel(host, "", "GameFontNormalLarge")
 -  title:SetPoint("TOPLEFT", 18, -14)
@@ -304,7 +307,7 @@
      state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
      if state.layout then state.layout() end
    end
-@@ -244,28 +383,52 @@
+@@ -247,28 +386,52 @@ local function repopulate(host)
      end
    end
  
@@ -369,7 +372,7 @@
    end
    state.layout()
  end
-@@ -276,19 +439,22 @@
+@@ -279,19 +442,22 @@ local function render(host)
    repopulate(host)
  
    local total = #state.rows

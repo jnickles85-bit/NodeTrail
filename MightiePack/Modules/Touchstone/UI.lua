@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- StatForge main window: chrome, tabs, content host.
 --- Pure frames (no Ace) — Classic Era compatible.
 ---
@@ -45,41 +48,6 @@ local tabReleasers = {}
 -- This table is the B8 fix: it replaces the per-switch CreateFrame.
 local tabHosts = {}
 
--- ── Hosted mode (card t_07f778ca) ─────────────────────────────────────────
--- MightiePack can host this frame inside its own window. There the pack owns
--- the only title, the only close button, the only frame and the only palette,
--- so this file must draw NONE of them. The host says so explicitly —
--- SF.SetHostedChrome(true) BEFORE the frame is created skips the chrome
--- entirely, and the same call on a frame created earlier (a /ts session before
--- the window opened) removes what is already there. Every creation and paint
--- path below reads that flag.
---
--- Nothing here recognises a piece of chrome by its height, its child order or
--- its name. `chrome` holds direct references to the parts hosting removes, and
--- it is empty when they were never built. Matching the title bar by measuring
--- it is the defect this replaces: the harness and the client disagreed about
--- the measurement, and the live client drew the title bar anyway.
-local hostedChrome = false
-local chrome = {}   -- titleBar / close / title / subtitle / strip, when built
--- Every button SF.UI_CreateButton makes, so the hosted palette can be applied to
--- buttons that were painted BEFORE the body was hosted (a /ts session). Buttons
--- created hosted resolve the palette at creation and need nothing here.
-local uiButtons = {}
--- Repaint callbacks for accent-coloured things built before hosting (a Settings
--- tab rendered by a /ts session). Hosted mode runs them, so adoption repaints
--- instead of leaving the module's teal behind in already-built widgets.
-local accentPainters = {}
-
--- A flat fill: no border art, so NO insets. A WHITE8X8 fill with insets paints
--- its colour inside them, leaving a transparent ring between the fill and the
--- frame's edge — the 2026-11-14 outline defect. Backdrop insets belong to
--- border art; a flat colour never needs them.
-local FLAT_BACKDROP = {
-  bgFile = "Interface\\Buttons\\WHITE8x8",
-  tile = false, tileSize = 0,
-  insets = { left = 0, right = 0, top = 0, bottom = 0 },
-}
-
 local BACKDROP = {
   bgFile   = "Interface\\Buttons\\WHITE8x8",
   edgeFile = "Interface\\Buttons\\WHITE8x8",
@@ -93,80 +61,115 @@ local function applyBackdrop(frame, bg, border, bgA, borderA)
   frame:SetBackdropBorderColor(border[1], border[2], border[3], borderA or 1)
 end
 
--- ── The accent in play (card t_07f778ca) ──────────────────────────────────
--- Standalone, this body's accent is its own brand (SF.Colors.accent) and stays
--- that way. Hosted, the pack's theme owns the palette: the body's teal is its
--- own chrome, and the window has none of it (the owner's retest: "the module's
--- teal chrome — title, tab highlights, Settings headings"). The pack publishes
--- MightiePackTheme at load, before this file, so the lookup needs no ordering
--- promise beyond the TOC's.
---- The accent colour table a heading, a tab or a primary button paints with.
-function SF.UI_Accent()
-  if hostedChrome then
-    local T = rawget(_G, "MightiePackTheme")
-    if type(T) == "table" and type(T.Ledger) == "function" then
-      local r, g, b = T.Ledger("text")
-      return { r, g, b }
-    end
-  end
+-- ---------------------------------------------------------------------------
+-- Hosted chrome (the presentation seam a host claims before it builds us).
+--
+-- A host that embeds this window in its own frame wants to own the title, the
+-- close control and the frame itself. `SF.SetHostedChrome(true)` tells this file
+-- to draw none of that: no title bar, no close button, no border, no fill, no
+-- bordered plates. The host calls it BEFORE the frame exists (so the chrome is
+-- never built) and again on the live frame (so a body a /ts session already
+-- created loses what it has). Unclaimed — the normal standalone case — every
+-- path below is the code that was here before.
+--
+-- `chrome` holds direct references to the parts hosting removes, and is empty
+-- when the flag was set before creation. Nothing here matches a child by its
+-- height or its name: that is how the previous attempt at this got it wrong.
+local hostedChrome = false
+local chrome = {}        -- titleBar / close / title / subtitle / strip, when built
+local uiButtons = {}     -- every button SF.UI_CreateButton made, for late repaint
+local accentPainters = {} -- repaint callbacks for accent content built earlier
+
+-- A flat fill: no border art, so NO insets. A WHITE8X8 fill with insets paints
+-- its colour inside them, leaving a transparent ring between the fill and the
+-- frame's edge. Backdrop insets belong to border art; a flat colour never needs
+-- them.
+local FLAT_BACKDROP = {
+  bgFile = "Interface\\Buttons\\WHITE8x8",
+  tile = false, tileSize = 0,
+  insets = { left = 0, right = 0, top = 0, bottom = 0 },
+}
+
+local function applyFlat(frame, colour, alpha)
+  if type(frame) ~= "table" or type(frame.SetBackdrop) ~= "function" then return end
+  frame:SetBackdrop(FLAT_BACKDROP)
+  frame:SetBackdropColor(colour[1], colour[2], colour[3], alpha or 1)
+end
+
+-- The accent in play: the host's (SF.SetTheme) or the brand's. Both live in
+-- Constants.lua; this file only paints with the answer.
+local function accentInPlay()
+  if type(SF.ThemeAccent) == "function" then return SF.ThemeAccent() end
   return C.accent
 end
 
 --- Set a FontString's colour to the accent in play, and remember it so a body
---- adopted LATER is repainted rather than left in the module's teal.
+--- adopted LATER is repainted rather than left in the brand teal.
 function SF.UI_SetAccent(fs)
   if type(fs) ~= "table" then return false end
-  local ac = SF.UI_Accent()
+  local ac = accentInPlay()
   fs:SetTextColor(ac[1], ac[2], ac[3])
   if not fs.__accentRegistered then
     fs.__accentRegistered = true
     accentPainters[#accentPainters + 1] = function()
-      local c = SF.UI_Accent()
+      local c = accentInPlay()
       fs:SetTextColor(c[1], c[2], c[3])
     end
   end
   return true
 end
 
---- Register a repaint for accent-coloured content that is not a plain FontString
---- colour (the Settings About block carries its accent as a colour CODE inside a
---- string). Hosted mode calls every registered painter (card t_07f778ca).
+--- Register a repaint for accent-coloured content that is not a plain
+--- FontString colour (a string that carries its accent as a colour CODE, e.g.
+--- the Settings About block). SF.RepaintAccent runs every registered painter.
 function SF.OnAccentRepaint(fn)
   if type(fn) == "function" then accentPainters[#accentPainters + 1] = fn end
 end
 
---- `text` wrapped in a colour code for the accent in play. The body has its own
---- SF.Accent(), which writes a FIXED "|cff66fcf1" code into a string — hosted,
---- that re-paints the module's teal inside a paragraph (the About block) where
---- no SetTextColor call can be seen (card t_07f778ca, review 2).
-function SF.UI_AccentText(text)
-  local ac = SF.UI_Accent()
-  return string.format("|cff%02x%02x%02x%s|r",
-    math.floor(ac[1] * 255 + 0.5), math.floor(ac[2] * 255 + 0.5),
-    math.floor(ac[3] * 255 + 0.5), tostring(text))
+-- The two painters are used by SF.RepaintAccent above their definitions, so they
+-- are forward-declared: a Lua closure captures the local, and a plain
+-- `local function` further down would leave the reference resolving to a global.
+local paintButtonPlate, paintTabPlate
+
+--- Repaint everything that carries the accent: registered painters plus the
+--- live chrome. A host calls this after SF.SetTheme, so a palette set late is
+--- applied to widgets that already exist.
+function SF.RepaintAccent()
+  for _, btn in pairs(tabButtons) do
+    paintTabPlate(btn, btn.tabId == activeTab)
+  end
+  for _, btn in ipairs(uiButtons) do
+    if btn._primary then
+      paintButtonPlate(btn, "primary")
+    elseif btn._success then
+      paintButtonPlate(btn, "success")
+    else
+      paintButtonPlate(btn, "rest")
+    end
+  end
+  for _, paint in ipairs(accentPainters) do
+    pcall(paint)
+  end
 end
 
---- A button's plate and label colour. Hosted, a button is a FLAT plate from the
---- pack's ledger palette: the drawing has no bordered boxes, and a vendored
---- WHITE8x8 edge on every control is the same "bordered box" language the owner
---- rejected (card t_07f778ca, review 2). Standalone, nothing changes.
-local function paintButtonPlate(btn, state)
+--- A button's plate and label colour. Hosted, a button is a FLAT fill: the
+--- drawing has no bordered boxes, and a vendored WHITE8x8 edge on every control
+--- is the "bordered box" language hosting removes. Standalone, nothing changes.
+paintButtonPlate = function(btn, state)
   if type(btn) ~= "table" then return false end
-  local hosted = hostedChrome
-  local T = hosted and rawget(_G, "MightiePackTheme") or nil
-  if type(T) == "table" and type(T.Ledger) == "function" then
-    local fillToken = (state == "hover" or state == "primary") and "raised" or "surface"
-    local r, g, b, a = T.Ledger(fillToken)
-    btn:SetBackdrop(FLAT_BACKDROP)
-    btn:SetBackdropColor(r, g, b, a or 1)
-    if state == "success" then
-      local sr, sg, sb = T.Ledger("upgrade")
-      btn.label:SetTextColor(sr, sg, sb)
-    elseif state == "rest" then
-      local tr, tg, tb = T.Ledger("text")
-      btn.label:SetTextColor(tr, tg, tb)
-    else
+  if hostedChrome then
+    if state == "hover" then
+      applyFlat(btn, C.surfaceHover, 1)
       SF.UI_SetAccent(btn.label)
+    elseif state == "primary" then
+      applyFlat(btn, C.surfaceHover, 1)
+      SF.UI_SetAccent(btn.label)
+    elseif state == "success" then
+      applyFlat(btn, C.surface, 1)
+      btn.label:SetTextColor(C.success[1], C.success[2], C.success[3])
+    else
+      applyFlat(btn, C.surface, 1)
+      btn.label:SetTextColor(C.text[1], C.text[2], C.text[3])
     end
     return true
   end
@@ -186,13 +189,54 @@ local function paintButtonPlate(btn, state)
   return true
 end
 
+--- A tab's plate. Selected: the accent in play. Unselected: the muted plate.
+--- When a host has claimed the theme's `underline` token, the selected tab also
+--- carries a rule in that colour along its bottom edge — the host's own tab
+--- grammar, drawn on the tabs this file owns. Unclaimed, no rule exists.
+paintTabPlate = function(btn, selected)
+  if type(btn) ~= "table" then return false end
+  if hostedChrome then
+    if selected then
+      applyFlat(btn, C.surfaceHover, 1)
+      SF.UI_SetAccent(btn.label)
+    else
+      applyFlat(btn, C.bg, 0.6)
+      btn.label:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+    end
+  elseif selected then
+    applyBackdrop(btn, C.surfaceHover, C.accent, 1, 0.9)
+    SF.UI_SetAccent(btn.label)
+  else
+    applyBackdrop(btn, C.bg, C.border, 0.6, 0.7)
+    btn.label:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+  end
+
+  local colour, height = nil, nil
+  if type(SF.ThemeUnderline) == "function" then colour, height = SF.ThemeUnderline() end
+  if colour and selected then
+    if type(btn.__underline) ~= "table" and type(btn.CreateTexture) == "function" then
+      btn.__underline = btn:CreateTexture(nil, "OVERLAY")
+      btn.__underline:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 0, 0)
+      btn.__underline:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 0)
+    end
+    if type(btn.__underline) == "table" then
+      btn.__underline:SetColorTexture(colour[1], colour[2], colour[3], 1)
+      btn.__underline:SetHeight(height or 2)
+      btn.__underline:Show()
+    end
+  elseif type(btn.__underline) == "table" then
+    btn.__underline:Hide()
+  end
+  return true
+end
+
 function SF.UI_CreateButton(parent, text, width, height)
   local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
   btn:SetSize(width or 120, height or 28)
   btn:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
   local ht = btn:GetHighlightTexture()
   if ht then
-    local ac = SF.UI_Accent()
+    local ac = accentInPlay()
     ht:SetVertexColor(ac[1], ac[2], ac[3], 0.12)
   end
 
@@ -200,6 +244,9 @@ function SF.UI_CreateButton(parent, text, width, height)
   fs:SetPoint("CENTER")
   fs:SetText(text or "")
   btn.label = fs
+  -- The plate is the ONE painter for every state, so the standalone look and
+  -- the hosted one cannot drift apart, and a late palette repaint reaches a
+  -- button that already exists.
   paintButtonPlate(btn, "rest")
 
   btn:SetScript("OnEnter", function(self)
@@ -218,17 +265,13 @@ function SF.UI_CreateButton(parent, text, width, height)
   function btn:SetPrimary(on)
     self._primary = on
     self._success = false
-    if on then
-      paintButtonPlate(self, "primary")
-    end
+    if on then paintButtonPlate(self, "primary") end
   end
 
   function btn:SetSuccess(on)
     self._success = on
     self._primary = false
-    if on then
-      paintButtonPlate(self, "success")
-    end
+    if on then paintButtonPlate(self, "success") end
   end
 
   function btn:SetLabel(t)
@@ -317,41 +360,6 @@ local function hostFor(id)
     tabHosts[id] = h
   end
   return h
-end
-
--- ── The inner strip's plates (card t_07f778ca) ────────────────────────────
--- The inner strip (Upgrades / Log / Settings) stays NAVIGATION when the pack
--- hosts the body: the tabs still exist, still switch, still render. What goes
--- is the module's chrome — the vendored teal highlight and the bordered plate.
--- Hosted, a plate is flat (zero insets, no border art): the active tab is a
--- raised surface with its label in the reading colour, the rest are bare.
-local function paintTabPlate(btn, active)
-  if type(btn) ~= "table" then return false end
-  if hostedChrome then
-    local T = rawget(_G, "MightiePackTheme")
-    if type(T) == "table" and type(T.Ledger) == "function" then
-      btn:SetBackdrop(FLAT_BACKDROP)
-      if active then
-        local r, g, b, a = T.Ledger("raised")
-        btn:SetBackdropColor(r, g, b, a or 1)
-        r, g, b = T.Ledger("text")
-        btn.label:SetTextColor(r, g, b)
-      else
-        btn:SetBackdropColor(0, 0, 0, 0)
-        local r, g, b = T.Ledger("muted")
-        btn.label:SetTextColor(r, g, b)
-      end
-      return true
-    end
-  end
-  if active then
-    applyBackdrop(btn, C.surfaceHover, C.accent, 1, 0.9)
-    btn.label:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
-  else
-    applyBackdrop(btn, C.bg, C.border, 0.6, 0.7)
-    btn.label:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
-  end
-  return true
 end
 
 local function selectTab(id)
@@ -482,22 +490,21 @@ local function createMainFrame()
   f:EnableMouse(true)
   f:SetClampedToScreen(true)
   if hostedChrome then
-    -- Hosted: the pack window is the only frame. No border, no fill of ours —
-    -- one window, one frame (card t_07f778ca).
-    f:SetBackdrop(FLAT_BACKDROP)
-    f:SetBackdropColor(0, 0, 0, 0)
+    -- Hosted: the host's window is the only frame. No border, no fill of ours.
+    applyFlat(f, C.bg, 0)
   else
     applyBackdrop(f, C.bg, C.accentDim, 0.97, 0.85)
   end
   restorePosition(f)
 
-  -- title bar (drag handle) — NOT built when the pack hosts this frame. The
-  -- window owns the only title and the only close button; a second title bar
-  -- (and its close) inside the tab is the "two frames" the owner saw. The
-  -- decision is made HERE, at creation, from the flag the host set — not later
-  -- by measuring children (card t_07f778ca).
+  -- Title bar (drag handle) — NOT built when a host owns the chrome. The host
+  -- window owns the only title and the only close button; a second one inside
+  -- the tab is the "two frames" defect. The decision is made HERE, at creation,
+  -- from the flag the host set before the frame existed — never afterwards by
+  -- measuring children.
+  local titleBar
   if not hostedChrome then
-    local titleBar = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    titleBar = CreateFrame("Frame", nil, f, "BackdropTemplate")
     titleBar:SetPoint("TOPLEFT", 1, -1)
     titleBar:SetPoint("TOPRIGHT", -1, -1)
     titleBar:SetHeight(40)
@@ -510,11 +517,10 @@ local function createMainFrame()
       savePosition()
     end)
     chrome.titleBar = titleBar
-
     local title = titleBar:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("LEFT", 16, 0)
-    title:SetText(SF.UI_AccentText("Touchstone"))
-    title:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+    title:SetText(SF.Accent("Touchstone"))
+    SF.UI_SetAccent(title)
     chrome.title = title
 
     local subtitle = titleBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -522,24 +528,7 @@ local function createMainFrame()
     -- B12 (card t_4412b04b): this used to read "Classic Hardcore · v…", which named
     -- a product scope the addon never had (it is not Hardcore-only). The ruling
     -- makes the scope plain: in-game Classic-era gear advice.
-    -- Pack audit: the header showed Touchstone's upstream module version (SF.VERSION,
-    -- e.g. 0.8.3) while the pack was 0.3.x. Show the pack TOC version here; the
-    -- module version stays on the Settings About line and in diagnostics.
-    local packVer
-    do
-      local pkg = rawget(_G, "MightiePack")
-      if type(pkg) == "table" and type(pkg.PackVersion) == "function" then
-        local ok, v = pcall(pkg.PackVersion)
-        if ok and type(v) == "string" and v ~= "" then
-          packVer = v
-        end
-      end
-    end
-    if packVer then
-      subtitle:SetText("Classic-era item advisor  ·  v" .. packVer)
-    else
-      subtitle:SetText("Classic-era item advisor")
-    end
+    subtitle:SetText("Classic-era item advisor  ·  v" .. SF.VERSION)
     subtitle:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
     chrome.subtitle = subtitle
 
@@ -556,8 +545,8 @@ local function createMainFrame()
     tabStrip:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -8)
     tabStrip:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, -8)
   else
-    tabStrip:SetPoint("TOPLEFT", chrome.titleBar, "BOTTOMLEFT", 12, -8)
-    tabStrip:SetPoint("TOPRIGHT", chrome.titleBar, "BOTTOMRIGHT", -12, -8)
+    tabStrip:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 12, -8)
+    tabStrip:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", -12, -8)
   end
   tabStrip:SetHeight(32)
   chrome.strip = tabStrip
@@ -582,6 +571,7 @@ local function createMainFrame()
     fs:SetPoint("CENTER")
     fs:SetText(t.label)
     btn.label = fs
+    btn.tabId = t.id
     paintTabPlate(btn, false)
 
     btn:SetScript("OnClick", function() selectTab(t.id) end)
@@ -593,12 +583,10 @@ local function createMainFrame()
   contentFrame:SetPoint("TOPLEFT", tabStrip, "BOTTOMLEFT", 0, -8)
   contentFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 16)
   if hostedChrome then
-    -- ONE FLAT PLANE. The content frame used to paint a WHITE8X8 border and a
-    -- surface fill; hosted inside the window that is the bordered box the owner
-    -- saw around the ledger (card t_07f778ca, A2). No border, no fill: the
-    -- window's own plane is the only one.
-    contentFrame:SetBackdrop(FLAT_BACKDROP)
-    contentFrame:SetBackdropColor(0, 0, 0, 0)
+    -- ONE FLAT PLANE. Hosted, the content frame paints no border and no fill:
+    -- the host window's own plane is the only one, and a vendored border here is
+    -- the bordered box around the body that hosting removes.
+    applyFlat(contentFrame, C.surface, 0)
   else
     applyBackdrop(contentFrame, C.surface, C.border, 0.6, 0.5)
   end
@@ -631,53 +619,39 @@ local function createMainFrame()
   return f
 end
 
--- ── Hosted mode: the host's one call (card t_07f778ca) ────────────────────
---- Tell this frame whether the pack is hosting it.
+-- ── Hosted mode: the host's one call ────────────────────────────────────────
+--- Tell this window whether a host is embedding it.
 ---
 --- `true` means: draw no chrome of our own. No title bar, no close button, no
---- border, no fill, no vendored accent — and the inner strip stays as plain
---- navigation in the pack's tokens. The host calls this BEFORE the frame exists
---- (so the chrome is never built) and again on the live frame (so a body that a
---- /ts session already created loses what it has). Idempotent.
+--- border, no fill, no bordered plates — and the inner strip stays as plain
+--- navigation. The host calls this BEFORE the frame exists (so the chrome is
+--- never built) and again on the live frame (so a body a `/ts` session already
+--- created loses what it has). Idempotent. Clearing the flag before the frame
+--- exists gives the normal standalone window; clearing it afterwards does not
+--- rebuild chrome that was never created (a host that changes its mind reloads).
 ---
---- The three things it changes are all things this file OWNS: its own chrome,
---- its own backdrops and its own palette. It never guesses which child is the
---- title bar — `chrome` holds the references, and is empty when hosting was on
---- before creation, which is the normal path.
+--- Everything it changes is something this file OWNS: its own chrome, its own
+--- backdrops and its own palette. It never guesses which child is the title bar;
+--- `chrome` holds the references, and it is empty when hosting was on before
+--- creation, which is the normal path.
 function SF.SetHostedChrome(on)
-  hostedChrome = on and true or false
-  if not hostedChrome then return false end
+  local want = on and true or false
+  if not want then
+    hostedChrome = false
+    -- Nothing is rebuilt: the standalone window is created with its chrome, so
+    -- clearing the flag only means "do not adopt"; the next created frame is a
+    -- normal one. Repaint so a palette claimed earlier still applies.
+    if mainFrame then SF.RepaintAccent() end
+    return false
+  end
+  hostedChrome = true
   -- Repaint the strip even when the frame does not exist yet: tabButtons is
   -- empty then, so this is a no-op rather than a special case.
-  for tid, btn in pairs(tabButtons) do
-    paintTabPlate(btn, tid == activeTab)
-  end
-  -- Buttons created before the body was hosted (a Settings tab rendered by a
-  -- /ts session) still carry the vendored plate; repaint them in the pack's.
-  for _, btn in ipairs(uiButtons) do
-    if btn._primary then
-      paintButtonPlate(btn, "primary")
-    elseif btn._success then
-      paintButtonPlate(btn, "success")
-    else
-      paintButtonPlate(btn, "rest")
-    end
-  end
-  -- Accent-coloured text built before hosting (the Settings headings and the
-  -- About block): repaint it in the pack's palette.
-  for _, paint in ipairs(accentPainters) do
-    pcall(paint)
-  end
+  SF.RepaintAccent()
   if not mainFrame then return true end
   local f = mainFrame
-  if type(f.SetBackdrop) == "function" then
-    f:SetBackdrop(FLAT_BACKDROP)
-    f:SetBackdropColor(0, 0, 0, 0)
-  end
-  if type(contentFrame) == "table" and type(contentFrame.SetBackdrop) == "function" then
-    contentFrame:SetBackdrop(FLAT_BACKDROP)
-    contentFrame:SetBackdropColor(0, 0, 0, 0)
-  end
+  applyFlat(f, C.bg, 0)
+  if type(contentFrame) == "table" then applyFlat(contentFrame, C.surface, 0) end
   -- The parts hosting removes, by reference. A frame created in hosted mode has
   -- none of them (the creation path skipped them).
   if type(chrome.titleBar) == "table" then chrome.titleBar:Hide() end
@@ -693,16 +667,20 @@ function SF.SetHostedChrome(on)
   return true
 end
 
---- The frame the inner tabs render into. A handle for the specs, so "the box
---- under the body" is a reference rather than a measured height or a name.
-function SF.ContentFrame()
-  return contentFrame
+--- Is a host embedding this window right now?
+function SF.IsHostedChrome()
+  return hostedChrome
 end
 
---- The chrome hosting removes, by reference (titleBar / close / title /
+--- The chrome parts hosting removes, by reference (titleBar / close / title /
 --- subtitle / strip). Empty when the frame was created in hosted mode.
 function SF.Chrome()
   return chrome
+end
+
+--- The frame the inner tabs render into (a handle, not a measured height).
+function SF.ContentFrame()
+  return contentFrame
 end
 
 function SF.ShowMain(tabId)
@@ -771,9 +749,9 @@ function SF.ShowFirstUseSplash()
   local panel = CreateFrame("Frame", nil, cover, "BackdropTemplate")
   panel:SetSize(520, 360)
   panel:SetPoint("CENTER")
-  applyBackdrop(panel, C.surface, SF.UI_Accent(), 1, 0.6)
+  applyBackdrop(panel, C.surface, C.accent, 1, 0.6)
 
-  local h = SF.UI_CreateLabel(panel, SF.UI_AccentText("Welcome to Touchstone"), "GameFontNormalLarge")
+  local h = SF.UI_CreateLabel(panel, SF.Accent("Welcome to Touchstone"), "GameFontNormalLarge")
   h:SetPoint("TOP", 0, -24)
   h:SetJustifyH("CENTER")
 
@@ -781,13 +759,11 @@ function SF.ShowFirstUseSplash()
   body:SetPoint("TOP", h, "BOTTOM", 0, -20)
   body:SetWidth(460)
   body:SetJustifyH("LEFT")
-  -- The numbered marks were fixed teal codes; hosted they resolve like every
-  -- other accent (card t_07f778ca, review 2).
   body:SetText(
     "Touchstone reads the gear you are holding and tells you, in the game, whether it beats what you wear.\n\n" ..
-    SF.UI_AccentText("1.") .. "  Hover a chest, weapon or armour piece in your bags to see the call.\n\n" ..
-    SF.UI_AccentText("2.") .. "  A green |cffffffffarrow|r marks an upgrade. An amber |cffffffffsquare|r marks a trade-off: better on some stats, worse on others.\n\n" ..
-    SF.UI_AccentText("3.") .. "  |cffffffff/ts|r opens this window; |cffffffff/ts help|r lists the commands."
+    "|cff66fcf11.|r  Hover a chest, weapon or armour piece in your bags to see the call.\n\n" ..
+    "|cff66fcf12.|r  A green |cffffffffarrow|r marks an upgrade. An amber |cffffffffsquare|r marks a trade-off: better on some stats, worse on others.\n\n" ..
+    "|cff66fcf13.|r  |cffffffff/ts|r opens this window; |cffffffff/ts help|r lists the commands."
   )
   body:SetTextColor(C.text[1], C.text[2], C.text[3])
 

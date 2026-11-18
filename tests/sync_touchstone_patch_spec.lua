@@ -1,5 +1,7 @@
--- CI cannot clone private StatForge, so the patch applicator is tested
--- through the sync script's own fixtures.
+-- CI cannot clone private StatForge, so the patch applicator is tested through the
+-- sync script's own fixtures — and the committed set is checked WITHOUT upstream by
+-- tests/touchstone_pin_checks_spec.lua (`--verify-shipped`: six pristine files hashed
+-- against the pin's blobs, eight patches reversed back to it).
 local cmd = "python3 tools/sync_touchstone.py --self-test-patches"
 local ok, term, code
 -- Lua 5.1 returns a wait status; 5.2+ returns true/false, "exit", code.

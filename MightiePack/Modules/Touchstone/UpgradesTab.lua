@@ -1,12 +1,7 @@
-if MightiePackTouchstoneSkip then return end
--- Fold: asset paths point at where the module actually lives. Upstream
--- hardcodes Interface\AddOns\Touchstone\... which does not exist once the
--- files are vendored under MightiePack/Modules/Touchstone/ — the bag arrow
--- and the toast arrow then render as nothing and the upgrade never shows.
-local _mpAddonName = ...
-local MIGHTIEPACK_TOUCHSTONE_ASSETS = "Interface\\AddOns\\"
-	.. tostring(_mpAddonName or "MightiePack")
-	.. "\\Modules\\Touchstone\\ChestAdvisor\\"
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- Touchstone — Upgrades tab (card t_b7b5f60c, audit U1).
 ---
 --- WHAT THIS IS. The window's DEFAULT tab, and the reason the window exists: the
@@ -42,9 +37,9 @@ local C = SF.Colors
 
 -- The marker texture the bag arrow and the toast both use. Loaded BY PATH (a
 -- texture is not a loadable file — listing it in the TOC raises at login). The
--- path is the merged layout's own: Touchstone/ChestAdvisor/marker.tga.
-local MARKER_TEXTURE =
-  (MIGHTIEPACK_TOUCHSTONE_ASSETS .. "marker.tga")
+-- path comes from SF.AssetPath, resolved where the texture is set: a host that
+-- vendors these files keeps them under its own folder and sets the base once.
+
 
 -- Card t_2d2c37b0: the list's metrics ARE the window's metrics. The pack's
 -- theme publishes them (MightiePack/Theme.lua, T.list) and the literal
@@ -553,7 +548,7 @@ local function repopulate(host)
         row.verdictWord:SetText(verdictWord(r.verdict))
         row.verdictWord:SetTextColor(vr, vg, vb, va)
         if r.verdict == "UPGRADE" then
-          row.mark:SetTexture(MARKER_TEXTURE)
+          row.mark:SetTexture(SF.AssetPath("marker.tga"))
           row.mark:SetVertexColor(vr, vg, vb, 1)
           row.mark:Show()
         elseif r.verdict == tradeOffWord() then

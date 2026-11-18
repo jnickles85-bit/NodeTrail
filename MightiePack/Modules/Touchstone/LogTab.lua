@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- Touchstone — Log tab (card t_b7b5f60c, audit U1 §4).
 ---
 --- The disagreement log as a TABLE, with a Clear action, replacing the `/up log`

@@ -53,21 +53,44 @@ local function check(cond, msg)
 end
 
 -- ---- 1. The pin the pack claims to carry ------------------------------------
+-- ONE source of truth. The pin is named in two places by design — SOURCE_REF in
+-- the sync tool, and the `ref` line of the blob manifest the shipped checks hash
+-- against — and this leg is what keeps them from parting company. A duplicate
+-- literal here would be a third place to update, and the update that got missed
+-- would read green.
 local syncPath = root .. "/tools/sync_touchstone.py"
 local sf = io.open(syncPath, "r")
 check(sf ~= nil, "tools/sync_touchstone.py is readable")
-local PIN = "4183aee51fc53e26ed89a3d9c1742c85be32c4cf"  -- StatForge "Merge pull request #106"
+local MANIFEST, PIN
+local pinFile = io.open(root .. "/tools/touchstone-patches/pin.txt", "r")
+if pinFile then
+  MANIFEST = pinFile:read("*a")
+  pinFile:close()
+  PIN = MANIFEST:match("ref%s+(%x+)")
+end
+check(type(PIN) == "string" and PIN:match("^%x+$") ~= nil,
+  "tools/touchstone-patches/pin.txt names the pin as a commit SHA")
+if MANIFEST then
+  local hashes = 0
+  for _ in MANIFEST:gmatch("%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x") do
+    hashes = hashes + 1
+  end
+  check(hashes == 14,
+    "the pin manifest carries one blob hash per vendored file (14), got " .. hashes)
+end
 if sf then
   local src = sf:read("*a")
   sf:close()
   local ref = src:match('SOURCE_REF%s*=%s*"([^"]+)"')
   check(ref == PIN,
-    ("SOURCE_REF is the named pin this spec measured (%s), got %s")
-      :format(PIN, tostring(ref)))
+    ("SOURCE_REF is the pin the manifest hashes (%s), got %s")
+      :format(tostring(PIN), tostring(ref)))
   -- The card's own rule (t_0153f144): a MOVING ref is what made the sweep lie,
   -- so the pin must be a named SHA — never a branch name.
   check(type(ref) == "string" and ref:match("^%x+$") ~= nil,
     "SOURCE_REF is a named commit SHA, not a branch (" .. tostring(ref) .. ")")
+  -- The manifest must carry a blob hash for every vendored file, or the COPY
+  -- check has nothing to compare one of them against.
   check(src:find('"Weights.lua"', 1, true) ~= nil,
     "Weights.lua is in LUA_FILES — the weights the priced legs below need are vendored, not assumed")
 end

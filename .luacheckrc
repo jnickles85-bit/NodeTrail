@@ -56,6 +56,18 @@ globals = {
     -- They are the addon's own globals, not client API — listed here because
     -- the vendored files cannot carry a `local` without changing upstream.
     TouchstoneGearAPI = { other_fields = true }, TouchstoneMarks = { other_fields = true },
+    -- The pin's own host opt-out (StatForge card t_4e61b67f): every vendored file
+    -- reads it on its first statement, and Bootstrap.lua is the one writer.
+    TouchstoneSkip = { other_fields = true },
+    -- Client reads the pin's chest advisor calls that this pack had not used before
+    -- the move to eebfba4 (Arbitration from the arbitration module, the rest from
+    -- the client's own stat/heal/mana surface). Same rule as the list above: an
+    -- API the pack actually uses belongs here, not in an `ignore`.
+    Arbitration = { other_fields = true },
+    UnitStat = { other_fields = true }, UnitPowerMax = { other_fields = true },
+    GetManaRegen = { other_fields = true }, GetSpellCritChance = { other_fields = true },
+    GetSpellBonusHealing = { other_fields = true }, UnitSpellHaste = { other_fields = true },
+    UnitHPPerStamina = { other_fields = true }, UnitArmor = { other_fields = true },
     UISpecialFrames = { other_fields = true }, UnitAffectingCombat = { other_fields = true }, UnitAttackBothHands = { other_fields = true }, UnitClass = { other_fields = true },
     UnitCreatureType = { other_fields = true }, UnitDefense = { other_fields = true }, UnitExists = { other_fields = true }, UnitGUID = { other_fields = true },
     UnitIsDead = { other_fields = true }, UnitLevel = { other_fields = true }, UnitName = { other_fields = true },

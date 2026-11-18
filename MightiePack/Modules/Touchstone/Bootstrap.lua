@@ -1,9 +1,15 @@
 -- Duplicate-load guard for the vendored Touchstone module.
 --
--- The vendored files each begin with `if MightiePackTouchstoneSkip then return
--- end`, so this file MUST load first (MightiePack.toc lists it first in the
--- Touchstone block). It is the only Touchstone code that runs when the module
--- is inert.
+-- The vendored files are the pin's own blobs, byte for byte: upstream ships the
+-- host opt-out itself (StatForge card t_4e61b67f), so every one of them opens
+-- with `if TouchstoneSkip then return end`. This file MUST load first (the toc
+-- lists it first in the Touchstone block); it is the only Touchstone code that
+-- runs when the module is inert.
+--
+-- `TouchstoneSkip` is set from the detection below, in this one place. A file
+-- vendored without it would run its body with the module off — which is why the
+-- sync's copy check hashes every vendored file against the pin's blob and its
+-- patch check re-applies every patch to that same blob.
 --
 -- Why folder existence and not load state: `MightiePack` sorts before
 -- `Touchstone`, so at our load time `IsAddOnLoaded("Touchstone")` is false even
@@ -85,6 +91,12 @@ pkg.TouchstoneDetection = {
 }
 
 MightiePackTouchstoneSkip = pkg.TouchstoneDetection.skip
+-- The pin's own opt-out flag (upstream card t_4e61b67f). Every vendored file
+-- checks THIS name on its first statement, so setting it here is what makes the
+-- module inert without editing a single vendored byte. It is the same answer as
+-- the pack's flag: the module is off when the standalone is present or when the
+-- client cannot tell.
+TouchstoneSkip = pkg.TouchstoneDetection.skip
 
 -- Exposed for the toggle message and for tests; returns the same table.
 function pkg.GetTouchstoneDetection()

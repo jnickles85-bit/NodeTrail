@@ -1,4 +1,7 @@
-if MightiePackTouchstoneSkip then return end
+-- Host opt-out: a host that vendors these files sets TouchstoneSkip = true before
+-- loading them, and every shipped file returns at this line. Unset -- the normal
+-- case -- nothing changes. See README.md, "Embedding Touchstone in a host addon".
+if TouchstoneSkip then return end
 --- StatForge constants: version, colors, slot labels.
 --- Loaded first; other files attach to the StatForge global table.
 
@@ -93,8 +96,106 @@ function SF.ColorText(hex, text)
   return "|cff" .. hex .. text .. "|r"
 end
 
+--- The base every texture this addon loads by path resolves through.
+---
+--- WHY THIS IS A VALUE AND NOT A LITERAL. A host that vendors these files keeps
+--- them in its OWN folder (MightiePack/Modules/Touchstone/ChestAdvisor/), so a
+--- hard-coded "Interface\\AddOns\\Touchstone\\" path names a folder that does not
+--- exist: the bag arrow, the slot marker and the toast arrow render as nothing
+--- and an upgrade shows no art at all. One published base, one call the host
+--- makes from its own file, and every path in the addon follows.
+---
+--- Unclaimed (the normal standalone case) this is exactly the string the four
+--- call sites hard-coded before, spelled once here instead of four times.
+SF.ASSET_ROOT = "Interface\\AddOns\\Touchstone\\ChestAdvisor\\"
+
+--- The full path of one asset under the base in play. `name` is relative to it
+--- ("marker.tga"). Resolved at USE time, not at load: a host may set the root
+--- before or after these files load.
+function SF.AssetPath(name)
+  return tostring(SF.ASSET_ROOT or "") .. tostring(name or "")
+end
+
+--- Point every asset path at `root` (absolute, e.g. "Interface\\AddOns\\X\\Mods\\ChestAdvisor\\").
+--- Returns the root now in play. A non-string or empty value is refused and the
+--- current root is kept, so a half-configured host cannot blank the addon's art.
+function SF.SetAssetRoot(root)
+  if type(root) == "string" and root ~= "" then
+    SF.ASSET_ROOT = root
+  end
+  return SF.ASSET_ROOT
+end
+
+--- Overrides for the palette this addon PAINTS with, supplied by a host.
+---
+--- Only the tokens a host actually repaints live here, and nil means "not
+--- claimed": the brand palette in SF.Colors is the default and stays the default
+--- until a host replaces it. `accent` is the colour of a heading, the selected
+--- tab's label / border and a primary button's plate; `underline` is the rule
+--- under the selected tab (height in px, default 2). Both are read at paint
+--- time, so a host that sets them late is repainted by SF.RepaintAccent.
+SF.Theme = {
+  accent = nil,
+  underline = nil,
+  underlineHeight = nil,
+}
+
+local function colourTriple(v)
+  if type(v) ~= "table" then return nil end
+  local r, g, b = tonumber(v[1]), tonumber(v[2]), tonumber(v[3])
+  if not (r and g and b) then return nil end
+  if r < 0 or r > 1 or g < 0 or g > 1 or b < 0 or b > 1 then return nil end
+  return { r, g, b }
+end
+
+--- The accent in play: the host's, or the brand's. Always three numbers.
+function SF.ThemeAccent()
+  local t = SF.Theme and SF.Theme.accent
+  if type(t) == "table" then return t end
+  return SF.Colors.accent
+end
+
+--- The tab underline in play: colour plus height. `nil` means the host has not
+--- claimed one, and nothing is drawn (the standalone window has no rule today).
+function SF.ThemeUnderline()
+  local t = SF.Theme or {}
+  local c = t.underline
+  if type(c) ~= "table" then return nil end
+  local h = tonumber(t.underlineHeight) or 2
+  if h < 1 then h = 1 end
+  return c, h
+end
+
+--- Claim the palette tokens above. Omitted / invalid keys keep their current
+--- value; `accent = false` (or any non-table) clears the claim back to the brand
+--- palette. Returns the tokens now in play. Painting does not happen here — the
+--- caller asks for a repaint (SF.RepaintAccent) after setting the whole palette,
+--- so a host paints once instead of once per token.
+function SF.SetTheme(tokens)
+  if type(tokens) ~= "table" then return SF.Theme end
+  if tokens.accent ~= nil then
+    SF.Theme.accent = colourTriple(tokens.accent)
+  end
+  if tokens.underline ~= nil then
+    SF.Theme.underline = colourTriple(tokens.underline)
+  end
+  if tokens.underlineHeight ~= nil then
+    local h = tonumber(tokens.underlineHeight)
+    SF.Theme.underlineHeight = (h and h >= 1) and h or nil
+  end
+  return SF.Theme
+end
+
+--- `text` wrapped in the accent in play as a colour code. Was a fixed
+--- "|cff66fcf1", which painted the brand teal inside a string (the Settings
+--- About block) where no SetTextColor call can reach it — the one place a host's
+--- palette could not follow. Unclaimed, the code is byte-identical to the old
+--- literal: SF.Colors.accent is 0.400/0.988/0.945 = 66/fc/f1.
 function SF.Accent(text)
-  return "|cff66fcf1" .. text .. "|r"
+  local ac = SF.ThemeAccent()
+  return string.format("|cff%02x%02x%02x%s|r",
+    math.floor(ac[1] * 255 + 0.5), math.floor(ac[2] * 255 + 0.5),
+    math.floor(ac[3] * 255 + 0.5), tostring(text))
 end
 
 function SF.Print(msg)

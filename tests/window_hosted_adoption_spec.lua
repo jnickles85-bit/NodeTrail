@@ -92,6 +92,18 @@ local function nearAccent(r, g, b)
     and math.abs(g - ACCENT[2]) < 0.02 and math.abs(b - ACCENT[3]) < 0.02
 end
 
+-- The PRE-STATE runs after the pack's modules have started, so the palette claim
+-- has already run and the body paints the HOST's accent, not the vendored teal.
+-- That is correct behaviour and it is what Section 2 proves survives adoption; the
+-- pre-state's job is only to prove this walker sees painted accent, so it accepts
+-- the accent in force. The post-adoption audit above stays pinned to the vendored
+-- teal — that is the colour that must not appear once the pack owns the window.
+local function nearAccentInForce(r, g, b)
+  local ac = (type(SF.ThemeAccent) == "function" and SF.ThemeAccent()) or ACCENT
+  return type(r) == "number" and math.abs(r - ac[1]) < 0.02
+    and math.abs(g - ac[2]) < 0.02 and math.abs(b - ac[3]) < 0.02
+end
+
 local function shownAccent(rootFrame)
   local out = {}
   for _, f in ipairs(walk(rootFrame)) do
@@ -134,8 +146,14 @@ local preContentEdge = type(contentFrame) == "table" and type(contentFrame.backd
 check(preContentEdge, "PRE-STATE: the standalone content frame paints its own border")
 local preEdges = shownEdges(contentFrame or body)
 check(#preEdges > 0, "PRE-STATE: at least one bordered frame is on screen (" .. #preEdges .. ")")
-local preAccent = shownAccent(body)
-check(#preAccent > 0, "PRE-STATE: the standalone body shows the vendored accent ("
+local preAccent = {}
+for _, f in ipairs(walk(body)) do
+  if C.Visible(f) and f.kind == "FontString" then
+    local r, g, b = f:GetTextColor()
+    if nearAccentInForce(r, g, b) then preAccent[#preAccent + 1] = tostring(f.text) end
+  end
+end
+check(#preAccent > 0, "PRE-STATE: the standalone body paints an accent heading ("
   .. #preAccent .. " string(s))")
 
 -- ── 2. ADOPT: the pack opens on Touchstone ────────────────────────────────
