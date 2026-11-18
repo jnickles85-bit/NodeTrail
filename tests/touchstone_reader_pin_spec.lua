@@ -75,8 +75,8 @@ if MANIFEST then
   for _ in MANIFEST:gmatch("%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x") do
     hashes = hashes + 1
   end
-  check(hashes == 14,
-    "the pin manifest carries one blob hash per vendored file (14), got " .. hashes)
+  check(hashes == 16,
+    "the pin manifest carries one blob hash per vendored file (16), got " .. hashes)
 end
 if sf then
   local src = sf:read("*a")

@@ -25,6 +25,8 @@ Modules/Touchstone/Diagnostics.lua
 Modules/Touchstone/Probe.lua
 Modules/Touchstone/ChestAdvisor/Marks.lua
 Modules/Touchstone/ChestAdvisor/Verdict.lua
+Modules/Touchstone/ChestAdvisor/StatOrders.lua
+Modules/Touchstone/ChestAdvisor/Arbitration.lua
 Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua
 Modules/Touchstone/GearAPI.lua
 Modules/Touchstone/Integration.lua

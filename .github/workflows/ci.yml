@@ -75,7 +75,7 @@ jobs:
       - name: Vendored Touchstone is the pin (COPY + PATCH)
         timeout-minutes: 3
         # The loud failure this whole shape exists for. Two checks, two messages:
-        #   COPY  — each of the six pristine files hashes to the pin's blob;
+        #   COPY  — each of the eight pristine files hashes to the pin's blob;
         #   PATCH — each of the eight patches reverses out of the shipped file to
         #           the pin's blob, i.e. it still applies to the named commit.
         # Neither needs StatForge (private), so a patch that stops applying fails

@@ -3,7 +3,7 @@
 -- Run from the repo root:  lua5.1 tests/touchstone_pin_checks_spec.lua
 --
 -- tools/sync_touchstone.py --verify-shipped is the loud failure this shape exists
--- for: six pristine files hashed against the pin's blobs, eight patches reversed
+-- for: eight pristine files hashed against the pin's blobs, eight patches reversed
 -- back to the pin's blob. Neither needs StatForge (a private repository), so this
 -- runs everywhere — and running it as a spec as well as a CI step means a broken
 -- pin or a drifted patch fails in BOTH jobs, with the tool's own sentence naming
