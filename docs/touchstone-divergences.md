@@ -1,8 +1,8 @@
 # Touchstone: where the pack's copy diverges from the pin
 
 The vendored Touchstone under `MightiePack/Modules/Touchstone/` is generated from a
-named StatForge commit (`SOURCE_REF` in `tools/sync_touchstone.py`). Six of the
-fourteen files are that commit's blobs, byte for byte. Eight carry a patch, and every
+named StatForge commit (`SOURCE_REF` in `tools/sync_touchstone.py`). Eight of the
+sixteen files are that commit's blobs, byte for byte. Eight carry a patch, and every
 patch names its reason in its own header.
 
 **A file that differs from the pin is not a divergence. It is a failed copy check.**
@@ -13,7 +13,7 @@ pack's own product surface (the registry, the row model, the ledger drawing, the
 Settings flow), which is additive and answers nothing differently.
 
 The mechanism that keeps this honest is `tools/sync_touchstone.py --verify-shipped`:
-it hashes the six pristine files against the pin's blobs (`COPY:`) and reverses each
+it hashes the eight pristine files against the pin's blobs (`COPY:`) and reverses each
 of the eight patches back to the pin's blob (`PATCH:`). Both messages name the file
 and the patch, and both run in CI on every pull request.
 

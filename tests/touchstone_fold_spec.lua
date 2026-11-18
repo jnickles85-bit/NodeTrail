@@ -19,7 +19,7 @@ end
 
 local TOUCH = root .. "/MightiePack/Modules/Touchstone/"
 
--- The 12 generated files, in TOC order. Bootstrap.lua is hand-written and is
+-- The 16 generated files, in TOC order. Bootstrap.lua is hand-written and is
 -- loaded first in every scenario. Weights.lua sits second: it writes the
 -- `StatForge.Weights` table onto the global Constants.lua creates, and
 -- Verdict.weightsFor reads that table at call time (card t_24a4c8ea — the
@@ -38,6 +38,11 @@ local VENDORED = {
   -- omitted it would ship an advisor that never marks an upgrade.
   "ChestAdvisor/Marks.lua",
   "ChestAdvisor/Verdict.lua",
+  -- Card t_13c807af (Step 3 payload): the published stat orders and the
+  -- arbitration model. Both pristine, and loaded where the advisor's
+  -- call-time `Arbitration` lookups expect them.
+  "ChestAdvisor/StatOrders.lua",
+  "ChestAdvisor/Arbitration.lua",
   "ChestAdvisor/ChestAdvisor.lua",
   "GearAPI.lua",
   "Integration.lua",
@@ -195,11 +200,13 @@ do
       check(body[start + 1] == "Modules/Touchstone/Constants.lua", "TOC: Constants after Bootstrap")
       check(body[start + 2] == "Modules/Touchstone/Weights.lua", "TOC: Weights after Constants")
       check(body[start + 9] == "Modules/Touchstone/ChestAdvisor/Marks.lua", "TOC: Marks before Verdict")
-      check(body[start + 10] == "Modules/Touchstone/ChestAdvisor/Verdict.lua", "TOC: Verdict before ChestAdvisor")
-      check(body[start + 11] == "Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua", "TOC: ChestAdvisor after Verdict")
-      check(body[start + 12] == "Modules/Touchstone/GearAPI.lua", "TOC: GearAPI after ChestAdvisor")
-      check(body[start + 13] == "Modules/Touchstone/Integration.lua", "TOC: Integration after GearAPI")
-      check(body[start + 14] == "Modules/Touchstone/Core.lua", "TOC: Core last in the block")
+      check(body[start + 10] == "Modules/Touchstone/ChestAdvisor/Verdict.lua", "TOC: Verdict before StatOrders")
+      check(body[start + 11] == "Modules/Touchstone/ChestAdvisor/StatOrders.lua", "TOC: StatOrders after Verdict")
+      check(body[start + 12] == "Modules/Touchstone/ChestAdvisor/Arbitration.lua", "TOC: Arbitration after StatOrders")
+      check(body[start + 13] == "Modules/Touchstone/ChestAdvisor/ChestAdvisor.lua", "TOC: ChestAdvisor last of the advisor's files")
+      check(body[start + 14] == "Modules/Touchstone/GearAPI.lua", "TOC: GearAPI after ChestAdvisor")
+      check(body[start + 15] == "Modules/Touchstone/Integration.lua", "TOC: Integration after GearAPI")
+      check(body[start + 16] == "Modules/Touchstone/Core.lua", "TOC: Core last in the block")
     end
     for _, entry in ipairs(body) do
       check(entry:find("marker.tga", 1, true) == nil, "marker.tga is not a TOC body entry")

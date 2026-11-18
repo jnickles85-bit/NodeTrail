@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Vendor Touchstone from StatForge into MightiePack/Modules/Touchstone.
 
-THE SHAPE. Six of the fourteen vendored files are the pin's own blobs, byte for
+THE SHAPE. Eight of the sixteen vendored files are the pin's own blobs, byte for
 byte. The other eight are the pin's blob plus one patch each, and every patch
 starts with a header that names its reason. There is no third mechanism: no
 anchored text editors, no asset retargeting, no guard insertion. If a file is not
@@ -88,7 +88,7 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # jnickles85-bit/wt/t_a875a586" (2026-11-17), carrying the four presentation
 # seams this shape was ruled against — hosted chrome, theme, asset root and the
 # toast hook — plus t_4e61b67f's host opt-out, which is why every vendored file
-# now begins with upstream's own `if TouchstoneSkip then return end` and the six
+# now begins with upstream's own `if TouchstoneSkip then return end` and the eight
 # pristine files can be the pin's blobs byte for byte.
 SOURCE_REF = "eebfba43d1c87ffba6ebe6fe11372ebd7d616f22"
 
@@ -99,6 +99,16 @@ SOURCE_REF = "eebfba43d1c87ffba6ebe6fe11372ebd7d616f22"
 # TIME. Marks.lua is the ONE arrow renderer every surface asks
 # (`_G.TouchstoneMarks`), so a cut that left it behind would ship an advisor
 # that draws no arrows at all.
+#
+# Card t_13c807af (Step 3 payload): StatOrders.lua and Arbitration.lua sit after
+# Verdict.lua and before ChestAdvisor.lua. Both the comparator and the advisor
+# resolve `Arbitration` at CALL time through the global that file publishes
+# (Verdict.lua `local A = rawget(_G, "Arbitration")`, ChestAdvisor.lua the same,
+# and `type(Arbitration) == "table"` in the tooltip's context label), so the
+# module has to be loaded before either can ask. StatOrders.lua is the published
+# order data the arbitration reads. Both are pristine: they go in the COPY lane.
+# Calibration.lua is deliberately NOT vendored — it is a dev surface (/ts3cal)
+# that no verdict path reads (P3's absence check is what keeps that true).
 LUA_FILES = [
     "Constants.lua",
     "Weights.lua",
@@ -110,6 +120,8 @@ LUA_FILES = [
     "Probe.lua",
     "ChestAdvisor/Marks.lua",
     "ChestAdvisor/Verdict.lua",
+    "ChestAdvisor/StatOrders.lua",
+    "ChestAdvisor/Arbitration.lua",
     "ChestAdvisor/ChestAdvisor.lua",
     "GearAPI.lua",
     "Integration.lua",

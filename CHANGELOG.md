@@ -8,6 +8,13 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Changed
+- **The vendored payload carries Step 3's two pure modules** — `ChestAdvisor/StatOrders.lua`
+  and `ChestAdvisor/Arbitration.lua`, both the pin's own blobs, listed after `Verdict.lua`
+  and before `ChestAdvisor.lua` so `Arbitration` is in `_G` when the advisor's call-time
+  lookups ask for it. `Calibration.lua` stays out on purpose: it is a dev surface and no
+  verdict path reads it. Fourteen vendored files became sixteen. (Card `t_13c807af`.)
+
 ### Held for 0.3.10
 - **Melee may not claim equality over a line it never read** — the behaviour is verified and unmerged; `t_dc1decd1` re-derives the M11 pin first, because the side-naming clause changed the wording that pin compares.
 - **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal tiebreak (`t_a4124aed`; fix written and held).
