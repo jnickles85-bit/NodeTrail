@@ -8,26 +8,66 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Held for the next release
+- **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
+  re-derives the M11 pin first.
+- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal
+  tiebreak (`t_a4124aed`; fix written and held).
+- Contract Y (`t_0bf5c207`) — parked, not scheduled. Superseded by the engine measurement, not by neglect.
+
+## [0.3.10-beta] - 2026-11-18
+
+The advisor runs on a rebuilt pipeline and judges a live character. Two things change for a player:
+a pair can now read **Sidegrade**, and the number behind that word moves as *your own sheet* moves.
+
+### Added
+- **Step 3 — totals-aware judging.** A pair the ordinal engine calls a trade-off is now arbitrated
+  against the character's live totals at hover time: the candidate is substituted, the throughput is
+  modelled from the spell the character actually casts, and the answer is stated with the context it
+  was judged in, the term that drove it, and a confidence when a constant is still unmeasured. The new
+  word is **Sidegrade** — inside the measured band, so "pick the one you like" is the honest answer.
+- The survival line speaks on a Sidegrade only (§4.4): losing 90 health is worth saying when the
+  throughput cannot separate the two.
+- `docs/touchstone-divergences.md`: where the pack's behaviour differs from the pinned upstream on
+  purpose, with both sides measured.
+
 ### Changed
-- **The vendored payload carries Step 3's two pure modules** — `ChestAdvisor/StatOrders.lua`
-  and `ChestAdvisor/Arbitration.lua`, both the pin's own blobs, listed after `Verdict.lua`
-  and before `ChestAdvisor.lua` so `Arbitration` is in `_G` when the advisor's call-time
-  lookups ask for it. `Calibration.lua` stays out on purpose: it is a dev surface and no
-  verdict path reads it. Fourteen vendored files became sixteen. (Card `t_13c807af`.)
+- **The vendored payload carries Step 3's two pure modules** — `ChestAdvisor/StatOrders.lua` and
+  `ChestAdvisor/Arbitration.lua`, both the pin's own blobs, listed after `Verdict.lua` and before
+  `ChestAdvisor.lua` so `Arbitration` is in `_G` when the advisor's call-time lookups ask for it.
+  `Calibration.lua` stays out on purpose: it is a dev surface and no verdict path reads it. Fourteen
+  vendored files became sixteen. (Card `t_13c807af`.)
+- **The engine under the pack's patch moved to StatForge `eebfba4`** — Contract Y (upstream no longer
+  lets a weight decide a Step 1 verdict) and the equal-dps gate fix arrived with it. The pack's own
+  weighted/order-profile layer still decides; that is the divergence recorded below, not an accident.
 
 ### Fixed
-- **The window names a pair the way the tooltip does.** The Upgrades ledger row read the
-  stored verdict TOKEN (`TOOLTIP_UI.word`), so a pair the arbitration answered SIDEGRADE
-  printed *Trade-off* in the window while the item tooltip for the same pair headlined
-  *Sidegrade*. The row now asks the ROW (`TOOLTIP_UI.wordFor`, the one arbitration-aware
-  word the tooltip and both mark hovers already read): the arbitration payload rides into
-  the row and no renderer re-derives a word from a token. UPGRADE and NOT_UPGRADE read
-  exactly as before. (Card `t_c8970547`; the patch is `UpgradesTab.lua.patch`.)
+- **The window names a pair the way the tooltip does.** The Upgrades ledger row read the stored verdict
+  TOKEN (`TOOLTIP_UI.word`), so a pair the arbitration answered SIDEGRADE printed *Trade-off* in the
+  window while the item tooltip headlined *Sidegrade*. The row now asks the ROW (`TOOLTIP_UI.wordFor`,
+  the one arbitration-aware word the tooltip and both mark hovers already read). UPGRADE and
+  NOT_UPGRADE read exactly as before. (Card `t_c8970547`.)
 
-### Held for 0.3.10
-- **Melee may not claim equality over a line it never read** — the behaviour is verified and unmerged; `t_dc1decd1` re-derives the M11 pin first, because the side-naming clause changed the wording that pin compares.
-- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal tiebreak (`t_a4124aed`; fix written and held).
-- Contract Y (`t_0bf5c207`) — parked, not scheduled. It was superseded by the engine measurement, not by neglect.
+### Built differently — no player-visible change, and the reason to trust the next fix
+- **Touchstone is vendored by a copy-and-patch tool, not an anchored text editor.** 3,023 lines became
+  788: pinned blob → optional patch → output. Of sixteen files, **eight are the pin's blobs byte for
+  byte** and eight carry one patch, each naming its reason in its own header.
+- `--verify-shipped` now has **two lanes that fail alone and by name**: `COPY` names a file whose copy
+  is not the pin's blob; `PATCH` names a patch that no longer applies to the pin. Both run in CI on
+  every pull request. The point was never the hash check — it was that an upstream move fails **loudly**
+  instead of silently.
+
+### Divergence, stated rather than hidden
+- At **equal weapon damage per second**, the pack lets the spec's weighted profile decide and names the
+  tier that decided it; upstream refuses (`UNKNOWN — cannot classify`). Permanent by the owner's
+  decision of 2026-11-17, recorded with both sides measured in `docs/touchstone-divergences.md`.
+
+### Known limitation
+- The toast seam is **observation-only**: the pack keeps its own toast block and its `/up toastdebug`
+  and `/up testtoast` commands, because the upstream hook cannot carry them.
+
+### Not in this release
+- Melee, the two-sided Block tie and Contract Y — named under `[Unreleased]`, unchanged.
 
 ## [0.3.9-beta] - 2026-11-16
 
