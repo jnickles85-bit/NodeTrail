@@ -1,0 +1,135 @@
+== Card t_853291f0 — the three behaviours the OWNER retests, measured before/after
+== Harness/source evidence ONLY. A real in-game capture is the owner's; none is faked here.
+
+WHAT IS COMPARED
+  before : origin/main 52aa25d592e0f9a8c245bf8a4d180703bb0924a1
+           (`git archive origin/main` into a clean directory — no worktree state)
+  after  : nt/t_853291f0, base 3e71ec5058a582c7e39b7f91bfd6e955ea574566
+           (the Step 3 payload + parity fixture, PRs #47/#48) plus this card's
+           evidence commit.
+
+WHY IT MATTERS
+  This card vendors `ChestAdvisor/StatOrders.lua` and `ChestAdvisor/Arbitration.lua`
+  and puts them in the load path. The owner's retest judges three things. All three
+  are measured here on the pack's own tree, in both trees, with the SAME instrument:
+
+      lua5.1 tools/retest_baseline_dump.lua                 # the tree it lives in
+      lua5.1 tools/retest_baseline_dump.lua <other-pack-root>
+
+  (the tool asserts nothing; it prints. The assertions are the specs named at the
+  end of this file)
+
+
+== A. THE WIRING — the only lines that differ between the two trees
+==
+  before: touchstone toc entries: 15
+          step3.StatOrders reachable: false
+          step3.Arbitration in _G: nil
+  after : touchstone toc entries: 17
+          step3.StatOrders reachable: true
+          step3.Arbitration in _G: table
+
+  Both trees: `Verdict.arbitrate type: function`.
+
+  THE FULL BODY DIFF OF THE TWO PROBE RUNS IS EXACTLY THESE THREE LINES. Everything
+  below is byte-identical between before and after, and was checked with `diff` on
+  the two transcripts (TREE line excluded).
+
+
+== B. [1] THE VERDICT LINE SITS ABOVE A THIRD-PARTY BLOCK
+==
+  Instrument: the pack's own item-tooltip PRE-call, fed the item's own four lines;
+  TSM's block is then appended the way a third-party POST-call appends it.
+
+  BEFORE (origin/main 52aa25d):
+    [1] verdict line position (ZweiHander hovered vs equipped Wolfsbane)
+        engine: verdict=TRADE_OFF  reason=decided by Healing Power [Holy] — Trade-off: +Healing vs −Intellect (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+        line 1: Polished ZweiHander of Healing
+        line 2: Item Level 70
+        line 3: 20 - 37 Damage  Speed 3.00
+        line 4: (9.5 damage per second)
+        line 5: |cffffa616Trade-off — decided by Healing Power [Holy] — Trade-off: +Healing vs −Intellect (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)|r
+        line 6: TSM: General Info
+        verdict at 5, third-party block at 6, verdict ABOVE: true
+
+  AFTER (nt/t_853291f0):
+    [1] verdict line position (ZweiHander hovered vs equipped Wolfsbane)
+        engine: verdict=TRADE_OFF  reason=decided by Healing Power [Holy] — Trade-off: +Healing vs −Intellect (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)
+        line 1: Polished ZweiHander of Healing
+        line 2: Item Level 70
+        line 3: 20 - 37 Damage  Speed 3.00
+        line 4: (9.5 damage per second)
+        line 5: |cffffa616Trade-off — decided by Healing Power [Holy] — Trade-off: +Healing vs −Intellect (judged, with an unpriced on-hit effect and an unpriced enchant on the equipped weapon)|r
+        line 6: TSM: General Info
+        verdict at 5, third-party block at 6, verdict ABOVE: true
+
+  UNCHANGED. Verdict at index 5 of the item's block, third-party block at 6.
+
+
+== C. [2] A REFUSAL READS HONESTLY: the side is named, no judged-clause
+==
+  Instrument: a MELEE spec through `Verdict.compareWeapon` (the DPS comparator) with
+  the WORN weapon's damage line unreadable, rendered by `ChestAdvisor.tooltipLines`
+  — the shipped renderer.
+
+  BEFORE (origin/main 52aa25d):
+    [2] refusal (worn weapon's dps unreadable)
+        engine: verdict=UNKNOWN
+        engine reason: cannot read the worn weapon's damage-per-second
+        rendered: Can't judge — cannot read the worn weapon's damage-per-second
+        names the worn side: true
+        '(judged' clauses in the line: 0
+
+  AFTER (nt/t_853291f0):
+    [2] refusal (worn weapon's dps unreadable)
+        engine: verdict=UNKNOWN
+        engine reason: cannot read the worn weapon's damage-per-second
+        rendered: Can't judge — cannot read the worn weapon's damage-per-second
+        names the worn side: true
+        '(judged' clauses in the line: 0
+
+  UNCHANGED. The refusal names WHICH side it could not read ("worn"), and carries no
+  judged-clause — a refusal is not a judgement and must not borrow its wording.
+
+
+== D. [3] THE WINDOW IS UNCHANGED
+==
+  Instrument: `tools/ledger_geometry_dump.lua` (the existing record for the chrome,
+  the hosted body, the summary strip and the ledger rows) run in both trees.
+
+    before exit=0  66 lines  sha256 484ddc5b00ddc50c2189c2720771779ac75628be10cff01299525c946a05fbb9
+    after  exit=0  66 lines  sha256 484ddc5b00ddc50c2189c2720771779ac75628be10cff01299525c946a05fbb9
+
+    `diff before after` -> no output. BYTE-IDENTICAL.
+
+  Quoted from that identical dump (after):
+    window                 x  480.0 .. 1440.0   y  -220.0 ..  -860.0    960.0 x 640.0  shown
+    summary strip          x  496.0 .. 1424.0   y  -308.0 ..  -340.0    928.0 x  32.0  shown
+    host touchstone        x  496.0 .. 1424.0   y  -348.0 ..  -844.0    928.0 x 496.0  shown
+    line   : 2 of 5 are worth taking
+    right  : 1 trade-off · 2 refused
+    meter  : width 928.0  upgrade 371.2  trade-off 185.6  refused 371.2  (3 px tall)
+    row 1  x  528.0 .. 1308.0   y  -471.5 ..  -548.5    780.0 x  77.0  shown  (77.0 tall)
+    row 4  x  528.0 .. 1308.0   y  -671.6 ..  -752.8    780.0 x  81.1  shown  (81.1 tall)
+
+
+== E. WHAT THIS MEANS FOR THE RETEST
+==
+  The two new modules are in `_G` at call time (section A). The verdict path does not
+  read them: at this pin `Verdict.arbitrate` has NO CALL SITE — Case 1's re-cut
+  (PR #46) removed the seam that used it, so the verdict is still decided by the
+  weighted order layer. Sections B, C and D are the measurement of that: every
+  player-facing behaviour is byte-identical before and after.
+
+  So the owner's retest should read EXACTLY as today, and that is the correct
+  outcome of this card — it is a payload/wiring change, not a behaviour change.
+  "Step 3 is on" in the sense of "the arbitration model is loaded and reachable";
+  it is not yet the arbiter of any player-visible verdict. Making it the arbiter is
+  the seam card (the call site above the weighted answer), not this one.
+
+  Assertions that own each behaviour (this file only records them):
+    [1] tests/touchstone_tooltip_line_spec.lua        leg 5 — placement above TSM
+    [2] tests/touchstone_disclosure_spec.lua          section 6 — refusal, no clause
+    [3] tests/window_*.lua + tools/ledger_geometry_dump.lua
+    payload is the pin's bytes : tools/sync_touchstone.py --verify-shipped (COPY lane)
+    payload is reachable in _G : tests/touchstone_arbitration_parity_spec.lua (:223)
