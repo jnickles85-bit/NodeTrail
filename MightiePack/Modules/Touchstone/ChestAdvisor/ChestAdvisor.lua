@@ -1710,6 +1710,22 @@ function TOOLTIP_UI.tradeOffTail(row)
 	return " (better on some stats, worse on others — your call)"
 end
 
+--- The player word for a STORED disagreement-log entry (card t_baea7949). A log
+--- entry keeps the verdict token and, since that card, the arbitration's own
+--- state (`arbState`), so the word is asked of `wordFor` -- the one helper the
+--- window row and the tooltip headline read -- rather than of the
+--- pre-arbitration token map. An entry written before `arbState` existed has no
+--- field and renders the token's word, which is what that entry recorded: the
+--- log is never guessed back into a judgement it did not make.
+function TOOLTIP_UI.entryWord(entry)
+	if type(entry) ~= "table" then return TOOLTIP_UI.word(entry) end
+	local row = { verdict = entry.verdict }
+	if type(entry.arbState) == "string" then
+		row.arbitration = { state = entry.arbState }
+	end
+	return TOOLTIP_UI.wordFor(row)
+end
+
 --- The situation, in player words, from the model's own context table. Never a
 --- second label table: Arbitration.CONTEXTS is where a context is named, and a
 --- copy here could name a context the model does not price.
@@ -8324,6 +8340,17 @@ local function logOne(slot, link)
 		reason     = row.reason,
 		role       = row.role,
 		roleSource = roleSource,
+		-- Card t_baea7949: the state this verdict was ARBITRATED to, when the
+		-- engine answered the pair -- the same field the tooltip and the window
+		-- read their word from, recorded here so the Log tab can read it too.
+		-- One short string, nil on every other row; an entry written before the
+		-- field existed has no key and renders the token's word, which is what
+		-- that entry recorded. `reason` above is already the arbitrated
+		-- sentence, so without this the Log's word and its own reason line
+		-- could name one entry two ways.
+		arbState   = (type(row.arbitration) == "table"
+			and type(row.arbitration.state) == "string")
+			and row.arbitration.state or nil,
 	})
 	while #log > LOG_CAP do table.remove(log, 1) end
 end
@@ -8825,12 +8852,16 @@ local function cmdLog(msg)
 			-- map cannot be absent here (unlike LogTab, a separate TOC entry
 			-- that can paint before this file loads). No second table and no
 			-- fallback branch: word() already owns both degenerate cases.
+			-- Card t_baea7949: `entryWord` IS that map, asked with the entry's
+			-- own recorded arbitration state -- the same helper the Log tab
+			-- reads, so this list and the tab cannot name one entry two ways.
+			-- The token map alone prints the pre-arbitration word.
 			local stamp = formatEntryTime(e.at, e.time)
 			local slotLabel = type(e.slotName) == "string" and e.slotName
 				or ("slot " .. tostring(e.slot))
 			lines[#lines + 1] = string.format(
 				"%d) %s  %s  %s role=%s(%s) link=%s reason=%s",
-				i, stamp, slotLabel, TOOLTIP_UI.word(e.verdict),
+				i, stamp, slotLabel, TOOLTIP_UI.entryWord(e),
 				tostring(e.role), tostring(e.roleSource), tostring(e.link), tostring(e.reason))
 		end
 	end

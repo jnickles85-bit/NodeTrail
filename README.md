@@ -141,7 +141,7 @@ Repo-only (not shipped): `README.md`, `tests/`,
 `.pkgmeta`.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 43 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 44 specs:
 - `tests/bugreport_spec.lua`
 - `tests/chestadvisor_diag_spec.lua`
 - `tests/chestadvisor_secret_values_spec.lua`
@@ -160,6 +160,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 43 specs:
 - `tests/touchstone_disclosure_spec.lua`
 - `tests/touchstone_fold_spec.lua`
 - `tests/touchstone_loadorder_spec.lua`
+- `tests/touchstone_log_entry_word_spec.lua`
 - `tests/touchstone_pin_checks_spec.lua`
 - `tests/touchstone_reader_pin_spec.lua`
 - `tests/touchstone_seam_claims_spec.lua`

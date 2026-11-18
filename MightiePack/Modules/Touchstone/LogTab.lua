@@ -122,16 +122,28 @@ local function verdictColor(verdict)
   return ledgerColor("ledgerNoUpgrade", C.textMuted)
 end
 
--- The player-facing word for a stored verdict token. The mapping lives on the
--- advisor (ChestAdvisor.tooltipUI.word) so this tab does not keep a second
--- table. A missing mapper, or a nil return, falls back to the stored token.
-local function playerWord(token)
+-- The player-facing word for a STORED log entry (card t_baea7949). The mapping
+-- lives on the advisor so this tab does not keep a second table: `entryWord`
+-- asks the ONE arbitration-aware helper the tooltip and the window read, from
+-- what the entry itself recorded. An entry written before the entry carried the
+-- arbitration's state has no field, and `entryWord` then answers the token's
+-- word -- exactly what that entry recorded, never a judgement re-derived here.
+local function playerWord(entry)
+  if type(entry) ~= "table" then return entry end
   local ui = ChestAdvisor and ChestAdvisor.tooltipUI
-  if type(ui) == "table" and type(ui.word) == "function" then
-    local word = ui.word(token)
-    if word ~= nil then return word end
+  if type(ui) == "table" then
+    if type(ui.entryWord) == "function" then
+      local word = ui.entryWord(entry)
+      if word ~= nil then return word end
+    end
+    -- An advisor that predates `entryWord` publishes only the token map: the
+    -- log still reads, in the word that advisor would have used.
+    if type(ui.word) == "function" then
+      local word = ui.word(entry.verdict)
+      if word ~= nil then return word end
+    end
   end
-  return token
+  return entry.verdict
 end
 
 local state = {
@@ -161,6 +173,10 @@ local function readRows()
         link    = e.link,
         name    = itemName(e.link),
         verdict = tostring(e.verdict),
+        -- Card t_baea7949: the arbitration's own state, when the engine
+        -- answered this pair. Absent on an entry written before the field
+        -- existed; `entryWord` then renders the token's word.
+        arbState = (type(e.arbState) == "string") and e.arbState or nil,
         reason  = tostring(e.reason),
       }
     end
@@ -402,7 +418,7 @@ local function repopulate(host)
         row.itemName:SetText(r.name)
         -- Player word, not the stored token (card t_385a0817), in the verdict's
         -- colour — the word and the marker are one colour, read once.
-        row.verdictWord:SetText(playerWord(r.verdict))
+        row.verdictWord:SetText(playerWord(r))
         local vc = { verdictColor(r.verdict) }
         row.verdictWord:SetTextColor(vc[1], vc[2], vc[3], vc[4] or 1)
         if r.verdict == "TRADE_OFF" then
