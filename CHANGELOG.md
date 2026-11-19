@@ -8,6 +8,18 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Held for the next release
+- **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
+  re-derives the M11 pin first.
+- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal
+  tiebreak (`t_a4124aed`; fix written and held).
+- Contract Y (`t_0bf5c207`) — parked, not scheduled. Superseded by the engine measurement, not by neglect.
+
+## [0.3.11-beta] - 2026-11-18
+
+A patch release carrying one fix. The release before it rebuilt the pipeline and turned on
+totals-aware judging; this one makes the record agree with the two surfaces that already did.
+
 ### Fixed
 - **The disagreement log names an arbitrated pair the way the other two surfaces do**
   (`t_baea7949`). The Log tab and `/up log` printed the token's word, so a pair the
@@ -17,13 +29,6 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   advisor's `entryWord`, which reads it through `wordFor`. An entry written before the
   field existed has no key and renders the token's word, exactly as recorded; no
   migration, no re-derivation.
-
-### Held for the next release
-- **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
-  re-derives the M11 pin first.
-- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal
-  tiebreak (`t_a4124aed`; fix written and held).
-- Contract Y (`t_0bf5c207`) — parked, not scheduled. Superseded by the engine measurement, not by neglect.
 
 ## [0.3.10-beta] - 2026-11-18
 
