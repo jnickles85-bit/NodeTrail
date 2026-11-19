@@ -99,7 +99,24 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # this pack replaces wholesale with its weighted layer. The two halves are one
 # wire and must move in one cut — a flag with no call is a seam that is ON in a
 # file nobody reads, and every other check stays green while it happens.
-SOURCE_REF = "ff64bc504e0c8043915c2cbf05e53a4cc270285f"
+#
+# Provenance of 1992240 (card t_18eb91e6): "Merge pull request #125 from
+# jnickles85-bit/wt/t_d1685fd1" (2026-11-19, StatForge main). It carries A8 —
+# the model's refusal reaches the player, by cause, in player words (PR #124,
+# 483b499) — plus t_d1685fd1's split of `no_totals` out of the permanent refusals
+# (PR #125, 4c93e9a): a not-yet-taken reading gets its own clause ("no mana
+# reading yet — it is read out of combat") instead of reading as a broken addon.
+# Three vendored files moved: Arbitration.lua (COPY — the judge now answers
+# `nil, why, cause`, so the cause keys arrive pristine), ChestAdvisor.lua (the
+# clause map and `TOOLTIP_UI.declineClause`), and Verdict.lua (`Verdict.arbitrate`
+# hands the refusal out instead of dropping it, and the trade-off gate passes it
+# through). The last two are PATCH-lane files, and the pack's Verdict patch
+# REPLACES the very region upstream edited — so that patch was re-cut against
+# this commit rather than re-applied, and --verify-shipped alone cannot tell
+# whether the overlay took: it compares the vendored copy to this pin and never
+# asks what the patch did with it. tests/touchstone_decline_clause_spec.lua asks,
+# against the shipped bytes.
+SOURCE_REF = "1992240be3990a4480d25efb3ca3f753171dd88b"
 
 # Order is load-bearing. Verdict.lua must load before ChestAdvisor.lua
 # (ChestAdvisor reads _G.Verdict at load time). Weights.lua sits directly after

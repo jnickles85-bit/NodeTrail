@@ -3,7 +3,7 @@
 # The Settings flow (host.blocks + relayout + the About block's accent
 # repaint). The window owns the layout, and upstream ships no seam for it.
 #
-# base: StatForge ff64bc504e0c8043915c2cbf05e53a4cc270285f
+# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
 # applies to: OptionsTab.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.

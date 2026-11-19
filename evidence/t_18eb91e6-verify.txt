@@ -1,0 +1,3 @@
+sync_touchstone: COPY   8 pristine files are the pin's blobs
+sync_touchstone: PATCH  8 patches reverse to the pin's blobs
+verify-exit=0

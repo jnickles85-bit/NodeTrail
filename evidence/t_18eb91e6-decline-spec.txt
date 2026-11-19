@@ -1,0 +1,17 @@
+A. declined-clause map :1897  MANA :1881  MANA_YET :1891  renderer :1928
+A. call :2811  local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
+A. call :2866  local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
+A. seam passthrough :7024   Verdict.arbitrate( occurrences: 2
+B. judge(nil totals)   cause no_totals   "no totals: the model needs the character's own numbers"
+B. judge(secret)       cause secret_totals   "totals are secret: the client would not hand them over"
+C. no_totals  ->  (throughput not judged: no mana reading yet — it is read out of combat)
+C. secret     ->  (throughput not judged: the client did not give your mana numbers)
+C. unknown key ->  (throughput not judged: the numbers do not price this trade)
+D. row.verdict "TRADE_OFF"   arbitration = { declined=true, cause=secret_totals }
+D. tooltip line  Trade-off: +Healing vs −Intellect — decided by Healing Power vs Worn Chest of the Parish [Holy (chosen)] (throughput not judged: the client did not give your mana numbers)
+E. arbitrated row.reason  "Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)"
+E. arbitrated tooltip line  Sidegrade — raid healing, inside the band on throughput
+E. clear-upgrade line  Upgrade — weighted +12
+
+59 check(s) passed: the clause map is in the shipped bytes, called, and correct for both states
+spec-exit=0

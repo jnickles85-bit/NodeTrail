@@ -6524,6 +6524,13 @@ Verdict.BUFF_WARNING = "judged with buffs on — a buff can fake a cap and infla
 --- survival, flip, buffed, lowWhy, byContext) — data for the surface, never a
 --- second decision.
 ---
+--- A DECLINE is (nil, why, { declined = true, why = <the refusal>, cause = <key> })
+--- (card t_eff0caec). The model was ASKED and turned the pair away; its sentence and
+--- its stable cause key are returned instead of deleted, so the surface can say which
+--- judgement did not happen. `cause` is a machine key, never prose the renderer
+--- matches on. Silent nil stays for the absences that are not answers: no totals, an
+--- absent module, a raise, a state this table cannot map.
+---
 --- `Arbitration` is resolved at CALL time through the global (the toc loads
 --- Verdict.lua before it, and the fengari VMs load the two separately). A
 --- module that is absent, has no judge, or raises is SILENCE: this function
@@ -6563,8 +6570,21 @@ function Verdict.arbitrate(candStats, eqStats, spec, totals)
 	if type(totals) ~= "table" then return nil end
 	local A = rawget(_G, "Arbitration")
 	if type(A) ~= "table" or type(A.judge) ~= "function" then return nil end
-	local ok, v = pcall(A.judge, candStats, eqStats, spec, totals)
-	if not ok or type(v) ~= "table" then return nil end
+	local ok, v, why, cause = pcall(A.judge, candStats, eqStats, spec, totals)
+	if not ok then return nil end
+	if type(v) ~= "table" then
+		-- THE DECLINE, DISCLOSED (card t_eff0caec). The judge answers `nil, why, cause`
+		-- when the model has no opinion; before this card the why was dropped on the
+		-- floor here and the player could not tell "no opinion" from "never called".
+		-- The refusal rides out in the detail slot the callers already pass through,
+		-- marked `declined = true` so nothing can read it as a judgement. THE VERDICT
+		-- WORD DOES NOT MOVE: this is a disclosure, and the caller keeps its own token.
+		-- A raise, an absent module or an unmappable state stay plain silence — those are
+		-- failures of the layer, not answers of the model, and a sentence about them
+		-- would be this module guessing.
+		if type(why) ~= "string" or why == "" then return nil end
+		return nil, why, { declined = true, why = why, cause = cause }
+	end
 	local token = ARBITRATION_STATE_TOKEN[v.state]
 	if token == nil then return nil end
 	local reason = type(v.reason) == "string" and v.reason or ""
@@ -6988,6 +7008,23 @@ if not Verdict.LEGACY_DOMINANCE_DECIDES then
 				d = (type(d) == "table") and d or {}
 				d.arbitration = aDetail
 				return fv, fr, d
+			end
+			-- THE DECLINE, THROUGH THE GATE (card t_eff0caec, carried into the
+			-- client by card t_18eb91e6). The model was ASKED and turned the pair
+			-- away: arbitrate answers (nil, why, { declined = true, why, cause }).
+			-- Upstream returns it through this gate so the surface can name the
+			-- judgement that did not happen, and this region is a REPLACEMENT — a
+			-- re-pin that moved the pin without carrying these lines would ship a
+			-- clause map nothing hands a cause to, with --verify-shipped still green
+			-- (it compares the vendored copy to the pin and never asks whether the
+			-- overlay took). THE WORD DOES NOT MOVE: the row keeps its own TRADE_OFF
+			-- answer (`v, r`), and only the detail rides out, set exactly as the
+			-- answered case above sets it, so ChestAdvisor publishes it as
+			-- `row.arbitration` and `TOOLTIP_UI.declineClause` can read `cause`.
+			if type(aDetail) == "table" and aDetail.declined == true then
+				d = (type(d) == "table") and d or {}
+				d.arbitration = aDetail
+				return v, r, d
 			end
 		end
 	end

@@ -18,7 +18,15 @@
 # guard (`a row whose arbitration state is not a string is not an arbitration`)
 # is kept at the branch, so a table with no state still falls through to the
 # comparator that did judge the pair.
-# base: StatForge ff64bc504e0c8043915c2cbf05e53a4cc270285f
+#
+# Plus A8's refusal clause (card t_18eb91e6): the clause map
+# (`DECLINE_CLAUSE`, `TOOLTIP_UI.declineClause`) arrives from the pin, and THIS
+# pack adds the second call site the pack needs — a declined trade-off still
+# carries its weighted detail, so its row renders on the WEIGHTED headline, not
+# on upstream's ordinal tail alone. A re-cut that drops either call ships a map
+# nothing asks, which is the 0.3.10/0.3.11 shape; the shipped-bytes spec
+# (tests/touchstone_decline_clause_spec.lua) reddens on both.
+# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
 # applies to: ChestAdvisor/ChestAdvisor.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
@@ -604,8 +612,18 @@
 +		-- that moved the helper would then cost a clause, not every tooltip.
 +		local clause = (type(disclosureClause) == "function")
 +			and select(2, disclosureClause(row.reason)) or ""
++		-- A8 (card t_eff0caec, carried into the client by card t_18eb91e6): the
++		-- refusal clause. Upstream attaches it on the ORDINAL tail, but in THIS pack
++		-- a declined trade-off still carries its weighted detail (`d.total` rides the
++		-- row beside `d.arbitration`), so the row renders HERE — this is the branch
++		-- it actually reaches, and a clause map the renderer never calls is the
++		-- 0.3.10/0.3.11 shape this card exists to prevent. Same helper and the same
++		-- `showDetail` gate as upstream's: Compact never widens, and the helper
++		-- answers "" on every row that was not declined, so those lines stay
++		-- byte-identical.
++		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
 +		out[#out + 1] = {
-+			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause,
++			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause .. decline,
 +			colour = colour,
 +		}
 +		if weighted.detail and showDetail then

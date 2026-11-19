@@ -20,14 +20,23 @@
 # tests/touchstone_shipped_seam_spec.lua drives a real scan to prove the second
 # one is reached.
 #
-# base: StatForge ff64bc504e0c8043915c2cbf05e53a4cc270285f
+# ⚠ AND IT CARRIES A8's DECLINE (card t_18eb91e6). At StatForge 1992240 the same
+# gate hands a REFUSAL through (`aDetail.declined == true`, with the ladder's
+# stable cause key), and `Verdict.arbitrate` returns the why instead of dropping
+# it. Both live inside the region this patch REPLACES WHOLE, so the replacement
+# carries them — delete them in a re-cut and the shipped clause map becomes dead
+# code while --verify-shipped stays green, because that check compares the
+# vendored copy to the pin and never asks what the overlay did with it.
+# tests/touchstone_decline_clause_spec.lua asks, on the shipped bytes.
+#
+# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
 # applies to: ChestAdvisor/Verdict.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
 
 --- a/ChestAdvisor/Verdict.lua
 +++ b/ChestAdvisor/Verdict.lua
-@@ -623,6 +623,37 @@ local KNOWN = {
+@@ -623,6 +623,37 @@
  	["Hit"]            = true,
  	["Crit"]           = true,
  	["FeralAttackPower"] = true,
@@ -65,7 +74,7 @@
  	-- Card t_4e1e1b1d (DD-2): healing-only and SCHOOL-specific spell damage.
  	-- Until this card every one of these sentences suppressed the item
  	-- ("cannot classify: Equip: Increases healing done by spells and effects by
-@@ -790,6 +821,28 @@ Verdict.ITEM_STAT_KEYS = {
+@@ -790,6 +821,28 @@
  	-- ITEM_MOD_DAMAGE_PER_SECOND_SHORT): the packs price it as weaponDps, and
  	-- where they do, the table prices it as WDN.
  	ITEM_MOD_DAMAGE_PER_SECOND   = "WeaponDps",
@@ -94,7 +103,7 @@
  }
  
  -- May the client's own stat read EXPLAIN this tooltip line?
-@@ -1203,16 +1256,30 @@ end
+@@ -1203,16 +1256,30 @@
  -- still fires (AC-5).
  Verdict.HIT_RATING_PER_PERCENT  = 10
  Verdict.CRIT_RATING_PER_PERCENT = 14
@@ -131,7 +140,7 @@
  }
  
  -- ── CARD t_9d718a77: THE SPELLINGS THE CLIENT PRINTS FOR THOSE WORDS ──────
-@@ -1616,9 +1683,87 @@ local function parseLine_(line)
+@@ -1616,9 +1683,87 @@
  	-- A chest's bare armor line ("12 Armor") lands here too and reads as
  	-- the known stat Armor — inert in practice, since no order in ORDERS
  	-- consumes Armor, and never a suppression trigger.
@@ -220,7 +229,7 @@
  	end
  	-- ── card t_9d718a77: THE RATING-TIP SPELLINGS OF THE TWO SCALE WORDS ────
  	-- The generic clause above reads "+12 Crit" / "+10 Hit" and nothing else,
-@@ -1660,6 +1805,14 @@ local function parseLine_(line)
+@@ -1660,6 +1805,14 @@
  		end
  	end
  	-- proc line:  "Equip: +X Foo"
@@ -235,7 +244,7 @@
  	local pnum, pword = trimmed:match("^%s*Equip:%s*%+%s*(%d+)%s+(%a+)")
  	if pnum and pword then
  		return nil, "Equip:" .. pword
-@@ -1667,6 +1820,22 @@ local function parseLine_(line)
+@@ -1667,6 +1820,22 @@
  	-- "Adds X" style lines, if the client ever uses them here.
  	local an, aw = trimmed:match("^%s*Adds%s*(%d+)%s+(%a+)")
  	if an and aw then return tonumber(an), aw end
@@ -258,7 +267,7 @@
  	-- ── card t_3cdbb70a (DD-1): the HIT and CRIT sentences ────────────────
  	-- The client prints these four phrasings, and until this card NOT ONE of
  	-- them was placeable: they carry a number, so they suppressed the item
-@@ -1752,6 +1921,62 @@ local function parseLine_(line)
+@@ -1752,6 +1921,62 @@
  	if meleehitp then return Verdict.ratingFromPercent("Hit", tonumber(meleehitp)), "Hit" end
  	local meleecritp = stat_sentence:match("^improves your chance to get a critical strike by (%d+%.?%d*)%%$")
  	if meleecritp then return Verdict.ratingFromPercent("Crit", tonumber(meleecritp)), "Crit" end
@@ -321,7 +330,7 @@
  	-- Structural tooltip chrome (gate C1). Case-insensitive, anchored.
  	-- Matched against `plain` (color/|r stripped) so a colored stat line
  	-- (e.g. "|cff9d9d9d+12 agility|r") still classifies as a stat below,
-@@ -1982,7 +2207,23 @@ local function parseLine_(line)
+@@ -1982,7 +2207,23 @@
  	-- cites (see the SPELL POWER note in Weights.lua).
  	local spn = plain:match(
  		"^equip:%s*increases damage and healing done by magical spells and effects by up to (%d+)%.?$")
@@ -345,7 +354,7 @@
  	-- ── card t_4e1e1b1d (DD-2): healing-only and school-specific damage ────
  	-- The two shapes the note above used to send to the suppression bucket.
  	-- They are exact matches, in the same style as the generic clause above:
-@@ -2173,8 +2414,16 @@ local API_WORD_TEXT = {
+@@ -2173,8 +2414,16 @@
  	Intellect  = { "intellect" },
  	Spirit     = { "spirit" },
  	Armor      = { "armor" },
@@ -364,7 +373,7 @@
  	-- card t_795eee9e: the extended reader's own phrasings. The plain one-word
  	-- lines (a "N Hit"-style spelling) fall back to the word's lowercased name
  	-- in lineNamesWord, so the entries below exist for the shapes the fallback
-@@ -2701,6 +2950,30 @@ local parseSide = function(lines, side, apiWords)
+@@ -2701,6 +2950,30 @@
  			for i = 1, #pending do fold(pending[i]) end
  		end
  	end
@@ -395,7 +404,7 @@
  	return stats, procWord, unknown, ignored, foreign
  end
  
-@@ -3665,12 +3938,13 @@ end
+@@ -3665,12 +3938,13 @@
  --    and ranged critical chance."
  --
  -- — and a word that does not exist needs no entry, no factor and no guard.
@@ -414,7 +423,7 @@
  	-- Card t_9d3273cb: THE TWO SPELL ENTRIES ARE GONE. They joined this list on
  	-- card t_b91b29f9 only because the split gave them a per-rating price with no
  	-- factor; with the split retired there is no such word to guard — a spell
-@@ -4201,12 +4475,1737 @@ local function weightedResolution(candStats, eqStats, spec)
+@@ -4201,12 +4475,1737 @@
  	return "NOT_UPGRADE", reason
  end
  
@@ -2158,12 +2167,34 @@
  
  -- The tri-state comparator.
  --   candidate  — table { canUse = [nil|true|false], line = [raw lines or nil] }
-@@ -4938,114 +6937,144 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord, totals
+@@ -4958,123 +6957,161 @@
  		return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
  	end
  
 -	-- (card t_0bf5c207, Touchstone Step 1) THE ORDERED VERDICT.
--	--
++	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
++	-- every word this pair's own pack prices (proof). One list, built by one
++	-- function, read by the proof AND by the two loops that word its answer
++	-- below, so the term that decided a pair is always the term the reason
++	-- names. `specWeights` is gate 5b's resolution: the same table both sides
++	-- of this comparison were already priced against.
++	local terms = Verdict.proofTerms(order, specWeights)
++-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
++-- the profile's weighted total, in the threshold order the card spells out. The
++-- number (and the profile's own name) travel back to the caller as the third
++-- return value so a rendered line can quote them.
++--
++-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
++-- which is test instrumentation (it exists so a fixture can be run through both
++-- comparators in one VM and diffed). It is read here, so the switch really does
++-- switch: with it set, the weighted path is skipped and the old block runs.
++if not Verdict.LEGACY_DOMINANCE_DECIDES then
++	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
++	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
++	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
++	-- pair is the only thing this engine ever offers the model, and this is the
++	-- only place the shipped path hands one back.
+ 	--
 -	-- The cascade itself lives in ONE place — Verdict.rankedVerdict above — and
 -	-- takes the ORDER AS AN INPUT (`order`, this spec's resolved list). Nothing
 -	-- in it reads Verdict.ORDERS, so Step 2 can hand it a leveling or endgame
@@ -2242,29 +2273,7 @@
 -	--
 -	-- TRADE_OFF_SEAM (card t_8e171c28). ONLY the trade-off state is offered to
 -	-- the arbitration, and only after the cascade declined to settle the pair.
-+	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
-+	-- every word this pair's own pack prices (proof). One list, built by one
-+	-- function, read by the proof AND by the two loops that word its answer
-+	-- below, so the term that decided a pair is always the term the reason
-+	-- names. `specWeights` is gate 5b's resolution: the same table both sides
-+	-- of this comparison were already priced against.
-+	local terms = Verdict.proofTerms(order, specWeights)
-+-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
-+-- the profile's weighted total, in the threshold order the card spells out. The
-+-- number (and the profile's own name) travel back to the caller as the third
-+-- return value so a rendered line can quote them.
-+--
-+-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
-+-- which is test instrumentation (it exists so a fixture can be run through both
-+-- comparators in one VM and diffed). It is read here, so the switch really does
-+-- switch: with it set, the weighted path is skipped and the old block runs.
-+if not Verdict.LEGACY_DOMINANCE_DECIDES then
-+	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
-+	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
-+	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
-+	-- pair is the only thing this engine ever offers the model, and this is the
-+	-- only place the shipped path hands one back.
- 	--
+-	--
 -	-- `allow` runs FIRST and its answer is what this branch returns unless it
 -	-- left the trade-off alone. That ordering is the §1.3 exception made
 -	-- structural rather than promised: a pair the lower-material rule softens
@@ -2311,9 +2320,34 @@
 +				d = (type(d) == "table") and d or {}
 +				d.arbitration = aDetail
 +				return fv, fr, d
-+			end
-+		end
-+	end
+ 			end
+-			-- THE DECLINE, THROUGH THE GATE (card t_eff0caec). This pair REACHED the model
+-			-- and the model turned it away with a reason. The words do not move — the two
+-			-- values this branch already returns are returned either way — only the detail
+-			-- rides out, so the tooltip can name the judgement that did not happen. A gate
+-			-- that never fired (a clear upgrade or downgrade, an `allow` softening, no
+-			-- totals, the flag off) leaves aDetail nil, and that silence is unchanged.
++			-- THE DECLINE, THROUGH THE GATE (card t_eff0caec, carried into the
++			-- client by card t_18eb91e6). The model was ASKED and turned the pair
++			-- away: arbitrate answers (nil, why, { declined = true, why, cause }).
++			-- Upstream returns it through this gate so the surface can name the
++			-- judgement that did not happen, and this region is a REPLACEMENT — a
++			-- re-pin that moved the pin without carrying these lines would ship a
++			-- clause map nothing hands a cause to, with --verify-shipped still green
++			-- (it compares the vendored copy to the pin and never asks whether the
++			-- overlay took). THE WORD DOES NOT MOVE: the row keeps its own TRADE_OFF
++			-- answer (`v, r`), and only the detail rides out, set exactly as the
++			-- answered case above sets it, so ChestAdvisor publishes it as
++			-- `row.arbitration` and `TOOLTIP_UI.declineClause` can read `cause`.
+ 			if type(aDetail) == "table" and aDetail.declined == true then
+-				return allowedV, allowedR, aDetail
++				d = (type(d) == "table") and d or {}
++				d.arbitration = aDetail
++				return v, r, d
+ 			end
+ 		end
+ 	end
+-	return allowedV, allowedR
 +	if v ~= nil then return v, r, d end
 +end
 +
@@ -2391,18 +2425,17 @@
 +			if c > e then
 +				return allow("UPGRADE", "upgrade: more " .. word .. " (" .. c .. " vs "
 +					.. e .. ") on an otherwise equal item")
- 			end
++			end
 +			return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
 +				.. e .. ") on an otherwise equal item"
- 		end
- 	end
--	return allowedV, allowedR
++		end
++	end
 +	return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 +	end
  end
  
  
-@@ -5111,7 +7140,7 @@ Verdict.TWO_HAND_TOKENS = {
+@@ -5140,7 +7177,7 @@
  -- candidate test, so every bow/gun/crossbow/thrown candidate against a
  -- character with anything in the off-hand was refused with W0 — "a two-handed
  -- weapon takes your off-hand" — a reason that is not true of the item. The live
@@ -2411,7 +2444,7 @@
  -- item:3742 [Bow of Plunder], slot 18, W0.
  --
  -- The two sets therefore differ by design and must not be collapsed:
-@@ -5910,10 +7939,12 @@ local function parseWeaponLine(line)
+@@ -5939,10 +7976,12 @@
  		end
  	end
  
@@ -2428,7 +2461,7 @@
  	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
  	if sp then
  		local v = tonumber((sp:gsub(",", ".")))
-@@ -6661,6 +8692,84 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
+@@ -6690,6 +8729,84 @@
  		end
  	end
  
@@ -2513,7 +2546,7 @@
  	local statLed = type(spec) == "table"
  		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
  		and type(spec.order) == "table"
-@@ -6833,6 +8942,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
+@@ -6862,6 +8979,7 @@
  		outcome = Verdict.dominance(candStats, eqStats, order)
  	end
  

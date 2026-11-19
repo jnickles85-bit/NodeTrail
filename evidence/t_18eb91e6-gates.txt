@@ -1,0 +1,9 @@
+== luac5.1 -p (every shipping file) ==
+luac: 25 files, 0 failures
+
+== specs (lua5.1.5) ==
+specs: 50 pass, 0 fail
+
+Total: 0 warnings / 0 errors in 25 files
+sync_touchstone: COPY   8 pristine files are the pin's blobs
+sync_touchstone: PATCH  8 patches reverse to the pin's blobs

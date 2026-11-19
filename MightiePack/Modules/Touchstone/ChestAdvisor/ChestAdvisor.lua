@@ -1862,6 +1862,77 @@ function TOOLTIP_UI.arbitratedLines(row, showDetail, note)
 	return out
 end
 
+-- ---- A8 (card t_eff0caec): the decline, in the player's words -----------------
+--
+-- A pair the model TURNED AWAY is not a silence, and must not read like one: from
+-- the player's seat, "the model declined and said nothing" is indistinguishable
+-- from "the wire is dead". The refusal ladder in Arbitration.lua says which
+-- judgement could not happen and why, and it hands a stable CAUSE KEY up beside its
+-- sentence (Arbitration.why). This is the ONE place a key becomes player words.
+--
+-- MAPPED BY KEY, NEVER BY SENTENCE. A refusal reworded upstream must keep its clause
+-- on screen; a map keyed on English substrings would silently blank it, which is the
+-- same defect class as a tooltip that defaults to a word it did not judge. A key this
+-- table does not know falls back to the plain clause below, so a cause added upstream
+-- costs a wording, not a hole.
+--
+-- WHAT IT NEVER SAYS: "unavailable", "error", "failed", "model". The player reads
+-- what did not get judged, and — where it is actionable — what to do about it.
+local DECLINE_MANA = "throughput not judged: the client did not give your mana numbers"
+-- THE SAME FAMILY, ONE STATE APART (card t_d1685fd1). `no_totals` is not a refusal:
+-- it is the numbers not being in hand YET. The client hands these readings over OUT
+-- OF COMBAT only (the totals snapshot's rule 1 — on the restricted map every one of
+-- them comes back secret in combat, and the scan itself is deferred until the fight
+-- ends), so before that read has happened the ladder has nothing to price a pair
+-- with, and the reading arrives by itself. "The client did not give your mana
+-- numbers" reads as a broken addon for a state that clears — and it is the state a
+-- first hover after logging in lands in most often. This clause says which state it
+-- is and what produces the reading, in the same voice as the spell and spirit ones.
+local DECLINE_MANA_YET = "throughput not judged: no mana reading yet — it is read out of combat"
+local DECLINE_SPELL = "throughput not judged: no spell reading for this character"
+local DECLINE_SPIRIT = "throughput not judged: no spirit reading for this character"
+local DECLINE_ROLE = "throughput not judged: no role chosen — /upgrade role <melee|spell>"
+local DECLINE_NOTHING = "throughput moves nothing either way"
+local DECLINE_DEFAULT = "throughput not judged: the numbers do not price this trade"
+local DECLINE_CLAUSE = {
+	-- not in hand yet: the read is taken out of combat, so this state clears by
+	-- itself (card t_d1685fd1)
+	no_totals = DECLINE_MANA_YET,
+	-- ...and these three are the client's ANSWER about those numbers, not an
+	-- absence of one: each is permanent until something changes
+	secret_totals = DECLINE_MANA,
+	incomplete_totals = DECLINE_MANA,
+	pool_not_positive = DECLINE_MANA,
+	-- no reading of the representative spell to price the pair with
+	no_spell = DECLINE_SPELL,
+	no_spell_cost = DECLINE_SPELL,
+	no_spell_cast_time = DECLINE_SPELL,
+	no_spell_measurement = DECLINE_SPELL,
+	no_spell_base = DECLINE_SPELL,
+	-- the Spirit this pair moves enters the model through a regen slope nobody measured
+	spirit_slope_unmeasured = DECLINE_SPIRIT,
+	-- a choice only the player can make
+	no_role = DECLINE_ROLE,
+	-- the trade itself is not one there is anything to say about
+	moves_nothing = DECLINE_NOTHING,
+}
+
+--- The clause for a DECLINED row, in player words, or "" for every other row.
+---
+--- Empty is the default on purpose. Only a pair that REACHED the gate and was turned
+--- away carries `arbitration.declined` (Verdict.lua's seam): a clear upgrade, a clear
+--- downgrade, a pair the ordinary comparator settled, and a row with no arbitration at
+--- all must stay byte-identical to what they showed before this card. The leading
+--- space belongs to the clause, exactly like the engine's own disclosure clause, so an
+--- empty answer leaves the line untouched.
+function TOOLTIP_UI.declineClause(row)
+	local arb = type(row) == "table" and row.arbitration or nil
+	if type(arb) ~= "table" or arb.declined ~= true then return "" end
+	local cause = arb.cause
+	local clause = type(cause) == "string" and DECLINE_CLAUSE[cause] or nil
+	return " (" .. (clause or DECLINE_DEFAULT) .. ")"
+end
+
 --- The surface's READ-ONLY handle (card t_8e171c28). The item tooltip, both
 --- mark hovers and every harness answer from THIS table, so publishing it lets a
 --- test drive the wording without a bag scan — and it is the table a diagnostic
@@ -2728,8 +2799,18 @@ local function verdictLines(row, order)
 		-- that moved the helper would then cost a clause, not every tooltip.
 		local clause = (type(disclosureClause) == "function")
 			and select(2, disclosureClause(row.reason)) or ""
+		-- A8 (card t_eff0caec, carried into the client by card t_18eb91e6): the
+		-- refusal clause. Upstream attaches it on the ORDINAL tail, but in THIS pack
+		-- a declined trade-off still carries its weighted detail (`d.total` rides the
+		-- row beside `d.arbitration`), so the row renders HERE — this is the branch
+		-- it actually reaches, and a clause map the renderer never calls is the
+		-- 0.3.10/0.3.11 shape this card exists to prevent. Same helper and the same
+		-- `showDetail` gate as upstream's: Compact never widens, and the helper
+		-- answers "" on every row that was not declined, so those lines stay
+		-- byte-identical.
+		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
 		out[#out + 1] = {
-			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause,
+			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause .. decline,
 			colour = colour,
 		}
 		if weighted.detail and showDetail then
@@ -2779,9 +2860,13 @@ local function verdictLines(row, order)
 				detail = dtext .. vs
 			end
 		end
+		-- A8 (card t_eff0caec): a pair the model was ASKED and turned away says so,
+		-- on THIS line and behind the same detail rule as everything else — so it never
+		-- widens a Compact tooltip, and a row the model never saw adds nothing here.
+		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
 		out[#out + 1] = {
 			text = TOOLTIP_AMBER .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
-				.. " — " .. reason,
+				.. " — " .. reason .. decline,
 			colour = "amber",
 		}
 		if detail and showDetail then
@@ -2820,8 +2905,11 @@ local function verdictLines(row, order)
 	-- is a fact about the read, not about the verdict word). It is "" when
 	-- nothing was skipped, so a fully-read tooltip is byte-identical to before.
 	-- (Card t_8e171c28: the arbitrated branch already attached it to its reason
-	-- line, where the disclosure belongs — its later lines are numbers.)
-	if note ~= "" and type(row.arbitration) ~= "table" then
+	-- line, where the disclosure belongs — its later lines are numbers. Card
+	-- t_eff0caec: the question is whether that branch RENDERED, not whether a table
+	-- sits on the row — a DECLINED pair carries a table and is rendered by the
+	-- ordinal branches above, so it still needs the note on its last line.)
+	if note ~= "" and arbitrated == nil then
 		out[#out].text = out[#out].text .. note
 	end
 	-- Close EVERY line with the reset. Each line opens with its own colour

@@ -8,6 +8,19 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Added
+- **A declined pair now says why, in the player's words.** The pack is re-pinned to StatForge
+  `1992240` (PR #125), which carries A8: when the model is asked about a trade-off and turns it
+  down, the refusal and its stable cause key ride out to the surface instead of being dropped on
+  the floor. The shipped tooltip appends one clause — `(throughput not judged: …)` — naming what
+  did not get judged. Two states read differently on purpose: a reading that has not happened yet
+  says *"no mana reading yet — it is read out of combat"*, while the client's permanent answer
+  says *"the client did not give your mana numbers"*. Every other row renders byte-identically.
+  The clause map and the renderer that calls it are asserted **in the shipped bytes** by
+  `tests/touchstone_decline_clause_spec.lua`, which also drives a real declined scan end to end:
+  `--verify-shipped` alone cannot see this, because it compares the vendored copy to the pin and
+  never asks whether the patch's overlay carried the map (card `t_18eb91e6`).
+
 ### Fixed
 - **The Options footer and the window header no longer disagree about a dev build.** The footer
   appended its own `" v"` to whatever `pkg.PackVersion()` returned, so a source checkout read

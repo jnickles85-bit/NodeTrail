@@ -1,0 +1,14 @@
+
+=== M1 clause map loses no_totals ===
+  FAIL: the map keys the two states to DIFFERENT clauses (no_totals -> MANA_YET, secret_totals -> MANA)
+  FAIL: no_totals renders the RECOVERABLE clause (got  (throughput not judged: the numbers do not price this trade))
+  exit=1  fail-lines=2
+
+=== M2 the weighted call is gone ===
+  FAIL: the renderer is CALLED from the shipped verdict lines twice (found 1 call site(s), expected 2)
+  FAIL: THE TOOLTIP LINE CARRIES THE CLAUSE (got Trade-off: +Healing vs −Intellect — decided by Healing Power vs Worn Chest of the Parish [Holy (chosen)])
+  FAIL: the clause names what did not get judged, in player words
+  exit=1  fail-lines=3
+
+restored: True
+S5-exit=0
