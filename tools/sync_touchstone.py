@@ -84,13 +84,22 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # made the changed-verdict sweep lie (card t_0153f144), and a pin that can move
 # is a pin that cannot be checked.
 #
-# Provenance of eebfba4: "Merge pull request #121 from
-# jnickles85-bit/wt/t_a875a586" (2026-11-17), carrying the four presentation
-# seams this shape was ruled against — hosted chrome, theme, asset root and the
-# toast hook — plus t_4e61b67f's host opt-out, which is why every vendored file
-# now begins with upstream's own `if TouchstoneSkip then return end` and the eight
-# pristine files can be the pin's blobs byte for byte.
-SOURCE_REF = "eebfba43d1c87ffba6ebe6fe11372ebd7d616f22"
+# Provenance of ff64bc5: "Merge pull request #123 from
+# jnickles85-bit/wt/t_ce1c4a4f" (2026-11-18, StatForge main), THE WIRE: the
+# arbitration flag is TRUE and gates the seam at its call site, the renderer
+# refuses a table with no state, the spec context survives every path, and
+# compareDPS carries the spec instead of dropping it. It supersedes eebfba4
+# (PR #121), whose four presentation seams — hosted chrome, theme, asset root,
+# toast hook — plus t_4e61b67f's host opt-out are all still in it, so every
+# vendored file still begins with upstream's own `if TouchstoneSkip then return
+# end` and the pristine files are still the pin's blobs byte for byte.
+#
+# Card t_58762500 moved the pin here for one reason: the flag arrives with
+# Arbitration.lua (a COPY-lane file) while the call lives in Verdict.lua, which
+# this pack replaces wholesale with its weighted layer. The two halves are one
+# wire and must move in one cut — a flag with no call is a seam that is ON in a
+# file nobody reads, and every other check stays green while it happens.
+SOURCE_REF = "ff64bc504e0c8043915c2cbf05e53a4cc270285f"
 
 # Order is load-bearing. Verdict.lua must load before ChestAdvisor.lua
 # (ChestAdvisor reads _G.Verdict at load time). Weights.lua sits directly after

@@ -3,7 +3,7 @@
 # The SF.Enable lifecycle fold and slash gating: the module registers its
 # slashes and builds its event frame on enable, not at load.
 #
-# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# base: StatForge ff64bc504e0c8043915c2cbf05e53a4cc270285f
 # applies to: Core.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.

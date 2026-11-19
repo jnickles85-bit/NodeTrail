@@ -101,10 +101,13 @@ if TouchstoneSkip then return end
 Arbitration = Arbitration or {}
 local A = Arbitration
 
---- THE FLAG. False, and nothing in the shipped addon reads it: C7 turns the seam on, C6
---- supplies the envelope. A test in this card's battery asserts that no shipped file
---- outside this one and its tests mentions the name at all.
-A.ENABLED = false
+--- THE FLAG. TRUE since card t_ce1c4a4f — the wire's deliberate act. The model
+--- is now reachable from the shipped judgement path, and this boolean is the
+--- rollback: set it to false and `Verdict.evaluate` behaves as it did before the
+--- seam existed, without reverting a single line of model code. `Verdict.lua`
+--- is the ONE shipped reader (a test pins that count, so no second reader can
+--- appear unnoticed).
+A.ENABLED = true
 
 -- ═══════════════════════════════════════════════════════════════════════════════════════
 -- 1. THE CONSTANTS — every one carries its class and its source, per the ledger (§5)

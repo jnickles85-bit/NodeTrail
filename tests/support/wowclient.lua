@@ -328,6 +328,13 @@ local function newFrame(kind, name, parent, template)
     fire(self, "OnHide")
   end
   function f:IsShown() return self.shown == true end
+  -- The client's SetShown is the Show/Hide pair in one call, and the pack's
+  -- marker path uses it (ChestAdvisor's anchorMarker suppresses a marker with
+  -- SetShown(false)). Added when tests/touchstone_shipped_seam_spec.lua became
+  -- the first spec to drive a real ChestAdvisor.scan() headlessly.
+  function f:SetShown(flag)
+    if flag then self:Show() else self:Hide() end
+  end
   function f:IsVisible() return C.Visible(self) end
   function f:EnableMouse(flag)
     if flag == nil then flag = true end

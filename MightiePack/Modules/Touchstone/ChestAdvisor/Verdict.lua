@@ -6955,6 +6955,42 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord, totals
 -- switch: with it set, the weighted path is skipped and the old block runs.
 if not Verdict.LEGACY_DOMINANCE_DECIDES then
 	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
+	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
+	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
+	-- pair is the only thing this engine ever offers the model, and this is the
+	-- only place the shipped path hands one back.
+	--
+	-- WHY IT WAS MISSING, named so the next re-cut can look for it: the region
+	-- was replaced WHOLE by the weighted layer (card t_3a744b4a), and the
+	-- replacement did not carry the call across with it. The old side of that
+	-- hunk ended `return allowedV, allowedR`; the new side ended without it. It
+	-- was an OMISSION IN THE REPLACEMENT REGION, not anchor drift — so nothing
+	-- complained: the patch applied cleanly, the digest matched, the suite ran,
+	-- and the definition of `Verdict.arbitrate` stayed in the file with no
+	-- caller. A later re-pin then brought `Arbitration.ENABLED = true` in a
+	-- pristine file, which is the shape that looks wired and answers nothing.
+	-- The gate below is upstream's, reproduced: only a TRADE_OFF, only when the
+	-- caller passed totals, only while the flag is on — read through the global
+	-- at CALL time, exactly as `Verdict.arbitrate` resolves the module.
+	-- `allow` runs on the model's answer for the same reason it runs above: the
+	-- lower-material rule outranks both answers, and a pair it softened was
+	-- already answered before `weightedVerdict` returned a TRADE_OFF here.
+	if v == TRADE_OFF and type(totals) == "table" then
+		local Arb = rawget(_G, "Arbitration")
+		if type(Arb) == "table" and Arb.ENABLED == true then
+			local av, aReason, aDetail = Verdict.arbitrate(candStats, eqStats, spec_, totals)
+			if av ~= nil then
+				local fv, fr = allow(av, aReason)
+				-- The model's table RIDES the row's detail, never in place of it:
+				-- the weighted total and the profile name are this path's own
+				-- answer and the window quotes them off the row. `d.arbitration`
+				-- is what ChestAdvisor's row builder publishes as `row.arbitration`.
+				d = (type(d) == "table") and d or {}
+				d.arbitration = aDetail
+				return fv, fr, d
+			end
+		end
+	end
 	if v ~= nil then return v, r, d end
 end
 
@@ -7040,6 +7076,7 @@ if Verdict.LEGACY_DOMINANCE_DECIDES then
 	return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 	end
 end
+
 
 -- ---- Tier B (t_73e20edb): the off-hand slot ----------------------------------
 --
@@ -7994,7 +8031,14 @@ end
 -- item read "UPGRADE — fills the weapon slot". The caller owns `wornLink` and
 -- therefore owns this fact; the comparator takes it as an argument rather than
 -- re-deriving it (no client read here — this module stays pure).
-local function compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+-- `_spec` (card t_ce1c4a4f, A4) is the row's spec, and it is NOT read here: this
+-- comparator decides on two sets of printed numbers, and a situation cannot
+-- change what 25.6 vs 24.1 dps means. It rides along so the weapon-dps path does
+-- not LOSE the spec at its last seam — the same rule that keeps `cmpSpec` whole
+-- above — and so a future arbitration on this path receives a spec that already
+-- carries the context instead of one that silently defaults. The leading
+-- underscore is the luacheck-visible statement that it is deliberately unread.
+local function compareDPS(candNumbers, wornNumbers, wornSlotFilled, _spec)
 	local c = weaponDPS(candNumbers)
 	local w = weaponDPS(wornNumbers)
 	if c == nil then
@@ -8640,7 +8684,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		if promotedOk and ctx.offFilled == true then
 			local offNumbers = weaponNumbers(ctx.offLines)
 			local offDpsRead = weaponDPS(offNumbers)
-			local _, _, tie = compareDPS(wornNumbers, offNumbers, true)
+			local _, _, tie = compareDPS(wornNumbers, offNumbers, true, spec)
 			if offDpsRead ~= nil and (tie == "more" or tie == "equal") then
 				promotionNote = (" (judged as a pair: your equipped weapon moves to your "
 					.. "off hand, ahead of the %.2f dps there)"):format(offDpsRead)
@@ -8733,7 +8777,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- EVERY other case — a melee role, a hybrid with no resolved role, an
 		-- unknown class, a stat-led class whose order did not resolve, no spec at
 		-- all — is today's comparator, byte-for-byte, reason string included.
-		local verdict, reason, tie = compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		local verdict, reason, tie = compareDPS(candNumbers, wornNumbers, wornSlotFilled, spec)
 		-- (card t_ee04ad6d) THE ONE EXCEPTION, and it is the claim this path
 		-- cannot support: an "equal" on damage per second while the two sides
 		-- differ MORE than the tooltip's own step on a word it can measure (Hit,
@@ -8785,10 +8829,17 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 	-- paladin's rows out of the UNKNOWN branch.
 	local order = Verdict.tankWeaponOrder(spec.class, spec.role, spec.clientRole)
 		or spec.order
+	-- A4 (card t_ce1c4a4f): COPY the spec, then replace ONLY the order. The
+	-- hand-built table this replaces dropped `context` (and every other field a
+	-- later spec grows), so a TANK weapon reached Verdict.evaluate — and with it
+	-- the arbitration — with no situation at all: the model would price the pair
+	-- for the default context while the player had set another. A spec that
+	-- loses a field at a seam is a wrong answer waiting for someone to build it.
 	local cmpSpec = spec
 	if order ~= spec.order then
-		cmpSpec = { class = spec.class, role = spec.role,
-			clientRole = spec.clientRole, level = spec.level, order = order }
+		cmpSpec = {}
+		for k, v in pairs(spec) do cmpSpec[k] = v end
+		cmpSpec.order = order
 	end
 
 	local api = type(apiBySide) == "table" and apiBySide or nil
@@ -8915,7 +8966,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- (card t_d5c915f2): a candidate that is measurably ahead on Hit or Crit
 		-- must not be called "the same" just because the order does not carry
 		-- the word. The gate is the melee branch's own rule, one helper away.
-		local dv, dr, tie = compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		local dv, dr, tie = compareDPS(candNumbers, wornNumbers, wornSlotFilled, cmpSpec)
 		local v, r = equalClaimOnStats(dv, dr, tie, candStats, eqStats, cmpSpec)
 		return answer(v, r)
 	end
@@ -8929,7 +8980,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- is on the melee branch and on the worn-side-empty branch above (card
 		-- t_d5c915f2): level on the ORDER is not the same fact as level on the
 		-- pair.
-		local dv2, dr2, tie2 = compareDPS(candNumbers, wornNumbers, wornSlotFilled)
+		local dv2, dr2, tie2 = compareDPS(candNumbers, wornNumbers, wornSlotFilled, cmpSpec)
 		local v2, r2 = equalClaimOnStats(dv2, dr2, tie2, candStats, eqStats, cmpSpec)
 		return answer(v2, r2)
 	end

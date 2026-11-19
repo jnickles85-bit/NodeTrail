@@ -1448,6 +1448,12 @@ local function buildSpec()
 			weightsKey = entry.weightsKey,
 			profileSource = "chosen",
 			profileLabel = entry.name,
+			-- Card t_58762500: the SAME field the talent path below carries and
+			-- the arbitration reads. `Arbitration.judge` treats an absent context
+			-- as Leveling (its own default), so a chosen spec without it priced
+			-- every pair for the wrong situation — a field lost at a seam, which
+			-- is the defect upstream's A4 fixed one layer down (cmpSpec).
+			context = contextWord(),
 		}
 	end
 	-- Auto: when the player has not recorded `/up role`, match the
@@ -1817,13 +1823,26 @@ end
 --- `note` is the partial-read disclosure, which rides the REASON line here (it is
 --- a fact about the read, and the lines after it are numbers).
 function TOOLTIP_UI.arbitratedLines(row, showDetail, note)
-	local arb = row.arbitration
+	local arb = type(row) == "table" and row.arbitration or nil
+	-- A2 (card t_ce1c4a4f): the renderer REFUSES to speak without a real state.
+	-- It used to default the word to SIDEGRADE before testing anything, so a
+	-- table that was not an arbitration printed "Sidegrade — …" and the headline
+	-- contradicted the window's own word for the same row. A row that is not
+	-- arbitrated now falls through to the ordinal branches, and no code path can
+	-- print "Sidegrade" that did not read a SIDEGRADE state.
+	if type(arb) ~= "table" or type(arb.state) ~= "string" then return nil end
 	local out = {}
-	local word, esc, colour = TOOLTIP_UI.words.SIDEGRADE, TOOLTIP_AMBER, "amber"
+	local word, esc, colour
 	if arb.state == "UPGRADE" then
 		word, esc, colour = TOOLTIP_UI.words.UPGRADE, TOOLTIP_GREEN, "green"
 	elseif arb.state == "NOT_UPGRADE" then
 		word, esc, colour = TOOLTIP_UI.words.NOT_UPGRADE, TOOLTIP_GREY, "grey"
+	elseif arb.state == "SIDEGRADE" then
+		word, esc, colour = TOOLTIP_UI.words.SIDEGRADE, TOOLTIP_AMBER, "amber"
+	else
+		-- A state this renderer has no word for is not an arbitration it can
+		-- speak: answer nil and let the caller fall through. Never invent one.
+		return nil
 	end
 	local head = TOOLTIP_PREFIX .. word .. " — " .. TOOLTIP_UI.contextLabel(arb.context)
 	if arb.state == "SIDEGRADE" then
@@ -2665,7 +2684,34 @@ local function verdictLines(row, order)
 
 	local out = {}
 	local weighted = TOOLTIP_UI.weighted(row, order)
-	if weighted ~= nil then
+	-- A2 (card t_ce1c4a4f): the SAME question `arbitratedLines` asks, asked
+	-- once. A table on `row.arbitration` that is not a real arbitration falls
+	-- through to the ordinal branches below — the renderer answers for the row,
+	-- and a row no model judged is worded by the comparator that did judge it.
+	local arbitrated = nil
+	if type(row.arbitration) == "table" and type(row.arbitration.state) == "string" then
+		-- Card t_8e171c28: an ARBITRATED row — the model answered it, so the
+		-- three branches below (which render the ordinal comparator's own
+		-- sentences) must not speak for it. First, deliberately: an arbitrated
+		-- UPGRADE is still row.verdict == "UPGRADE", and its headline names the
+		-- context and the driving term instead of the ordinal "beats what you
+		-- have" arithmetic.
+		--
+		-- The numbers stay behind Shift in EVERY mode — `showDetail` above is
+		-- the read-arithmetic rule (Full shows it, Compact hides it), while the
+		-- model's margin/band/confidence is a different class of detail and the
+		-- card puts it behind the modifier key without exception.
+		arbitrated = TOOLTIP_UI.arbitratedLines(row, showDetail and TOOLTIP_UI.shiftHeld(), note)
+	end
+	if arbitrated ~= nil then
+		out = arbitrated
+	elseif weighted ~= nil then
+		-- Card t_3a744b4a: a row whose outcome came from the weights quotes the
+		-- number and the profile it came from. SECOND, deliberately, behind the
+		-- arbitration: a trade-off the model answered carries both (the weighted
+		-- detail rides the row with the model's table on it, card t_58762500),
+		-- and the model's word is the one the window's ledger row prints. Two
+		-- surfaces must not name one row two ways (card t_c8970547).
 		local esc = TOOLTIP_GREY
 		local colour = "grey"
 		if row.verdict == "UPGRADE" then
@@ -2689,19 +2735,6 @@ local function verdictLines(row, order)
 		if weighted.detail and showDetail then
 			out[#out + 1] = { text = TOOLTIP_GREY .. weighted.detail, colour = "grey" }
 		end
-	elseif type(row.arbitration) == "table" then
-		-- Card t_8e171c28: an ARBITRATED row — the model answered it, so the
-		-- three branches below (which render the ordinal comparator's own
-		-- sentences) must not speak for it. First, deliberately: an arbitrated
-		-- UPGRADE is still row.verdict == "UPGRADE", and its headline names the
-		-- context and the driving term instead of the ordinal "beats what you
-		-- have" arithmetic.
-		--
-		-- The numbers stay behind Shift in EVERY mode — `showDetail` above is
-		-- the read-arithmetic rule (Full shows it, Compact hides it), while the
-		-- model's margin/band/confidence is a different class of detail and the
-		-- card puts it behind the modifier key without exception.
-		out = TOOLTIP_UI.arbitratedLines(row, showDetail and TOOLTIP_UI.shiftHeld(), note)
 	elseif row.verdict == "UPGRADE" then
 		local head, detail = describeUpgradeParts(row, order)
 		out[#out + 1] = {
@@ -4493,6 +4526,10 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 			-- ranked deltas when the tiebreaker decided, so the line can say
 			-- "tiebreaker (...)" instead of "weighted 0".
 			row.tiebreak = weighted.tiebreak
+			-- Card t_58762500: the same ride as the bag row's — a reward pair
+			-- the model answered says the model's word on this surface too,
+			-- instead of the weighted headline the bag row no longer prints.
+			row.arbitration = weighted.arbitration
 		end
 		return v, reason, row
 	end
@@ -4626,7 +4663,8 @@ local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mai
 				ChestAdvisor._judgeKey("questweapondps", link, wornLink, loc, spec, candLines, wornLinesR, canUseV),
 				function()
 					return Verdict.compareDPS(Verdict.weaponNumbers(candLines),
-						wornLink and Verdict.weaponNumbers(wornLinesR) or nil, wornSlotFilled)
+							wornLink and Verdict.weaponNumbers(wornLinesR) or nil, wornSlotFilled,
+							spec)
 				end)
 		end
 		if type(reason) == "string" and w0Notes ~= nil then
@@ -7767,7 +7805,8 @@ ChestAdvisor.scan = function()
 											return Verdict.compareDPS(
 												Verdict.weaponNumbers(wlines),
 												wornLink and Verdict.weaponNumbers(wornLines) or nil,
-												wornSlotFilled)
+												wornSlotFilled,
+												spec)
 										end)
 								end
 								if type(reason) == "string" and w0Notes ~= nil then
@@ -7852,7 +7891,13 @@ ChestAdvisor.scan = function()
 							-- SavedVariables (diagHistory keeps headers only —
 							-- card t_6696b35a — so this table lives and dies with
 							-- the scan, exactly like `lines`/`api` above).
-							arbitration = (type(arbDet) == "table") and arbDet or nil,
+							-- Card t_58762500: the engine's arbitration table rides
+							-- the row's detail (`d.arbitration`, set by
+							-- Verdict.evaluate's trade-off seam). The weighted
+							-- numbers stay on `d` itself, so the row keeps both.
+							arbitration = (type(arbDet) == "table"
+								and type(arbDet.arbitration) == "table")
+								and arbDet.arbitration or nil,
 							role = roleLabel,
 							-- Card t_3a744b4a: the weighted total this row was decided on
 							-- and the profile that supplied the weights. Two scalars, so a

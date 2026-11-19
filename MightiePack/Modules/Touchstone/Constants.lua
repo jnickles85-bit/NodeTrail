@@ -4,6 +4,9 @@
 if TouchstoneSkip then return end
 --- StatForge constants: version, colors, slot labels.
 --- Loaded first; other files attach to the StatForge global table.
+-- Naming: StatForge is this repo; the addon it ships is Touchstone
+-- (Touchstone.toc). The Lua namespace keeps the repo's name on purpose
+-- (StatForge is the table, SF its alias), and nothing is being renamed.
 
 StatForge = StatForge or {}
 local SF = StatForge

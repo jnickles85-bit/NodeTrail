@@ -1,0 +1,25 @@
+=== MUTATION 2: the shipped Arbitration.lua flag flipped back to false by hand
+=== (the call stays; only the flag the seam reads is gone)
+
+FAIL: the flag is on in the shipped bytes (got false)
+FAIL: THE ROW IS ARBITRATED: row.arbitration is a table (got nil)
+FAIL: the flag restored: the same scan is arbitrated again
+FAIL: the tooltip (Trade-off: +Healing vs) and the window row (Trade-off) name the same pair the same way
+FAIL: both say the model's word for inside the band (expected "Sidegrade", got Trade-off: +Healing vs)
+A. shipped Verdict.lua: 2 occurrence(s) — definition :6562, call :6981
+A. shipped Arbitration.lua: A.ENABLED = false
+B. scan: 1 row(s), one bag item judged against the worn chest
+B. row.verdict              "TRADE_OFF"
+B. row.reason               "decided by Healing Power [Holy (chosen)] — Trade-off: +Healing vs −Intellect"
+B. row.arbitration          nil
+C. with A.ENABLED = false: row.arbitration = nil
+D. tooltip headline          "Trade-off: +Healing vs −Intellect — decided by Healing Power vs Worn Chest of the Parish [Holy (chosen)]"
+D. window ledger row word    "Trade-off"
+D. pre-arbitration token word "Trade-off"
+touchstone_shipped_seam_spec: 5 failure(s)
+spec exit: 1
+
+--- and the digest lane:
+COPY: ChestAdvisor/Arbitration.lua is not the pin's blob — sha256 3161bf8638de != dd105f6fd034 (StatForge ff64bc5). This file has no patch: re-copy it from the pin.
+sync_touchstone: 1 problem(s); nothing was written
+verify exit: 2
