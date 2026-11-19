@@ -67,6 +67,34 @@ function pkg.PackVersion()
   return val
 end
 
+-- The display label for a version — the ONE rule for a leading "v", called by
+-- every surface that prints one (the window header, the Options footer).
+--
+-- A version gets exactly one "v" in front of it; `dev` gets none, because dev
+-- is a state, not a version. The tag's own v is already off by the time a
+-- string arrives here: pkg.PackVersion() above strips it once, for every
+-- caller (card t_c02c1643). The strip below is the guard for a caller that
+-- hands this function an un-normalised string, not a second fix — do not add
+-- another.
+--
+-- This rule used to live in Window.lua as a local, so the header and the footer
+-- each owned half of one convention and disagreed on the dev case: the header
+-- read `dev`, the footer `MightiePack vdev` (card t_60042e97). One function,
+-- one convention, both callers — a surface that needs a version label calls
+-- this; it does not re-derive the rule.
+function pkg.VersionLabel(ver)
+  if type(ver) ~= "string" then return nil end
+  local s = ver:gsub("^%s+", ""):gsub("%s+$", "")
+  if s == "" then return nil end
+  -- Neither shape of a source checkout is a version to put a v in front of:
+  -- the legacy metadata path hands back the raw token, the modern one "dev"
+  -- (and PackVersion answers both as "dev" now).
+  if s == "dev" or s:find("@project-version@", 1, true) then return "dev" end
+  s = s:gsub("^[vV]", "")
+  if s == "" then return nil end
+  return "v" .. s
+end
+
 -- NodeTrail used to be the gathering module. It is its own addon now (card
 -- t_75309c97), so the pack's default list holds Touchstone only. The
 -- `modules.NodeTrail` key in an existing MightiePackDB is left exactly as it is:

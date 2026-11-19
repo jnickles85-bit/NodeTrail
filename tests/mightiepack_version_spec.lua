@@ -22,10 +22,10 @@
 --      player reads.
 --   3. `@project-version@` through the MODERN provider (answered as "dev") and
 --      through the LEGACY one (which hands back the raw token): neither surface
---      prints `v@project-version@`. The header reads `dev`; the footer reads
---      `MightiePack vdev` — the footer's own `" v" .. ver` convention applied to
---      the word `dev`, unchanged from what the modern path rendered before this
---      card, and never the machinery.
+--      prints `v@project-version@`. The header reads `dev` and the footer reads
+--      `MightiePack dev` — dev is a state, not a version, so it gets no v on
+--      either surface, and both read the same label from the same function
+--      (pkg.VersionLabel, Core.lua — card t_60042e97).
 --   4. no version at all -> no header label, and the footer reads exactly
 --      `MightiePack · …` — no stray separator, no empty `v`.
 --
@@ -33,10 +33,21 @@
 -- `vv` or `v@`, and it runs over BOTH the header and the footer. A header-only
 -- assertion is how the footer survived the first fix.
 --
+-- AC3 of card t_60042e97 is the AGREEMENT predicate below: the footer's version
+-- segment must be the header's label character for character. `vv` was one
+-- symptom of two surfaces keeping separate copies of one convention; the
+-- property is that they cannot disagree at all, whatever either is called. The
+-- teeth leg runs that predicate on `("dev", "MightiePack vdev")` and must
+-- redden naming the footer.
+--
 -- TEETH: the same detector is run on the pre-fix footer expression
 -- (`"MightiePack" .. (" v" .. "v0.3.12-beta")`) and must name it. The card's
 -- non-vacuity gate — restore the un-normalised PackVersion() and watch this file
 -- redden naming the footer — was run, and is quoted in the handoff.
+--
+-- Card t_60042e97's gate, likewise: restore the footer's own `" v" .. ver`
+-- (Options.lua) and watch the AGREEMENT check redden naming the footer, then
+-- restore the fix. Quoted in that card's handoff.
 --
 -- The three Touchstone surfaces (subtitle, About, diagnostics) concatenate
 -- Touchstone's OWN module version, SF.VERSION = "0.8.3", which carries no v;
@@ -180,6 +191,24 @@ local function checkSurface(caseName, surface, text, expectHead)
   end
 end
 
+--- AC3: the two surfaces of ONE build agree about the version. The footer's
+--- head is the name plus — when there is a label — one space and exactly the
+--- string the header draws; with no label it is the bare name. Returns nil when
+--- they agree, a message naming the footer when they do not, so the teeth leg
+--- can run the same predicate backwards.
+local function agreementProblem(header, footerHeadText)
+  if type(footerHeadText) ~= "string" then
+    return "the footer renders no head string"
+  end
+  local want = header and ("MightiePack " .. header) or "MightiePack"
+  if footerHeadText ~= want then
+    return "the footer disagrees with the header about the version: the header " ..
+      "reads \"" .. tostring(header) .. "\", the footer's head reads \"" ..
+      footerHeadText .. "\", expected \"" .. want .. "\""
+  end
+  return nil
+end
+
 local CASES = {
   {
     name = "a tagged release, the TOC carrying the tag's own v",
@@ -203,19 +232,19 @@ local CASES = {
     name = "a source checkout, modern provider (answered as dev)",
     version = "@project-version@", provider = "modern",
     packVersion = "dev",
-    header = "dev", footer = "MightiePack vdev",
+    header = "dev", footer = "MightiePack dev",
   },
   {
     name = "a source checkout, legacy provider (the raw token)",
     version = "@project-version@", provider = "legacy",
     packVersion = "dev",
-    header = "dev", footer = "MightiePack vdev",
+    header = "dev", footer = "MightiePack dev",
   },
   {
     name = "a dev answer from the client",
     version = "dev", provider = "modern",
     packVersion = "dev",
-    header = "dev", footer = "MightiePack vdev",
+    header = "dev", footer = "MightiePack dev",
   },
   {
     name = "no version at all",
@@ -259,6 +288,10 @@ for _, case in ipairs(CASES) do
     end
     check(type(footer) == "string" and footer:find(FOOTER_MARK, 1, true) ~= nil,
       case.name .. ": the footer still carries the diagnostic hint")
+
+    -- AC3: the two surfaces agree — every case, not only the dev one.
+    local problem = agreementProblem(case.header, footerHead(footer))
+    check(problem == nil, case.name .. ": " .. tostring(problem))
   end
 end
 
@@ -274,6 +307,24 @@ check(doubleV(prefixBug),
 check(doubleV("MightiePack" .. (" v" .. "v@project-version@")),
   "TEETH: the detector names the pre-fix dev footer \"MightiePack v@project-version@\"")
 check(not doubleV("MightiePack v0.3.12-beta"), "TEETH: the detector is silent on the fixed footer")
+
+-- TEETH for the AGREEMENT predicate. The pre-fix dev pair is exactly what card
+-- t_60042e97 exists to remove: a header reading `dev` and a footer reading
+-- `MightiePack vdev` — no `vv` anywhere, and still two surfaces disagreeing.
+local devBug = "MightiePack" .. (" v" .. "dev")
+check(devBug == "MightiePack vdev",
+  "TEETH: the pre-fix dev footer expression is \"MightiePack vdev\"")
+check(not doubleV(devBug),
+  "TEETH: the `vv` detector alone is blind to it — which is why AC3 is agreement, not a substring")
+local devProblem = agreementProblem("dev", devBug)
+check(type(devProblem) == "string",
+  "TEETH: the agreement check reddens on the pre-fix dev footer \"" .. devBug .. "\"")
+check(type(devProblem) == "string" and devProblem:find("footer", 1, true) ~= nil,
+  "TEETH: the reddened message names the footer — got " .. tostring(devProblem))
+check(agreementProblem("dev", "MightiePack dev") == nil,
+  "TEETH: the agreement check is silent on the fixed dev footer")
+check(agreementProblem(nil, "MightiePack") == nil,
+  "TEETH: the agreement check is silent when neither surface has a label")
 check(not doubleV("v0.3.12-beta"), "TEETH: the detector is silent on the fixed header")
 check(not doubleV("dev"), "TEETH: the detector is silent on a dev build")
 
