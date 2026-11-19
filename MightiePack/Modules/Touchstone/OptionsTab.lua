@@ -528,9 +528,26 @@ local function build(host)
 
   host.contextChecks = {}
   local contextOptions = contextState()
-  local contextX = 560
+  -- Card t_ce1c4a4f (pack defect): the row's anchor. `contextX` is gone with
+  -- the fixed layout this loop outlived; the boxes flow off the heading and off
+  -- each other instead.
+  local contextRow
   for _, opt in ipairs(contextOptions or {}) do
-    local cb = labelledCheck(host, "TouchstoneOptContext" .. opt.label, opt.label, contextX, -309)
+    local cb = labelledCheck(host, "TouchstoneOptContext" .. opt.label, opt.label)
+    -- Card t_ce1c4a4f (pack defect): THIS LOOP IS THE CALLER THE SIGNATURE
+    -- CHANGE FORGOT. labelledCheck no longer anchors — card t_4e5ad8a4 moved
+    -- placement to the caller — and this call still passed the ghost of the old
+    -- fixed layout, (contextX, -309), which Lua discarded. All three boxes
+    -- landed on the parent's origin, on top of each other, because nothing in
+    -- this loop anchored `cb` at all. The caller anchors them now, in a row: the
+    -- first under the Context heading, each next one 110 units to the right of
+    -- the previous box, so the three can never share a point.
+    if contextRow == nil then
+      cb:SetPoint("TOPLEFT", contextHeader, "BOTTOMLEFT", 0, -4)
+    else
+      cb:SetPoint("TOPLEFT", contextRow, "TOPLEFT", 110, 0)
+    end
+    contextRow = cb
     cb:SetScript("OnClick", function()
       advisorSlash("context " .. opt.word)
       syncShown(host)
@@ -550,7 +567,6 @@ local function build(host)
     end)
     cb:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     host.contextChecks[opt.word] = cb
-    contextX = contextX + 110
   end
   -- The heading is unnamed, so a test reaches it the way it reaches the reset
   -- button and the class label.
