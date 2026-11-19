@@ -8,6 +8,14 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Fixed
+- **The three Context checkboxes in Pack Settings sit in a row instead of on top of each other**
+  (`t_ce1c4a4f`). The row was built by a loop that still passed the old fixed position to a helper
+  that no longer places anything — Lua discarded the position, nothing anchored the boxes, and
+  Leveling, Dungeon and Raid were created at the same point on the panel, each label drawn over the
+  last. The first box now hangs under the Context heading and the other two beside it, 110 units
+  apart, measured in the pack's own harness.
+
 ### Held for the next release
 - **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
   re-derives the M11 pin first.
