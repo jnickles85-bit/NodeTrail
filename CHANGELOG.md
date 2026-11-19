@@ -8,6 +8,14 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Fixed
+- **The Context switch scrolls with the rest of Settings** (audit A3). The Context heading was the
+  one part of the Settings stack still pinned at the old fixed layout's position, about 60 units
+  below the Role heading it belongs beside, and it stayed put while the rest of the stack scrolled,
+  with its three boxes. It now sits on Role's row in the same right-hand column and moves and clips
+  with the stack. `tests/touchstone_context_scroll_spec.lua` pins it and fails on the old shape.
+  The change is in `tools/touchstone-patches/OptionsTab.lua.patch`, and `--verify-shipped` passes.
+
 ### Held for the next release
 - **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
   re-derives the M11 pin first.

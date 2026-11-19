@@ -297,11 +297,24 @@
    roleMelee:SetScript("OnClick", function()
      advisorSlash("role melee")
      syncShown(host)
-@@ -455,7 +511,19 @@ local function build(host)
+@@ -453,16 +509,56 @@ local function build(host)
+   -- table (ChestAdvisor.contextOptions): the command and this tab cannot drift.
+   -- A host whose advisor did not resolve draws the heading and no boxes rather
    -- than a second, hand-copied list of words.
-   local contextHeader = SF.UI_CreateLabel(host, "Context", "GameFontNormal")
-   contextHeader:SetPoint("TOPLEFT", 560, -293)
+-  local contextHeader = SF.UI_CreateLabel(host, "Context", "GameFontNormal")
+-  contextHeader:SetPoint("TOPLEFT", 560, -293)
 -  contextHeader:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
++  --
++  -- Audit A3 (pack defect): the heading was the one region of this stack still
++  -- parented to `host` and pinned at the old fixed layout's (560, -293). The flow
++  -- (card t_4e5ad8a4) moves every block by moving `content`, so when the wheel
++  -- scrolled the stack the Role heading it sits beside moved and this one did not,
++  -- and nothing clipped it. It now lives on `content` and hangs off the Role
++  -- heading's own top, 540 units to its right: the same 560 column, the same row,
++  -- and no y of its own, so it goes wherever relayout() puts Role. The boxes hang
++  -- off this heading (below), so the whole column scrolls and clips as one.
++  local contextHeader = SF.UI_CreateLabel(content, "Context", "GameFontNormal")
++  contextHeader:SetPoint("TOPLEFT", roleHeader, "TOPLEFT", 540, 0)
 +  -- Fold (MightiePack host): the heading is painted with the accent IN FORCE and
 +  -- registered for the host's late repaint through the pin's own hook. In force
 +  -- means the host's claimed palette when one was claimed (SF.SetTheme), and the
@@ -318,7 +331,6 @@
    host.contextHeader = contextHeader
  
    host.contextChecks = {}
-@@ -472,14 +528,30 @@ local function build(host)
    local contextOptions = contextState()
 -  local contextX = 560
 +  -- Card t_ce1c4a4f (pack defect): the row's anchor. `contextX` is gone with
@@ -327,7 +339,9 @@
 +  local contextRow
    for _, opt in ipairs(contextOptions or {}) do
 -    local cb = labelledCheck(host, "TouchstoneOptContext" .. opt.label, opt.label, contextX, -309)
-+    local cb = labelledCheck(host, "TouchstoneOptContext" .. opt.label, opt.label)
++    -- Audit A3: on `content`, like every other control in the stack, so the
++    -- viewport clips them with the rest of it.
++    local cb = labelledCheck(content, "TouchstoneOptContext" .. opt.label, opt.label)
 +    -- Card t_ce1c4a4f (pack defect): THIS LOOP IS THE CALLER THE SIGNATURE
 +    -- CHANGE FORGOT. labelledCheck no longer anchors — card t_4e5ad8a4 moved
 +    -- placement to the caller — and this call still passed the ghost of the old
@@ -342,11 +356,18 @@
 +      cb:SetPoint("TOPLEFT", contextRow, "TOPLEFT", 110, 0)
 +    end
 +    contextRow = cb
-@@ -483,3 +549,2 @@ local function build(host)
+     cb:SetScript("OnClick", function()
+       advisorSlash("context " .. opt.word)
+       syncShown(host)
+@@ -482,7 +578,6 @@ local function build(host)
+     end)
+     cb:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
      host.contextChecks[opt.word] = cb
 -    contextX = contextX + 110
    end
-@@ -537,14 +605,128 @@ local function build(host)
+   -- The heading is unnamed, so a test reaches it the way it reaches the reset
+   -- button and the class label.
+@@ -537,14 +632,128 @@ local function build(host)
    end
    about:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
    host.about = about
@@ -475,7 +496,7 @@
    local hideMini = StatForgeDB and StatForgeDB.minimapHide
    if host.minimapCheck then host.minimapCheck:SetChecked(not hideMini) end
    if host.scaleSlider and type(SF.GetWindowScale) == "function" then
-@@ -556,6 +738,11 @@ local function render(host)
+@@ -556,6 +765,11 @@ local function render(host)
      end
    end
    syncShown(host)

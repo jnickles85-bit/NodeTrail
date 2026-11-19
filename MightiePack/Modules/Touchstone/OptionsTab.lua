@@ -509,8 +509,17 @@ local function build(host)
   -- table (ChestAdvisor.contextOptions): the command and this tab cannot drift.
   -- A host whose advisor did not resolve draws the heading and no boxes rather
   -- than a second, hand-copied list of words.
-  local contextHeader = SF.UI_CreateLabel(host, "Context", "GameFontNormal")
-  contextHeader:SetPoint("TOPLEFT", 560, -293)
+  --
+  -- Audit A3 (pack defect): the heading was the one region of this stack still
+  -- parented to `host` and pinned at the old fixed layout's (560, -293). The flow
+  -- (card t_4e5ad8a4) moves every block by moving `content`, so when the wheel
+  -- scrolled the stack the Role heading it sits beside moved and this one did not,
+  -- and nothing clipped it. It now lives on `content` and hangs off the Role
+  -- heading's own top, 540 units to its right: the same 560 column, the same row,
+  -- and no y of its own, so it goes wherever relayout() puts Role. The boxes hang
+  -- off this heading (below), so the whole column scrolls and clips as one.
+  local contextHeader = SF.UI_CreateLabel(content, "Context", "GameFontNormal")
+  contextHeader:SetPoint("TOPLEFT", roleHeader, "TOPLEFT", 540, 0)
   -- Fold (MightiePack host): the heading is painted with the accent IN FORCE and
   -- registered for the host's late repaint through the pin's own hook. In force
   -- means the host's claimed palette when one was claimed (SF.SetTheme), and the
@@ -533,7 +542,9 @@ local function build(host)
   -- each other instead.
   local contextRow
   for _, opt in ipairs(contextOptions or {}) do
-    local cb = labelledCheck(host, "TouchstoneOptContext" .. opt.label, opt.label)
+    -- Audit A3: on `content`, like every other control in the stack, so the
+    -- viewport clips them with the rest of it.
+    local cb = labelledCheck(content, "TouchstoneOptContext" .. opt.label, opt.label)
     -- Card t_ce1c4a4f (pack defect): THIS LOOP IS THE CALLER THE SIGNATURE
     -- CHANGE FORGOT. labelledCheck no longer anchors — card t_4e5ad8a4 moved
     -- placement to the caller — and this call still passed the ghost of the old
