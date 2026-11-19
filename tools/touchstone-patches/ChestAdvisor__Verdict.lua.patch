@@ -5,10 +5,26 @@
 # name. Upstream retired that model (Contract Y); this is the one permanent
 # divergence, recorded in docs/touchstone-divergences.md.
 #
-# base: StatForge eebfba43d1c87ffba6ebe6fe11372ebd7d616f22
+# ⚠ IT CARRIES THE TRADE-OFF SEAM (card t_58762500). `Verdict.evaluate` here is
+# an upstream region REPLACED WHOLE by the weighted layer, and the first cut of
+# that replacement (card t_3a744b4a) did not carry upstream's arbitration call
+# across with it: the definition of `Verdict.arbitrate` stayed in the file and
+# its one caller vanished, so the pack shipped a model nothing asked. That was
+# an OMISSION IN THE REPLACEMENT REGION, not anchor drift — the old side of the
+# hunk below ended `return allowedV, allowedR`, the new side ended without it —
+# which is why every check stayed green while it happened. The call is back and
+# gated exactly as upstream gates it (`Arbitration.ENABLED` read through the
+# global at call time, on a TRADE_OFF, when the caller passed totals). Anyone
+# re-cutting this region must carry it again; the seam's guard in the shipped
+# file is `Verdict.arbitrate(` occurring twice, and
+# tests/touchstone_shipped_seam_spec.lua drives a real scan to prove the second
+# one is reached.
+#
+# base: StatForge ff64bc504e0c8043915c2cbf05e53a4cc270285f
 # applies to: ChestAdvisor/Verdict.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
+
 --- a/ChestAdvisor/Verdict.lua
 +++ b/ChestAdvisor/Verdict.lua
 @@ -623,6 +623,37 @@ local KNOWN = {
@@ -2142,7 +2158,7 @@
  
  -- The tri-state comparator.
  --   candidate  — table { canUse = [nil|true|false], line = [raw lines or nil] }
-@@ -4938,106 +6937,110 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord, totals
+@@ -4938,114 +6937,144 @@ function Verdict.evaluate(candidate, equipped, spec, apiBySide, slotWord, totals
  		return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
  	end
  
@@ -2215,6 +2231,17 @@
 -				end
 -				return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
 -					.. e .. ") on an otherwise equal item"
+-			end
+-		end
+-		return verdict, reason
+-	end
+-
+-	-- "upgrade" | "downgrade" | "trade_off": the cascade's own answer, worded by
+-	-- the cascade, with the lower-material rule applied where it has always
+-	-- applied (it passes a NOT_UPGRADE through untouched).
+-	--
+-	-- TRADE_OFF_SEAM (card t_8e171c28). ONLY the trade-off state is offered to
+-	-- the arbitration, and only after the cascade declined to settle the pair.
 +	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
 +	-- every word this pair's own pack prices (proof). One list, built by one
 +	-- function, read by the proof AND by the two loops that word its answer
@@ -2233,6 +2260,60 @@
 +-- switch: with it set, the weighted path is skipped and the old block runs.
 +if not Verdict.LEGACY_DOMINANCE_DECIDES then
 +	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
++	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
++	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
++	-- pair is the only thing this engine ever offers the model, and this is the
++	-- only place the shipped path hands one back.
+ 	--
+-	-- `allow` runs FIRST and its answer is what this branch returns unless it
+-	-- left the trade-off alone. That ordering is the §1.3 exception made
+-	-- structural rather than promised: a pair the lower-material rule softens
+-	-- (TRADE_OFF -> NOT_UPGRADE) has already been decided by that rule, so the
+-	-- model is never asked about it and its bytes cannot move. A nil from the
+-	-- judge (every caller that passes no totals, every refusal, any raise)
+-	-- falls through to the same `allowed` answer, which is today's.
+-	--
+-	-- THE FLAG (card t_ce1c4a4f). This call used to run whenever totals were
+-	-- present, so the model was live while `Arbitration.ENABLED` read false and
+-	-- the flag only LOOKED like a switch. It is the switch now: the flag is the
+-	-- whole gate, read through the global at CALL time exactly as arbitrate
+-	-- resolves the module (a VM that loads the two files separately is the same
+-	-- machine as the client). Turning it back to false restores the bytes that
+-	-- predate the seam with no revert, which is why the gate is kept.
+-	local allowedV, allowedR = allow(verdict, reason)
+-	if state == "trade_off" and allowedV == verdict and type(totals) == "table" then
++	-- WHY IT WAS MISSING, named so the next re-cut can look for it: the region
++	-- was replaced WHOLE by the weighted layer (card t_3a744b4a), and the
++	-- replacement did not carry the call across with it. The old side of that
++	-- hunk ended `return allowedV, allowedR`; the new side ended without it. It
++	-- was an OMISSION IN THE REPLACEMENT REGION, not anchor drift — so nothing
++	-- complained: the patch applied cleanly, the digest matched, the suite ran,
++	-- and the definition of `Verdict.arbitrate` stayed in the file with no
++	-- caller. A later re-pin then brought `Arbitration.ENABLED = true` in a
++	-- pristine file, which is the shape that looks wired and answers nothing.
++	-- The gate below is upstream's, reproduced: only a TRADE_OFF, only when the
++	-- caller passed totals, only while the flag is on — read through the global
++	-- at CALL time, exactly as `Verdict.arbitrate` resolves the module.
++	-- `allow` runs on the model's answer for the same reason it runs above: the
++	-- lower-material rule outranks both answers, and a pair it softened was
++	-- already answered before `weightedVerdict` returned a TRADE_OFF here.
++	if v == TRADE_OFF and type(totals) == "table" then
+ 		local Arb = rawget(_G, "Arbitration")
+ 		if type(Arb) == "table" and Arb.ENABLED == true then
+ 			local av, aReason, aDetail = Verdict.arbitrate(candStats, eqStats, spec_, totals)
+ 			if av ~= nil then
+ 				local fv, fr = allow(av, aReason)
+-				return fv, fr, aDetail
++				-- The model's table RIDES the row's detail, never in place of it:
++				-- the weighted total and the profile name are this path's own
++				-- answer and the window quotes them off the row. `d.arbitration`
++				-- is what ChestAdvisor's row builder publishes as `row.arbitration`.
++				d = (type(d) == "table") and d or {}
++				d.arbitration = aDetail
++				return fv, fr, d
++			end
++		end
++	end
 +	if v ~= nil then return v, r, d end
 +end
 +
@@ -2252,18 +2333,11 @@
 +		for _, word in ipairs(terms) do
 +			if termSign(word, rawget(candStats, word), rawget(eqStats, word)) > 0 then
 +				return allow("UPGRADE", winReason(word))
- 			end
- 		end
--		return verdict, reason
++			end
++		end
 +		return allow("UPGRADE", winReason())
- 	end
- 
--	-- "upgrade" | "downgrade" | "trade_off": the cascade's own answer, worded by
--	-- the cascade, with the lower-material rule applied where it has always
--	-- applied (it passes a NOT_UPGRADE through untouched).
--	--
--	-- TRADE_OFF_SEAM (card t_8e171c28). ONLY the trade-off state is offered to
--	-- the arbitration, and only after the cascade declined to settle the pair.
++	end
++
 +	if outcome == "dominated" then
 +		-- The mirror: the first term the candidate is strictly worse on.
 +		for _, word in ipairs(terms) do
@@ -2291,20 +2365,7 @@
 +	-- order, Armor first then Block — exactly as E2 (t_8bc7d7f2, §4.1a) and
 +	-- Tier B (t_73e20edb) ruled: "Armor and Block break a remaining tie, and
 +	-- only that" (the Tier B/AC-E comment, verbatim).
- 	--
--	-- `allow` runs FIRST and its answer is what this branch returns unless it
--	-- left the trade-off alone. That ordering is the §1.3 exception made
--	-- structural rather than promised: a pair the lower-material rule softens
--	-- (TRADE_OFF -> NOT_UPGRADE) has already been decided by that rule, so the
--	-- model is never asked about it and its bytes cannot move. A nil from the
--	-- judge (every caller that passes no totals, every refusal, any raise)
--	-- falls through to the same `allowed` answer, which is today's.
--	local allowedV, allowedR = allow(verdict, reason)
--	if state == "trade_off" and allowedV == verdict and type(totals) == "table" then
--		local av, aReason, aDetail = Verdict.arbitrate(candStats, eqStats, spec_, totals)
--		if av ~= nil then
--			local fv, fr = allow(av, aReason)
--			return fv, fr, aDetail
++	--
 +	-- ⚠ WHY Armor/Block are members of the relevance SET (relevanceSet, above:
 +	-- unconditional per RULING (b)) but NOT terms of the dominance proof:
 +	--   * E2 ruled "armour is never a win, only a tiebreak" and graded
@@ -2330,7 +2391,7 @@
 +			if c > e then
 +				return allow("UPGRADE", "upgrade: more " .. word .. " (" .. c .. " vs "
 +					.. e .. ") on an otherwise equal item")
-+			end
+ 			end
 +			return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
 +				.. e .. ") on an otherwise equal item"
  		end
@@ -2340,11 +2401,8 @@
 +	end
  end
  
--
- -- ---- Tier B (t_73e20edb): the off-hand slot ----------------------------------
- --
- -- The off-hand slot is special: a shield, a held-in-off-hand item and an
-@@ -5100,7 +7103,7 @@ Verdict.TWO_HAND_TOKENS = {
+ 
+@@ -5111,7 +7140,7 @@ Verdict.TWO_HAND_TOKENS = {
  -- candidate test, so every bow/gun/crossbow/thrown candidate against a
  -- character with anything in the off-hand was refused with W0 — "a two-handed
  -- weapon takes your off-hand" — a reason that is not true of the item. The live
@@ -2353,7 +2411,7 @@
  -- item:3742 [Bow of Plunder], slot 18, W0.
  --
  -- The two sets therefore differ by design and must not be collapsed:
-@@ -5899,10 +7902,12 @@ local function parseWeaponLine(line)
+@@ -5910,10 +7939,12 @@ local function parseWeaponLine(line)
  		end
  	end
  
@@ -2370,7 +2428,7 @@
  	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
  	if sp then
  		local v = tonumber((sp:gsub(",", ".")))
-@@ -6643,6 +8648,84 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
+@@ -6661,6 +8692,84 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
  		end
  	end
  
@@ -2455,7 +2513,7 @@
  	local statLed = type(spec) == "table"
  		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
  		and type(spec.order) == "table"
-@@ -6808,6 +8891,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
+@@ -6833,6 +8942,7 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
  		outcome = Verdict.dominance(candStats, eqStats, order)
  	end
  

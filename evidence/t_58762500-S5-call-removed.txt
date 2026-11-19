@@ -1,0 +1,26 @@
+=== MUTATION 1: the arbitrate CALL removed from the shipped Verdict.lua by hand
+=== (the flag stays true; the definition stays; only the call site is gone)
+
+FAIL: the shipped Verdict.lua calls the seam exactly once and defines it once (got 1 occurrence(s))
+FAIL: THE CALL IS IN THE SHIPPED FILE (a definition is not a call) — re-cut ChestAdvisor__Verdict.lua.patch: its replacement region dropped it once
+FAIL: THE ROW IS ARBITRATED: row.arbitration is a table (got nil)
+FAIL: the flag restored: the same scan is arbitrated again
+FAIL: the tooltip (Trade-off: +Healing vs) and the window row (Trade-off) name the same pair the same way
+FAIL: both say the model's word for inside the band (expected "Sidegrade", got Trade-off: +Healing vs)
+A. shipped Verdict.lua: 1 occurrence(s) — definition :6562, call :nil
+A. shipped Arbitration.lua: A.ENABLED = true
+B. scan: 1 row(s), one bag item judged against the worn chest
+B. row.verdict              "TRADE_OFF"
+B. row.reason               "decided by Healing Power [Holy (chosen)] — Trade-off: +Healing vs −Intellect"
+B. row.arbitration          nil
+C. with A.ENABLED = false: row.arbitration = nil
+D. tooltip headline          "Trade-off: +Healing vs −Intellect — decided by Healing Power vs Worn Chest of the Parish [Holy (chosen)]"
+D. window ledger row word    "Trade-off"
+D. pre-arbitration token word "Trade-off"
+touchstone_shipped_seam_spec: 6 failure(s)
+spec exit: 1
+
+--- and the digest lane:
+PATCH: ChestAdvisor__Verdict.lua.patch no longer applies to the pin for ChestAdvisor/Verdict.lua — ChestAdvisor/Verdict.lua hunk not found (anchor drifted): '\t\treturn "NOT_UPGRADE", "equal to what\'s equipped — not a strict impro'. The shipped file is not this patch's result. Re-cut the patch against ff64bc5.
+sync_touchstone: 1 problem(s); nothing was written
+verify exit: 2

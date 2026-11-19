@@ -54,6 +54,35 @@ is a `Downgrade`/`UPGRADE` off the weighted total, with the profile named) and
 *on an equal-dps pair, does Weapon Skill decide?* — in a form the pack can call.
 Until then the pack's answer stands, and this entry stays.
 
+### 1a. The trade-off seam is CALLED from that replacement region — **carried, as upstream calls it**
+
+**What differs.** Nothing, any more — and that is the entry. Upstream's Step 3 arbitration
+(`Verdict.arbitrate`, gated on `Arbitration.ENABLED` and on a `trade_off` state with totals
+present) is reached from the pack's `Verdict.evaluate` exactly as it is from upstream's, and the
+row it produces carries the model's table (`row.arbitration`), its token and its sentence.
+
+**Why it was missing, and what to look for.** The weighted layer replaces upstream's gate-9
+region **whole** (card `t_3a744b4a`). The first cut of that replacement did not carry the
+arbitration call across with it: the definition of `Verdict.arbitrate` stayed in the file, its
+one caller vanished, and the old side of the hunk still ended `return allowedV, allowedR` while
+the new side ended without it. That is an **omission in the replacement region, not anchor
+drift** — which is exactly why nothing complained: the patch applied, the digest matched, the
+suite ran. A later re-pin then brought `Arbitration.ENABLED = true` in a pristine file, and the
+pack would have shipped a seam that was ON in a file nobody reads.
+
+The guard is `Verdict.arbitrate(` occurring **twice** in the shipped file — the definition and
+the call — plus `tests/touchstone_shipped_seam_spec.lua`, which drives a real
+`ChestAdvisor.scan()` through the vendored tree and fails if a row does not come out arbitrated.
+A re-cut of the region must carry the call again; the patch header in
+`tools/touchstone-patches/ChestAdvisor__Verdict.lua.patch` says so at the top of the file.
+
+**The one pack-side shape.** Upstream returns the model's table as `evaluate`'s third value.
+The pack's third value is the weighted record (`total`, `profile`, `decidedBy`, …), so the
+model's table rides **on** it (`d.arbitration`) and `ChestAdvisor.lua` publishes that as
+`row.arbitration` — for the bag row and the quest-reward row alike. The tooltip asks the
+arbitration first and the weighted line second, so the model's word is the one both the window's
+ledger row and the tooltip headline print.
+
 ---
 
 ## 2. Seam limitations (not divergences)

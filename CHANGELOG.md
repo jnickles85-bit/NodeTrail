@@ -9,6 +9,15 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 ## [Unreleased]
 
 ### Fixed
+- **The shipped addon calls the arbitration — the flag and the call ship in one cut** (`t_58762500`).
+  The re-pin to StatForge `ff64bc5` (PR #123) brought `Arbitration.ENABLED = true` by itself:
+  `Arbitration.lua` is a pristine file the pack copies byte for byte. The CALL lives in `Verdict.lua`,
+  which this pack replaces whole, and that replacement region had dropped it — so the vendored file had
+  the definition of `Verdict.arbitrate` and no caller. Flag on with the call absent is the worst shape:
+  it looks wired, reads exactly like 0.3.11, and every check stays green. The re-cut patch carries the
+  call, gated exactly as upstream gates it, and `tests/touchstone_shipped_seam_spec.lua` drives a real
+  scan through the vendored tree to prove a row comes out arbitrated (token, state and the model's own
+  sentence), with the tooltip and the window naming that row the same way.
 - **The three Context checkboxes in Pack Settings sit in a row instead of on top of each other**
   (`t_ce1c4a4f`). The row was built by a loop that still passed the old fixed position to a helper
   that no longer places anything — Lua discarded the position, nothing anchored the boxes, and

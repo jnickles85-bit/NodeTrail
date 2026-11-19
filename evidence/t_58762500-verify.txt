@@ -1,0 +1,52 @@
+=== card t_58762500 — the re-pin and the seam, measured on the shipped bytes
+date: 2026-11-19T02:26:36Z  branch: nt/t_58762500  head: e78134f73c38923537b3a99cd2039bab60157303
+
+--- SOURCE_REF / manifest:
+102:SOURCE_REF = "ff64bc504e0c8043915c2cbf05e53a4cc270285f"
+9:ref ff64bc504e0c8043915c2cbf05e53a4cc270285f
+
+--- S-1 the call exists, in call position:
+6562:function Verdict.arbitrate(candStats, eqStats, spec, totals)
+6981:			local av, aReason, aDetail = Verdict.arbitrate(candStats, eqStats, spec_, totals)
+count: 2
+
+--- S-2 the flag is on:
+110:A.ENABLED = true
+
+--- S-2/COPY+PATCH lanes:
+sync_touchstone: COPY   8 pristine files are the pin's blobs
+sync_touchstone: PATCH  8 patches reverse to the pin's blobs
+exit=0
+
+--- S-3/S-4 the seam spec, against the vendored tree:
+A. shipped Verdict.lua: 2 occurrence(s) — definition :6562, call :6981
+A. shipped Arbitration.lua: A.ENABLED = true
+B. scan: 1 row(s), one bag item judged against the worn chest
+B. row.verdict              "TRADE_OFF"
+B. row.reason               "Raid healing: under the band either way — pick the one you like. (confidence low: crit multiplier unmeasured)"
+B. row.arbitration          { state=SIDEGRADE, context=raid, margin=0.0046976085743623, band=0.0035423058051506, driving=healing }
+C. with A.ENABLED = false: row.arbitration = nil
+D. tooltip headline          "Sidegrade — raid healing, inside the band on throughput"
+D. window ledger row word    "Sidegrade"
+D. pre-arbitration token word "Trade-off"
+touchstone_shipped_seam_spec: ok
+exit=0
+
+--- S-6 the suite (Lua 5.1, as CI runs it):
+specs: 46 run, 0 failure(s)
+
+--- S-6 luacheck (CI: luacheck MightiePack):
+Checking MightiePack\Window\TouchstoneTab.lua     OK
+
+Total: 0 warnings / 0 errors in 25 files
+
+--- S-6 luac -p over every shipping file:
+checked 25 file(s), 0 failure(s)
+
+--- S-6 diffstat (vs origin/main e78134f), before the commit:
+ tools/touchstone-patches/LogTab.lua.patch          |   2 +-
+ tools/touchstone-patches/OptionsTab.lua.patch      |   2 +-
+ tools/touchstone-patches/UI.lua.patch              |   2 +-
+ tools/touchstone-patches/UpgradesTab.lua.patch     |   2 +-
+ tools/touchstone-patches/pin.txt                   |  12 +-
+ 19 files changed, 791 insertions(+), 164 deletions(-)

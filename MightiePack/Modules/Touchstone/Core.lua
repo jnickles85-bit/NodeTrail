@@ -4,6 +4,9 @@
 if TouchstoneSkip then return end
 --- StatForge core: SavedVariables, events, slash commands, lifecycle.
 --- UI shell lives in UI.lua + *Tab.lua.
+-- Naming: StatForge is this repo; the addon it ships is Touchstone
+-- (Touchstone.toc). The Lua namespace keeps the repo's name on purpose
+-- (StatForge is the table, SF its alias), and nothing is being renamed.
 ---
 --- The export / desktop-app half is RETIRED (card t_adf556d6). This file used to
 --- carry three export-only hooks -- the PLAYER_LOGOUT auto-export, the
