@@ -454,7 +454,15 @@ local function buildFooter()
     local ok, v = pcall(pkg.GetAddOnMeta, "MightiePack", "Interface")
     if ok and type(v) == "string" and v ~= "" then interface = v end
   end
-  local parts = { "MightiePack" .. (ver and (" v" .. ver) or "") }
+  -- The version segment is the SAME rule the window header draws, from the same
+  -- function (pkg.VersionLabel, Core.lua): one "v" for a version, none for
+  -- `dev`. This line used to carry a second copy of the convention — `" v" ..
+  -- ver` — so the panel read `MightiePack vdev` beside a header that read
+  -- `dev` (card t_60042e97). The space belongs to this line; the labelling
+  -- does not.
+  local verLabel = nil
+  if type(pkg.VersionLabel) == "function" then verLabel = pkg.VersionLabel(ver) end
+  local parts = { "MightiePack" .. (verLabel and (" " .. verLabel) or "") }
   if interface then parts[#parts + 1] = "Interface " .. interface end
   parts[#parts + 1] = "/mp status prints a diagnostic you can paste"
   footer = label(panel, "quiet", "textDim", table.concat(parts, " · "))

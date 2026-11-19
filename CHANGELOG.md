@@ -8,6 +8,18 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Fixed
+- **The Options footer and the window header no longer disagree about a dev build.** The footer
+  appended its own `" v"` to whatever `pkg.PackVersion()` returned, so a source checkout read
+  `MightiePack vdev` under a header that read `dev` — one convention, two copies, and the footer's
+  copy was the wrong one. The header's label rule now lives once, as `pkg.VersionLabel()` in
+  `MightiePack/Core.lua`, and both surfaces call it: a version gets one `v`, `dev` gets none. A
+  tagged TOC still reads `v0.3.12-beta` in the header and `MightiePack v0.3.12-beta` in the footer,
+  and the no-version case still reads a bare `MightiePack` with no stray separator.
+  `tests/mightiepack_version_spec.lua` now asserts the two surfaces **agree** character for
+  character on every TOC shape — not merely that neither contains `vv`, which the dev case never did
+  (card `t_60042e97`).
+
 ### Held for the next release
 - **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
   re-derives the M11 pin first.

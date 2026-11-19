@@ -112,25 +112,6 @@ local function newFontString(parent, template)
 end
 local swatch = T.Swatch
 
--- The label beside the name: this is the header's OWN convention — a version
--- gets one "v" in front of it, and `dev` gets none. The tag's leading v is
--- already off by the time the string arrives: pkg.PackVersion() (Core.lua)
--- strips it once, for every caller (card t_c02c1643). The strip here is the
--- guard for a caller that hands this function an un-normalised string, not a
--- second fix — do not add another.
-local function versionText(ver)
-  if type(ver) ~= "string" then return nil end
-  local s = ver:gsub("^%s+", ""):gsub("%s+$", "")
-  if s == "" then return nil end
-  -- Neither shape of a source checkout is a version to put a v in front of:
-  -- the legacy metadata path hands back the raw token, the modern one "dev"
-  -- (and PackVersion answers both as "dev" now).
-  if s == "dev" or s:find("@project-version@", 1, true) then return "dev" end
-  s = s:gsub("^[vV]", "")
-  if s == "" then return nil end
-  return "v" .. s
-end
-
 local function settings()
   if type(pkg.GetSettings) == "function" then
     local ok, s = pcall(pkg.GetSettings)
@@ -561,10 +542,14 @@ function W._Ensure()
 
   -- The version is secondary: dim, small, beside the name rather than in it, so
   -- the name reads as a name.
+  -- One rule, two surfaces: the label is Core.lua's pkg.VersionLabel — the same
+  -- function the Options footer calls. A version gets one "v", `dev` gets none.
+  -- This file used to own a local copy of that rule, so the header and the
+  -- footer could (and did) disagree on a dev build (card t_60042e97).
   local label = nil
-  if type(pkg.PackVersion) == "function" then
+  if type(pkg.PackVersion) == "function" and type(pkg.VersionLabel) == "function" then
     local okV, v = pcall(pkg.PackVersion)
-    if okV then label = versionText(v) end
+    if okV then label = pkg.VersionLabel(v) end
   end
   if type(title) == "table" and label then
     local version = newFontString(band, T.font.small)
