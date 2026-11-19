@@ -13,7 +13,7 @@
 --
 -- THE TWO SIDES, AND WHAT PROVES EACH ONE.
 --
---   (a) StatForge @ pin eebfba4 — the upstream reference. The pin is a private
+--   (a) StatForge @ pin 1992240 — the upstream reference. The pin is a private
 --       repository, so CI cannot check it out. What CI *can* do is load the two
 --       shipped files with no pack code and no host table at all, which is how
 --       upstream loads them (`Arbitration.lua` and `StatOrders.lua` are standalone
@@ -40,11 +40,20 @@
 --
 -- PROVENANCE OF THE RECORDED COLUMN. Every `recorded` field below was measured, not
 -- remembered: the pin's `Constants.lua`, `Weights.lua`, `StatOrders.lua`,
--- `Verdict.lua` and `Arbitration.lua` were extracted from a StatForge checkout at
--- eebfba4 into a temporary directory and loaded in the pin's own TOC order
+-- `Verdict.lua` and `Arbitration.lua` were loaded in the pin's own TOC order
 -- (StatOrders before Verdict), then asked the same five inputs through
 -- `Verdict.arbitrate` and `Arbitration.judge`. The two refusals print
 -- `Arbitration.why`, because a refusal's answer IS its reason.
+--
+-- CARD t_18eb91e6 RE-MEASURED THE COLUMN AT 1992240. A8 (the refusal clause) moved
+-- what a refusal hands UP, not what the model decides: the three judged cases
+-- answer byte-identically to the previous column (the margins and bands below are
+-- the eebfba4 numbers, re-measured and unchanged), while a refusal now carries a
+-- stable CAUSE KEY beside its sentence (`secret_totals` here; the crit case's key,
+-- `moves_unpriced`, is deliberately one the pack's clause map does not name, so the
+-- renderer falls back to its plain clause). The recorded `cause` fields are the
+-- keys measured at 1992240, and section 5 asserts the shipped seam hands each one
+-- out with `declined = true`.
 --
 -- That run was itself cross-checked against the pin's own battery before the numbers
 -- were written down here: replaying the battery's `owner-mid-raid` and
@@ -258,7 +267,7 @@ local TRADE_C = { Intellect = 6, Healing = 38 }   -- trades Intellect for Healin
 local TRADE_E = { Intellect = 12, Healing = 15 }
 local CRIT_C = { Intellect = 6, Healing = 32, Crit = 10 }
 
--- Each input carries the answers measured at eebfba4 (see PROVENANCE in the header).
+-- Each input carries the answers measured at 1992240 (see PROVENANCE in the header).
 -- `state`/`margin`/`band`/`driving`/`binding`/`confidence`/`reason` are
 -- `Arbitration.judge`; `token`/`tokenReason` are `Verdict.arbitrate`; `why` is
 -- `Arbitration.why`, which is the whole answer when the ladder refuses.
@@ -320,6 +329,7 @@ local CASES = {
       token = nil, state = nil, margin = nil, band = nil,
       driving = nil, binding = nil, confidence = nil, reason = nil,
       why = "totals are secret: the client would not hand them over",
+      cause = "secret_totals",
     },
   },
   {
@@ -330,6 +340,9 @@ local CASES = {
       token = nil, state = nil, margin = nil, band = nil,
       driving = nil, binding = nil, confidence = nil, reason = nil,
       why = "the pair moves Crit, which the healer model does not price",
+      -- A key the pack's clause map does not name on purpose: the renderer must fall
+      -- back to its plain clause rather than blank the line (see the header).
+      cause = "moves_unpriced",
     },
   },
 }
@@ -370,6 +383,10 @@ local function wiredRecord(V, A, input)
   return {
     token = token,
     tokenReason = tokenReason,
+    -- A8: a refusal is disclosed, not dropped — the detail says so and carries the
+    -- model's stable cause key. nil on every pair the model actually judged.
+    declined = (type(detail) == "table" and detail.declined == true) or nil,
+    cause = (type(detail) == "table" and detail.declined == true) and detail.cause or nil,
     state = detail and detail.state or nil,
     margin = detail and detail.margin or nil,
     band = detail and detail.band or nil,
@@ -416,6 +433,9 @@ local function printSide(tag, rec, wired)
   print(("        reason  %s"):format(q(rec.reason)))
   if wired then
     print(("        token   %s"):format(q(rec.token)))
+    if rec.declined then
+      print(("        declined %s   cause %s"):format(tostring(rec.declined), q(rec.cause)))
+    end
     if rec.token ~= nil and rec.tokenReason ~= rec.reason then
       print(("        token reason, rewritten by the seam  %s"):format(q(rec.tokenReason)))
     end
@@ -504,7 +524,7 @@ for _, input in ipairs(CASES) do
   local b = wiredRecord(PV, PA, input)
   local c = judgeRecord(PINORDER.Arbitration, input)
 
-  printSide("(a) StatForge @ eebfba4      ", a, false)
+  printSide("(a) StatForge @ 1992240      ", a, false)
   printSide("(b) MightiePack (vendored)    ", b, true)
 
   -- The seam's contract: the token is the pack's map of the model's state.
@@ -516,26 +536,46 @@ for _, input in ipairs(CASES) do
   check((a.state == nil) == (b.state == nil),
     ("%s: both sides judge or both refuse (a.state=%s, b.state=%s)")
       :format(label, q(a.state), q(b.state)))
-  -- These five inputs carry no survival movement and no buffs, so the seam must pass
-  -- the model's reason through untouched — both places it can rewrite one
-  -- (SURVIVAL_SENTENCE in a sidegrade, BUFF_WARNING on totals.buffed) are silent.
-  check(b.tokenReason == b.reason,
-    ("%s: the seam passed the reason through unrewritten (tokenReason=%s, reason=%s)")
-      :format(label, q(b.tokenReason), q(b.reason)))
+  -- The seam's second return is the model's own sentence. When the model JUDGED,
+  -- it is the reason, passed through untouched — both places the seam can rewrite
+  -- one (SURVIVAL_SENTENCE in a sidegrade, BUFF_WARNING on totals.buffed) are silent
+  -- on these five inputs. When the model REFUSED, A8 (card t_18eb91e6) makes the
+  -- refusal itself the answer: the same second slot carries it, the detail is marked
+  -- `declined = true`, and the model's stable cause key rides beside it. A refusal
+  -- that silently answers nil here is the defect the clause map exists to end.
+  if a.state ~= nil then
+    check(b.tokenReason == b.reason,
+      ("%s: the seam passed the reason through unrewritten (tokenReason=%s, reason=%s)")
+        :format(label, q(b.tokenReason), q(b.reason)))
+    check(b.declined == nil,
+      ("%s: a judged pair is not marked declined (declined=%s)")
+        :format(label, q(b.declined)))
+  else
+    check(b.tokenReason == a.why,
+      ("%s: the seam hands the refusal up unchanged (tokenReason=%s, why=%s)")
+        :format(label, q(b.tokenReason), q(a.why)))
+    check(b.declined == true,
+      ("%s: a refused pair is marked declined in the detail (declined=%s)")
+        :format(label, q(b.declined)))
+    check(b.cause == input.recorded.cause,
+      ("%s: the decline carries the pin's cause key %s (got %s)")
+        :format(label, q(input.recorded.cause), q(b.cause)))
+  end
 
   diffRecorded(label, a, input.recorded)
   diffJudge(label, a, b)
   diffJudge(label .. " (pack order vs pin order)", a, c)
 
-  -- (b) against the recorded upstream seam: the token and the reason the pin's own
-  -- Verdict.arbitrate returned for this input (nil for a refusal, which the seam
-  -- answers with no token at all).
+  -- (b) against the recorded upstream seam: the token and the sentence the pin's own
+  -- Verdict.arbitrate returned for this input. For a judged pair the sentence is the
+  -- reason; for a refusal it is `why` (the recorded `reason` is nil there, and A8
+  -- makes the refusal the second return — see the branch above).
   check(b.token == input.recorded.token,
-    ("%s: (b) token %s is the recorded eebfba4 token %s")
+    ("%s: (b) token %s is the recorded 1992240 token %s")
       :format(label, q(b.token), q(input.recorded.token)))
-  check(b.tokenReason == input.recorded.reason,
-    ("%s: (b) reason %s is the recorded eebfba4 seam reason %s")
-      :format(label, q(b.tokenReason), q(input.recorded.reason)))
+  check(b.tokenReason == (input.recorded.reason or input.recorded.why),
+    ("%s: (b) reason %s is the recorded 1992240 seam sentence %s")
+      :format(label, q(b.tokenReason), q(input.recorded.reason or input.recorded.why)))
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════════

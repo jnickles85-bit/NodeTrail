@@ -1,0 +1,201 @@
+PIN: 1992240be3990a4480d25efb3ca3f753171dd88b
+SOURCE_REF line in tools/sync_touchstone.py:
+  119  SOURCE_REF = "1992240be3990a4480d25efb3ca3f753171dd88b"
+==============================================================================
+ChestAdvisor.lua — the clause map
+==============================================================================
+ 1881  local DECLINE_MANA = "throughput not judged: the client did not give your mana numbers"
+ 1882  -- THE SAME FAMILY, ONE STATE APART (card t_d1685fd1). `no_totals` is not a refusal:
+ 1883  -- it is the numbers not being in hand YET. The client hands these readings over OUT
+ 1884  -- OF COMBAT only (the totals snapshot's rule 1 — on the restricted map every one of
+ 1885  -- them comes back secret in combat, and the scan itself is deferred until the fight
+ 1886  -- ends), so before that read has happened the ladder has nothing to price a pair
+ 1887  -- with, and the reading arrives by itself. "The client did not give your mana
+ 1888  -- numbers" reads as a broken addon for a state that clears — and it is the state a
+ 1889  -- first hover after logging in lands in most often. This clause says which state it
+ 1890  -- is and what produces the reading, in the same voice as the spell and spirit ones.
+ 1891  local DECLINE_MANA_YET = "throughput not judged: no mana reading yet — it is read out of combat"
+ 1892  local DECLINE_SPELL = "throughput not judged: no spell reading for this character"
+ 1893  local DECLINE_SPIRIT = "throughput not judged: no spirit reading for this character"
+ 1894  local DECLINE_ROLE = "throughput not judged: no role chosen — /upgrade role <melee|spell>"
+ 1895  local DECLINE_NOTHING = "throughput moves nothing either way"
+ 1896  local DECLINE_DEFAULT = "throughput not judged: the numbers do not price this trade"
+ 1897  local DECLINE_CLAUSE = {
+ 1898  	-- not in hand yet: the read is taken out of combat, so this state clears by
+ 1899  	-- itself (card t_d1685fd1)
+ 1900  	no_totals = DECLINE_MANA_YET,
+ 1901  	-- ...and these three are the client's ANSWER about those numbers, not an
+ 1902  	-- absence of one: each is permanent until something changes
+ 1903  	secret_totals = DECLINE_MANA,
+------------------------------------------------------------
+ 1891  local DECLINE_MANA_YET = "throughput not judged: no mana reading yet — it is read out of combat"
+ 1892  local DECLINE_SPELL = "throughput not judged: no spell reading for this character"
+ 1893  local DECLINE_SPIRIT = "throughput not judged: no spirit reading for this character"
+ 1894  local DECLINE_ROLE = "throughput not judged: no role chosen — /upgrade role <melee|spell>"
+ 1895  local DECLINE_NOTHING = "throughput moves nothing either way"
+ 1896  local DECLINE_DEFAULT = "throughput not judged: the numbers do not price this trade"
+ 1897  local DECLINE_CLAUSE = {
+ 1898  	-- not in hand yet: the read is taken out of combat, so this state clears by
+ 1899  	-- itself (card t_d1685fd1)
+ 1900  	no_totals = DECLINE_MANA_YET,
+ 1901  	-- ...and these three are the client's ANSWER about those numbers, not an
+ 1902  	-- absence of one: each is permanent until something changes
+ 1903  	secret_totals = DECLINE_MANA,
+ 1904  	incomplete_totals = DECLINE_MANA,
+ 1905  	pool_not_positive = DECLINE_MANA,
+ 1906  	-- no reading of the representative spell to price the pair with
+ 1907  	no_spell = DECLINE_SPELL,
+ 1908  	no_spell_cost = DECLINE_SPELL,
+ 1909  	no_spell_cast_time = DECLINE_SPELL,
+ 1910  	no_spell_measurement = DECLINE_SPELL,
+ 1911  	no_spell_base = DECLINE_SPELL,
+ 1912  	-- the Spirit this pair moves enters the model through a regen slope nobody measured
+ 1913  	spirit_slope_unmeasured = DECLINE_SPIRIT,
+------------------------------------------------------------
+ 1897  local DECLINE_CLAUSE = {
+ 1898  	-- not in hand yet: the read is taken out of combat, so this state clears by
+ 1899  	-- itself (card t_d1685fd1)
+ 1900  	no_totals = DECLINE_MANA_YET,
+ 1901  	-- ...and these three are the client's ANSWER about those numbers, not an
+ 1902  	-- absence of one: each is permanent until something changes
+ 1903  	secret_totals = DECLINE_MANA,
+ 1904  	incomplete_totals = DECLINE_MANA,
+ 1905  	pool_not_positive = DECLINE_MANA,
+ 1906  	-- no reading of the representative spell to price the pair with
+ 1907  	no_spell = DECLINE_SPELL,
+ 1908  	no_spell_cost = DECLINE_SPELL,
+ 1909  	no_spell_cast_time = DECLINE_SPELL,
+ 1910  	no_spell_measurement = DECLINE_SPELL,
+ 1911  	no_spell_base = DECLINE_SPELL,
+ 1912  	-- the Spirit this pair moves enters the model through a regen slope nobody measured
+ 1913  	spirit_slope_unmeasured = DECLINE_SPIRIT,
+ 1914  	-- a choice only the player can make
+ 1915  	no_role = DECLINE_ROLE,
+ 1916  	-- the trade itself is not one there is anything to say about
+ 1917  	moves_nothing = DECLINE_NOTHING,
+ 1918  }
+ 1919  
+------------------------------------------------------------
+==============================================================================
+ChestAdvisor.lua — the renderer
+==============================================================================
+ 1928  function TOOLTIP_UI.declineClause(row)
+ 1929  	local arb = type(row) == "table" and row.arbitration or nil
+ 1930  	if type(arb) ~= "table" or arb.declined ~= true then return "" end
+ 1931  	local cause = arb.cause
+ 1932  	local clause = type(cause) == "string" and DECLINE_CLAUSE[cause] or nil
+ 1933  	return " (" .. (clause or DECLINE_DEFAULT) .. ")"
+ 1934  end
+ 1935  
+ 1936  --- The surface's READ-ONLY handle (card t_8e171c28). The item tooltip, both
+------------------------------------------------------------
+==============================================================================
+ChestAdvisor.lua — both CALL SITES
+==============================================================================
+ 2808  		-- `showDetail` gate as upstream's: Compact never widens, and the helper
+ 2809  		-- answers "" on every row that was not declined, so those lines stay
+ 2810  		-- byte-identical.
+ 2811  		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
+ 2812  		out[#out + 1] = {
+ 2813  			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause .. decline,
+------------------------------------------------------------
+ 2863  		-- A8 (card t_eff0caec): a pair the model was ASKED and turned away says so,
+ 2864  		-- on THIS line and behind the same detail rule as everything else — so it never
+ 2865  		-- widens a Compact tooltip, and a row the model never saw adds nothing here.
+ 2866  		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
+ 2867  		out[#out + 1] = {
+ 2868  			text = TOOLTIP_AMBER .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
+------------------------------------------------------------
+==============================================================================
+ChestAdvisor.lua — the ordinal tail (upstream's own hook) and the note rule
+==============================================================================
+ 2867  		out[#out + 1] = {
+ 2868  			text = TOOLTIP_AMBER .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
+ 2869  				.. " — " .. reason .. decline,
+ 2870  			colour = "amber",
+ 2871  		}
+------------------------------------------------------------
+ 2910  	-- sits on the row — a DECLINED pair carries a table and is rendered by the
+ 2911  	-- ordinal branches above, so it still needs the note on its last line.)
+ 2912  	if note ~= "" and arbitrated == nil then
+ 2913  		out[#out].text = out[#out].text .. note
+ 2914  	end
+------------------------------------------------------------
+==============================================================================
+Verdict.lua — the decline handed up by arbitrate
+==============================================================================
+ 6582  		-- A raise, an absent module or an unmappable state stay plain silence — those are
+ 6583  		-- failures of the layer, not answers of the model, and a sentence about them
+ 6584  		-- would be this module guessing.
+ 6585  		if type(why) ~= "string" or why == "" then return nil end
+ 6586  		return nil, why, { declined = true, why = why, cause = cause }
+ 6587  	end
+------------------------------------------------------------
+==============================================================================
+Verdict.lua — the declined passthrough through the trade-off gate
+==============================================================================
+ 7020  			-- overlay took). THE WORD DOES NOT MOVE: the row keeps its own TRADE_OFF
+ 7021  			-- answer (`v, r`), and only the detail rides out, set exactly as the
+ 7022  			-- answered case above sets it, so ChestAdvisor publishes it as
+ 7023  			-- `row.arbitration` and `TOOLTIP_UI.declineClause` can read `cause`.
+ 7024  			if type(aDetail) == "table" and aDetail.declined == true then
+ 7025  				d = (type(d) == "table") and d or {}
+ 7026  				d.arbitration = aDetail
+ 7027  				return v, r, d
+ 7028  			end
+ 7029  		end
+ 7030  	end
+------------------------------------------------------------
+==============================================================================
+Verdict.arbitrate( occurrences in the shipped file: 2
+ 6569  function Verdict.arbitrate(candStats, eqStats, spec, totals)
+ 7001  local av, aReason, aDetail = Verdict.arbitrate(candStats, eqStats, spec_, totals)
+==============================================================================
+Arbitration.lua — the cause keys (pristine COPY lane)
+   15  ---     `Arbitration.ENABLED` is false. C6 generates the band envelope and gates the
+   16  ---     verdict; C7 cuts the seam at Verdict.lua's ordinal trade-off arm. Until then the
+   17  ---     changed-verdict sweep MUST move zero rows, and the battery asserts the shipped
+   18  ---     comparator's bytes for the same pairs.
+   20  ---     uses arrives in `totals`, which the impure edge reads and caches (doc §2.1, §3).
+   21  ---     That is what lets the fengari suite drive it with a plain table.
+   22  ---   * It never arbitrates the ARMOUR-MATERIAL trade-off (doc §1.3). `Verdict.lua` has two
+   23  ---     TRADE_OFF producers; this layer is for the ordinal one (`dominance` = "trade-off")
+   25  ---     exception — the model has no armour-material term and inventing one here would
+   34  ---   casts the clock allows   C_time = fightLength / t
+   36  ---   casts the mana allows    C_mana = B_mana / cost
+   66  ---   1. A "drink window" is ONE POOL of mana added to the budget, with NO clock cost. The
+   67  ---      clock cost would need a drinking duration nobody has measured, and the model's
+   70  ---      applied only where the context's own declaration leaves room for one: the shipped
+   71  ---      three contexts fix the drink assumption absolutely (Leveling refills between
+   72  ---      pulls, Dungeon and Raid declare none), so the "+1" leg is live everywhere and the
+   78  ---      EVERY level-dependent term at once: when the record's level differs from the
+  122  ---   intBreak             20        the client mirror's break (`PaperDollFrameConstants.lua`)
+  258  ---   returns the resolved spell table, or nil + why.
+  342  ---   no_totals                the character's numbers never arrived
+  343  ---   secret_totals            the client refused to hand them over
+  344  ---   incomplete_totals        a field the model needs is not a number
+  345  ---   pool_not_positive        the mana pool reads as <= 0
+  346  ---   no_role                  the spec has no role chosen
+  352  ---   moves_nothing            the pair moves no stat the model reads
+  353  ---   moves_unpriced           it moves a word the healer model does not price
+  355  ---   spirit_slope_unmeasured  Spirit moves and the regen slope was never measured
+  356  ---   no_output                the model resolved but produced no positive output
+  360  return "no totals: the model needs the character's own numbers", "no_totals"
+  363  return "totals are secret: the client would not hand them over", "secret_totals"
+  370  return "totals are incomplete: " .. k .. " is not a number", "incomplete_totals"
+  374  return "the representative spell cannot be resolved", "no_spell"
+  377  return "totals are incomplete: haste is not a number", "incomplete_totals"
+  380  return "totals are incomplete: critMult is not a number", "incomplete_totals"
+  383  return "totals are incomplete: Intellect is not a number", "incomplete_totals"
+  386  return "the mana pool is not a positive number", "pool_not_positive"
+  394  return "the spec has no role", "no_role"
+  400  return "the representative spell's cost is not a positive number", "no_spell_cost"
+  407  return "the representative spell's base heal is not a positive number", "no_spell_base"
+  411  return "totals are incomplete: level is not a number", "incomplete_totals"
+  438  return "the pair moves nothing: there is no trade to arbitrate", "moves_nothing"
+  451  return "Spirit moves and the regen slope is unmeasured", "spirit_slope_unmeasured"
+  705  ---   candStats, eqStats — the comparator's own parsed stat tables (word -> points). The
+  708  ---   spec               — the spec buildSpec built: `role` is the ONE role resolution point.
+  709  ---                        `context` is the situation ("leveling" | "dungeon" | "raid").
+  710  ---   totals             — the character snapshot the impure edge read (§3). See the shape in
+  711  ---                        the battery's case file; every field is optional only where the

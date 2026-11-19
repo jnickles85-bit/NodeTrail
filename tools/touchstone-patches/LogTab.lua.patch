@@ -7,7 +7,7 @@
 # The Log tab's word, asked of the advisor's arbitration-aware
 # `entryWord` (card t_baea7949), so a stored entry is named the way the
 # tooltip and the window name it.
-# base: StatForge ff64bc504e0c8043915c2cbf05e53a4cc270285f
+# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
 # applies to: LogTab.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.

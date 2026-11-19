@@ -261,12 +261,15 @@ local spiritSlope
 --- record at all does the era rule speak, and then `source` says so.
 local function resolveSpell(totals)
 	local s = tableOf(totals.spell)
-	if s == nil then return nil, "the representative spell cannot be resolved" end
+	if s == nil then
+		return nil, "the representative spell cannot be resolved", "no_spell"
+	end
 	if not num(s.cost) or s.cost <= 0 then
-		return nil, "the representative spell cannot be resolved (no cost)"
+		return nil, "the representative spell cannot be resolved (no cost)", "no_spell_cost"
 	end
 	if not num(s.castTimeMs) or s.castTimeMs <= 0 then
-		return nil, "the representative spell cannot be resolved (no cast time)"
+		return nil, "the representative spell cannot be resolved (no cast time)",
+			"no_spell_cast_time"
 	end
 	local level = totals.level
 	local rec = nil
@@ -301,7 +304,8 @@ local function resolveSpell(totals)
 	-- the spell's own tooltip numbers to say anything at all about H.
 	if not num(s.baseMin) or not num(s.baseMax) then
 		return nil, "the representative spell's healing numbers cannot be resolved"
-			.. " (no measurement for this level and rank, and no tooltip numbers)"
+			.. " (no measurement for this level and rank, and no tooltip numbers)",
+			"no_spell_measurement"
 	end
 	local castSeconds = s.castTimeMs / 1000
 	return {
@@ -328,44 +332,83 @@ end
 ---
 --- `judge` and `Arbitration.why` both call this, so a refusal can never drift from its
 --- explanation: the battery asserts the named reason, not just the nil.
+---
+--- THE CAUSE KEY (card t_eff0caec). Every refusal returns TWO values: the sentence a
+--- developer reads, and a stable machine key beside it. The key is the CLOSED vocabulary
+--- below, and the surface maps a key — it never pattern-matches the sentence — so a
+--- refusal reworded here keeps its disclosure on screen, and a key this list does not
+--- name is a bug the battery catches rather than a blank clause.
+---
+---   no_totals                the character's numbers never arrived
+---   secret_totals            the client refused to hand them over
+---   incomplete_totals        a field the model needs is not a number
+---   pool_not_positive        the mana pool reads as <= 0
+---   no_role                  the spec has no role chosen
+---   no_spell                 no representative spell at all
+---   no_spell_cost            its cost is absent or not positive
+---   no_spell_cast_time       its cast time is absent or not positive
+---   no_spell_measurement     no record and no tooltip numbers to price it
+---   no_spell_base            its base heal is absent or not positive
+---   moves_nothing            the pair moves no stat the model reads
+---   moves_unpriced           it moves a word the healer model does not price
+---   not_healer_pair          it moves only survival words
+---   spirit_slope_unmeasured  Spirit moves and the regen slope was never measured
+---   no_output                the model resolved but produced no positive output
 local function refusal(candStats, eqStats, spec, totals)
 	-- §8.9 — totals unavailable or secret, and never "compute on partially-secret totals".
-	if type(totals) ~= "table" then return "no totals: the model needs the character's own numbers" end
-	if totals.secret == true then return "totals are secret: the client would not hand them over" end
+	if type(totals) ~= "table" then
+		return "no totals: the model needs the character's own numbers", "no_totals"
+	end
+	if totals.secret == true then
+		return "totals are secret: the client would not hand them over", "secret_totals"
+	end
 	local stats = tableOf(totals.stats)
-	if stats == nil then return "totals are incomplete: no stat block" end
+	if stats == nil then return "totals are incomplete: no stat block", "incomplete_totals" end
 	local required = { "pool", "regenCasting", "crit", "bonusHealing", "level" }
 	for _, k in ipairs(required) do
-		if not num(totals[k]) then return "totals are incomplete: " .. k .. " is not a number" end
+		if not num(totals[k]) then
+			return "totals are incomplete: " .. k .. " is not a number", "incomplete_totals"
+		end
 	end
-	if totals.spell == nil then return "the representative spell cannot be resolved" end
+	if totals.spell == nil then
+		return "the representative spell cannot be resolved", "no_spell"
+	end
 	if totals.haste ~= nil and not num(totals.haste) then
-		return "totals are incomplete: haste is not a number"
+		return "totals are incomplete: haste is not a number", "incomplete_totals"
 	end
 	if totals.critMult ~= nil and not num(totals.critMult) then
-		return "totals are incomplete: critMult is not a number"
+		return "totals are incomplete: critMult is not a number", "incomplete_totals"
 	end
-	if not num(stats.Intellect) then return "totals are incomplete: Intellect is not a number" end
-	if totals.pool <= 0 then return "the mana pool is not a positive number" end
+	if not num(stats.Intellect) then
+		return "totals are incomplete: Intellect is not a number", "incomplete_totals"
+	end
+	if totals.pool <= 0 then
+		return "the mana pool is not a positive number", "pool_not_positive"
+	end
 
 	-- §8.6 — no role picked. `spec.role` is the ONE role resolution point (ChestAdvisor's
 	-- buildSpec); a spec without it is a hybrid the player has not chosen for, and the
 	-- arbitration has no idea which model to apply.
-	if type(spec) ~= "table" then return "the spec has no role" end
+	if type(spec) ~= "table" then return "the spec has no role", "no_role" end
 	if type(spec.role) ~= "string" or spec.role:match("%S") == nil then
-		return "the spec has no role"
+		return "the spec has no role", "no_role"
 	end
 
-	local spell, spellWhy = resolveSpell(totals)
-	if spell == nil then return spellWhy end
-	if spell.cost <= 0 then return "the representative spell's cost is not a positive number" end
-	if spell.castSeconds <= 0 then return "the representative spell's cast time is not a positive number" end
+	local spell, spellWhy, spellCause = resolveSpell(totals)
+	if spell == nil then return spellWhy, spellCause end
+	if spell.cost <= 0 then
+		return "the representative spell's cost is not a positive number", "no_spell_cost"
+	end
+	if spell.castSeconds <= 0 then
+		return "the representative spell's cast time is not a positive number",
+			"no_spell_cast_time"
+	end
 	if not num(spell.base) or spell.base <= 0 then
-		return "the representative spell's base heal is not a positive number"
+		return "the representative spell's base heal is not a positive number", "no_spell_base"
 	end
 	-- Level extrapolation is allowed, but it needs a level to extrapolate FROM.
 	if spell.source == "measured" and not num(totals.level) then
-		return "totals are incomplete: level is not a number"
+		return "totals are incomplete: level is not a number", "incomplete_totals"
 	end
 
 	-- The pair itself: does it move anything this model can price?
@@ -391,18 +434,21 @@ local function refusal(candStats, eqStats, spec, totals)
 			end
 		end
 	end
-	if not moved then return "the pair moves nothing: there is no trade to arbitrate" end
-	if unpriced ~= nil then
-		return "the pair moves " .. unpriced .. ", which the healer model does not price"
+	if not moved then
+		return "the pair moves nothing: there is no trade to arbitrate", "moves_nothing"
 	end
-	if not pricedMove then return "the pair is not a healer-total pair" end
+	if unpriced ~= nil then
+		return "the pair moves " .. unpriced .. ", which the healer model does not price",
+			"moves_unpriced"
+	end
+	if not pricedMove then return "the pair is not a healer-total pair", "not_healer_pair" end
 
 	-- §8.8 — Spirit-dominant with the regen slope unmeasured. Spirit enters M ONLY through
 	-- regen; with no measured slope the model would have to guess one, so it refuses
 	-- instead of guessing. (Fail-closed, and it degrades to today's words exactly.)
 	local dSpirit = (num(cand.Spirit) and cand.Spirit or 0) - (num(eq.Spirit) and eq.Spirit or 0)
 	if dSpirit ~= 0 and spiritSlope(totals) == nil then
-		return "Spirit moves and the regen slope is unmeasured"
+		return "Spirit moves and the regen slope is unmeasured", "spirit_slope_unmeasured"
 	end
 
 	return nil
@@ -616,7 +662,9 @@ local function delta(cand, eq, word)
 	return (num(cand[word]) and cand[word] or 0) - (num(eq[word]) and eq[word] or 0)
 end
 
---- The refusal reason, or nil. Diagnostics and tests; C7 may print it.
+--- The refusal sentence and its cause key, or nil,nil. Diagnostics and tests; the
+--- shipped renderer reads the key (card t_eff0caec), so this is a contract now, not
+--- a debugging convenience.
 function A.why(candStats, eqStats, spec, totals)
 	return refusal(candStats, eqStats, spec, totals)
 end
@@ -663,12 +711,13 @@ end
 ---                        the battery's case file; every field is optional only where the
 ---                        refusal ladder above says so.
 ---
---- Returns nil when the model has no opinion, and a table whose REQUIRED fields are the
+--- Returns `nil, why, cause` when the model has no opinion (the refusal sentence and its
+--- stable cause key, card t_eff0caec), and a table whose REQUIRED fields are the
 --- card's seven: state, reason, driving, margin, band, context, confidence. Everything else
 --- (byContext, binding, survival, spell, lowWhy, flip) is data for C6/C7 and for the battery.
 function A.judge(candStats, eqStats, spec, totals)
-	local why = refusal(candStats, eqStats, spec, totals)
-	if why ~= nil then return nil end
+	local why, cause = refusal(candStats, eqStats, spec, totals)
+	if why ~= nil then return nil, why, cause end
 	local cand, eq = candStats, eqStats
 	local spell = resolveSpell(totals)
 
@@ -691,8 +740,13 @@ function A.judge(candStats, eqStats, spec, totals)
 	candSide.dCrit = candSide.dInt * A.MEASURED.critPerInt
 	local eqSide = { dInt = 0, dSpirit = 0, dHeal = 0, dMP5 = 0, dCrit = 0 }
 
-	local verdict = evaluateContext(candSide, eqSide, totals, ctx, spell)
-	if verdict == nil then return nil end
+	local verdict, verdictWhy = evaluateContext(candSide, eqSide, totals, ctx, spell)
+	if verdict == nil then
+		-- A resolved model that cannot produce a positive output is a decline too, and it is
+		-- disclosed like every other one (card t_eff0caec): the model's own sentence rides
+		-- beside the key, so no surface has to guess why the numbers stopped.
+		return nil, verdictWhy or "the model cannot price this pair", "no_output"
+	end
 
 	-- Every context, because §7 names a flip: the verdict is for the CURRENT context and the
 	-- reason may name the context the pair is better for.
