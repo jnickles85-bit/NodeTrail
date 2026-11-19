@@ -8,37 +8,64 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
-### Added
-- **A declined pair now says why, in the player's words.** The pack is re-pinned to StatForge
-  `1992240` (PR #125), which carries A8: when the model is asked about a trade-off and turns it
-  down, the refusal and its stable cause key ride out to the surface instead of being dropped on
-  the floor. The shipped tooltip appends one clause — `(throughput not judged: …)` — naming what
-  did not get judged. Two states read differently on purpose: a reading that has not happened yet
-  says *"no mana reading yet — it is read out of combat"*, while the client's permanent answer
-  says *"the client did not give your mana numbers"*. Every other row renders byte-identically.
-  The clause map and the renderer that calls it are asserted **in the shipped bytes** by
-  `tests/touchstone_decline_clause_spec.lua`, which also drives a real declined scan end to end:
-  `--verify-shipped` alone cannot see this, because it compares the vendored copy to the pin and
-  never asks whether the patch's overlay carried the map (card `t_18eb91e6`).
-
-### Fixed
-- **The Options footer and the window header no longer disagree about a dev build.** The footer
-  appended its own `" v"` to whatever `pkg.PackVersion()` returned, so a source checkout read
-  `MightiePack vdev` under a header that read `dev` — one convention, two copies, and the footer's
-  copy was the wrong one. The header's label rule now lives once, as `pkg.VersionLabel()` in
-  `MightiePack/Core.lua`, and both surfaces call it: a version gets one `v`, `dev` gets none. A
-  tagged TOC still reads `v0.3.12-beta` in the header and `MightiePack v0.3.12-beta` in the footer,
-  and the no-version case still reads a bare `MightiePack` with no stray separator.
-  `tests/mightiepack_version_spec.lua` now asserts the two surfaces **agree** character for
-  character on every TOC shape — not merely that neither contains `vv`, which the dev case never did
-  (card `t_60042e97`).
-
 ### Held for the next release
 - **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
   re-derives the M11 pin first.
 - **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal
   tiebreak (`t_a4124aed`; fix written and held).
 - Contract Y (`t_0bf5c207`) — parked, not scheduled. Superseded by the engine measurement, not by neglect.
+
+## [0.3.13-beta] - 2026-11-18
+
+**The retest fixes, and nothing else.** Everything here came from the owner's own sitting with
+0.3.12-beta, and nothing that was working has moved: the model's wire, the verdicts it produces and
+the pairs it judges are exactly as 0.3.12 left them.
+
+### A declined pair now says why
+
+The advisor asks a throughput model about trade-offs, and when it turns one down it used to say
+nothing at all — which reads exactly like the model never being called. It was called; its reason
+was simply dropped at the boundary. Now the refusal reaches the tooltip as one short clause:
+
+```
+(throughput not judged: no mana reading yet — it is read out of combat)
+(throughput not judged: the client did not give your mana numbers)
+(throughput not judged: no spell reading for this character)
+(throughput not judged: no role chosen — /upgrade role <melee|spell>)
+(throughput moves nothing either way)
+```
+
+**Two of those read differently on purpose.** A reading that has not happened *yet* — the ordinary
+state on a first hover after logging in — says so, and tells you when it fills in. The permanent
+cases say the client refused. Naming them the same way would have made the commonest one look like
+a fault.
+
+The clause appears **only** on pairs the model was actually asked about and declined. A clear
+upgrade, a clear downgrade and a refusal never reach the gate, and those rows are silent — no
+apology on every hover. The verdict word never changes because of this: it is a disclosure, not a
+judgement.
+
+The clause map and the renderer that calls it are asserted **in the shipped bytes** by
+`tests/touchstone_decline_clause_spec.lua`, which also drives a real declined scan end to end.
+`--verify-shipped` alone cannot see this: it compares the vendored copy to the pin and never asks
+whether the patch's overlay carried the map.
+
+### One `v`, on both surfaces
+
+The window header and the Options footer now read the same rule. The footer appended its own `" v"`
+to whatever version it was given, so a source checkout read `MightiePack vdev` under a header that
+read `dev` — one convention, two copies, and the footer's copy was the wrong one.
+
+The label rule lives once, as `pkg.VersionLabel()` in `MightiePack/Core.lua`, and both surfaces call
+it: a version gets one `v`, `dev` gets none, and no version renders a bare `MightiePack` with a
+stray separator. `tests/mightiepack_version_spec.lua` asserts the two surfaces **agree** character
+for character on every TOC shape — not merely that neither contains `vv`, which the dev case never
+did.
+
+### The wire, unchanged
+
+No gate, weight, band or profile moved. What the model judges, and what it says when it does, is
+what 0.3.12 shipped; the difference is that a decline is now legible.
 
 ## [0.3.12-beta] - 2026-11-18
 
