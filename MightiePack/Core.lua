@@ -37,19 +37,34 @@ end
 
 -- Pack version from the TOC, via GetAddOnMeta. Nil-safe: a missing provider
 -- or an empty string returns nil rather than a stale hardcoded string.
--- A source-checkout token (@project-version@) follows GetAddOnMeta's own
--- split: the C_AddOns path returns "dev", the legacy GetAddOnMetadata path
--- returns the raw token. /mp status already uses this path; the Touchstone
--- window header does too.
+--
+-- This is the ONE place the tag's "v" is taken off (card t_c02c1643). The
+-- packager substitutes the TOC's `## Version:` line from the git TAG, so a
+-- tagged build arrives as "v0.3.12-beta" — the tag's own leading v included —
+-- while a hand-edited TOC has none. Removing it here means every caller can add
+-- its own convention (the window header prefixes "v", the Options footer
+-- prefixes " v") without asking whether a v is already there. Two consumers
+-- each guessed instead, and the footer read "MightiePack vv0.3.12-beta"; the
+-- next consumer someone wrote would have doubled it too.
+--
+-- A source-checkout token (@project-version@) is not a version: it answers
+-- "dev" here, the same word GetAddOnMeta's modern path already returns, so the
+-- two provider paths agree and no caller can print "@project-version@" back.
 function pkg.PackVersion()
   if type(pkg.GetAddOnMeta) ~= "function" then
     return nil
   end
   local ok, val = pcall(pkg.GetAddOnMeta, pkg.addonName or "MightiePack", "Version")
-  if ok and type(val) == "string" and val ~= "" then
-    return val
+  if not ok or type(val) ~= "string" then
+    return nil
   end
-  return nil
+  val = val:gsub("^%s+", ""):gsub("%s+$", "")
+  if val == "" then return nil end
+  -- The packager's unsubstituted token: a dev build, not a version string.
+  if val:find("^@.*@$") then return "dev" end
+  val = val:gsub("^[vV]", "")
+  if val == "" then return nil end
+  return val
 end
 
 -- NodeTrail used to be the gathering module. It is its own addon now (card
