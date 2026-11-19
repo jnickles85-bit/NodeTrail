@@ -141,7 +141,7 @@ Repo-only (not shipped): `README.md`, `tests/`,
 `.pkgmeta`.
 
 ## Tests
-Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 44 specs:
+Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 47 specs:
 - `tests/bugreport_spec.lua`
 - `tests/chestadvisor_diag_spec.lua`
 - `tests/chestadvisor_secret_values_spec.lua`
@@ -157,6 +157,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 44 specs:
 - `tests/toast_trace_spec.lua`
 - `tests/touchstone_arbitration_parity_spec.lua`
 - `tests/touchstone_assets_spec.lua`
+- `tests/touchstone_context_anchor_spec.lua`
 - `tests/touchstone_disclosure_spec.lua`
 - `tests/touchstone_fold_spec.lua`
 - `tests/touchstone_loadorder_spec.lua`
@@ -165,6 +166,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 44 specs:
 - `tests/touchstone_reader_pin_spec.lua`
 - `tests/touchstone_seam_claims_spec.lua`
 - `tests/touchstone_secret_guard_spec.lua`
+- `tests/touchstone_shipped_seam_spec.lua`
 - `tests/touchstone_tiebreak_single_rule_spec.lua`
 - `tests/touchstone_tiebreak_spec.lua`
 - `tests/touchstone_tooltip_line_spec.lua`
@@ -174,6 +176,7 @@ Run from repo root with lua5.1 (`lua5.1 tests/<name>.lua`). 44 specs:
 - `tests/umbrella_spec.lua`
 - `tests/window_chrome_spec.lua`
 - `tests/window_fill_inset_spec.lua`
+- `tests/window_header_version_spec.lua`
 - `tests/window_hosted_adoption_spec.lua`
 - `tests/window_hosted_body_spec.lua`
 - `tests/window_inner_input_spec.lua`

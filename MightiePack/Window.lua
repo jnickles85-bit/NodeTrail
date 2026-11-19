@@ -112,6 +112,21 @@ local function newFontString(parent, template)
 end
 local swatch = T.Swatch
 
+-- The label beside the name. The TOC's Version line is the git TAG as the
+-- packager wrote it -- "v0.3.12-beta", its own leading v included -- so the
+-- prefix is added only when the string does not already carry one.
+local function versionText(ver)
+  if type(ver) ~= "string" then return nil end
+  local s = ver:gsub("^%s+", ""):gsub("%s+$", "")
+  if s == "" then return nil end
+  -- Neither shape of a source checkout is a version to put a v in front of:
+  -- the legacy metadata path answers the raw token, the modern one "dev".
+  if s == "dev" or s:find("@project-version@", 1, true) then return "dev" end
+  s = s:gsub("^[vV]", "")
+  if s == "" then return nil end
+  return "v" .. s
+end
+
 local function settings()
   if type(pkg.GetSettings) == "function" then
     local ok, s = pcall(pkg.GetSettings)
@@ -542,19 +557,19 @@ function W._Ensure()
 
   -- The version is secondary: dim, small, beside the name rather than in it, so
   -- the name reads as a name.
-  local ver = nil
+  local label = nil
   if type(pkg.PackVersion) == "function" then
     local okV, v = pcall(pkg.PackVersion)
-    if okV and type(v) == "string" and v ~= "" then ver = v end
+    if okV then label = versionText(v) end
   end
-  if type(title) == "table" and ver then
+  if type(title) == "table" and label then
     local version = newFontString(band, T.font.small)
     W.version = version
     if type(version) == "table" then
       call(version, "SetPoint", "LEFT", title, "RIGHT", T.space.sm, 0)
       local r, g, b, a = T.R("textDim")
       call(version, "SetTextColor", r, g, b, a)
-      call(version, "SetText", "v" .. ver)
+      call(version, "SetText", label)
     end
   end
 
