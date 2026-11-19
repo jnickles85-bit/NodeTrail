@@ -8,6 +8,51 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Held for the next release
+- **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
+  re-derives the M11 pin first.
+- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal
+  tiebreak (`t_a4124aed`; fix written and held).
+- Contract Y (`t_0bf5c207`) — parked, not scheduled. Superseded by the engine measurement, not by neglect.
+
+## [0.3.12-beta] - 2026-11-18
+
+**The build that switches the model on — and says plainly what 0.3.10 and 0.3.11 got wrong.**
+
+### The correction
+
+0.3.10-beta and 0.3.11-beta shipped with Step 3's arbitration **unwired**. The verdicts you saw in
+those builds came from the ordinal layer alone: the model was in the addon, fully written and fully
+tested, and nothing called it. A tooltip headline that read **Sidegrade** in either of those builds
+was a **renderer default, not the model's answer** — the renderer started from that word and only
+overwrote it for two of the states it knew.
+
+The seam was blocked twice over: the flag that admits the model was off, and the pack's own patch —
+the layer that carries this addon's customisations into the vendored copy — replaced the region
+holding the call and did not carry it back. The patch applied cleanly, the digests matched, and the
+addon had no caller. That is the shape that looks wired and answers nothing.
+
+### What this build changes
+
+- **The model is wired, and the gate is deliberately narrow.** It is consulted only on a pair the
+  weighted engine has already judged a **trade-off**, only when the client has supplied the totals,
+  and only while the flag is on. A clear upgrade, a clear downgrade, and a refusal are untouchable by
+  construction — the call never fires for them.
+- **Measured blast radius, over 15,840 cells** (32 item pairs × 33 spec profiles × 5 totals snapshots
+  × 3 contexts, each cell judged twice, flag off and flag on):
+
+  | | |
+  |---|---|
+  | word changes | **266**, every one of them **Trade-off → Upgrade** |
+  | model answered "inside the band" | **19**, rendered Sidegrade |
+  | clear answers moved | **0** |
+  | refusals moved | **0** |
+  | direction of any move | upward only; nothing was downgraded |
+
+  The one pair behind those 266 rows is a Holy priest chest pair with +22 Healing where the model
+  says the extra healing per cast outruns the smaller mana pool. It reaches the same answer in every
+  context and every totals set — which is what "the model's home ground" means.
+
 ### Fixed
 - **The shipped addon calls the arbitration — the flag and the call ship in one cut** (`t_58762500`).
   The re-pin to StatForge `ff64bc5` (PR #123) brought `Arbitration.ENABLED = true` by itself:
@@ -24,13 +69,6 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   Leveling, Dungeon and Raid were created at the same point on the panel, each label drawn over the
   last. The first box now hangs under the Context heading and the other two beside it, 110 units
   apart, measured in the pack's own harness.
-
-### Held for the next release
-- **Melee may not claim equality over a line it never read** — verified and unmerged; `t_dc1decd1`
-  re-derives the M11 pin first.
-- **A two-sided Block tie** reads "no change" in the pack where upstream decides it on the ordinal
-  tiebreak (`t_a4124aed`; fix written and held).
-- Contract Y (`t_0bf5c207`) — parked, not scheduled. Superseded by the engine measurement, not by neglect.
 
 ## [0.3.11-beta] - 2026-11-18
 
