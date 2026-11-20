@@ -116,7 +116,20 @@ SOURCE_URL = "https://github.com/jnickles85-bit/StatForge.git"
 # whether the overlay took: it compares the vendored copy to this pin and never
 # asks what the patch did with it. tests/touchstone_decline_clause_spec.lua asks,
 # against the shipped bytes.
-SOURCE_REF = "1992240be3990a4480d25efb3ca3f753171dd88b"
+#
+# Provenance of bb03d13 (NodeTrail re-pin, 2026-11-20): "Merge pull request #130
+# from jnickles85-bit/fk/c-pr3-ledger-gearapi-arrow" (StatForge main). It carries
+# #128 (A9+A11: the band says what it measured and what it could not), #129
+# (Part C PR 2: SLOT header, upgrade-count lead, one-time ready line, splash
+# accent, band wording) and #130 (Part C PR 3: One Ledger palette #22C55E /
+# #F59E0B, glyphs on by default, GearAPI v2, the arrow clock throttled to 30 a
+# second). Nine vendored files moved. COPY lane: Constants.lua, Arbitration.lua,
+# Marks.lua, GearAPI.lua. PATCH lane: UI.lua and OptionsTab.lua (patches applied
+# unchanged), Core.lua, ChestAdvisor.lua and UpgradesTab.lua (re-cut; each
+# patch header says how). Verdict.lua did not move. What the re-cut patches do
+# with the new code is asked of the shipped bytes by
+# tests/touchstone_repin_bb03d13_spec.lua.
+SOURCE_REF = "bb03d13bdaac686e11b61e7262fcc2acdabc0e43"
 
 # Order is load-bearing. Verdict.lua must load before ChestAdvisor.lua
 # (ChestAdvisor reads _G.Verdict at load time). Weights.lua sits directly after

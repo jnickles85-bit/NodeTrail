@@ -158,7 +158,7 @@ end
 local HEX = {
   bg = "14161a", band = "191c22", surface = "1b1f26", raised = "20242c",
   text = "eef1f5", muted = "a8b2c0", dim = "7c8695",
-  upgrade = "6fcf97", tradeoff = "e6a94c", noupgrade = "8b95a5",
+  upgrade = "22c55e", tradeoff = "f59e0b", noupgrade = "8b95a5", -- One Ledger (StatForge C2)
 }
 check(type(T.ledgerPalette) == "table", "the theme publishes the ledger palette")
 for name, hex in pairs(HEX) do
@@ -386,7 +386,8 @@ check(type(columns) == "table", "the ledger has a column-label line")
 if type(columns) == "table" then
   check(hasText(columns, "VERDICT") ~= nil, "the first column is labelled VERDICT")
   check(hasText(columns, "ITEM AND REASON") ~= nil, "the second column is labelled ITEM AND REASON")
-  check(hasText(columns, "CHANGE") ~= nil, "the third column is labelled CHANGE")
+  check(hasText(columns, "SLOT") ~= nil, "the third column is labelled SLOT (StatForge #129)")
+  check(hasText(columns, "CHANGE") == nil, "the old CHANGE label is gone (one header, not two)")
 end
 local head = findText(upgradesHost, "judged")
 check(head ~= nil and head:find("5 judged", 1, true) ~= nil and head:find("2 worth taking", 1, true) ~= nil,

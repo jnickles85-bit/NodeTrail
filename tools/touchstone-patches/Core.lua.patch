@@ -3,14 +3,70 @@
 # The SF.Enable lifecycle fold and slash gating: the module registers its
 # slashes and builds its event frame on enable, not at load.
 #
-# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
+# Re-cut for bb03d13 (StatForge #129): upstream's one-time ready line keeps its
+# name and its one key (readyAnnounced, add-only), but in the pack it is for
+# characters that have never ENABLED Touchstone (the module ships off, so the
+# upstream table-identity test would call nearly every character a veteran), and
+# it runs from SF.Enable() instead of the removed PLAYER_LOGIN frame.
+#
+# base: StatForge bb03d13bdaac686e11b61e7262fcc2acdabc0e43
 # applies to: Core.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
 --- a/Core.lua
 +++ b/Core.lua
-@@ -30,18 +30,12 @@ local function initDB()
+@@ -33,44 +33,45 @@
    -- minimap state, deep-probe history), so nothing purges it.
+ end
+ 
+--- The first-run default ChestAdvisor.lua assigns while it loads (Core.lua loads
+--- after it, Touchstone.toc). Held ONLY to compare identity, never read or written
+--- through: before ADDON_LOADED the client replaces the global with the
+--- character's saved table when one exists, so a ChestAdvisorDB that is not this
+--- table was restored from disk, meaning the character has run Touchstone (or the
+--- standalone ChestAdvisor) before. If this file ever loads first, this is nil,
+--- every table reads as restored, and the line stays quiet rather than nagging.
+-local firstRunChestAdvisorDB = rawget(_G, "ChestAdvisorDB")
++-- Fold (MightiePack): the pack ships Touchstone OFF by default, but
++-- ChestAdvisor.lua still assigns its first-run ChestAdvisorDB while it loads and
++-- the client saves that table at logout. Upstream's table-identity test would
++-- therefore read almost every pack character as a veteran and the line would
++-- never show. The pack's ruling (owner, 2026-11-20): the line is for characters
++-- that have never ENABLED Touchstone. It runs from SF.Enable() (load, or the
++-- moment the module is switched on), never from a frame of its own.
++--
++-- A character is a veteran when its table already says so: readyAnnounced is
++-- set (written by the first enable from this version on), or it carries
++-- anything an enabled Touchstone writes. The first-run default is exactly
++-- `{ role = {} }`, so any other key, or a recorded role, means it ran before.
++local function advisorDBLooksUsed(db)
++  for k, v in pairs(db) do
++    if k ~= "role" then return true end
++    if type(v) ~= "table" or next(v) ~= nil then return true end
++  end
++  return false
++end
+ 
+---- The one-time "ready" line, for characters that have never used Touchstone
+---- (owner's ruling, 2026-11-19). A character whose ChestAdvisorDB was restored
+---- from SavedVariables is a veteran: it is marked announced and stays quiet.
+---- ADD-ONLY: the only key this writes is readyAnnounced.
++--- The one-time "ready" line, for characters that have never enabled
++--- Touchstone. A veteran is marked announced and stays quiet.
++--- ADD-ONLY: the only key this writes is readyAnnounced; nothing is removed.
+ function SF.MaybeAnnounceReady()
+   local db = rawget(_G, "ChestAdvisorDB")
+   if type(db) ~= "table" then return end
+   if db.readyAnnounced == true then return end
+-  if db ~= firstRunChestAdvisorDB then
+-    db.readyAnnounced = true
+-    return
+-  end
+-  SF.Print("ready — hover your bags")
++  local veteran = advisorDBLooksUsed(db)
+   db.readyAnnounced = true
++  if veteran then return end
++  SF.Print("ready — hover your bags")
  end
  
 -local events = CreateFrame("Frame")
@@ -23,6 +79,7 @@
 -    initDB()
 -    SF.CreateMinimapButton()
 -    SF.UpdateMinimapButton()
+-    SF.MaybeAnnounceReady()
 -  end
 -end)
 +-- Fold (MightiePack Touchstone module): the ADDON_LOADED / PLAYER_LOGIN
@@ -34,7 +91,7 @@
  
  -- Card t_916be2d9: the addon is now Touchstone. The slash handler keeps its
  -- single implementation; the global is renamed to match the addon identity.
-@@ -54,7 +48,9 @@ end)
+@@ -83,7 +84,9 @@
  -- by t_6696b35a). The client strips the slash word, so a second registration
  -- of the string "/ts" on this handler would either steal it from the advisor
  -- or be the dead copy. /ts stays SLASH_CHESTADVISOR4, exactly once.
@@ -45,7 +102,7 @@
    local arg = (msg or ""):match("^%s*(.-)%s*$"):lower()
    -- NOTE (card t_adf556d6): the `debug` arm is gone too. It called
    -- SF.DebugContainers, which lived in the deleted Snapshot.lua and reported
-@@ -104,6 +100,20 @@ function SlashCmdList.TOUCHSTONE(msg)
+@@ -133,6 +136,23 @@
    end
    SF.ToggleMain()
  end
@@ -60,6 +117,9 @@
 +  initDB()
 +  SF.CreateMinimapButton()
 +  SF.UpdateMinimapButton()
++  -- Fold: upstream calls this on PLAYER_LOGIN; the module's Enable is the
++  -- pack's one init point (load, or the toggle). Add-only: readyAnnounced only.
++  SF.MaybeAnnounceReady()
 +  -- Integration.lua defines this and loads before Core.lua.
 +  if type(SF.EnableIntegrations) == "function" then
 +    SF.EnableIntegrations()

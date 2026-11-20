@@ -3,13 +3,13 @@
 # The deferred load calls: SF.EnableIntegrations() is the module's one
 # initialisation point instead of a load-time side effect.
 #
-# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
+# base: StatForge bb03d13bdaac686e11b61e7262fcc2acdabc0e43
 # applies to: Integration.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
 --- a/Integration.lua
 +++ b/Integration.lua
-@@ -109,5 +109,11 @@ function SF.RegisterCompartment()
+@@ -109,5 +109,11 @@
    return SF._compartmentRegistered
  end
  

@@ -66,6 +66,35 @@ SF.Colors = {
   black       = { 0, 0, 0 },
 }
 
+-- ONE LEDGER (audit C2): the two verdict colours, defined once. `success` above is
+-- the upgrade colour and `warning` the trade-off colour on EVERY surface: the item
+-- tooltip line, the bag arrow's glow, the trade-off chip, the window ledger's mark
+-- and the log. Every call site asks through these two accessors instead of
+-- carrying its own literal. The advisor files (ChestAdvisor.lua, Marks.lua) read
+-- them at load or build time and keep a fallback copy only for a harness that
+-- loads them without this file; tests/t_c_pr3_ledger_gearapi_arrow.js fails if a
+-- fallback drifts from these values. The accent cyan is chrome only, never a
+-- verdict colour.
+SF.VERDICT_KINDS = { upgrade = "success", tradeoff = "warning" }
+
+--- The verdict colour for `kind` ("upgrade" | "tradeoff") as a fresh { r, g, b }
+--- copy, or nil for any other kind.
+function SF.VerdictColour(kind)
+  local key = SF.VERDICT_KINDS[kind]
+  local c = key and SF.Colors[key]
+  if type(c) ~= "table" then return nil end
+  return { c[1], c[2], c[3] }
+end
+
+--- The same colour as an inline escape ("|cffrrggbb", no closing |r), rounded the
+--- way SF.Accent rounds, so a tooltip string and a texture tint agree.
+function SF.VerdictCode(kind)
+  local c = SF.VerdictColour(kind)
+  if not c then return nil end
+  return string.format("|cff%02x%02x%02x", math.floor(c[1] * 255 + 0.5),
+    math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
+end
+
 SF.PLAYER_BAGS = { 0, 1, 2, 3, 4 }
 -- container -1 = fixed bank slots; bags 5-11 = bank bags
 SF.BANK_BAGS = { -1, 5, 6, 7, 8, 9, 10, 11 }

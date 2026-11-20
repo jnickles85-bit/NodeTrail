@@ -168,8 +168,11 @@ T.ledgerPalette = {
   text      = { 0.933, 0.945, 0.961 },        -- #eef1f5
   muted     = { 0.659, 0.698, 0.753 },        -- #a8b2c0
   dim       = { 0.486, 0.525, 0.584 },        -- #7c8695
-  upgrade   = { 0.435, 0.812, 0.592 },        -- #6fcf97
-  tradeoff  = { 0.902, 0.663, 0.298 },        -- #e6a94c
+  -- One Ledger (StatForge audit C2): the ledger's verdict colours ARE the
+  -- palette's success / warning, the same pair the tooltip line, the bag arrow
+  -- glow and the trade-off chip draw (was #6fcf97 / #e6a94c).
+  upgrade   = { 0.133, 0.773, 0.369 },        -- #22C55E
+  tradeoff  = { 0.961, 0.620, 0.043 },        -- #F59E0B
   noupgrade = { 0.545, 0.584, 0.647 },        -- #8b95a5
 }
 

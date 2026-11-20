@@ -8,6 +8,23 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
 
 ## [Unreleased]
 
+### Changed
+- **Touchstone re-pinned to StatForge `bb03d13`** (#128, #129, #130). It brings:
+  - **One Ledger colours.** Every surface draws the same pair: the tooltip line, the bag arrow's
+    glow, the bag trade-off chip and the Upgrades ledger. Upgrade is green `#22C55E` and trade-off
+    is amber `#F59E0B` (the ledger used `#6fcf97` / `#e6a94c`).
+  - **The + / ^ glyphs are on by default.** A character that never set `/up glyphs` now sees them.
+    A character that turned them off keeps them off, and so does one that ran `/up reset` on an
+    older version (that command saved "off"). `/up reset` now turns them on. No saved key is added
+    or removed for this.
+  - **SLOT header.** The ledger's third column is labelled SLOT (was CHANGE), and the label shows
+    only when at least one row is drawn.
+  - **A one-time "ready — hover your bags" line** the first time Touchstone is enabled on a
+    character that has never had it on. Characters that used Touchstone before stay quiet. The one
+    new saved key is `ChestAdvisorDB.readyAnnounced`; nothing is removed.
+  - Arrow animation capped at 30 placements a second; GearAPI v2 (every v1 field unchanged); the
+    band wording says what it measured and what it could not (A9, A11).
+
 ### Fixed
 - **The Context switch scrolls with the rest of Settings** (audit A3). The Context heading was the
   one part of the Settings stack still pinned at the old fixed layout's position, about 60 units

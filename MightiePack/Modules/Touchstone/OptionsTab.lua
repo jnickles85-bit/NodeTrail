@@ -103,7 +103,7 @@ local function glyphsOn()
   if type(advisor) == "table" and type(advisor._glyphsOn) == "function" then
     return advisor._glyphsOn() == true
   end
-  return false
+  return true -- audit C2: glyphs default on
 end
 
 -- Card t_1c9d5a17: the CONTEXT, read from the advisor's own table so this tab

@@ -759,12 +759,17 @@ function SF.ShowFirstUseSplash()
   body:SetPoint("TOP", h, "BOTTOM", 0, -20)
   body:SetWidth(460)
   body:SetJustifyH("LEFT")
-  body:SetText(
-    "Touchstone reads the gear you are holding and tells you, in the game, whether it beats what you wear.\n\n" ..
-    "|cff66fcf11.|r  Hover a chest, weapon or armour piece in your bags to see the call.\n\n" ..
-    "|cff66fcf12.|r  A green |cffffffffarrow|r marks an upgrade. An amber |cffffffffsquare|r marks a trade-off: better on some stats, worse on others.\n\n" ..
-    "|cff66fcf13.|r  |cffffffff/ts|r opens this window; |cffffffff/ts help|r lists the commands."
-  )
+  local function bodyText()
+    return
+      "Touchstone reads the gear you are holding and tells you, in the game, whether it beats what you wear.\n\n" ..
+      SF.Accent("1.") .. "  Hover a chest, weapon or armour piece in your bags to see the call.\n\n" ..
+      SF.Accent("2.") .. "  A green |cffffffffarrow|r marks an upgrade. An amber |cffffffffsquare|r marks a trade-off: better on some stats, worse on others.\n\n" ..
+      SF.Accent("3.") .. "  |cffffffff/ts|r opens this window; |cffffffff/ts help|r lists the commands."
+  end
+  body:SetText(bodyText())
+  if type(SF.OnAccentRepaint) == "function" then
+    SF.OnAccentRepaint(function() body:SetText(bodyText()) end)
+  end
   body:SetTextColor(C.text[1], C.text[2], C.text[3])
 
   local ok = SF.UI_CreateButton(panel, "Got it", 140, 32)

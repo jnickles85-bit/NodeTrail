@@ -33,6 +33,39 @@ local function initDB()
   -- minimap state, deep-probe history), so nothing purges it.
 end
 
+-- Fold (MightiePack): the pack ships Touchstone OFF by default, but
+-- ChestAdvisor.lua still assigns its first-run ChestAdvisorDB while it loads and
+-- the client saves that table at logout. Upstream's table-identity test would
+-- therefore read almost every pack character as a veteran and the line would
+-- never show. The pack's ruling (owner, 2026-11-20): the line is for characters
+-- that have never ENABLED Touchstone. It runs from SF.Enable() (load, or the
+-- moment the module is switched on), never from a frame of its own.
+--
+-- A character is a veteran when its table already says so: readyAnnounced is
+-- set (written by the first enable from this version on), or it carries
+-- anything an enabled Touchstone writes. The first-run default is exactly
+-- `{ role = {} }`, so any other key, or a recorded role, means it ran before.
+local function advisorDBLooksUsed(db)
+  for k, v in pairs(db) do
+    if k ~= "role" then return true end
+    if type(v) ~= "table" or next(v) ~= nil then return true end
+  end
+  return false
+end
+
+--- The one-time "ready" line, for characters that have never enabled
+--- Touchstone. A veteran is marked announced and stays quiet.
+--- ADD-ONLY: the only key this writes is readyAnnounced; nothing is removed.
+function SF.MaybeAnnounceReady()
+  local db = rawget(_G, "ChestAdvisorDB")
+  if type(db) ~= "table" then return end
+  if db.readyAnnounced == true then return end
+  local veteran = advisorDBLooksUsed(db)
+  db.readyAnnounced = true
+  if veteran then return end
+  SF.Print("ready — hover your bags")
+end
+
 -- Fold (MightiePack Touchstone module): the ADDON_LOADED / PLAYER_LOGIN
 -- event frame that used to live here is gone. MightiePack fires
 -- ADDON_LOADED for its own name after SavedVariables exist and calls
@@ -111,6 +144,9 @@ function SF.Enable()
   initDB()
   SF.CreateMinimapButton()
   SF.UpdateMinimapButton()
+  -- Fold: upstream calls this on PLAYER_LOGIN; the module's Enable is the
+  -- pack's one init point (load, or the toggle). Add-only: readyAnnounced only.
+  SF.MaybeAnnounceReady()
   -- Integration.lua defines this and loads before Core.lua.
   if type(SF.EnableIntegrations) == "function" then
     SF.EnableIntegrations()
