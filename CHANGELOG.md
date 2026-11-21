@@ -26,6 +26,11 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
     band wording says what it measured and what it could not (A9, A11).
 
 ### Fixed
+- **The ledger's VERDICT column draws again** (Upgrades and Log). The green arrow, the amber
+  trade-off square and the verdict word ("Upgrade", "Not an upgrade", …) sat in a gutter frame that
+  had a width but no height, and the client paints nothing owned by a frame with no area, so the
+  column was blank in game. The gutter now spans the row. Pack-only (the gutter is the ledger
+  patch's; upstream draws the mark on the row), changed in `tools/touchstone-patches/`.
 - **The Context switch scrolls with the rest of Settings** (audit A3). The Context heading was the
   one part of the Settings stack still pinned at the old fixed layout's position, about 60 units
   below the Role heading it belongs beside, and it stayed put while the rest of the stack scrolled,

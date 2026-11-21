@@ -42,6 +42,9 @@
 --      alone is the weaker of the two orderings and it hid this defect for two
 --      cards; `C.StrataCover` / `C.ZOrderHazards` now answer it directly, and
 --      `SetParent` records the comparison at the moment of the move.
+--   6. DRAWN is a separate question from VISIBLE (`C.Drawn`): a region is
+--      painted only when the frame that owns it has a non-zero rect. A
+--      height-less frame shows every flag as true and paints nothing.
 --
 -- It is not a Blizzard emulator: it models the API surface this pack calls.
 -- Anything it does not model is absent rather than silently benign, so a spec
@@ -264,6 +267,36 @@ function C.Visible(f)
   local p = parentOf(f)
   if not p then return true end
   return C.Visible(p)
+end
+
+--- DRAWN, not just visible: would the client actually paint this REGION?
+---
+--- The client draws a frame's regions (its textures and font strings) only
+--- when that frame has a real rect: a frame whose width or height resolves to
+--- zero paints none of its own regions, however large the regions themselves
+--- are. A frame given one anchor and a SetWidth -- and no height -- is such a
+--- frame. `IsVisible` cannot see this (the flags are all true), which is how
+--- the ledger's verdict gutter shipped empty on 7439f02 with every spec green.
+---
+--- The rule is modelled for a region's OWNING frame only, which is the case
+--- this pack has hit; nothing here claims a zero-size frame hides its child
+--- FRAMES. A region with no area of its own (an empty string, an unsized
+--- texture) is not drawn either.
+local REGION_KIND = { Texture = true, FontString = true }
+function C.Drawn(region)
+  if type(region) ~= "table" or not C.Visible(region) then return false, "not visible" end
+  local owner = parentOf(region)
+  if REGION_KIND[region.kind] and type(owner) == "table" then
+    local o = C.Rect(owner)
+    if not (o.width > 0 and o.height > 0) then
+      return false, ("its frame has no area (%.1f x %.1f)"):format(o.width, o.height)
+    end
+  end
+  local r = C.Rect(region)
+  if not (r.width > 0 and r.height > 0) then
+    return false, ("it has no area of its own (%.1f x %.1f)"):format(r.width, r.height)
+  end
+  return true
 end
 
 local function fire(f, script, ...)
