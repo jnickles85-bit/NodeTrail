@@ -4,13 +4,19 @@
 # and the page is measured to the viewport. Upstream has no row model to hang
 # this on, so the tab keeps its own.
 #
-# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
+# Re-cut for bb03d13 (StatForge #129/#130): the ledger keeps its own layout and
+# its "N judged · M worth taking" head. #129's SLOT header is the ledger's third
+# column label (relabelled CHANGE -> SLOT, published as host.colSlot; no second
+# font string), shown only over drawn rows. #130's trade-off colour arrives via
+# the ledger tokens, which are now the One Ledger pair (MightiePack/Theme.lua).
+#
+# base: StatForge bb03d13bdaac686e11b61e7262fcc2acdabc0e43
 # applies to: UpgradesTab.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
 --- a/UpgradesTab.lua
 +++ b/UpgradesTab.lua
-@@ -40,11 +40,57 @@ local C = SF.Colors
+@@ -40,11 +40,57 @@
  -- path comes from SF.AssetPath, resolved where the texture is set: a host that
  -- vendors these files keeps them under its own folder and sets the base once.
  
@@ -73,7 +79,7 @@
  
  -- The verdict the advisor reports for a genuine trade-off. Read off the
  -- comparator when it is present (never a second hard-coded truth), with the bare
-@@ -71,29 +117,51 @@ local function isMarked(v)
+@@ -71,29 +117,51 @@
    return verdictRank(v) <= 2
  end
  
@@ -94,7 +100,6 @@
 -    local ok, r, g, b = pcall(GetItemQualityColor, quality)
 -    if ok and type(r) == "number" and type(g) == "number" and type(b) == "number" then
 -      return r, g, b
--    end
 +-- The verdict's COLOUR is the information (card t_07f778ca, PART B): green when
 +-- equipping is right, amber when it is a trade-off, grey when it is refused.
 +-- One function, so the marker glyph and the verdict word beside it can never be
@@ -128,7 +133,7 @@
 +    if type(ui.word) == "function" then
 +      local word = ui.word(token)
 +      if word ~= nil then return tostring(word) end
-+    end
+     end
    end
 -  local c = FALLBACK_QUALITY[quality or 1] or FALLBACK_QUALITY[1]
 -  return c[1], c[2], c[3]
@@ -145,7 +150,7 @@
  -- The item's name and rarity from the client's own read. Never fabricated: a
  -- miss falls back to the link's own bracket text, and only then to a literal.
  local function itemIdentity(link)
-@@ -116,16 +184,10 @@ local function itemIdentity(link)
+@@ -116,16 +184,10 @@
    return name, quality
  end
  
@@ -166,7 +171,8 @@
  
  -- Open the bags so the player can see the cell the row is about. Guarded against
  -- every name this client family has used; the sweep card owns marker behaviour,
-@@ -155,3 +217,8 @@ buildRows
+@@ -154,6 +216,11 @@
+       rows[#rows + 1] = {
          link     = link,
          verdict  = row.verdict,
 +        -- Card t_c8970547: the model's own answer rides into the tab with the
@@ -175,7 +181,9 @@
 +        -- the model did not answer — exactly the shape the advisor records.
 +        arbitration = (type(row.arbitration) == "table") and row.arbitration or nil,
          reason   = (type(row.reason) == "string") and row.reason or "",
-@@ -182,6 +249,7 @@ local state = {
+         slotWord = (type(row.slotWord) == "string") and row.slotWord or "slot",
+         id       = row.id,
+@@ -182,6 +249,7 @@
    rendered = {},   -- the rows the toggle admits
    pool     = {},   -- one Button per index, created once
    offset   = 0,
@@ -183,11 +191,30 @@
    host     = nil,
    layout   = nil,
  }
-@@ -190,13 +258,13 @@ local state = {
+@@ -190,32 +258,13 @@
  -- tab exposes what it drew, it does not re-derive it.
  --   * `rows`    — every row, in the card's sort order (the full verdict set);
  --   * `admitted`— the rows the toggle currently admits (a subset of `rows`);
 ---   * `shown`   — how many of the admitted rows are inside the visible window.
+-
+-local function summaryText()
+-  local total = #state.rows
+-  if total == 0 then return "" end
+-  local n = 0
+-  for _, r in ipairs(state.rows) do
+-    if r.verdict == "UPGRADE" then n = n + 1 end
+-  end
+-  local shown = #state.rendered
+-  local lead = (n == 0) and "nothing worth taking" or (n .. " worth taking")
+-  local s = lead .. "  ·  " .. shown .. " of " .. total
+-    .. " item" .. (total == 1 and "" or "s")
+-  if shown > VISIBLE then
+-    s = s .. "  ·  rows " .. tostring(state.offset + 1) .. "-"
+-      .. tostring(math.min(state.offset + VISIBLE, shown))
+-  end
+-  return s
+-end
+-
 +--   * `shown`   — how many of the admitted rows the layout placed on the page.
  function SF.UpgradesTabState()
    local out = {
@@ -199,7 +226,7 @@
      offset   = state.offset,
      rows     = {},
      rendered = {},
-@@ -213,11 +281,6 @@ function SF.UpgradesTabState()
+@@ -232,17 +281,12 @@
        slotWord = r.slotWord, name = r.name, rank = r.rank,
      }
    end
@@ -208,10 +235,19 @@
 -      out.shown = out.shown + 1
 -    end
 -  end
+-  -- nil when the header was never built: a literal fallback here would let a
+-  -- missing header pass for a present one.
++  -- StatForge #129, folded: the pack's third column label IS the slot header
++  -- (one font string, not a second one). nil when the header was never built:
++  -- a literal fallback here would let a missing header pass for a present one.
+   local colSlot = state.host and state.host.colSlot
+   out.slotHeader = colSlot and colSlot:GetText() or nil
+   out.slotHeaderShown = colSlot and colSlot:IsShown() or false
+-  out.summary = summaryText()
    return out
  end
  
-@@ -234,44 +297,93 @@ end
+@@ -259,44 +303,93 @@
  
  -- ---------------------------------------------------------------------------
  -- One-time widget build. Everything created here is created exactly once.
@@ -326,7 +362,7 @@
  
    -- Hover: the client's own tooltip, on the item's own link. The advisor's
    -- existing post-call adds the Touchstone verdict line to it on the live
-@@ -292,43 +404,98 @@ local function buildRow(parent, index)
+@@ -317,56 +410,102 @@
    return row
  end
  
@@ -375,7 +411,7 @@
    end)
    host.toggle = toggle
  
-+  -- The column-label line: VERDICT / ITEM AND REASON / CHANGE, at 9.5px
++  -- The column-label line: VERDICT / ITEM AND REASON / SLOT, at 9.5px
 +  -- uppercase. Uppercase IS the client's substitute for letter-spacing (a
 +  -- FontString has none); the labels sit on the same three columns as the rows,
 +  -- so a column cannot drift from its heading.
@@ -397,15 +433,19 @@
 +  host.colVerdict = columnLabel("VERDICT", ROW_INSET, GUTTER)
 +  host.colItem = columnLabel("ITEM AND REASON", GUTTER + NAME_GAP_X,
 +    ROW_W - ROW_INSET * 2 - GUTTER - NAME_GAP_X - CHANGE_W - 8)
-+  host.colChange = columnLabel("CHANGE",
++  -- StatForge #129: the third column is labelled SLOT (it holds the slot word).
++  -- colSlot is the same font string under upstream's name, so the tests and the
++  -- render rule below read one header, never a second one.
++  host.colChange = columnLabel("SLOT",
 +    ROW_W - ROW_INSET * 2 - CHANGE_W, CHANGE_W, "RIGHT")
++  host.colSlot = host.colChange
 +  host.columns = labels
 +
    -- The viewport. A plain frame with a wheel handler: no UIPanelScrollFrameTemplate,
    -- no second named scroll global, no new art. Rows live in a child frame that is
    -- sized once and re-positioned by the wheel handler.
    local viewport = CreateFrame("Frame", "TouchstoneUpgradesViewport", host)
--  viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -10)
+-  viewport:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 8, -24)
 -  viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -18, 12)
 +  viewport:SetPoint("TOPLEFT", labels, "BOTTOMLEFT", 0, -6)
 +  viewport:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -BODY_PAD, BODY_PAD)
@@ -424,6 +464,19 @@
 +  rowParent:SetWidth(ROW_W)
    host.rowParent = rowParent
  
+-  -- Column header over the slot text. Anchored to rowParent, not the viewport:
+-  -- row slot text sits at rowParent's right edge minus 10, and rowParent is a
+-  -- fixed 780 wide while the viewport stretches with the window. The viewport's
+-  -- top gap (24) leaves room for this line under the title row, clear of the
+-  -- Show all toggle.
+-  local colSlot = host:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+-  colSlot:SetPoint("BOTTOMRIGHT", rowParent, "TOPRIGHT", -10, 2)
+-  colSlot:SetJustifyH("RIGHT")
+-  colSlot:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3])
+-  colSlot:SetText("SLOT")
+-  colSlot:Hide()
+-  host.colSlot = colSlot
+-
    local function scrollBy(delta)
      if type(delta) ~= "number" or delta == 0 then return end
      local shown = #state.rendered
@@ -434,7 +487,7 @@
      state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
      if state.layout then state.layout() end
    end
-@@ -367,41 +534,78 @@ local function repopulate(host)
+@@ -405,42 +544,78 @@
      end
    end
  
@@ -487,7 +540,8 @@
            row.mark:Show()
          elseif r.verdict == tradeOffWord() then
            row.mark:SetTexture(nil)
--          row.mark:SetColorTexture(1, 0.65, 0.15, 0.9)
+-          local tc = SF.VerdictColour("tradeoff")
+-          row.mark:SetColorTexture(tc[1], tc[2], tc[3], 0.9)
 +          row.mark:SetColorTexture(vr, vg, vb, 0.95)
            row.mark:Show()
          else
@@ -524,11 +578,10 @@
    end
    state.layout()
  end
-@@ -416,22 +620,33 @@ local function render(host)
+@@ -455,20 +630,38 @@
    host.toggle:SetLabel(state.showAll and "Upgrades only" or "Show all")
  
    local total = #state.rows
--  local shown = #state.rendered
 -  host.title:SetText(SF.Accent("Upgrades"))
 +  local admitted = #state.rendered
 +  local page = state.shown or 0
@@ -541,9 +594,15 @@
 +    host.count:SetText("0 judged · 0 worth taking")
      host.empty:Show()
      host.viewport:Hide()
+     host.colSlot:Hide()
    else
      host.empty:Hide()
      host.viewport:Show()
+-    -- Only over rows actually drawn: in Upgrades-only mode a list with no marked
+-    -- row draws nothing under "nothing worth taking", and a header there labels
+-    -- an empty column.
+-    if #state.rendered > 0 then host.colSlot:Show() else host.colSlot:Hide() end
+-    host.count:SetText(summaryText())
 +    -- The section head's second half, in the ledger's own words: how many rows
 +    -- the advisor judged and how many are worth taking. Both are COUNTED from
 +    -- the list on this render — never carried over from the last one.
@@ -551,18 +610,17 @@
 +    for _, r in ipairs(state.rows) do
 +      if r.verdict == "UPGRADE" then worth = worth + 1 end
 +    end
-     local more = ""
--    if shown > VISIBLE then
--      more = "  ·  rows " .. tostring(state.offset + 1) .. "-"
--        .. tostring(math.min(state.offset + VISIBLE, shown))
++    local more = ""
 +    if admitted > page and page > 0 then
 +      more = " · rows " .. tostring(state.offset + 1) .. "-"
 +        .. tostring(math.min(state.offset + page, admitted))
-     end
--    host.count:SetText(tostring(shown) .. " of " .. tostring(total)
--      .. " item" .. (total == 1 and "" or "s") .. more)
++    end
 +    host.count:SetText(tostring(total) .. " judged · " .. tostring(worth)
 +      .. " worth taking" .. more)
++    -- StatForge #129: the SLOT header only over rows actually drawn. In
++    -- Upgrades-only mode a list with no marked row draws nothing, and a header
++    -- there would label an empty column.
++    if (state.shown or 0) > 0 then host.colSlot:Show() else host.colSlot:Hide() end
    end
  end
  

@@ -281,6 +281,12 @@ function SF.UpgradesTabState()
       slotWord = r.slotWord, name = r.name, rank = r.rank,
     }
   end
+  -- StatForge #129, folded: the pack's third column label IS the slot header
+  -- (one font string, not a second one). nil when the header was never built:
+  -- a literal fallback here would let a missing header pass for a present one.
+  local colSlot = state.host and state.host.colSlot
+  out.slotHeader = colSlot and colSlot:GetText() or nil
+  out.slotHeaderShown = colSlot and colSlot:IsShown() or false
   return out
 end
 
@@ -444,7 +450,7 @@ local function build(host)
   end)
   host.toggle = toggle
 
-  -- The column-label line: VERDICT / ITEM AND REASON / CHANGE, at 9.5px
+  -- The column-label line: VERDICT / ITEM AND REASON / SLOT, at 9.5px
   -- uppercase. Uppercase IS the client's substitute for letter-spacing (a
   -- FontString has none); the labels sit on the same three columns as the rows,
   -- so a column cannot drift from its heading.
@@ -466,8 +472,12 @@ local function build(host)
   host.colVerdict = columnLabel("VERDICT", ROW_INSET, GUTTER)
   host.colItem = columnLabel("ITEM AND REASON", GUTTER + NAME_GAP_X,
     ROW_W - ROW_INSET * 2 - GUTTER - NAME_GAP_X - CHANGE_W - 8)
-  host.colChange = columnLabel("CHANGE",
+  -- StatForge #129: the third column is labelled SLOT (it holds the slot word).
+  -- colSlot is the same font string under upstream's name, so the tests and the
+  -- render rule below read one header, never a second one.
+  host.colChange = columnLabel("SLOT",
     ROW_W - ROW_INSET * 2 - CHANGE_W, CHANGE_W, "RIGHT")
+  host.colSlot = host.colChange
   host.columns = labels
 
   -- The viewport. A plain frame with a wheel handler: no UIPanelScrollFrameTemplate,
@@ -630,6 +640,7 @@ local function render(host)
     host.count:SetText("0 judged · 0 worth taking")
     host.empty:Show()
     host.viewport:Hide()
+    host.colSlot:Hide()
   else
     host.empty:Hide()
     host.viewport:Show()
@@ -647,6 +658,10 @@ local function render(host)
     end
     host.count:SetText(tostring(total) .. " judged · " .. tostring(worth)
       .. " worth taking" .. more)
+    -- StatForge #129: the SLOT header only over rows actually drawn. In
+    -- Upgrades-only mode a list with no marked row draws nothing, and a header
+    -- there would label an empty column.
+    if (state.shown or 0) > 0 then host.colSlot:Show() else host.colSlot:Hide() end
   end
 end
 

@@ -44,13 +44,39 @@ if TouchstoneSkip then return end
 -- handle ChestAdvisor resolves at CALL time, so a harness that loads this file
 -- alone or in either order still finds it.
 
-local GREEN_R, GREEN_G, GREEN_B = 0.2, 1, 0.6   -- §10 GREEN
+-- §10 GREEN, now the One Ledger upgrade colour (audit C2): read from the host
+-- palette (StatForge.VerdictColour, Constants.lua) when the arrow is BUILT, so the
+-- glow is the same green as the tooltip line and the ledger. The copy below is the
+-- fallback for a harness with no host core; it must equal Constants.lua's
+-- `success` (#22C55E), and the PR 3 test leg fails if it drifts. Was 0.2, 1, 0.6.
+local GREEN_FALLBACK = { 0.133, 0.773, 0.369 }
+local function green()
+	local sf = rawget(_G, "StatForge")
+	if type(sf) == "table" and type(sf.VerdictColour) == "function" then
+		local ok, c = pcall(sf.VerdictColour, "upgrade")
+		if ok and type(c) == "table" and type(c[1]) == "number"
+			and type(c[2]) == "number" and type(c[3]) == "number" then
+			return c[1], c[2], c[3]
+		end
+	end
+	return GREEN_FALLBACK[1], GREEN_FALLBACK[2], GREEN_FALLBACK[3]
+end
 local INSET  = 2                                 -- §10 INSET
 local SIZE   = 15                                -- §10 SIZE
 local BOB    = 2                                 -- §10 BOB (px)
 local PERIOD = 1.6                               -- §10 PERIOD (s)
 local GLOW_LOW, GLOW_HIGH = 0.1, 0.35            -- §10 GLOW_LOW / GLOW_HIGH
 local GLOW_OUT = 5                               -- §10 GLOW_OUT (px each side)
+-- Audit B5 / C6: the bob is a 1.6 s cycle, so placing every arrow on every
+-- rendered frame (60+ fps, two pcalls per arrow) buys nothing a 30 fps update
+-- does not show. The driver still runs every frame, but it re-places the arrows
+-- at most MAX_FPS times a second; a frame inside the interval returns at once.
+local MAX_FPS = 30
+local MIN_STEP = 1 / MAX_FPS
+-- Half a millisecond of slack for float rounding: two 60 Hz frames add up to
+-- 1/30 s give or take an ulp. The accumulator below subtracts the full MIN_STEP
+-- on every placement, so the slack never raises the long-run rate above 30.
+local STEP_SLACK = 0.0005
 
 --- The marker texture path, resolved at the point of use.
 ---
@@ -92,6 +118,19 @@ if type(host) == "table" then host.Marks = Marks end
 local driverFrame = nil
 local running = false
 local clock = 0
+-- B5 throttle state: an accumulator of elapsed time. `lastTick` is the GetTime()
+-- of the previous tick (nil until the first one, so the first tick after a start
+-- always places); `acc` is the time banked since the last placement. Each
+-- placement spends one MIN_STEP and carries the remainder, so the rate holds ~30
+-- at any refresh rate (60, 75, 144 Hz) instead of rounding down to a divisor of
+-- it. placedTicks / skippedTicks count the work — the observable the leg reads.
+local lastTick = nil
+local acc = 0
+local placedTicks, skippedTicks = 0, 0
+-- C6: the parked-animation seam. While false the driver never installs and each
+-- arrow is placed once, at rest, when it attaches (no bob, steady glow). Default
+-- true: the arrows animate as they do today.
+local animated = true
 
 -- The live arrows, in registration order. Entries are plain tables:
 --   { frame = <Frame>, button = <Frame>, glow = <Texture> }
@@ -157,6 +196,8 @@ local function startDriver()
 	end
 	if type(driverFrame.SetScript) ~= "function" then return end
 	running = true
+	lastTick = nil
+	acc = 0
 	driverFrame:SetScript("OnUpdate", tick)
 end
 
@@ -171,7 +212,26 @@ local function stopDriver()
 end
 
 tick = function()
-	clock = now()
+	local t = now()
+	-- B5: at most MAX_FPS placements a second, by accumulator. The first tick
+	-- after a start places; so does a clock that went backwards (a harness
+	-- resetting time), which also empties the bank.
+	if lastTick == nil or t < lastTick then
+		acc = MIN_STEP
+	else
+		acc = acc + (t - lastTick)
+	end
+	lastTick = t
+	if acc < (MIN_STEP - STEP_SLACK) then
+		skippedTicks = skippedTicks + 1
+		return
+	end
+	acc = acc - MIN_STEP
+	-- A long hitch (a loading screen, a stalled frame) must not bank a burst of
+	-- catch-up placements: keep less than one step in hand.
+	if acc >= MIN_STEP then acc = 0 end
+	placedTicks = placedTicks + 1
+	clock = t
 	for i = 1, arrowCount do
 		place(arrows[i], clock)
 	end
@@ -198,7 +258,8 @@ local function buildArrow(button)
 
 	-- 1. The additive green glow, behind everything. A colour, not an asset.
 	local glow = f:CreateTexture(nil, "BACKGROUND")
-	glow:SetColorTexture(GREEN_R, GREEN_G, GREEN_B, GLOW_HIGH)
+	local gr, gg, gb = green()
+	glow:SetColorTexture(gr, gg, gb, GLOW_HIGH)
 	glow:SetSize(GLOW_SIZE, GLOW_SIZE)
 	glow:SetPoint("CENTER", f, "CENTER", 0, 0)
 	if type(glow.SetBlendMode) == "function" then
@@ -263,9 +324,37 @@ function Marks.Attach(button)
 		arrowCount = arrowCount + 1
 	end
 	if type(f.SetShown) == "function" then pcall(f.SetShown, f, true) end
-	place(f.__entry, now())
-	startDriver()
+	if animated then
+		place(f.__entry, now())
+		startDriver()
+	else
+		-- Parked: the rest position (up(0) = 0, so no bob and the low glow), once.
+		place(f.__entry, 0)
+	end
 	return f
+end
+
+--- C6: turn the arrow animation on or off (the parked-animation seam). Off stops
+--- the driver and puts every live arrow at rest; on re-places them and restarts
+--- the driver when any arrow is showing. Returns the setting now in force. Not a
+--- saved setting: a host that parks the animation calls this after loading.
+function Marks.SetAnimated(on)
+	animated = on and true or false
+	if animated then
+		if arrowCount > 0 then
+			local t = now()
+			for i = 1, arrowCount do place(arrows[i], t) end
+			startDriver()
+		end
+	else
+		stopDriver()
+		for i = 1, arrowCount do place(arrows[i], 0) end
+	end
+	return animated
+end
+
+function Marks.IsAnimated()
+	return animated
 end
 
 --- Take the arrow off `button` (hide it and stop animating it). Idempotent:
@@ -361,6 +450,9 @@ function Marks.State()
 		visible = visible,
 		running = Marks.Running(),
 		clock = clock,
+		animated = animated,
+		placedTicks = placedTicks,
+		skippedTicks = skippedTicks,
 	}
 end
 
@@ -368,7 +460,8 @@ end
 --- rather than a reader re-typing them; a consumer cannot mutate the live set.
 function Marks.Spec()
 	return {
-		GREEN = { GREEN_R, GREEN_G, GREEN_B },
+		GREEN = { green() },
+		MAX_FPS = MAX_FPS,
 		INSET = INSET,
 		SIZE = SIZE,
 		BOB = BOB,

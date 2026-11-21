@@ -54,6 +54,38 @@ ChestAdvisor = {
 	getVerdicts = function() return {} end,
 	scan = function() end,
 }
+
+-- ONE LEDGER (audit C2): the verdict colours come from the host palette
+-- (StatForge.VerdictColour, Constants.lua), which loads before this file in game.
+-- The fallback below is only for a harness that loads the advisor without the host
+-- core; it must equal Constants.lua's success / warning, and the PR 3 test leg
+-- fails if it drifts. Fields on the module table, not new top-level locals: this
+-- chunk sits near Lua 5.1's 200-local cap.
+ChestAdvisor._VERDICT_FALLBACK = {
+	upgrade  = { 0.133, 0.773, 0.369 }, -- #22C55E
+	tradeoff = { 0.961, 0.620, 0.043 }, -- #F59E0B
+}
+
+function ChestAdvisor._verdictColour(kind)
+	local sf = rawget(_G, "StatForge")
+	if type(sf) == "table" and type(sf.VerdictColour) == "function" then
+		local ok, c = pcall(sf.VerdictColour, kind)
+		if ok and type(c) == "table" and type(c[1]) == "number"
+			and type(c[2]) == "number" and type(c[3]) == "number" then
+			return { c[1], c[2], c[3] }
+		end
+	end
+	local f = ChestAdvisor._VERDICT_FALLBACK[kind]
+	if type(f) ~= "table" then return nil end
+	return { f[1], f[2], f[3] }
+end
+
+function ChestAdvisor._verdictCode(kind)
+	local c = ChestAdvisor._verdictColour(kind)
+	if type(c) ~= "table" then return nil end
+	return string.format("|cff%02x%02x%02x", math.floor(c[1] * 255 + 0.5),
+		math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
+end
 -- One version string. Constants.lua (loaded first by Touchstone.toc) owns
 -- SF.VERSION; this field reads it. A literal here drifted to "0.1.0" while
 -- the TOC and the host said 0.8.x. Isolated loads with no host report nil
@@ -345,7 +377,12 @@ local MARKER_MAX = 64        -- cap on concurrent markers
 --   * this chip  — a plain amber square, 12x12, BOTTOMRIGHT (-1,+1)
 -- and it is QUIETER than the arrow (smaller, no icon). A later reader must NOT
 -- "unify" the two: same silhouette means "upgrade" to the eye.
-local TRADEOFF_R, TRADEOFF_G, TRADEOFF_B, TRADEOFF_A = 1, 0.65, 0.15, 0.9
+-- The chip's colour is the One Ledger trade-off colour (audit C2); its alpha is
+-- the chip's own.
+local TRADEOFF_R, TRADEOFF_G, TRADEOFF_B, TRADEOFF_A = (function()
+	local c = ChestAdvisor._verdictColour("tradeoff")
+	return c[1], c[2], c[3], 0.9
+end)()
 local TRADEOFF_SIZE = 12
 
 -- ---- E3 (t_1f22bc67): the scan is slot-driven across the nine armour slots --
@@ -1580,12 +1617,15 @@ end
 -- lose the name together. The duplicate guard below needs a marker
 -- of its own now — see ca.tooltip-duplicate-guard.
 local TOOLTIP_PREFIX = ""
-local TOOLTIP_GREEN  = "|cff00ff00"
+-- One Ledger (audit C2): the upgrade line is the palette's upgrade colour, the
+-- same green the arrow's glow and the ledger draw (was a pure |cff00ff00).
+local TOOLTIP_GREEN  = ChestAdvisor._verdictCode("upgrade")
 local TOOLTIP_GREY   = "|cff9d9d9d"
 -- Card t_89440dfa: the trade-off line's own colour — amber, matching the chip
 -- the bag button draws (TRADEOFF_R/G/B above), so the tooltip's answer and the
--- mark's colour agree. NOT green: the arrow's green means "upgrade".
-local TOOLTIP_AMBER  = "|cffffa616"
+-- mark's colour agree. NOT green: the arrow's green means "upgrade". One Ledger
+-- (audit C2): the palette's trade-off colour (was |cffffa616).
+local TOOLTIP_AMBER  = ChestAdvisor._verdictCode("tradeoff")
 local TOOLTIP_RESET  = "|r"
 local TOOLTIP_DELTA_MAX = 4
 
@@ -3174,8 +3214,10 @@ end
 -- sentence: in this build the frame is not mouse-enabled, hover rides the
 -- button, and SetAllPoints no longer sizes a visible marker.)
 --
--- Colorblind-safe marks. Off unless ChestAdvisorDB.markers.glyphs is exactly
--- true — a missing key (an older saved table, a fresh character) stays off.
+-- Colorblind-safe marks. ON unless ChestAdvisorDB.markers.glyphs is exactly
+-- false (audit C2, "One Ledger": the shape carries the meaning consistently once
+-- the hues are unified). A missing key (an older saved table, a fresh character)
+-- now reads as on; a player who turned them off keeps them off.
 -- No new art and no TOC change: a white ASCII glyph is drawn on the existing
 -- arrow and on the trade-off chip. Exotic symbols become missing-glyph
 -- squares in this client's font (the fontstring-marker bug), so the two
@@ -3185,7 +3227,7 @@ ChestAdvisor.markerGlyphs = { upgrade = "+", tradeoff = "^" }
 function ChestAdvisor._glyphsOn()
 	local db = rawget(_G, "ChestAdvisorDB")
 	local markers = type(db) == "table" and db.markers or nil
-	return type(markers) == "table" and markers.glyphs == true
+	return not (type(markers) == "table" and markers.glyphs == false)
 end
 
 function ChestAdvisor._paintGlyph(button, kind, anchor)
@@ -8573,7 +8615,7 @@ local function helpText()
 		.. "                 (off by default; /up toasts raises one, dump prints the last lines)\n"
 		.. "  /up tooltip <on|off>  turn the item-tooltip verdict line on or off (persisted; default on)\n"
 		.. "  /up detail <full|compact|upgrades>  how much the tooltip shows (persisted; default full)\n"
-		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default off)\n"
+		.. "  /up glyphs <on|off>  colorblind-safe marker glyphs (persisted; default on)\n"
 		.. "  /up bagmark <on|off>  green up-arrows on upgrades in your bags, the bank and quest rewards (persisted; default on)\n"
 		.. "  /up reset      restore the display defaults (tooltip detail, tooltip line, toast, markers) and clear a chosen Gear-for spec (back to Auto); does not clear /up role or the log\n"
 		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
@@ -8843,8 +8885,8 @@ local function cmdDetail(msg)
 end
 
 -- /up glyphs <on|off> — the colorblind-safe marker shapes. Same per-character
--- store as the tooltip and the toast. A missing key reads as OFF (only an
--- explicit true draws the glyphs), so an older saved table stays colour-only.
+-- store as the tooltip and the toast. A missing key reads as ON (only an
+-- explicit false hides the glyphs; audit C2 made them the default).
 local function glyphsOn()
 	return ChestAdvisor._glyphsOn()
 end
@@ -8915,10 +8957,10 @@ local function cmdReset()
 	cmdDetail("detail full")
 	cmdTooltip("tooltip on")
 	cmdToast("toast on")
-	cmdGlyphs("glyphs off")
+	cmdGlyphs("glyphs on")
 	ChestAdvisor.setGearFor(nil)
 	return true, "settings reset to defaults: tooltip detail full, tooltip line on,"
-		.. " toast on, marker glyphs off; chosen Gear-for spec cleared (back to Auto)"
+		.. " toast on, marker glyphs on; chosen Gear-for spec cleared (back to Auto)"
 end
 
 -- /ts scale <0.5-1.5> — the window scale the Settings slider also writes.

@@ -61,6 +61,19 @@ if TouchstoneSkip then return end
 --- fewer drink window, level extrapolation +/-50 % on every level-dependent term when the
 --- measurement level differs from the character's level.
 ---
+--- THE LEVEL-DEPENDENT TERMS, named (audit A9). Two records carry a level: the spell record
+--- (coefficient and base heal, moved together by the "level extrapolation" legs) and
+--- `MEASURED.critPerInt`, the Intellect -> spell crit slope measured at level 34. The slope
+--- is exact only at its own level; away from it the pair's crit movement is perturbed
+--- +/-50 % by its own two legs ("crit per Intellect level extrapolation"), and the reason
+--- data says the slope was measured at another level. At the measured level nothing moves.
+---
+--- A LEG THAT CANNOT BE COMPUTED IS NAMED, NOT DROPPED (audit A11). A perturbation under
+--- which either side's output stops being a positive number cannot contribute a spread, so
+--- the band is the max over the legs that could be computed — a lower bound. The legs left
+--- out are carried as `bandSkipped` and named in the reason data, so the band never presents
+--- a partial spread as the whole one. A leg that computes changes nothing here.
+---
 --- TWO POLICY DECISIONS I HAD TO MAKE, both stated rather than buried:
 ---
 ---   1. A "drink window" is ONE POOL of mana added to the budget, with NO clock cost. The
@@ -253,6 +266,10 @@ end
 --- refusal ladder below reads it and the assignment lives beside the model it feeds — one
 --- definition, two readers, no second copy to drift.
 local spiritSlope
+
+--- Forward-declared beside it for the same reason (audit A9): the perturbation set and
+--- the confidence word both read it, from one definition.
+local critSlopeExact
 
 --- Resolve one representative spell to its numbers.
 ---   returns the resolved spell table, or nil + why.
@@ -469,6 +486,15 @@ spiritSlope = function(totals)
 	return nil
 end
 
+--- Audit A9: is the Intellect -> crit slope a MEASUREMENT for this character? Only at the
+--- level it was measured at — the same gate `spiritSlope` and the survival line's
+--- `hpPerStamina` apply to their level-34 records. Away from it the slope is still used
+--- (there is no other number for it), but as an extrapolation: perturbed +/-50 % in the
+--- band and named in the reason data.
+critSlopeExact = function(totals)
+	return num(totals.level) and totals.level == A.MEASURED.level
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════════════════
 -- 4. THE MODEL — one side of the pair, one context, one perturbation
 -- ═══════════════════════════════════════════════════════════════════════════════════════
@@ -512,7 +538,7 @@ local function output(totals, ctx, spell, side, p)
 	end
 	if budget <= 0 then return nil, "the mana budget goes to or below zero" end
 
-	local crit = totals.crit + (side.dCrit or 0)
+	local crit = totals.crit + (side.dCrit or 0) * (p.critSlopeScale or 1)
 	local critMult = p.critMult or totals.critMult or 1.5
 
 	local coefScale = (p.coefScale or 1) * (p.levelScale or 1)
@@ -585,6 +611,13 @@ local function perturbations(totals, spell, side)
 		add("level extrapolation -50%", { levelScale = 1 - P.level })
 	end
 
+	-- Audit A9: the Intellect -> crit slope is a level-34 measurement too. Away from its
+	-- own level it is perturbed on its own axis, and only when the pair moves crit at all.
+	if (side.dCrit or 0) ~= 0 and not critSlopeExact(totals) then
+		add("crit per Intellect level extrapolation +50%", { critSlopeScale = 1 + P.level })
+		add("crit per Intellect level extrapolation -50%", { critSlopeScale = 1 - P.level })
+	end
+
 	if (side.dSpirit or 0) ~= 0 then
 		add("Spirit slope +30%", { spiritScale = 1 + P.spirit })
 		add("Spirit slope -30%", { spiritScale = 1 - P.spirit })
@@ -604,6 +637,10 @@ local function evaluateContext(candSide, eqSide, totals, ctx, spell)
 	if not num(margin) then return nil, "the margin is not a number" end
 
 	local band, worst = 0, nil
+	-- Audit A11: a leg under which either side stops producing a positive output cannot
+	-- contribute a spread. It is still left out of the max — but by name, in `skipped`,
+	-- so the band is never presented as the whole spread when it is only part of one.
+	local skipped = {}
 	for _, item in ipairs(perturbations(totals, spell, candSide)) do
 		local p = item.p
 		local c = output(totals, ctx, spell, candSide, p)
@@ -611,6 +648,8 @@ local function evaluateContext(candSide, eqSide, totals, ctx, spell)
 		if c ~= nil and e ~= nil then
 			local d = math.abs((c - e) / e - margin)
 			if d > band then band, worst = d, item.name end
+		else
+			skipped[#skipped + 1] = item.name
 		end
 	end
 
@@ -621,6 +660,7 @@ local function evaluateContext(candSide, eqSide, totals, ctx, spell)
 	end
 	return {
 		context = ctx.key, margin = margin, band = band, bandSource = worst,
+		bandSkipped = skipped,
 		state = state, decisive = decisive,
 		binding = cp.binding, casts = cp.casts, cTime = cp.cTime, cMana = cp.cMana,
 		pool = cp.pool, budget = cp.budget, H = cp.H, m = cp.m,
@@ -792,15 +832,33 @@ function A.judge(candStats, eqStats, spec, totals)
 	-- needs one logged crit heal (§5a, still unmeasured), so the `m` term every healer
 	-- verdict divides by is a declared default. The word says so instead of pretending.
 	local lowWhy = {}
-	if spell.source ~= "measured" then
-		lowWhy[#lowWhy + 1] = "spell coefficient and base heal from the era rule, not a hover"
-	elseif spell.levelExact ~= true then
-		lowWhy[#lowWhy + 1] = "measured at level " .. tostring(spell.measuredLevel)
+	local spellOff = spell.source == "measured" and spell.levelExact ~= true
+	local critOff = candSide.dCrit ~= 0 and not critSlopeExact(totals)
+	if spellOff and critOff and spell.measuredLevel == A.MEASURED.level then
+		lowWhy[#lowWhy + 1] = "spell and crit per Intellect measured at level " .. tostring(A.MEASURED.level)
 			.. ", used at level " .. tostring(totals.level)
+	else
+		if spell.source ~= "measured" then
+			lowWhy[#lowWhy + 1] = "spell coefficient and base heal from the era rule, not a hover"
+		elseif spellOff then
+			lowWhy[#lowWhy + 1] = "measured at level " .. tostring(spell.measuredLevel)
+				.. ", used at level " .. tostring(totals.level)
+		end
+		if critOff then
+			lowWhy[#lowWhy + 1] = "crit per Intellect measured at level " .. tostring(A.MEASURED.level)
+				.. ", used at level " .. tostring(totals.level)
+		end
 	end
 	if not num(totals.critMult) then lowWhy[#lowWhy + 1] = "crit multiplier unmeasured" end
 	if (candSide.dSpirit or 0) ~= 0 and not num(totals.spiritSlopeCasting) then
 		lowWhy[#lowWhy + 1] = "Spirit slope from the level-tagged record"
+	end
+	-- Audit A11: legs the band could not compute are named, so a partial spread says so.
+	local skipped = verdict.bandSkipped or {}
+	if #skipped > 0 then
+		local verb = (#skipped == 1) and "is" or "are"
+		lowWhy[#lowWhy + 1] = #skipped .. " of the band's checks could not be computed and " .. verb
+			.. " left out (" .. table.concat(skipped, ", ") .. ")"
 	end
 	local confidence = (#lowWhy == 0) and "measured" or "low"
 
@@ -818,6 +876,7 @@ function A.judge(candStats, eqStats, spec, totals)
 		marginPercent = verdict.margin * 100,
 		bandPercent = verdict.band * 100,
 		bandSource = verdict.bandSource,
+		bandSkipped = skipped,
 		binding = verdict.binding,
 		casts = verdict.casts,
 		cTime = verdict.cTime,

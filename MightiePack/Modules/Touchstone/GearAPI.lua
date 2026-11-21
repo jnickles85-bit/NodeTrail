@@ -38,10 +38,27 @@ if TouchstoneSkip then return end
 -- copy carries `verdict`, `reason`, `slot`, `role`, `slotWord` and the epoch it
 -- was judged in, and where the engine could not tell (an UNKNOWN row, or a link
 -- we have never judged) the answer is nil — never 0, never a guessed score.
+--
+-- VERSIONS. The surface is additive: a field, once published, keeps its name,
+-- type and meaning in every later version.
+--   1  the five entry points above; GetGain's copy carries verdict, reason,
+--      slot, slotWord, role, itemID and epoch.
+--   2  (audit C4) GetGain's copy ALSO carries:
+--        word      the player word the tooltip and both mark hovers render for
+--                  this row ("Upgrade", "Not an upgrade", "Trade-off",
+--                  "Sidegrade"), from the one renderer (tooltipUI.wordFor). It
+--                  can differ from `verdict`: a TRADE_OFF the arbitration model
+--                  judged inside its band renders "Sidegrade". nil if the
+--                  renderer is not loaded.
+--        arbState  the arbitration model's own state for the row ("UPGRADE",
+--                  "NOT_UPGRADE" or "SIDEGRADE"), or nil when the row was not
+--                  arbitrated. It is the model's answer, not a second verdict.
+--      Every version-1 field, and every entry point's behaviour, is unchanged: a
+--      consumer that reads only `verdict` sees exactly what it saw before.
 
 local GearAPI = {}
 GearAPI.name = "TouchstoneGearAPI"
-GearAPI.VERSION = 1
+GearAPI.VERSION = 2
 
 TouchstoneGearAPI = GearAPI
 -- The card's own name, published for OTHER ADDONS: a bag addon, TSM or
@@ -140,6 +157,18 @@ function GearAPI.GetGain(link)
 		-- could not tell"; a row with no verdict at all is the same answer.
 		if type(verdict) ~= "string" then return nil end
 		if verdict == "UNKNOWN" then return nil end
+		-- v2 (audit C4): the rendered word, read from the one renderer the bag
+		-- hover and the item tooltip use, and the arbitration state. Both are
+		-- read defensively: a missing renderer or a renderer that raises leaves
+		-- `word` nil and never takes the v1 answer down with it.
+		local word = nil
+		local ui = a.tooltipUI
+		if type(ui) == "table" and type(ui.wordFor) == "function" then
+			local okWord, w = pcall(ui.wordFor, row)
+			if okWord and type(w) == "string" then word = w end
+		end
+		local arb = row.arbitration
+		local arbState = (type(arb) == "table" and type(arb.state) == "string") and arb.state or nil
 		return {
 			verdict = verdict,
 			reason = row.reason,
@@ -152,6 +181,9 @@ function GearAPI.GetGain(link)
 			-- answers to two different characters, so a caller caching our
 			-- answer can tell when it is stale.
 			epoch = row.__epoch,
+			-- v2 fields (additive).
+			word = word,
+			arbState = arbState,
 		}
 	end)
 end

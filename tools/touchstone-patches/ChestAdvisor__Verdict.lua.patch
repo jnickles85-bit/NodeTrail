@@ -29,7 +29,7 @@
 # vendored copy to the pin and never asks what the overlay did with it.
 # tests/touchstone_decline_clause_spec.lua asks, on the shipped bytes.
 #
-# base: StatForge 1992240be3990a4480d25efb3ca3f753171dd88b
+# base: StatForge bb03d13bdaac686e11b61e7262fcc2acdabc0e43
 # applies to: ChestAdvisor/Verdict.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
 # blob hash, so a patch that stops applying fails BY NAME in CI.
@@ -2172,29 +2172,7 @@
  	end
  
 -	-- (card t_0bf5c207, Touchstone Step 1) THE ORDERED VERDICT.
-+	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
-+	-- every word this pair's own pack prices (proof). One list, built by one
-+	-- function, read by the proof AND by the two loops that word its answer
-+	-- below, so the term that decided a pair is always the term the reason
-+	-- names. `specWeights` is gate 5b's resolution: the same table both sides
-+	-- of this comparison were already priced against.
-+	local terms = Verdict.proofTerms(order, specWeights)
-+-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
-+-- the profile's weighted total, in the threshold order the card spells out. The
-+-- number (and the profile's own name) travel back to the caller as the third
-+-- return value so a rendered line can quote them.
-+--
-+-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
-+-- which is test instrumentation (it exists so a fixture can be run through both
-+-- comparators in one VM and diffed). It is read here, so the switch really does
-+-- switch: with it set, the weighted path is skipped and the old block runs.
-+if not Verdict.LEGACY_DOMINANCE_DECIDES then
-+	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
-+	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
-+	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
-+	-- pair is the only thing this engine ever offers the model, and this is the
-+	-- only place the shipped path hands one back.
- 	--
+-	--
 -	-- The cascade itself lives in ONE place — Verdict.rankedVerdict above — and
 -	-- takes the ORDER AS AN INPUT (`order`, this spec's resolved list). Nothing
 -	-- in it reads Verdict.ORDERS, so Step 2 can hand it a leveling or endgame
@@ -2291,6 +2269,29 @@
 -	-- predate the seam with no revert, which is why the gate is kept.
 -	local allowedV, allowedR = allow(verdict, reason)
 -	if state == "trade_off" and allowedV == verdict and type(totals) == "table" then
++	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
++	-- every word this pair's own pack prices (proof). One list, built by one
++	-- function, read by the proof AND by the two loops that word its answer
++	-- below, so the term that decided a pair is always the term the reason
++	-- names. `specWeights` is gate 5b's resolution: the same table both sides
++	-- of this comparison were already priced against.
++	local terms = Verdict.proofTerms(order, specWeights)
++-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
++-- the profile's weighted total, in the threshold order the card spells out. The
++-- number (and the profile's own name) travel back to the caller as the third
++-- return value so a rendered line can quote them.
++--
++-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
++-- which is test instrumentation (it exists so a fixture can be run through both
++-- comparators in one VM and diffed). It is read here, so the switch really does
++-- switch: with it set, the weighted path is skipped and the old block runs.
++if not Verdict.LEGACY_DOMINANCE_DECIDES then
++	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
++	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
++	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
++	-- pair is the only thing this engine ever offers the model, and this is the
++	-- only place the shipped path hands one back.
++	--
 +	-- WHY IT WAS MISSING, named so the next re-cut can look for it: the region
 +	-- was replaced WHOLE by the weighted layer (card t_3a744b4a), and the
 +	-- replacement did not carry the call across with it. The old side of that
@@ -2344,10 +2345,9 @@
 +				d = (type(d) == "table") and d or {}
 +				d.arbitration = aDetail
 +				return v, r, d
- 			end
- 		end
- 	end
--	return allowedV, allowedR
++			end
++		end
++	end
 +	if v ~= nil then return v, r, d end
 +end
 +
@@ -2425,11 +2425,12 @@
 +			if c > e then
 +				return allow("UPGRADE", "upgrade: more " .. word .. " (" .. c .. " vs "
 +					.. e .. ") on an otherwise equal item")
-+			end
+ 			end
 +			return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
 +				.. e .. ") on an otherwise equal item"
-+		end
-+	end
+ 		end
+ 	end
+-	return allowedV, allowedR
 +	return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 +	end
  end
