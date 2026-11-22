@@ -233,6 +233,13 @@ local function buildRow(parent, index)
   local gutter = CreateFrame("Frame", nil, row)
   gutter:SetWidth(GUTTER)
   gutter:SetPoint("TOPLEFT", row, "TOPLEFT", ROW_INSET, -PAD_TOP)
+  -- The gutter needs a HEIGHT, not just a width: the client paints none of a
+  -- frame's regions while its rect has no area, so a TOPLEFT + SetWidth gutter
+  -- (88 x 0) drew neither the mark nor the word on 7439f02. The second anchor
+  -- spans it down the row's inner box, which rowHeight() keeps at least as tall
+  -- as the mark plus the word, so it grows with the row and never needs a
+  -- height of its own (tests/touchstone_ledger_gutter_drawn_spec.lua).
+  gutter:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", ROW_INSET, PAD_BOTTOM + RULE_H)
   row.gutter = gutter
 
   local mark = gutter:CreateTexture(nil, "OVERLAY")

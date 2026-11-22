@@ -7,6 +7,10 @@
 # The Log tab's word, asked of the advisor's arbitration-aware
 # `entryWord` (card t_baea7949), so a stored entry is named the way the
 # tooltip and the window name it.
+#
+# The verdict gutter is anchored top AND bottom to the row (7439f02 drew it
+# 88 x 0, and the client paints no region of a frame with no area: the log's
+# verdict word was missing in game). Pack-only: upstream draws it on the row.
 # base: StatForge bb03d13bdaac686e11b61e7262fcc2acdabc0e43
 # applies to: LogTab.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
@@ -137,7 +141,7 @@
          reason  = tostring(e.reason),
        }
      end
-@@ -144,82 +204,177 @@
+@@ -144,82 +204,184 @@
  end
  
  function SF.LogTabState()
@@ -181,6 +185,13 @@
 +  local gutter = CreateFrame("Frame", nil, row)
 +  gutter:SetWidth(GUTTER)
 +  gutter:SetPoint("TOPLEFT", row, "TOPLEFT", ROW_INSET, -PAD_TOP)
++  -- The gutter needs a HEIGHT, not just a width: the client paints none of a
++  -- frame's regions while its rect has no area, so a TOPLEFT + SetWidth gutter
++  -- (88 x 0) drew neither the mark nor the word on 7439f02. The second anchor
++  -- spans it down the row's inner box, which rowHeight() keeps at least as tall
++  -- as the mark plus the word, so it grows with the row and never needs a
++  -- height of its own (tests/touchstone_ledger_gutter_drawn_spec.lua).
++  gutter:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", ROW_INSET, PAD_BOTTOM + RULE_H)
 +  row.gutter = gutter
 +
 +  local mark = gutter:CreateTexture(nil, "OVERLAY")
@@ -354,7 +365,7 @@
      state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
      if state.layout then state.layout() end
    end
-@@ -247,28 +402,52 @@
+@@ -247,28 +409,52 @@
      end
    end
  
@@ -419,7 +430,7 @@
    end
    state.layout()
  end
-@@ -279,19 +458,22 @@
+@@ -279,19 +465,22 @@
    repopulate(host)
  
    local total = #state.rows

@@ -10,6 +10,9 @@
 # font string), shown only over drawn rows. #130's trade-off colour arrives via
 # the ledger tokens, which are now the One Ledger pair (MightiePack/Theme.lua).
 #
+# The verdict gutter is anchored top AND bottom to the row (7439f02 drew it
+# 88 x 0, and the client paints no region of a frame with no area: the mark and
+# the word were missing in game). Pack-only: upstream draws both on the row.
 # base: StatForge bb03d13bdaac686e11b61e7262fcc2acdabc0e43
 # applies to: UpgradesTab.lua at that commit. The sync applies this patch to the pin's
 # blob and hashes the result; --verify-shipped reverses it and checks the pin's
@@ -247,7 +250,7 @@
    return out
  end
  
-@@ -259,44 +303,93 @@
+@@ -259,44 +303,100 @@
  
  -- ---------------------------------------------------------------------------
  -- One-time widget build. Everything created here is created exactly once.
@@ -288,6 +291,13 @@
 +  local gutter = CreateFrame("Frame", nil, row)
 +  gutter:SetWidth(GUTTER)
 +  gutter:SetPoint("TOPLEFT", row, "TOPLEFT", ROW_INSET, -PAD_TOP)
++  -- The gutter needs a HEIGHT, not just a width: the client paints none of a
++  -- frame's regions while its rect has no area, so a TOPLEFT + SetWidth gutter
++  -- (88 x 0) drew neither the mark nor the word on 7439f02. The second anchor
++  -- spans it down the row's inner box, which rowHeight() keeps at least as tall
++  -- as the mark plus the word, so it grows with the row and never needs a
++  -- height of its own (tests/touchstone_ledger_gutter_drawn_spec.lua).
++  gutter:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", ROW_INSET, PAD_BOTTOM + RULE_H)
 +  row.gutter = gutter
  
    -- The mark. The green arrow is the SAME marker.tga the bag arrow uses; the
@@ -362,7 +372,7 @@
  
    -- Hover: the client's own tooltip, on the item's own link. The advisor's
    -- existing post-call adds the Touchstone verdict line to it on the live
-@@ -317,56 +410,102 @@
+@@ -317,56 +417,102 @@
    return row
  end
  
@@ -487,7 +497,7 @@
      state.offset = math.max(0, math.min(maxOffset, state.offset + delta))
      if state.layout then state.layout() end
    end
-@@ -405,42 +544,78 @@
+@@ -405,42 +551,78 @@
      end
    end
  
@@ -578,7 +588,7 @@
    end
    state.layout()
  end
-@@ -455,20 +630,38 @@
+@@ -455,20 +637,38 @@
    host.toggle:SetLabel(state.showAll and "Upgrades only" or "Show all")
  
    local total = #state.rows
