@@ -36,6 +36,31 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   option, font or window size changed. `tests/touchstone_settings_clip_spec.lua` checks every
   Settings region against the panel's bottom and fails on the old shape. The change is in
   `tools/touchstone-patches/OptionsTab.lua.patch`, and `--verify-shipped` passes.
+- **A healer's weapon trade-off is now judged by the healer model** (advisor ruling (e)+(a)). Holy
+  paladins (and other healers) used to see Trade-off on a weapon that clearly heals better, because
+  the weapon path sorted the stats by priority and never asked the healer model the armour path
+  already uses: Polished ZweiHander of Healing (+34 Healing, +9 Int) against an enchanted, proc-ing
+  Wolfsbane (+10 Int) read amber on the 1 Intellect alone. The weapon path now asks the model on
+  exactly the pairs the armour path does: the stat-priority check first, the model only on its
+  Trade-offs, only when the character's totals were read, and only when the evaluation is healing:
+  a healer spec with the spell role, in Dungeon or Raid, or in Leveling once `/up role spell` is
+  recorded. Leveling with Role clear keeps the old Trade-off and its reason gains one line, "Set
+  Role to Spell (/up role spell) to judge this as a healer"; a recorded Melee role and every
+  non-healer spec (Protection included) keep the old verdict byte for byte. Weapon DPS, Spell
+  Damage (damage only), the proc and the enchant are left out of that healing evaluation and the
+  line says so: "not counted for healing; you'd lose Wolfsbane's on-hit effect and its Weapon
+  Damage +5 enchant". Spell Power heals, so it is never called not counted: a pair that moves it is
+  not sent to the model and stays Trade-off with the cause printed. Likewise an enchant on either
+  weapon that may change healing (healing, spell power, mana, Intellect or Spirit, or enchant text
+  Touchstone cannot place) keeps the pair out of the model, Trade-off with the sizes and the cause
+  ("the equipped weapon's enchant, Healing Power +30, may change healing, and enchants are never
+  priced"); a melee-only enchant such as Weapon Damage +5 is still left out and disclosed. The
+  Leveling hint appears only where Role Spell really would send the pair to the model. Nothing is
+  priced and no stat ratio is added. When the model declines, the word stays Trade-off and the reason prints the sizes
+  and the cause ("Trade-off: +34 Healing Power vs −1 Intellect. Healer model: …"). The talents
+  path now carries the Context switch too. No setting, saved key or UI change.
+  Changed in `tools/touchstone-patches/` (Verdict and ChestAdvisor patches);
+  `tests/touchstone_healer_weapon_spec.lua` pins it.
 - **The ledger's VERDICT column draws again** (Upgrades and Log). The green arrow, the amber
   trade-off square and the verdict word ("Upgrade", "Not an upgrade", …) sat in a gutter frame that
   had a width but no height, and the client paints nothing owned by a frame with no area, so the

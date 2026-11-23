@@ -133,7 +133,8 @@ do
   print(("A. seam passthrough :%s   Verdict.arbitrate( occurrences: %d")
     :format(tostring(pass[1] and pass[1].n), #arbitrate))
   check(#pass == 1, "THE SEAM PASSES THE DECLINE THROUGH in the shipped Verdict.lua")
-  check(#arbitrate == 2, "the seam is defined once and called once in the shipped bytes")
+  -- Definition + armour seam + healer weapon seam (fk/healer-weapon-verdict).
+  check(#arbitrate == 3, "the seam is defined once and called twice (armour, healer weapon) in the shipped bytes")
   check(verdictSrc:find("return nil, why, { declined = true, why = why, cause = cause }", 1, true) ~= nil,
     "the shipped arbitrate returns the refusal with its cause key")
 end

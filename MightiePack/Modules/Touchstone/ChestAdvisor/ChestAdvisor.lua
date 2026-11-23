@@ -1491,6 +1491,12 @@ local function buildSpec()
 			-- every pair for the wrong situation — a field lost at a seam, which
 			-- is the defect upstream's A4 fixed one layer down (cmpSpec).
 			context = contextWord(),
+			-- The player's recorded `/up role` word (Settings > Role), carried
+			-- beside the chosen spec it does not override: the healer weapon
+			-- seam (Verdict.healingContext) treats a recorded "melee" as a
+			-- melee-leaning setup and keeps weapon DPS and procs in play.
+			-- Read-only here; nothing new is stored.
+			recordedRole = playerRole(token),
 		}
 	end
 	-- Auto: when the player has not recorded `/up role`, match the
@@ -1515,6 +1521,13 @@ local function buildSpec()
 				weightsKey = talent.weightsKey,
 				profileSource = "talents",
 				profileLabel = talent.name,
+				-- (fk/healer-weapon-verdict, Review round 1) the situation this
+				-- spec is for. The chosen path and the fallback below already
+				-- carry it; without it the model read every talents-path pair
+				-- as Leveling whatever the Context switch said.
+				context = contextWord(),
+				-- No role is recorded on this path (that is how it was reached).
+				recordedRole = nil,
 			}
 		end
 	end
@@ -1556,7 +1569,9 @@ local function buildSpec()
 	         name = (si and si.name) or nil,
 	         classDisplay = classDisplayName(),
 	         profileSource = "talents",
-	         context = contextWord() }
+	         context = contextWord(),
+	         -- the recorded `/up role` word, read only (healer weapon seam)
+	         recordedRole = playerRole(token) }
 end
 
 ChestAdvisor.buildSpec = buildSpec
