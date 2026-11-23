@@ -1491,6 +1491,12 @@ local function buildSpec()
 			-- every pair for the wrong situation — a field lost at a seam, which
 			-- is the defect upstream's A4 fixed one layer down (cmpSpec).
 			context = contextWord(),
+			-- The player's recorded `/up role` word (Settings > Role), carried
+			-- beside the chosen spec it does not override: the healer weapon
+			-- seam (Verdict.healingContext) treats a recorded "melee" as a
+			-- melee-leaning setup and keeps weapon DPS and procs in play.
+			-- Read-only here; nothing new is stored.
+			recordedRole = playerRole(token),
 		}
 	end
 	-- Auto: when the player has not recorded `/up role`, match the

@@ -8541,6 +8541,151 @@ end
 -- literal cannot silently drop it from the set.
 local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 
+-- ---- THE HEALER WEAPON SEAM (NodeTrail fk/healer-weapon-verdict) -----------
+--
+-- WHY. The order-only weapon path below returned straight out of
+-- Verdict.orderVerdict, so a healer's weapon trade-off never reached the healer
+-- model the armour path already asks (the TRADE_OFF seam in Verdict.evaluate).
+-- The owner's live pair, Polished ZweiHander of Healing (+34 Healing, +9 Int)
+-- against an enchanted proc Wolfsbane (+10 Int, +9 Sta), read amber on
+-- Conservative Pareto's -1 Intellect alone. Advisor ruling, Mightie's go
+-- 2026-11-22: (e) the model judges healer weapon trade-offs under the armour
+-- rule (strict layer first, model only on the Trade-off bucket), and (a) an
+-- extra that touches no ranked stat does not block the word, ONLY in a healing
+-- evaluation, and is always disclosed as not counted, never as worthless.
+--
+-- The healing evaluation: the client role is HEALER, the folded order word is
+-- "spell", and the player has not recorded `/up role melee`. A Melee role (or a
+-- melee-leaning setup while leveling, which is what a recorded melee role is)
+-- keeps the pre-seam behaviour byte for byte. Nothing here prices an enchant or
+-- a proc, and no ratio between stats is introduced: the model either decides
+-- from the character's own totals or declines with its own cause.
+function Verdict.healingContext(spec)
+	if type(spec) ~= "table" then return false end
+	if spec.clientRole ~= "HEALER" then return false end
+	if spec.role ~= "spell" then return false end
+	if spec.recordedRole == "melee" then return false end
+	return true
+end
+
+-- The pair as a healing evaluation sees it: every word a ranked tier of the
+-- profile names, plus the model's survival words (data, never deciding). The
+-- rest is EXCLUDED from this evaluation and returned, sorted, so the answer can
+-- name it. Returns candView, eqView, excluded.
+function Verdict.healerView(cand, eq, profile)
+	local keep = {}
+	if type(profile) == "table" and type(profile.tiers) == "table" then
+		for _, tier in ipairs(profile.tiers) do
+			for _, w in ipairs(type(tier.stats) == "table" and tier.stats or {}) do keep[w] = true end
+		end
+	end
+	local A = rawget(_G, "Arbitration")
+	if type(A) == "table" and type(A.SURVIVAL_WORDS) == "table" then
+		for _, w in ipairs(A.SURVIVAL_WORDS) do keep[w] = true end
+	end
+	local cv, ev, excluded, seen = {}, {}, {}, {}
+	for _, pair in ipairs({ { cand, cv }, { eq, ev } }) do
+		local src, dst = pair[1], pair[2]
+		if type(src) == "table" then
+			for w, x in pairs(src) do
+				if keep[w] then
+					dst[w] = x
+				elseif not seen[w] then
+					seen[w] = true
+					excluded[#excluded + 1] = w
+				end
+			end
+		end
+	end
+	table.sort(excluded)
+	return cv, ev, excluded
+end
+
+-- "Trade-off: +34 Healing Power vs −1 Intellect": the ranked movement with its
+-- SIZES, in tier order, read off the two stat tables (no weights).
+function Verdict.sizedTradeOffText(cand, eq, profile)
+	if type(profile) ~= "table" or type(profile.tiers) ~= "table" then return nil end
+	local gains, losses = {}, {}
+	local function amount(n)
+		if n == math.floor(n) then return string.format("%d", n) end
+		return (string.format("%.2f", n):gsub("0+$", ""):gsub("%.$", ""))
+	end
+	for _, tier in ipairs(profile.tiers) do
+		local stats = type(tier.stats) == "table" and tier.stats or {}
+		for _, w in ipairs(stats) do
+			local d = (tonumber(cand and cand[w]) or 0) - (tonumber(eq and eq[w]) or 0)
+			if Verdict.ranksAsDifferent(d) then
+				local label = (#stats == 1 and type(tier.name) == "string") and tier.name
+					or tostring(Verdict.orderStatLabel(w))
+				if d > 0 then
+					gains[#gains + 1] = "+" .. amount(d) .. " " .. label
+				else
+					losses[#losses + 1] = TRADE_OFF_MINUS .. amount(-d) .. " " .. label
+				end
+			end
+		end
+	end
+	if #gains == 0 or #losses == 0 then return nil end
+	return "Trade-off: " .. table.concat(gains, ", ") .. " vs " .. table.concat(losses, ", ")
+end
+
+-- A tooltip's first line as an item NAME, or nil when it does not look like one.
+local function weaponNameOf(lines)
+	if type(lines) ~= "table" or type(lines[1]) ~= "string" then return nil end
+	local s = lines[1]:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	s = s:gsub("^%s+", ""):gsub("%s+$", "")
+	if s == "" or s:find("%d") or s:find("[:()]") then return nil end
+	return s
+end
+
+-- The disclosure of a pair the HEALER MODEL judged: what this evaluation did not
+-- count, and what the swap would give up. It keeps the engine's clause lead, so
+-- ChestAdvisor's disclosureClause splits it exactly like the unpriced clause.
+local function healerDisclosure(candLines, wornLines, excluded)
+	local notCounted, hasDps = {}, false
+	for _, w in ipairs(excluded or {}) do
+		if w == "WeaponDps" then hasDps = true end
+	end
+	for _, w in ipairs(excluded or {}) do
+		if not (w == "WeaponSpeed" and hasDps) then
+			notCounted[#notCounted + 1] = tostring(Verdict.orderStatLabel(w))
+		end
+	end
+	local onHit, enchant = { candidate = false, worn = false }, {}
+	for _, side in ipairs({ { candLines, "candidate" }, { wornLines, "worn" } }) do
+		if type(side[1]) == "table" then
+			for _, line in ipairs(side[1]) do
+				if weaponOnHitLine(line) then onHit[side[2]] = true end
+				if weaponEnchantLine(line) then
+					local payload = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+						:match("^%s*[Ee]nchanted%s*:%s*(.-)%s*$")
+					payload = payload and payload:gsub("[()]", "") or ""
+					enchant[side[2]] = payload
+				end
+			end
+		end
+	end
+	if onHit.candidate or onHit.worn then notCounted[#notCounted + 1] = "an on-hit effect" end
+	if enchant.candidate or enchant.worn then notCounted[#notCounted + 1] = "an enchant" end
+	if #notCounted == 0 then return "" end
+	local list = notCounted[1]
+	if #notCounted > 1 then
+		list = table.concat(notCounted, ", ", 1, #notCounted - 1) .. " and " .. notCounted[#notCounted]
+	end
+	local out = " (judged, with " .. list .. " not counted for healing"
+	local lose = {}
+	if onHit.worn then lose[#lose + 1] = "on-hit effect" end
+	if enchant.worn then
+		lose[#lose + 1] = (enchant.worn ~= "") and ("its " .. enchant.worn .. " enchant") or "its enchant"
+	end
+	if #lose > 0 then
+		local name = weaponNameOf(wornLines)
+		out = out .. "; you'd lose " .. (name and (name .. "'s ") or "the equipped weapon's ")
+			.. table.concat(lose, " and ")
+	end
+	return out .. ")"
+end
+
 function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide, ctx, totals)
 	local candNumbers = weaponNumbers(candLines)
 	local wornNumbers = weaponNumbers(wornLines)
@@ -8804,6 +8949,35 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 			if wornNumbers.speed then tierEq.WeaponSpeed = wornNumbers.speed end
 		end
 		local tv, tr, td = Verdict.orderVerdict(tierCand, tierEq, spec, nil, orderProfile)
+		-- THE HEALER WEAPON SEAM (see Verdict.healingContext). The armour rule:
+		-- the strict layer has answered, and ONLY its Trade-off bucket goes to
+		-- the model, only with totals, only while the flag is on, and only in a
+		-- healing evaluation. The model sees the healing view of the pair; what
+		-- that view leaves out is disclosed on the answer, never dropped.
+		if tv == TRADE_OFF and type(totals) == "table" and Verdict.healingContext(spec) then
+			local Arb = rawget(_G, "Arbitration")
+			if type(Arb) == "table" and Arb.ENABLED == true then
+				local hc, he, excluded = Verdict.healerView(tierCand, tierEq, orderProfile)
+				local hv, hr, hd = Verdict.arbitrate(hc, he, spec, totals)
+				td = (type(td) == "table") and td or {}
+				if hv ~= nil then
+					td.arbitration = hd
+					return hv, tostring(hr or "") .. healerDisclosure(candLines, wornLines, excluded), td
+				end
+				-- A DECLINE keeps the word and says why: the ranked movement
+				-- with its sizes, and the model's own cause sentence.
+				if type(hd) == "table" and hd.declined == true then
+					td.arbitration = hd
+					local sized = Verdict.sizedTradeOffText(hc, he, orderProfile)
+					local plain = type(td.tradeOffText) == "string" and td.tradeOffText or nil
+					if sized ~= nil and plain ~= nil and type(tr) == "string" then
+						local i, j = tr:find(plain, 1, true)
+						if i ~= nil then tr = tr:sub(1, i - 1) .. sized .. tr:sub(j + 1) end
+					end
+					tr = tostring(tr or "") .. ". Healer model: " .. tostring(hd.why)
+				end
+			end
+		end
 		local av, ar = answer(tv, tr)
 		return av, ar, td
 	end

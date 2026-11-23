@@ -81,8 +81,15 @@ do
     end
     print(("A. shipped Verdict.lua: %d occurrence(s) — definition :%s, call :%s")
       :format(count, tostring(defLine), tostring(callLine)))
-    check(count == 2, "the shipped Verdict.lua calls the seam exactly once and defines it once (got "
-      .. count .. " occurrence(s))")
+    -- Three since fk/healer-weapon-verdict: the definition, the armour
+    -- trade-off seam in Verdict.evaluate, and the healer WEAPON seam in
+    -- compareWeapon's order-only branch. Both calls are asked for by name.
+    check(count == 3, "the shipped Verdict.lua defines the seam once and calls it twice — armour and "
+      .. "healer weapon (got " .. count .. " occurrence(s))")
+    check(verdictSrc:find("local av, aReason, aDetail = Verdict.arbitrate(", 1, true) ~= nil,
+      "the ARMOUR seam call is in the shipped file")
+    check(verdictSrc:find("local hv, hr, hd = Verdict.arbitrate(", 1, true) ~= nil,
+      "the healer WEAPON seam call is in the shipped file")
     check(defLine ~= nil, "the definition is in the shipped file")
     check(callLine ~= nil, "THE CALL IS IN THE SHIPPED FILE (a definition is not a call) — "
       .. "re-cut ChestAdvisor__Verdict.lua.patch: its replacement region dropped it once")
