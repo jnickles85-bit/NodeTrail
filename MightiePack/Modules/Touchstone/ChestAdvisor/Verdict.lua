@@ -8658,6 +8658,53 @@ function Verdict.sizedTradeOffText(cand, eq, profile)
 	return "Trade-off: " .. table.concat(gains, ", ") .. " vs " .. table.concat(losses, ", ")
 end
 
+-- (Review round 2) AN ENCHANT THAT MAY CHANGE HEALING KEEPS THE PAIR OUT OF THE
+-- MODEL. The enchant is still never priced (the Nov 15 ruling): this only reads
+-- whether its payload could touch healing, and if it could, the model is not
+-- asked — it would judge a pair while blind to part of its healing. The read is
+-- conservative: a payload that names healing, spells, mana, Intellect or Spirit
+-- is healing-relevant; so is anything this list cannot place. Only a payload it
+-- positively recognises as melee-only (weapon damage, a melee stat, a slaying
+-- or elemental-damage enchant) keeps the earlier behaviour, excluded and
+-- disclosed.
+local ENCHANT_HEALS = { "heal", "spell", "mana", "intellect", "spirit", "mp5", "per 5" }
+local ENCHANT_MELEE_ONLY = { "damage", "strength", "agility", "stamina", "attack power",
+	"slay", "fiery", "icy" }
+
+local function enchantPayload(line)
+	local payload = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+		:match("^%s*[Ee][Nn][Cc][Hh][Aa][Nn][Tt][Ee][Dd]%s*:%s*(.-)%s*$")
+	return ((payload or ""):gsub("[()]", ""))
+end
+
+-- true when the payload may change healing (or cannot be placed).
+function Verdict.enchantMayHeal(payload)
+	local low = tostring(payload or ""):lower()
+	for _, w in ipairs(ENCHANT_HEALS) do
+		if low:find(w, 1, true) then return true end
+	end
+	for _, w in ipairs(ENCHANT_MELEE_ONLY) do
+		if low:find(w, 1, true) then return false end
+	end
+	return true
+end
+
+-- The first enchant on either side that may change healing: side ("worn" or
+-- "candidate") and its payload, or nil when every enchant is melee-only.
+function Verdict.healingEnchant(candLines, wornLines)
+	for _, side in ipairs({ { wornLines, "worn" }, { candLines, "candidate" } }) do
+		if type(side[1]) == "table" then
+			for _, line in ipairs(side[1]) do
+				if weaponEnchantLine(line) then
+					local payload = enchantPayload(line)
+					if Verdict.enchantMayHeal(payload) then return side[2], payload end
+				end
+			end
+		end
+	end
+	return nil
+end
+
 -- A tooltip's first line as an item NAME, or nil when it does not look like one.
 local function weaponNameOf(lines)
 	if type(lines) ~= "table" or type(lines[1]) ~= "string" then return nil end
@@ -8686,10 +8733,7 @@ local function healerDisclosure(candLines, wornLines, excluded)
 			for _, line in ipairs(side[1]) do
 				if weaponOnHitLine(line) then onHit[side[2]] = true end
 				if weaponEnchantLine(line) then
-					local payload = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-						:match("^%s*[Ee]nchanted%s*:%s*(.-)%s*$")
-					payload = payload and payload:gsub("[()]", "") or ""
-					enchant[side[2]] = payload
+					enchant[side[2]] = enchantPayload(line)
 				end
 			end
 		end
@@ -8702,15 +8746,18 @@ local function healerDisclosure(candLines, wornLines, excluded)
 		list = table.concat(notCounted, ", ", 1, #notCounted - 1) .. " and " .. notCounted[#notCounted]
 	end
 	local out = " (judged, with " .. list .. " not counted for healing"
+	-- What the swap gives up, as one possessive: the first thing takes the
+	-- weapon's name, any second one takes "its" ("Wolfsbane's on-hit effect and
+	-- its Weapon Damage +5 enchant"; "Worn Mace's Weapon Damage +5 enchant").
 	local lose = {}
 	if onHit.worn then lose[#lose + 1] = "on-hit effect" end
 	if enchant.worn then
-		lose[#lose + 1] = (enchant.worn ~= "") and ("its " .. enchant.worn .. " enchant") or "its enchant"
+		lose[#lose + 1] = (enchant.worn ~= "") and (enchant.worn .. " enchant") or "enchant"
 	end
 	if #lose > 0 then
 		local name = weaponNameOf(wornLines)
-		out = out .. "; you'd lose " .. (name and (name .. "'s ") or "the equipped weapon's ")
-			.. table.concat(lose, " and ")
+		out = out .. "; you'd lose " .. (name and (name .. "'s ") or "the equipped weapon's ") .. lose[1]
+		if lose[2] then out = out .. " and its " .. lose[2] end
 	end
 	return out .. ")"
 end
@@ -8998,15 +9045,30 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 					end
 					tr = tostring(tr or "") .. ". Healer model: " .. tostring(why)
 				end
+				-- The model is asked only about a pair it can see whole. Two
+				-- things it cannot see keep the pair out (and are named): a Spell
+				-- Power difference (it heals; the model does not price it) and an
+				-- enchant on either side that may change healing (never priced).
+				local spDelta = (tonumber(tierCand.SpellPower) or 0) - (tonumber(tierEq.SpellPower) or 0)
+				local blind
+				if Verdict.ranksAsDifferent(spDelta) then
+					blind = "not asked — the pair moves Spell Power, which heals,"
+						.. " and the model does not price it yet"
+				else
+					local eSide, ePayload = Verdict.healingEnchant(candLines, wornLines)
+					if eSide ~= nil then
+						local whose = (eSide == "worn") and "the equipped weapon's" or "the hovered weapon's"
+						blind = "not asked — " .. whose .. " enchant"
+							.. ((ePayload ~= "") and (", " .. ePayload .. ",") or "")
+							.. " may change healing, and enchants are never priced"
+					end
+				end
 				if Verdict.healingContext(spec) then
 					local hc, he, excluded = Verdict.healerView(tierCand, tierEq, orderProfile)
-					local spDelta = (tonumber(tierCand.SpellPower) or 0) - (tonumber(tierEq.SpellPower) or 0)
-					if Verdict.ranksAsDifferent(spDelta) then
-						-- Spell Power heals and the model does not price it: NOT
-						-- asked, so a pair it moves can never turn green on a
+					if blind ~= nil then
+						-- NOT asked, so such a pair can never turn green on a
 						-- model that cannot see part of its healing.
-						keepWithCause(hc, he, "not asked — the pair moves Spell Power, which heals,"
-							.. " and the model does not price it yet")
+						keepWithCause(hc, he, blind)
 					else
 						local hv, hr, hd = Verdict.arbitrate(hc, he, spec, totals)
 						if hv ~= nil then
@@ -9018,7 +9080,9 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 							keepWithCause(hc, he, hd.why)
 						end
 					end
-				elseif Verdict.healerRoleHint(spec) then
+				elseif blind == nil and Verdict.healerRoleHint(spec) then
+					-- The hint promises a judgement, so it appears only where
+					-- `/up role spell` really would send the pair to the model.
 					tr = tostring(tr or "") .. ". " .. Verdict.HEALER_ROLE_HINT
 				end
 			end

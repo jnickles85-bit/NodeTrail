@@ -26,18 +26,25 @@
 --   S. SPELL POWER heals and the model does not price it: a pair that moves it is
 --      not sent and stays amber with a printed cause; an unmoved one still is, and
 --      no answer ever calls Spell Power "not counted for healing".
+--   N. ENCHANTS (Review round 2): an enchant on either side that may change
+--      healing (healing, spell power, mana, Intellect, Spirit, or text it cannot
+--      place) keeps the pair out of the model with the sizes and the cause; a
+--      melee-only enchant is still excluded and disclosed; never priced. The
+--      Leveling hint appears only where the model really would be asked.
 --   D. NOT HEALING: a recorded Melee role (nothing zeroed, pre-seam bytes),
 --      Retribution, Protection (TANK + "spell") and a HEALER spec whose order
 --      word is melee never reach the model.
---   T. THE TALENTS PATH carries the Context switch (Raid reads Raid).
+--   T. THE TALENTS PATH carries the Context switch (Raid reads Raid); THE
+--      FALLBACK PATH carries the recorded role (`/up role spell`, no gear-for).
 --   M. MODEL OFF: Arbitration.ENABLED = false gives the pre-seam bytes.
 --   E. No totals: the model is not asked and the bytes are the pre-seam ones.
---   F. SavedVariables (context, role and gearFor included) are snapshotted around
---      EVERY judgement and must come out unchanged.
+--   F. SavedVariables (context, role and gearFor included, and any table, even an
+--      empty one) are snapshotted around EVERY judgement and must come out unchanged.
 --   G. MUTATIONS: the unmutated file is run through the same command first and
 --      must report 0 failed; then each mutated copy of the shipped Verdict.lua
 --      must report "N check(s), K failed" with K > 0. Anything else fails loudly.
---      Skipped when TS_VERDICT_SRC is set, i.e. inside a leg.
+--      Legs mutate Verdict.lua or ChestAdvisor.lua; every leg (the baseline too)
+--      sets both TS_VERDICT_SRC and TS_ADVISOR_SRC. Skipped inside a leg.
 --
 -- The totals are the harness's, labelled as such: the level-34 paladin record the
 -- decline-clause spec already uses (pool 2060, Int 101, Holy Light rank 5).
@@ -146,7 +153,12 @@ local function snapshot(t, prefix, out)
   out = out or {}
   for k, x in pairs(t) do
     local key = (prefix or "") .. tostring(k)
-    if type(x) == "table" then snapshot(x, key .. ".", out) else out[key] = tostring(x) end
+    if type(x) == "table" then
+      out[key] = "table"  -- the table itself, so a new EMPTY table is a new key
+      snapshot(x, key .. ".", out)
+    else
+      out[key] = tostring(x)
+    end
   end
   return out
 end
@@ -168,6 +180,12 @@ local function judge(totals, cand, worn, spec)
     check(before[k] ~= nil, "F: judgement " .. judgements .. " added no key (" .. k .. ")")
   end
   return v, r, d, spec
+end
+do
+  -- The snapshot itself can see a new EMPTY table and a changed scalar.
+  local a, b = snapshot({ role = {} }), snapshot({ role = { PALADIN = {} } })
+  check(b["role.PALADIN"] == "table" and a["role.PALADIN"] == nil,
+    "F: the snapshot sees a newly created empty table")
 end
 local function setDB(gearFor, context, role)
   ChestAdvisorDB.gearFor, ChestAdvisorDB.context = gearFor, context
@@ -312,6 +330,87 @@ do
     "S: the disclosure never names Spell Power as not counted")
 end
 
+-- ── N. enchants that may change healing ─────────────────────────────────────
+local function sword(name, extra)
+  local t = { name, "Two-Hand  Sword", "69 - 105 Damage  Speed 3.40", "(25.6 damage per second)" }
+  for _, l in ipairs(extra) do t[#t + 1] = l end
+  return t
+end
+local HEAL20 = sword("Mender's Greatsword", { "+9 Intellect",
+  "Equip: Increases healing done by up to 20 and damage done by up to 7 for all magical spells and effects" })
+local function enchantCase(label, cand, worn, cause)
+  setDB("holy", "raid", nil)
+  local v, r, d = judge(TOTALS, cand, worn)
+  print(("N. %-22s %s  %s"):format(label, tostring(v), tostring(r)))
+  check(arbCalls == 0, "N: " .. label .. ": the model is not asked (asked " .. arbCalls .. ")")
+  check(v == "TRADE_OFF", "N: " .. label .. ": it stays Trade-off (got " .. tostring(v) .. ")")
+  check(type(r) == "string" and r:find("Trade-off: +20 Healing Power vs −1 Intellect. Healer model: "
+      .. cause, 1, true) ~= nil,
+    "N: " .. label .. ": the reason prints the sizes and the cause (got " .. tostring(r) .. ")")
+  check(type(r) == "string" and r:find("not counted for healing", 1, true) == nil,
+    "N: " .. label .. ": nothing is called not counted for healing")
+  check(not (type(d) == "table" and d.arbitration), "N: " .. label .. ": no model table")
+end
+enchantCase("worn Healing Power", HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Healing Power +30" }),
+  "not asked — the equipped weapon's enchant, Healing Power +30, may change healing, and enchants are never priced")
+enchantCase("worn Spell Power", HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Spell Power +30" }),
+  "not asked — the equipped weapon's enchant, Spell Power +30, may change healing, and enchants are never priced")
+do
+  local cand = {}
+  for i, l in ipairs(HEAL20) do cand[i] = l end
+  cand[#cand + 1] = "|cff00ff00Enchanted: Spell Damage and Healing +12|r"
+  enchantCase("hovered dmg+healing", cand, sword("Worn Mace", { "+10 Intellect" }),
+    "not asked — the hovered weapon's enchant, Spell Damage and Healing +12, may change healing,"
+      .. " and enchants are never priced")
+end
+enchantCase("worn unknown text", HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Crusader" }),
+  "not asked — the equipped weapon's enchant, Crusader, may change healing, and enchants are never priced")
+do
+  -- A melee-only enchant keeps the earlier behaviour: judged, excluded, disclosed,
+  -- and the possessive reads once ("Worn Mace's Weapon Damage +5 enchant").
+  setDB("holy", "raid", nil)
+  local v, r = judge(TOTALS, HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Weapon Damage +5" }))
+  print("N. melee-only enchant    " .. tostring(v) .. "  " .. tostring(r))
+  check(arbCalls == 1, "N: a melee-only enchant still lets the model judge (asked " .. arbCalls .. ")")
+  check(type(r) == "string" and r:sub(-#"; you'd lose Worn Mace's Weapon Damage +5 enchant)")
+      == "; you'd lose Worn Mace's Weapon Damage +5 enchant)" and r:find("'s its", 1, true) == nil,
+    "N: the swap's loss reads as one possessive (got " .. tostring(r) .. ")")
+  check(type(V.enchantMayHeal) == "function", "N: Verdict.enchantMayHeal is published")
+  local mayHeal = type(V.enchantMayHeal) == "function" and V.enchantMayHeal or function() return nil end
+  check(mayHeal("Weapon Damage +5") == false and mayHeal("+15 Strength") == false
+    and mayHeal("Healing Power +55") == true and mayHeal("+22 Intellect") == true
+    and mayHeal("Brilliant Mana Oil") == true and mayHeal("") == true,
+    "N: the enchant read is conservative: melee-only is out, anything that could heal is in")
+end
+do
+  -- The hint promises a judgement, so it is absent where Role Spell would still
+  -- not ask the model (a healing enchant, a Spell Power difference).
+  setDB("holy", "leveling", nil)
+  local _, r1 = judge(TOTALS, HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Healing Power +30" }))
+  check(arbCalls == 0 and type(r1) == "string" and r1:find("/up role spell", 1, true) == nil,
+    "N: Leveling, Role clear, healing enchant: no hint (got " .. tostring(r1) .. ")")
+  local _, r2 = judge(TOTALS, SP_CAND, SP_EQ)
+  check(arbCalls == 0 and type(r2) == "string" and r2:find("/up role spell", 1, true) == nil,
+    "N: Leveling, Role clear, Spell Power moves: no hint (got " .. tostring(r2) .. ")")
+end
+
+-- ── L2. the hint needs NO recorded role, and a spec with no context is Leveling
+do
+  setDB("holy", "leveling", "melee")
+  local v, r = judge(TOTALS)
+  print("L. leveling Role melee  " .. tostring(v) .. "  " .. tostring(r))
+  check(arbCalls == 0 and v == "TRADE_OFF" and r == PRE_SEAM,
+    "L: Leveling with a recorded Melee role: the pre-seam bytes, no hint (got " .. tostring(r) .. ")")
+  setDB("holy", "raid", nil)
+  local spec = CA.buildSpec()
+  local noCtx = {}
+  for k, x in pairs(spec) do noCtx[k] = x end
+  noCtx.context = nil
+  local v2, r2 = judge(TOTALS, nil, nil, noCtx)
+  check(arbCalls == 0 and v2 == "TRADE_OFF" and r2 == PRE_SEAM_HEAD .. HINT .. PRE_CLAUSE,
+    "L: a spec with no context reads as Leveling: not asked, the hint (got " .. tostring(r2) .. ")")
+end
+
 -- ── D. not a healing evaluation: nothing zeroed ─────────────────────────────
 do
   setDB("holy", "raid", "melee")
@@ -379,6 +478,17 @@ do
     and d.arbitration.context == "raid",
     "T: the model judges the talents-path pair for Raid (got "
       .. tostring(type(d) == "table" and type(d.arbitration) == "table" and d.arbitration.context) .. ")")
+  -- THE FALLBACK PATH: no gear-for and a recorded `/up role spell`, so the
+  -- talents path is skipped; the recorded role must still reach the seam.
+  setDB(nil, "leveling", "spell")
+  local fv, fr, fd, fspec = judge(TOTALS)
+  print("T. fallback: " .. tostring(fv) .. "  " .. tostring(fr))
+  check(fspec.weightsKey == nil and fspec.clientRole == "HEALER" and fspec.role == "spell",
+    "T: the fallback path was taken (HEALER, spell, no weights key)")
+  check(fspec.recordedRole == "spell", "T: the fallback-path spec carries the recorded role")
+  check(arbCalls == 1 and type(fd) == "table" and type(fd.arbitration) == "table"
+    and fd.arbitration.context == "leveling",
+    "T: Leveling with /up role spell on the fallback path is judged by the model (asked " .. arbCalls .. ")")
   C_SpecializationInfo = nil
 end
 
@@ -404,10 +514,10 @@ end
 -- ── G. mutations ────────────────────────────────────────────────────────────
 -- One runner for the baseline and every mutant, and one reading of its result:
 -- the LAST "N check(s), K failed" line. No such line is a failure, never a kill.
-local function runLeg(path)
+local function runLeg(vpath, apath)
   local lua = (arg and arg[-1]) or "lua5.1"
-  local cmd = ("cd %q && TS_VERDICT_SRC=%q %s tests/touchstone_healer_weapon_spec.lua 2>&1")
-    :format(root, path, lua)
+  local cmd = ("cd %q && TS_VERDICT_SRC=%q TS_ADVISOR_SRC=%q %s tests/touchstone_healer_weapon_spec.lua 2>&1")
+    :format(root, vpath, apath, lua)
   local p = io.popen(cmd)
   local out = p and p:read("*a") or ""
   if p then p:close() end
@@ -415,16 +525,17 @@ local function runLeg(path)
   for a, b in out:gmatch("(%d+) check%(s%), (%d+) failed") do n, k = tonumber(a), tonumber(b) end
   return n, k, out
 end
-if os.getenv("TS_VERDICT_SRC") == nil then
+if os.getenv("TS_VERDICT_SRC") == nil and os.getenv("TS_ADVISOR_SRC") == nil then
   local shipped = readFile(TOUCH .. "ChestAdvisor/Verdict.lua") or ""
+  local shippedCA = readFile(TOUCH .. "ChestAdvisor/ChestAdvisor.lua") or ""
   local function legFile(text)
     local path = os.tmpname()
     local f = io.open(path, "w"); f:write(text); f:close()
     return path
   end
-  local basePath = legFile(shipped)
-  local bn, bk, bout = runLeg(basePath)
-  os.remove(basePath)
+  local basePath, baseCA = legFile(shipped), legFile(shippedCA)
+  local bn, bk, bout = runLeg(basePath, baseCA)
+  os.remove(basePath); os.remove(baseCA)
   print(("G. baseline (unmutated, same command): %s check(s), %s failed"):format(tostring(bn), tostring(bk)))
   check(bn ~= nil and bn > 0 and bk == 0,
     "G: the unmutated file must run through the leg command and report 0 failed — the mutation"
@@ -439,18 +550,52 @@ if os.getenv("TS_VERDICT_SRC") == nil then
     { "the 'spell' order-word check dropped", " and spec.role == \"spell\"", "" },
     { "the model-on check dropped", "\t\t\tif type(Arb) == \"table\" and Arb.ENABLED == true then\n\t\t\t\ttd =",
       "\t\t\tif type(Arb) == \"table\" then\n\t\t\t\ttd =" },
-    { "the Spell Power guard dropped", "\t\t\t\t\tif Verdict.ranksAsDifferent(spDelta) then\n",
-      "\t\t\t\t\tif false then\n" },
+    { "the Spell Power guard dropped", "\t\t\t\tif Verdict.ranksAsDifferent(spDelta) then\n",
+      "\t\t\t\tif false then\n" },
+    { "the enchant guard dropped", "\t\t\t\t\tif eSide ~= nil then\n", "\t\t\t\t\tif false then\n" },
+    { "the enchant scan finds nothing",
+      "if Verdict.enchantMayHeal(payload) then return side[2], payload end", "" },
+    { "the healing-words check dropped",
+      "\t\tif low:find(w, 1, true) then return true end\n", "" },
+    { "unknown enchant text read as melee-only",
+      "\t\tif low:find(w, 1, true) then return false end\n\tend\n\treturn true\n",
+      "\t\tif low:find(w, 1, true) then return false end\n\tend\n\treturn false\n" },
+    { "the hovered side's enchant not read", "{ { wornLines, \"worn\" }, { candLines, \"candidate\" } }",
+      "{ { wornLines, \"worn\" } }" },
+    { "the hint not gated on the blind checks", "elseif blind == nil and Verdict.healerRoleHint(spec) then",
+      "elseif Verdict.healerRoleHint(spec) then" },
+    { "the hint ignores the recorded role", "return spec.recordedRole == nil and levelingContext(spec)",
+      "return levelingContext(spec)" },
+    { "a nil context not read as Leveling", "return c == nil or c == \"leveling\"",
+      "return c == \"leveling\"" },
+    { "the possessive reads twice", "lose[#lose + 1] = (enchant.worn ~= \"\") and (enchant.worn .. \" enchant\") or \"enchant\"",
+      "lose[#lose + 1] = (enchant.worn ~= \"\") and (\"its \" .. enchant.worn .. \" enchant\") or \"its enchant\"" },
     { "the Leveling/no-role gate dropped",
       "\tif spec.recordedRole ~= \"spell\" and levelingContext(spec) then return false end\n", "" },
   }
+  -- ChestAdvisor.lua mutants (the spec's own buildSpec paths).
+  local ADVISOR_MUTANTS = {
+    { "the fallback path's recordedRole removed",
+      "\t         context = contextWord(),\n\t         -- the recorded `/up role` word, read only (healer weapon seam)\n"
+        .. "\t         recordedRole = playerRole(token) }",
+      "\t         context = contextWord() }" },
+    { "the talents path's context removed",
+      "\t\t\t\tcontext = contextWord(),\n\t\t\t\t-- No role is recorded on this path", "\t\t\t\t-- No role is recorded on this path" },
+    { "the chosen path's recordedRole removed", "\t\t\trecordedRole = playerRole(token),\n", "" },
+  }
+  for _, m in ipairs(MUTANTS) do m.ca = false end
+  for _, m in ipairs(ADVISOR_MUTANTS) do m.ca = true; MUTANTS[#MUTANTS + 1] = m end
   for _, m in ipairs(MUTANTS) do
-    local s, e = shipped:find(m[2], 1, true)
+    local src = m.ca and shippedCA or shipped
+    local s, e = src:find(m[2], 1, true)
     check(s ~= nil, "G: mutation anchor present: " .. m[1])
+    check(s == nil or src:find(m[2], e + 1, true) == nil, "G: mutation anchor is unique: " .. m[1])
     if s ~= nil and bk == 0 then
-      local path = legFile(shipped:sub(1, s - 1) .. m[3] .. shipped:sub(e + 1))
-      local n, k, out = runLeg(path)
-      os.remove(path)
+      local mutated = src:sub(1, s - 1) .. m[3] .. src:sub(e + 1)
+      local vpath = legFile(m.ca and shipped or mutated)
+      local apath = legFile(m.ca and mutated or shippedCA)
+      local n, k, out = runLeg(vpath, apath)
+      os.remove(vpath); os.remove(apath)
       print(("G. mutant %-38s %s"):format(m[1],
         (n == nil) and "NO RESULT LINE" or (k > 0 and ("killed (" .. k .. "/" .. n .. ")") or "SURVIVED")))
       check(n ~= nil, "G: the mutant leg printed its result line: " .. m[1] .. ". Output:\n" .. out:sub(-400))

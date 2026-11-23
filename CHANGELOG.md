@@ -50,8 +50,13 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   Damage (damage only), the proc and the enchant are left out of that healing evaluation and the
   line says so: "not counted for healing; you'd lose Wolfsbane's on-hit effect and its Weapon
   Damage +5 enchant". Spell Power heals, so it is never called not counted: a pair that moves it is
-  not sent to the model and stays Trade-off with the cause printed. Nothing is priced and no stat
-  ratio is added. When the model declines, the word stays Trade-off and the reason prints the sizes
+  not sent to the model and stays Trade-off with the cause printed. Likewise an enchant on either
+  weapon that may change healing (healing, spell power, mana, Intellect or Spirit, or enchant text
+  Touchstone cannot place) keeps the pair out of the model, Trade-off with the sizes and the cause
+  ("the equipped weapon's enchant, Healing Power +30, may change healing, and enchants are never
+  priced"); a melee-only enchant such as Weapon Damage +5 is still left out and disclosed. The
+  Leveling hint appears only where Role Spell really would send the pair to the model. Nothing is
+  priced and no stat ratio is added. When the model declines, the word stays Trade-off and the reason prints the sizes
   and the cause ("Trade-off: +34 Healing Power vs −1 Intellect. Healer model: …"). The talents
   path now carries the Context switch too. No setting, saved key or UI change.
   Changed in `tools/touchstone-patches/` (Verdict and ChestAdvisor patches);
