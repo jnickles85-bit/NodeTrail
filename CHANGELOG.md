@@ -26,6 +26,16 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
     band wording says what it measured and what it could not (A9, A11).
 
 ### Fixed
+- **The Settings tab's About block stays inside the panel again.** The About text, the Commands
+  line and the Tip line drew below the window's bottom edge (owner retest of 5e10486, window
+  scale 1.00). When the Settings stack became a scrolled, clipped flow, every block moved onto
+  the scrolled frame except About, which stayed on the frame around it: it still scrolled, but
+  nothing clipped it, so at the top of the scroll its tail hung out of the panel — the symptom an
+  earlier fix (card t_4ddeae90) had cured on the old fixed layout. About now lives in the scroll
+  child with the rest of the stack: clipped at the top, fully on screen when you scroll down. No
+  option, font or window size changed. `tests/touchstone_settings_clip_spec.lua` checks every
+  Settings region against the panel's bottom and fails on the old shape. The change is in
+  `tools/touchstone-patches/OptionsTab.lua.patch`, and `--verify-shipped` passes.
 - **The ledger's VERDICT column draws again** (Upgrades and Log). The green arrow, the amber
   trade-off square and the verdict word ("Upgrade", "Not an upgrade", …) sat in a gutter frame that
   had a width but no height, and the client paints nothing owned by a frame with no area, so the

@@ -586,24 +586,23 @@ local function build(host)
     SF.optionControls.contextChecks = host.contextChecks
   end
 
-  -- Card t_4ddeae90 (defect 1): the About block is anchored to the content
-  -- frame's BOTTOM edge, not to the role row above it. It used to chain off
-  -- roleRow's BOTTOM (-18, y -494); its 11 rendered lines need 132 units, so
-  -- it ended 111 units below the 515-unit content frame and -- with no clip and
-  -- no scroll anywhere in this tab -- the tail (/up diag and the Tip line) was
-  -- drawn over the panel's border in open space.
+  -- The About block is the stack's LAST block, so it lives on `content` like
+  -- every block above it: relayout() places it under the role row, and the
+  -- viewport's clip is what keeps its tail inside the panel until the wheel
+  -- brings it up.
   --
-  -- Two things fix it. The stack above is compressed (see build()'s header),
-  -- which is where the room came from; and the block's own bottom is now
-  -- DECLARED (515 - 4 = 511) instead of "wherever the stack above happens to
-  -- end". The audit could not measure the client's rendered line height, so a
-  -- top-anchored fix would be only as safe as that guess -- a bottom anchor
-  -- cannot fall outside the panel at any line height. With the evidence-based
-  -- metrics (GameFontHighlight = FRIZQT__.TTF height 12, spacing 0) the stack
-  -- above ends at 369, leaving 10 units of clearance to the role row and 6 to
-  -- the bottom of its 32-tall checkboxes.
-  local about = SF.UI_CreateLabel(host, "", "GameFontHighlight")
-  about:SetPoint("BOTTOMLEFT", host, "BOTTOMLEFT", 20, 4)
+  -- History, because this is the second time its tail left the panel. Card
+  -- t_4ddeae90 pinned the block to the BOTTOM of a fixed 515-unit stack so it
+  -- could not fall outside at any line height. Card t_4e5ad8a4 then replaced
+  -- the fixed stack with the flow and the clipped viewport, moved every block
+  -- onto `content` -- and left this one parented to `host`. relayout() still
+  -- re-anchored it under the role row, so it scrolled, but a region is clipped
+  -- only by a clipping ANCESTOR and `host` is the viewport's parent, not its
+  -- child: at the top of the scroll the About paragraph, the Commands line and
+  -- the Tip line drew below the panel's bottom edge (owner, 2026-11-22, window
+  -- scale 1.00). Same miss as the Context heading (audit A3).
+  -- tests/touchstone_settings_clip_spec.lua pins it.
+  local about = SF.UI_CreateLabel(content, "", "GameFontHighlight")
   about:SetWidth(840)
   about:SetJustifyH("LEFT")
   -- The heading carries the accent as a colour CODE inside the string, so no
