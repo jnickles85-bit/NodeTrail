@@ -8555,18 +8555,42 @@ local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 -- evaluation, and is always disclosed as not counted, never as worthless.
 --
 -- The healing evaluation: the client role is HEALER, the folded order word is
--- "spell", and the player has not recorded `/up role melee`. A Melee role (or a
--- melee-leaning setup while leveling, which is what a recorded melee role is)
--- keeps the pre-seam behaviour byte for byte. Nothing here prices an enchant or
+-- "spell", the player has not recorded `/up role melee`, and the situation is
+-- not Leveling-with-no-role (see CONTEXT below). A Melee role keeps the pre-seam
+-- behaviour byte for byte; Leveling with Role clear keeps the pre-seam verdict
+-- and gains only a one-line role hint. Nothing here prices an enchant or
 -- a proc, and no ratio between stats is introduced: the model either decides
 -- from the character's own totals or declines with its own cause.
+--
+-- CONTEXT (Review round 1, Mightie's go): a questing healer often melees, so
+-- Leveling with NO recorded role is not a healing evaluation — the pre-seam
+-- Trade-off stands, and the reason gains a one-line hint that `/up role spell`
+-- judges it as a healer (Verdict.healerRoleHint). Dungeon and Raid with no
+-- recorded role, and an explicit `/up role spell` in any context, are healing.
+-- A spec with no context word reads as Leveling, the store's own default.
+local function levelingContext(spec)
+	local c = spec.context
+	return c == nil or c == "leveling"
+end
+
+local function healerSpellSpec(spec)
+	return type(spec) == "table" and spec.clientRole == "HEALER" and spec.role == "spell"
+end
+
 function Verdict.healingContext(spec)
-	if type(spec) ~= "table" then return false end
-	if spec.clientRole ~= "HEALER" then return false end
-	if spec.role ~= "spell" then return false end
+	if not healerSpellSpec(spec) then return false end
 	if spec.recordedRole == "melee" then return false end
+	if spec.recordedRole ~= "spell" and levelingContext(spec) then return false end
 	return true
 end
+
+-- True exactly when the missing role is the ONE thing that kept a healer's
+-- weapon pair out of the healing evaluation (Leveling, Role clear).
+function Verdict.healerRoleHint(spec)
+	if not healerSpellSpec(spec) then return false end
+	return spec.recordedRole == nil and levelingContext(spec)
+end
+Verdict.HEALER_ROLE_HINT = "Set Role to Spell (/up role spell) to judge this as a healer"
 
 -- The pair as a healing evaluation sees it: every word a ranked tier of the
 -- profile names, plus the model's survival words (data, never deciding). The
@@ -8583,6 +8607,11 @@ function Verdict.healerView(cand, eq, profile)
 	if type(A) == "table" and type(A.SURVIVAL_WORDS) == "table" then
 		for _, w in ipairs(A.SURVIVAL_WORDS) do keep[w] = true end
 	end
+	-- Spell Power ("Increases damage and healing done by magical spells") HEALS.
+	-- It is never left out of a healing view, so no answer can call it "not
+	-- counted for healing". The model does not price it, so a pair that moves
+	-- it is never sent (see the seam); an unmoved one carries no weight.
+	keep.SpellPower = true
 	local cv, ev, excluded, seen = {}, {}, {}, {}
 	for _, pair in ipairs({ { cand, cv }, { eq, ev } }) do
 		local src, dst = pair[1], pair[2]
@@ -8954,27 +8983,43 @@ function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUs
 		-- the model, only with totals, only while the flag is on, and only in a
 		-- healing evaluation. The model sees the healing view of the pair; what
 		-- that view leaves out is disclosed on the answer, never dropped.
-		if tv == TRADE_OFF and type(totals) == "table" and Verdict.healingContext(spec) then
+		if tv == TRADE_OFF and type(totals) == "table" then
 			local Arb = rawget(_G, "Arbitration")
 			if type(Arb) == "table" and Arb.ENABLED == true then
-				local hc, he, excluded = Verdict.healerView(tierCand, tierEq, orderProfile)
-				local hv, hr, hd = Verdict.arbitrate(hc, he, spec, totals)
 				td = (type(td) == "table") and td or {}
-				if hv ~= nil then
-					td.arbitration = hd
-					return hv, tostring(hr or "") .. healerDisclosure(candLines, wornLines, excluded), td
-				end
-				-- A DECLINE keeps the word and says why: the ranked movement
-				-- with its sizes, and the model's own cause sentence.
-				if type(hd) == "table" and hd.declined == true then
-					td.arbitration = hd
+				-- A decline or a skip keeps the word and says why: the ranked
+				-- movement with its sizes, and the cause sentence.
+				local function keepWithCause(hc, he, why)
 					local sized = Verdict.sizedTradeOffText(hc, he, orderProfile)
 					local plain = type(td.tradeOffText) == "string" and td.tradeOffText or nil
 					if sized ~= nil and plain ~= nil and type(tr) == "string" then
 						local i, j = tr:find(plain, 1, true)
 						if i ~= nil then tr = tr:sub(1, i - 1) .. sized .. tr:sub(j + 1) end
 					end
-					tr = tostring(tr or "") .. ". Healer model: " .. tostring(hd.why)
+					tr = tostring(tr or "") .. ". Healer model: " .. tostring(why)
+				end
+				if Verdict.healingContext(spec) then
+					local hc, he, excluded = Verdict.healerView(tierCand, tierEq, orderProfile)
+					local spDelta = (tonumber(tierCand.SpellPower) or 0) - (tonumber(tierEq.SpellPower) or 0)
+					if Verdict.ranksAsDifferent(spDelta) then
+						-- Spell Power heals and the model does not price it: NOT
+						-- asked, so a pair it moves can never turn green on a
+						-- model that cannot see part of its healing.
+						keepWithCause(hc, he, "not asked — the pair moves Spell Power, which heals,"
+							.. " and the model does not price it yet")
+					else
+						local hv, hr, hd = Verdict.arbitrate(hc, he, spec, totals)
+						if hv ~= nil then
+							td.arbitration = hd
+							return hv, tostring(hr or "") .. healerDisclosure(candLines, wornLines, excluded), td
+						end
+						if type(hd) == "table" and hd.declined == true then
+							td.arbitration = hd
+							keepWithCause(hc, he, hd.why)
+						end
+					end
+				elseif Verdict.healerRoleHint(spec) then
+					tr = tostring(tr or "") .. ". " .. Verdict.HEALER_ROLE_HINT
 				end
 			end
 		end

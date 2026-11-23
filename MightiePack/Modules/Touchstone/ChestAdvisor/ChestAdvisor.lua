@@ -1521,6 +1521,13 @@ local function buildSpec()
 				weightsKey = talent.weightsKey,
 				profileSource = "talents",
 				profileLabel = talent.name,
+				-- (fk/healer-weapon-verdict, Review round 1) the situation this
+				-- spec is for. The chosen path and the fallback below already
+				-- carry it; without it the model read every talents-path pair
+				-- as Leveling whatever the Context switch said.
+				context = contextWord(),
+				-- No role is recorded on this path (that is how it was reached).
+				recordedRole = nil,
 			}
 		end
 	end
@@ -1562,7 +1569,9 @@ local function buildSpec()
 	         name = (si and si.name) or nil,
 	         classDisplay = classDisplayName(),
 	         profileSource = "talents",
-	         context = contextWord() }
+	         context = contextWord(),
+	         -- the recorded `/up role` word, read only (healer weapon seam)
+	         recordedRole = playerRole(token) }
 end
 
 ChestAdvisor.buildSpec = buildSpec
