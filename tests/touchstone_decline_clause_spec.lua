@@ -314,7 +314,7 @@ do
     local shortLines = CA.tooltipLines(row)
     local short = type(shortLines) == "table" and shortLines[1] and stripEscapes(shortLines[1].text) or nil
     check(short ~= nil and short:find("throughput not judged", 1, true) == nil
-      and short:find("(hold Shift for details)", 1, true) ~= nil,
+      and short:find("(Shift: details)", 1, true) ~= nil,
       "Shift up: the decline clause folds to the short marker (got " .. tostring(short) .. ")")
     IsShiftKeyDown = function() return true end
     local lines = CA.tooltipLines(row)

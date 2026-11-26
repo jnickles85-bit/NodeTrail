@@ -280,15 +280,15 @@ do
     "the engine's clause reaches the tooltip whole")
   local _, clause = CA._disclosureClause(r)
   check(clause == HEALER_CLAUSE, "ChestAdvisor's splitter takes the clause off as one parenthetical")
-  -- Shift UP (the default): the real pair's paragraph folds to its lead and one
-  -- short caveat (fk/tooltip-shift-details); the headline is the same.
+  -- Shift UP (the default): the headline alone with the grey Shift marker
+  -- (fk/tooltip-shift-details); the paragraph and its confidence are Shift-only.
   IsShiftKeyDown = function() return false end
   local short = {}
   for _, l in ipairs(CA.tooltipLines(row) or {}) do short[#short + 1] = plain(l.text) end
   IsShiftKeyDown = savedShift
   print("B. tooltip, Shift up: " .. table.concat(short, " / "))
-  check(short[1] == all[1] and short[2] == "Raid healing: an upgrade (low confidence; hold Shift for details)"
-    and #short == 2, "B: Shift up: the headline plus one short caveat line (got " .. table.concat(short, " / ") .. ")")
+  check(short[1] == all[1] .. " (Shift: details)" and #short == 1,
+    "B: Shift up: the headline and the marker, one line (got " .. table.concat(short, " / ") .. ")")
 end
 
 -- ── C. a decline stays amber and says why ───────────────────────────────────

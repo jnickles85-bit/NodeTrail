@@ -41,13 +41,14 @@
 #
 # (fk/tooltip-shift-details) The tooltip shows a verdict's long disclosure (the
 # engine's "(judged, with ...)" clause, a decline clause, the healer model's
-# paragraph) only while Shift is held; otherwise one short caveat. The detail
+# paragraph) only while Shift is held; otherwise the headline and a grey
+# "(Shift: details)" marker. The detail
 # setting (Full / Compact / Upgrades only) still governs the numbers line. A
 # MODIFIER_STATE_CHANGED frame asks the client to rebuild one of our item
 # tooltips on Shift, and the pre-call rebuilds its own lines on a cached rebuild.
 
---- a/ChestAdvisor/ChestAdvisor.lua
-+++ b/ChestAdvisor/ChestAdvisor.lua
+--- a/a/ChestAdvisor/ChestAdvisor.lua
++++ b/b/ChestAdvisor/ChestAdvisor.lua
 @@ -1014,6 +1014,245 @@
  	return r
  end
@@ -466,17 +467,21 @@
  	},
  	detailDefault = "full",
  	details = { full = true, compact = true, upgrades = true },
-@@ -1372,6 +1711,83 @@
+@@ -1372,6 +1711,75 @@
  	return type(IsShiftKeyDown) == "function" and IsShiftKeyDown() == true
  end
  
 +-- ---- SHORT BY DEFAULT, FULL ON SHIFT (fk/tooltip-shift-details) ------------
 +--
 +-- The owner's ask (Nov 26, after testing ca8804f): a verdict's long DISCLOSURE —
-+-- the engine's "(judged, with …)" clause, the healer model's paragraph, a
-+-- "throughput not judged" decline — reads as a wall under the headline. By
-+-- default the tooltip now shows the headline plus ONE short caveat; the full
-+-- current text is shown, unchanged, while Shift is held.
++-- the engine's "(judged, with …)" clause, the healer model's paragraph and its
++-- confidence, a "throughput not judged" decline — reads as a wall under the
++-- headline. His follow-up: "the less info for the tooltip the better". By
++-- default the tooltip now shows the HEADLINE plus one small grey marker,
++-- "(Shift: details)", and only when Shift would show more; the full current
++-- text is shown, unchanged, while Shift is held. "low confidence" is part of
++-- that full text (the paragraph's "(confidence low: …)" and the Details line),
++-- so it moved behind Shift with the rest.
 +--
 +-- How this sits with the Tooltip detail setting (Full / Compact / Upgrades
 +-- only): that setting is about the READ ARITHMETIC (the "+34 Healing, -1 Int"
@@ -486,35 +491,23 @@
 +-- model's margin/band line, which was already behind Shift in EVERY mode; it
 +-- now follows the same rule. Nothing is stored; no setting is added.
 +--
-+-- The short wording is deliberately plain and is the owner's to approve:
-+-- SHIFT_HINT is the only new phrase, and LOW_CONFIDENCE the only caveat word.
-+TOOLTIP_UI.SHIFT_HINT = "hold Shift for details"
-+TOOLTIP_UI.LOW_CONFIDENCE = "low confidence"
++-- The marker's wording is deliberately plain and is the owner's to approve:
++-- SHIFT_HINT is the only new phrase.
++TOOLTIP_UI.SHIFT_HINT = "Shift: details"
++
++-- The marker as it is drawn: a space, then grey "(Shift: details)". It is the
++-- last thing on its line; the renderer closes every line with the reset.
++function TOOLTIP_UI.shiftHint()
++	return " " .. TOOLTIP_GREY .. "(" .. TOOLTIP_UI.SHIFT_HINT .. ")"
++end
 +
 +-- A disclosure tail (" (judged, with …)", a decline clause, or both) as the
-+-- tooltip shows it: whole while Shift is held, folded to one short marker
-+-- otherwise. "" stays "" — a row with nothing to disclose is byte-identical.
++-- tooltip shows it: whole while Shift is held, folded to the marker otherwise.
++-- "" stays "" — a row with nothing to disclose is byte-identical.
 +function TOOLTIP_UI.foldTail(tail)
 +	if type(tail) ~= "string" or tail == "" then return "" end
 +	if TOOLTIP_UI.shiftHeld() then return tail end
-+	return " (" .. TOOLTIP_UI.SHIFT_HINT .. ")"
-+end
-+
-+-- The healer model's paragraph, short: its lead ("Raid healing: an upgrade",
-+-- the text before the first " — "), the low-confidence caveat when the model
-+-- says so, and the Shift marker when anything was left out. Shift held: the
-+-- paragraph, whole.
-+function TOOLTIP_UI.shortReason(reason, arb)
-+	if type(reason) ~= "string" then return reason end
-+	if TOOLTIP_UI.shiftHeld() then return reason end
-+	local lead = reason:match("^(.-) — ") or reason
-+	local low = type(arb) == "table" and arb.confidence == "low"
-+	local hidden = lead ~= reason
-+	if not hidden and not low then return reason end
-+	local parts = {}
-+	if low then parts[#parts + 1] = TOOLTIP_UI.LOW_CONFIDENCE end
-+	if hidden then parts[#parts + 1] = TOOLTIP_UI.SHIFT_HINT end
-+	return lead .. " (" .. table.concat(parts, "; ") .. ")"
++	return TOOLTIP_UI.shiftHint()
 +end
 +
 +-- Shift pressed or released while one of OUR item tooltips is up: ask the
@@ -550,7 +543,7 @@
  -- Does this row deserve a line under the "Upgrades" setting? Only the two
  -- non-answers are suppressed (the card's "no line on not-upgrades / can't-judge").
  function TOOLTIP_UI.worthALine(row)
-@@ -1432,6 +1848,22 @@
+@@ -1432,6 +1840,22 @@
  	return " (better on some stats, worse on others — your call)"
  end
  
@@ -573,19 +566,22 @@
  --- The situation, in player words, from the model's own context table. Never a
  --- second label table: Arbitration.CONTEXTS is where a context is named, and a
  --- copy here could name a context the model does not price.
-@@ -1552,8 +1984,9 @@
+@@ -1551,6 +1975,14 @@
+ 		head = head .. ", decided by " .. TOOLTIP_UI.drivingPhrase(arb.driving)
  	end
  	out[1] = { text = esc .. head, colour = colour }
++	-- Shift up: the headline alone, with the marker (the model's paragraph is
++	-- always there to show). The partial-read note, a fact about the read, rides
++	-- the headline then, since it is the only line. Shift held: every line below,
++	-- exactly as before this change.
++	if not TOOLTIP_UI.shiftHeld() then
++		out[1].text = out[1].text .. TOOLTIP_UI.shiftHint() .. (type(note) == "string" and note or "")
++		return out
++	end
  	local reason = type(row.reason) == "string" and row.reason or "no reason recorded"
--	out[2] = { text = TOOLTIP_GREY .. reason .. (type(note) == "string" and note or ""),
--		colour = "grey" }
-+	-- Short by default, the whole paragraph on Shift (see TOOLTIP_UI.shortReason).
-+	out[2] = { text = TOOLTIP_GREY .. TOOLTIP_UI.shortReason(reason, arb)
-+		.. (type(note) == "string" and note or ""), colour = "grey" }
- 	local surv = TOOLTIP_UI.survivalLine(arb)
- 	if surv ~= nil then out[#out + 1] = { text = TOOLTIP_GREY .. surv, colour = "grey" } end
- 	if showDetail then
-@@ -2313,6 +2746,118 @@
+ 	out[2] = { text = TOOLTIP_GREY .. reason .. (type(note) == "string" and note or ""),
+ 		colour = "grey" }
+@@ -2313,6 +2745,118 @@
  	return tonumber(r, 16) / 255, tonumber(g, 16) / 255, tonumber(b, 16) / 255
  end
  
@@ -704,7 +700,7 @@
  -- One verdict, as the tooltip renders it: a coloured HEADLINE (the verdict in
  -- the player's own words + the leading reason) and, when the setting allows, a
  -- muted DETAIL line (the read arithmetic). Two lines rather than one wall —
-@@ -2342,6 +2887,7 @@
+@@ -2342,6 +2886,7 @@
  	local note = partialReadSuffix(row)
  
  	local out = {}
@@ -712,7 +708,7 @@
  	-- A2 (card t_ce1c4a4f): the SAME question `arbitratedLines` asks, asked
  	-- once. A table on `row.arbitration` that is not a real arbitration falls
  	-- through to the ordinal branches below — the renderer answers for the row,
-@@ -2363,8 +2909,53 @@
+@@ -2363,8 +2908,53 @@
  	end
  	if arbitrated ~= nil then
  		out = arbitrated
@@ -766,7 +762,7 @@
  		out[#out + 1] = {
  			text = TOOLTIP_GREEN .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
  				.. " — " .. head,
-@@ -2388,7 +2979,7 @@
+@@ -2388,7 +2978,7 @@
  		-- is the one being dropped, and the two are told apart by the helper.
  		local sentence, clause = disclosureClause(type(row.reason) == "string" and row.reason
  			or "better on some stats, worse on others")
@@ -775,7 +771,7 @@
  		local detail = nil
  		if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
  			and Verdict and type(Verdict.statTable) == "function"
-@@ -2413,7 +3004,7 @@
+@@ -2413,7 +3003,7 @@
  		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
  		out[#out + 1] = {
  			text = TOOLTIP_AMBER .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
@@ -784,7 +780,7 @@
  			colour = "amber",
  		}
  		if detail and showDetail then
-@@ -2482,13 +3073,22 @@
+@@ -2482,13 +3072,22 @@
  	for i = n, math.max(1, n - 3), -1 do
  		local fs = _G[name .. "TextLeft" .. i]
  		local ok2, text = pcall(function() return fs and fs.GetText and fs:GetText() end)
@@ -814,7 +810,7 @@
  		end
  	end
  	return false
-@@ -2557,6 +3157,7 @@
+@@ -2557,6 +3156,7 @@
  -- and anchors a FRAME at the end), so the data list is the only supported
  -- insertion point. Nothing here reads or patches another addon's files.
  local TOOLTIP_LINE_MARK = "__touchstoneVerdict"
@@ -822,7 +818,7 @@
  
  -- A colour object for the client's line-data model: AddLineDataText does
  -- `leftColor:GetRGB()` (AddLineDataText -> GameTooltip_AddColoredLine), so this
-@@ -2590,7 +3191,14 @@
+@@ -2590,7 +3190,14 @@
  	-- reuses a CACHED data table when the info carries no getter, so the guard has
  	-- to live in the data itself; a re-fetch hands us a fresh table and the line
  	-- is rebuilt from scratch. Either way: exactly one verdict line, always.
@@ -837,7 +833,7 @@
  	local at = #lines
  	for i = 1, at do
  		local ld = lines[i]
-@@ -2652,6 +3260,22 @@
+@@ -2652,6 +3259,22 @@
  -- kept as the fallback for a client without AddTooltipPreCall, and it is
  -- registered INSTEAD of the pre-call, never both, so the line can never print
  -- twice.
@@ -860,7 +856,7 @@
  local tooltipHooked = false
  local function installTooltipHook()
  	if tooltipHooked then return end
-@@ -2662,6 +3286,7 @@
+@@ -2662,6 +3285,7 @@
  	if type(processor) == "table" and dataType ~= nil then
  		if type(processor.AddTooltipPreCall) == "function" then
  			processor.AddTooltipPreCall(dataType, tooltipPreCall)
@@ -868,7 +864,7 @@
  			return
  		end
  		if type(processor.AddTooltipPostCall) == "function" then
-@@ -3535,8 +4160,9 @@
+@@ -3535,8 +4159,9 @@
  	return ChestAdvisor._onContentRefresh()
  end
  
@@ -880,7 +876,7 @@
  
  -- ---- Quest reward arrows (t_c3fe7d1d) ---------------------------------------
  --
-@@ -4136,14 +4762,28 @@
+@@ -4136,14 +4761,28 @@
  local function judgeQuestReward(link, loc, id, spec, wornLinks, offHandSpec, mainHandLoc, wornOffLoc)
  	local invSlot = wornSlotFor(loc)
  	local row = { link = link }
@@ -915,7 +911,7 @@
  		return v, reason, row
  	end
  	if not invSlot then
-@@ -4333,7 +4973,7 @@
+@@ -4333,7 +4972,7 @@
  	-- The row's own slot word (card t_d88b7f28, item 3): the empty-slot reason
  	-- names the slot it fills instead of saying "chest" for every row. Taken from
  	-- the addon's ONE slot vocabulary (slotWord → SLOT_WORD), not a second one.
@@ -924,7 +920,7 @@
  		ChestAdvisor._judgeKey("quest", link, wornLink, loc, spec, lines, wornLines, canUseV),
  		function()
  			return Verdict.evaluate(
-@@ -4345,7 +4985,7 @@
+@@ -4345,7 +4984,7 @@
  				(ChestAdvisor._totals())
  			)
  		end)
@@ -933,7 +929,7 @@
  end
  
  -- Clear every quest marker and every arrow texture we drew on a reward button.
-@@ -4901,7 +5541,9 @@
+@@ -4901,7 +5540,9 @@
  ChestAdvisor._judgeQuestReward = judgeQuestReward
  ChestAdvisor._readWornLinks = readWornLinks
  end
@@ -944,7 +940,7 @@
  end
  
  
-@@ -5284,8 +5926,16 @@
+@@ -5284,8 +5925,16 @@
  
  -- Same function objects the quest surface just published. Bound once,
  -- so the vendor walk calls the quest walk's judge rather than a copy.
@@ -963,7 +959,7 @@
  
  local function refreshVendorMarkers()
  	-- Clear FIRST: this refresh is the only author of a vendor mark, so clearing
-@@ -5459,9 +6109,8 @@
+@@ -5459,9 +6108,8 @@
  	end)
  end
  
@@ -975,7 +971,7 @@
  
  -- ---- Toast (t_632f27e9): the "Upgrade found!" notification layer -------------
  --
-@@ -5534,15 +6183,21 @@
+@@ -5534,15 +6182,21 @@
  --                 how long a toast may outlive its stated lifetime.
  local TOAST = {
  	accent = { 0.400, 0.988, 0.945 },   -- #66FCF1, the window's own accent
@@ -1000,7 +996,7 @@
  local function toastIsEnabled()
  	local t = ChestAdvisorDB and ChestAdvisorDB.toast
  	if type(t) ~= "table" then return TOAST_DEFAULTS.enabled end
-@@ -5600,6 +6255,17 @@
+@@ -5600,6 +6254,17 @@
  	current = nil, hovered = false, lifetimeLeft = 0,
  	held = {}, deferred = false,
  	fadeIn = nil, fadeOut = nil, ticker = nil, afterId = 0,
@@ -1018,7 +1014,7 @@
  }
  
  -- Stop whichever countdown driver is running. ONE stop path, used by arming, by
-@@ -5619,7 +6285,91 @@
+@@ -5619,7 +6284,91 @@
  	toastRT.afterId = (toastRT.afterId or 0) + 1
  end
  
@@ -1111,7 +1107,7 @@
  
  -- ---- The toast emit point (host seam) -------------------------------------
  --
-@@ -5788,13 +6538,29 @@
+@@ -5788,13 +6537,29 @@
  -- Fade+slide the panel in. Both animation groups live on the frame and are
  -- re-used forever; only their offsets are rewritten per show, so a rotation
  -- through TOAST_MAX toasts does not leak an animation object per toast.
@@ -1142,7 +1138,7 @@
  			-- THE RESTING ALPHA, set the moment the animation takes over. A
  			-- finished Alpha animation restores the frame's OWN alpha — the one
  			-- this function just set to 0 — and the classic client drops a
-@@ -5856,6 +6622,21 @@
+@@ -5856,6 +6621,21 @@
  				end
  			end)
  		end
@@ -1164,7 +1160,7 @@
  		toastRT.fadeIn = ag
  	end
  	do
-@@ -5878,7 +6659,10 @@
+@@ -5878,7 +6658,10 @@
  		-- must not leave the panel up. toastExpire also arms a timer.
  		if type(ag.SetScript) == "function" then
  			ag:SetScript("OnFinished", function()
@@ -1176,7 +1172,7 @@
  			end)
  		end
  		toastRT.fadeOut = ag
-@@ -5991,6 +6775,21 @@
+@@ -5991,6 +6774,21 @@
  					id = type(item) == "table" and item.id or nil,
  					name = type(item) == "table" and item.name or nil,
  				})
@@ -1198,7 +1194,7 @@
  				-- Dismiss THIS toast. Anything still queued is a DIFFERENT upgrade
  				-- the player has not seen, and it is already marked "told" — so
  				-- dropping the queue here would lose it silently. Continue the
-@@ -6125,10 +6924,46 @@
+@@ -6125,10 +6923,46 @@
  	toastRT.ticker = C_Timer.NewTicker(TOAST.tick, function()
  		if not toastActive then return end
  		if showId ~= nil and toastRT.showId ~= showId then return end
@@ -1246,7 +1242,7 @@
  		end
  	end)
  end
-@@ -6144,6 +6979,36 @@
+@@ -6144,6 +6978,36 @@
  	-- time a host could read it back.
  	local finished = toastRT.current
  	reason = reason or "finish"
@@ -1283,7 +1279,7 @@
  	toastRT.showId = (toastRT.showId or 0) + 1
  	local f = toastFrame
  	toastActive = false
-@@ -6183,11 +7048,21 @@
+@@ -6183,11 +7047,21 @@
  -- OnFinished on the classic client while the alpha still runs, which is the
  -- stuck near-transparent "...und!" panel. A timer finishes the show anyway, and
  -- so does a finish step that errors.
@@ -1306,7 +1302,7 @@
  	local f = toastFrame
  	local fade = toastRT.fadeOut
  	local fadeFinishes = type(fade) == "table" and type(fade.Play) == "function"
-@@ -6202,12 +7077,12 @@
+@@ -6202,12 +7076,12 @@
  		if played and type(C_Timer) == "table" and type(C_Timer.After) == "function" then
  			local delay = (TOAST.fadeOut or 0.25) + 0.05
  			C_Timer.After(delay, function()
@@ -1321,7 +1317,7 @@
  end
  
  -- Put ONE item on screen. The single place a toast becomes visible, so the
-@@ -6215,6 +7090,7 @@
+@@ -6215,6 +7089,7 @@
  showToastItem = function(item)
  	toastRT.showId = (toastRT.showId or 0) + 1
  	local showId = toastRT.showId
@@ -1329,7 +1325,7 @@
  	local f = ensureToast()
  	if type(f) ~= "table" then
  		toastActive = false
-@@ -6267,6 +7143,16 @@
+@@ -6267,6 +7142,16 @@
  		-- the screen under a stationary mouse) the pointer never left the panel — so
  		-- clearing it would silently un-pause the new toast.
  		toastRT.lifetimeLeft = toastLifetime()
@@ -1346,7 +1342,7 @@
  		-- Re-anchor from the persisted position on every show: the panel may have
  		-- been dragged since it was built, and the resting point is what is saved.
  		if type(f.dragging) ~= "boolean" or not f.dragging then
-@@ -6279,8 +7165,41 @@
+@@ -6279,8 +7164,41 @@
  			phase = "show", showId = showId, link = item.link,
  			id = item.id, name = item.name,
  		})
@@ -1389,7 +1385,7 @@
  	end)
  	if not ok then
  		if type(f.Hide) == "function" then pcall(f.Hide, f) end
-@@ -6297,7 +7216,9 @@
+@@ -6297,7 +7215,9 @@
  -- showToastItem/toastExpire, so this is a thin shim over the same two paths.
  advanceToast = function()
  	if toastActive then
@@ -1400,7 +1396,7 @@
  		return
  	end
  	local item = table.remove(toastQueue, 1)
-@@ -6319,6 +7240,12 @@
+@@ -6319,6 +7239,12 @@
  local function maybeToastUpgrades(verdicts)
  	if not toastIsEnabled() then
  		toastQueue = {}
@@ -1413,7 +1409,7 @@
  		if toastFrame then toastFrame:Hide() end
  		toastActive = false
  		return
-@@ -6380,8 +7307,17 @@
+@@ -6380,8 +7306,17 @@
  	-- A toast whose lifetime already elapsed must not stay up. OnFinished is
  	-- supposed to hide it; if that step never ran, toastActive would block
  	-- every later upgrade behind a faded panel.
@@ -1433,7 +1429,7 @@
  	end
  	-- Draw now only if nothing is on screen; otherwise the queue drains as each
  	-- toast's lifetime expires.
-@@ -6491,8 +7427,64 @@
+@@ -6491,8 +7426,64 @@
  		lifetime = toastLifetime(),
  		held = #toastRT.held,
  		deferred = toastRT.deferred,
@@ -1498,7 +1494,7 @@
  ChestAdvisor._maybeToastUpgrades = maybeToastUpgrades
  ChestAdvisor._toastIsEnabled = toastIsEnabled
  -- The lifetime as a SETTING (card t_d88b7f28, item 4). The slash handler lives
-@@ -6512,7 +7504,9 @@
+@@ -6512,7 +7503,9 @@
  ChestAdvisor._toastLifetimeMin = TOAST_LIFETIME_MIN
  ChestAdvisor._toastLifetimeMax = TOAST_LIFETIME_MAX
  end
@@ -1509,7 +1505,7 @@
  end
  
  
-@@ -6535,16 +7529,35 @@
+@@ -6535,16 +7528,35 @@
  --   6. Draw the marker for UPGRADE; explain the reason for every row.
  -- Captured once, here, under the names scan already calls. These are the
  -- function objects the surfaces published above, not live lookups.
@@ -1551,7 +1547,7 @@
  		ChestAdvisor._scanDeferred = true
  		return ChestAdvisor.__verdicts or {}
  	end
-@@ -6758,6 +7771,10 @@
+@@ -6758,6 +7770,10 @@
  					itemsWalked = itemsWalked + 1
  					local v, reason, arbDet
  					local canUseV
@@ -1562,7 +1558,7 @@
  					local ulevel = (UnitLevel and UnitLevel("player")) or nil
  					-- Card t_119d120c: every judged row's lines come from the
  					-- ONE item reader. A third-party annotation on the rendered
-@@ -7068,7 +8085,8 @@
+@@ -7068,7 +8084,8 @@
  						-- equipped; …" at the SOURCE. The frozen gate-6 sentinel
  						-- and its rewrite are gone: one vocabulary (SLOT_WORD),
  						-- one place the sentence is built.
@@ -1572,7 +1568,7 @@
  							ChestAdvisor._judgeKey("armour", link, wornLink, invSlot, spec, lines, wornLines, canUseV),
  							function()
  								return Verdict.evaluate(
-@@ -7083,7 +8101,7 @@
+@@ -7083,7 +8100,7 @@
  									(ChestAdvisor._totals())
  								)
  							end)
@@ -1581,7 +1577,7 @@
  					end
  					-- Card t_d8de0090: WHAT was set aside, recorded at the
  					-- read the verdict was decided on. AC-D: the raw
-@@ -7126,8 +8144,29 @@
+@@ -7126,8 +8143,29 @@
  							-- SavedVariables (diagHistory keeps headers only —
  							-- card t_6696b35a — so this table lives and dies with
  							-- the scan, exactly like `lines`/`api` above).
@@ -1612,7 +1608,7 @@
  							-- The richer diag row (t_9ad3d462 part 3): everything plan s4
  							-- PASS/FIX/KILL grades from, per item. Raw stat lines (<=30, already
  							-- capped by TooltipLines), raw CanUseItem type+value, the player level
-@@ -7599,6 +8638,17 @@
+@@ -7599,6 +8637,17 @@
  		reason     = row.reason,
  		role       = row.role,
  		roleSource = roleSource,
@@ -1630,7 +1626,7 @@
  	})
  	while #log > LOG_CAP do table.remove(log, 1) end
  end
-@@ -7678,15 +8728,19 @@
+@@ -7678,15 +8727,19 @@
  		.. "  A green arrow marks an upgrade. An amber square marks a trade-off (better on some stats, worse on others). On the character sheet the arrow means a bag item is an upgrade for that slot.\n"
  		.. "  /up role <r>   record the focus role for a hybrid class (melee|spell; the client spec read is used automatically when unset)\n"
  		.. "  /up role clear clear the recorded role for this class\n"
@@ -1652,7 +1648,7 @@
  		.. "  /up log        list the disagreement log — items you equipped that Touchstone did not call an upgrade (persisted; last 50)\n"
  		.. "  /up log clear  empty the disagreement log\n"
  		.. "  /up rescan     re-scan your bags now — the marks are drawn from a fresh read (an upgrade, a trade-off, or no mark)\n"
-@@ -7742,6 +8796,56 @@
+@@ -7742,6 +8795,56 @@
  	return false, "usage: /up role <melee|spell|clear>"
  end
  
@@ -1709,7 +1705,7 @@
  -- /up context — WHAT the advice is judged for (card t_1c9d5a17). Bare prints the
  -- current context and its one-line meaning, because "is it still on leveling?"
  -- is the question a player actually types; a word sets it, in any casing.
-@@ -7827,6 +8931,40 @@
+@@ -7827,6 +8930,40 @@
  	return true, "toast " .. w
  end
  
@@ -1750,7 +1746,7 @@
  -- /up tooltip <on|off> — the sibling of /up toast, on the SAME per-character
  -- store (AC-F: no new store). A missing key reads as ON (TOOLTIP_UI.enabled treats
  -- anything but an explicit `false` as enabled), so a fresh character sees the
-@@ -7934,13 +9072,18 @@
+@@ -7934,13 +9071,18 @@
  -- has exactly one place its values are spelled, and it returns one summary. The
  -- four writers' own confirmations are discarded on purpose: their writes are the
  -- point, the line below is what the player sees.
@@ -1770,7 +1766,7 @@
  end
  
  -- /ts scale <0.5-1.5> — the window scale the Settings slider also writes.
-@@ -8007,12 +9150,16 @@
+@@ -8007,12 +9149,16 @@
  			-- map cannot be absent here (unlike LogTab, a separate TOC entry
  			-- that can paint before this file loads). No second table and no
  			-- fallback branch: word() already owns both degenerate cases.
@@ -1788,7 +1784,7 @@
  				tostring(e.role), tostring(e.roleSource), tostring(e.link), tostring(e.reason))
  		end
  	end
-@@ -8218,6 +9365,36 @@
+@@ -8218,6 +9364,36 @@
  	-- the token is what identifies WHY something was skipped (a weapon
  	-- skip is a different skip from a neck skip and both should read
  	-- differently on this line).
@@ -1825,7 +1821,7 @@
  	if type(d.ledger) == "table" then
  		local ld = d.ledger
  		summary = summary
-@@ -8230,21 +9407,6 @@
+@@ -8230,21 +9406,6 @@
  		-- t_632f27e9: the toast's own state — the notification layer's behaviour
  		-- belongs in the DIAG path (a human explicitly asking), never in the
  		-- toast itself, which carries no suppression/debug text (AC-E2).
@@ -1847,7 +1843,7 @@
  		-- t_c3fe7d1d: the quest-reward surface's own state, same reasoning as the
  		-- toast block above — the reward arrows' behaviour belongs in the diag
  		-- path (a human asking), never as on-screen debug text.
-@@ -8572,10 +9734,16 @@
+@@ -8572,10 +9733,16 @@
  	elseif subword == "context" then
  		-- t_1c9d5a17: what the advice is judged for (leveling | dungeon | raid).
  		ok, out = cmdContext(trimmed)
@@ -1864,7 +1860,7 @@
  	elseif subword == "tooltip" then
  		ok, out = cmdTooltip(trimmed)
  	elseif subword == "detail" then
-@@ -8663,7 +9831,15 @@
+@@ -8663,7 +9830,15 @@
  	return ok, out
  end
  end
@@ -1881,7 +1877,7 @@
  end
  
  
-@@ -8720,25 +9896,38 @@
+@@ -8720,25 +9895,38 @@
  	frame:RegisterEvent("MERCHANT_UPDATE")
  	frame:RegisterEvent("MERCHANT_CLOSED")
  end

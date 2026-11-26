@@ -3,15 +3,17 @@
 -- The owner tested ca8804f and asked (Nov 26): the verdict's long disclosure —
 -- the healer model's paragraph, the engine's "(judged, with …)" clause, the
 -- "throughput not judged" decline — should not sit under every hover. By
--- default the tooltip shows the headline plus one short caveat; the full current
--- text shows only while Shift is held, and the line swaps when Shift goes down
--- or up without moving the mouse.
+-- default the tooltip shows the headline plus a small grey "(Shift: details)"
+-- marker (his follow-up: "the less info for the tooltip the better"); the full
+-- current text shows only while Shift is held, and the line swaps when Shift goes
+-- down or up without moving the mouse.
 --
 -- This spec drives the REAL vendored renderer and the REAL pre-call:
---   1. ARBITRATED rows: Shift up gives "<lead> (low confidence; hold Shift for
---      details)"; Shift down gives the paragraph whole plus the Details line.
+--   1. ARBITRATED rows: Shift up gives the headline alone plus the grey marker
+--      (no paragraph, no "low confidence", no survival line); Shift down gives
+--      the paragraph whole plus the Details line.
 --   2. ORDINAL / WEIGHTED / UPGRADE rows: the disclosure tail folds to
---      " (hold Shift for details)"; Shift down restores it byte for byte.
+--      " (Shift: details)"; Shift down restores it byte for byte.
 --   3. THE DETAIL SETTING is unchanged: Full always shows the numbers, Compact
 --      shows them on Shift, Upgrades only drops the two non-answers.
 --   4. NOTHING TO DISCLOSE: such a row is byte-identical in both Shift states.
@@ -184,7 +186,7 @@ end
 loadModule(true)
 check(type(preCall) == "function", "the item-tooltip pre-call was registered")
 local UI = ChestAdvisor._tooltipUI
-check(type(UI) == "table" and type(UI.foldTail) == "function" and type(UI.shortReason) == "function"
+check(type(UI) == "table" and type(UI.foldTail) == "function" and type(UI.shiftHint) == "function"
   and type(UI.onModifierChanged) == "function", "the Shift helpers are published on the tooltip UI table")
 
 local function onMod(...)
@@ -202,8 +204,16 @@ local function render(row, mode, held)
   shift = false
   return out
 end
+local function renderRaw(row, mode, held)
+  ChestAdvisorDB.tooltip = { detail = mode }
+  shift = held
+  local out = {}
+  for _, l in ipairs(ChestAdvisor.tooltipLines(row) or {}) do out[#out + 1] = l.text end
+  shift = false
+  return out
+end
 local MODES = { "full", "compact", "upgrades" }
-local HINT = " (hold Shift for details)"
+local HINT = " (Shift: details)"
 
 -- ── 1. arbitrated rows ──────────────────────────────────────────────────────
 local CLAUSE = " (judged, with Spell Damage, Weapon DPS, an on-hit effect and an enchant not counted"
@@ -219,33 +229,39 @@ for _, mode in ipairs(MODES) do
     print("1. Shift up:   " .. table.concat(up, " / "))
     print("1. Shift down: " .. table.concat(down, " / "))
   end
-  check(type(up[1]) == "string" and up[1]:find("^Upgrade — raid") ~= nil
-    and up[1]:find("decided by the healing per cast", 1, true) ~= nil and down[1] == up[1],
-    "1/" .. mode .. ": the headline is the same in both Shift states (got " .. tostring(up[1]) .. ")")
-  check(up[2] == "Raid healing: an upgrade (low confidence; hold Shift for details)",
-    "1/" .. mode .. ": Shift up: the lead plus one short caveat (got " .. tostring(up[2]) .. ")")
-  check(#up == 2, "1/" .. mode .. ": Shift up: no Details line (got " .. #up .. " lines)")
+  check(type(down[1]) == "string" and down[1]:find("^Upgrade — raid") ~= nil
+    and down[1]:find("decided by the healing per cast", 1, true) ~= nil,
+    "1/" .. mode .. ": the headline (got " .. tostring(down[1]) .. ")")
+  check(#up == 1 and up[1] == down[1] .. HINT,
+    "1/" .. mode .. ": Shift up: the headline and the marker, one line (got " .. table.concat(up, " / ") .. ")")
+  check(table.concat(up, " "):find("confidence", 1, true) == nil,
+    "1/" .. mode .. ": Shift up: no confidence wording (it is in the Shift view)")
   check(down[2] == RAID_REASON, "1/" .. mode .. ": Shift down: the paragraph, whole and unchanged")
   check(type(down[3]) == "string" and down[3]:sub(1, 9) == "Details: ",
     "1/" .. mode .. ": Shift down: the model's Details line (got " .. tostring(down[3]) .. ")")
+  check(table.concat(down, " "):find("Shift: details", 1, true) == nil,
+    "1/" .. mode .. ": Shift down: no marker")
 end
 do
-  -- Confidence not low: only the Shift marker. No " — " and not low: nothing hidden,
-  -- so the reason stands as it is, with no marker.
+  -- The marker is grey and closes the line.
+  local raw = renderRaw(arbRow, "full", false)[1] or ""
+  check(raw:sub(-#("|cff9d9d9d(Shift: details)|r")) == "|cff9d9d9d(Shift: details)|r",
+    "1: the marker is grey and ends the line (got " .. raw .. ")")
+  -- High confidence: the same single line.
   local sure = { state = "UPGRADE", context = "dungeon", driving = "healing", confidence = "high" }
   local r1 = render({ id = 1, verdict = "UPGRADE", reason = "Dungeon healing: an upgrade — more per cast.",
     arbitration = sure }, "full", false)
-  check(r1[2] == "Dungeon healing: an upgrade" .. HINT,
-    "1: high confidence: the lead and the Shift marker only (got " .. tostring(r1[2]) .. ")")
-  local r2 = render({ id = 1, verdict = "UPGRADE", reason = "Dungeon healing: an upgrade.",
-    arbitration = sure }, "full", false)
-  check(r2[2] == "Dungeon healing: an upgrade.",
-    "1: nothing hidden and not low: the reason as it is, no marker (got " .. tostring(r2[2]) .. ")")
-  local r3 = render({ id = 1, verdict = "UPGRADE", reason = "Dungeon healing: an upgrade.",
-    arbitration = { state = "UPGRADE", context = "dungeon", driving = "healing", confidence = "low" } },
-    "full", false)
-  check(r3[2] == "Dungeon healing: an upgrade. (low confidence)",
-    "1: nothing hidden but low: the caveat alone (got " .. tostring(r3[2]) .. ")")
+  check(#r1 == 1 and r1[1]:sub(-#HINT) == HINT,
+    "1: high confidence: the headline and the marker (got " .. table.concat(r1, " / ") .. ")")
+  -- A sidegrade's survival line is detail too.
+  local side = { state = "SIDEGRADE", context = "raid", driving = "healing", confidence = "high",
+    survival = { dHP = 40, dMitigation = 0 }, survivalVerdict = "candidate" }
+  local srow = { id = 1, verdict = "TRADE_OFF", reason = "Raid healing: a sidegrade — inside the band.", arbitration = side }
+  local su, sd = render(srow, "full", false), render(srow, "full", true)
+  check(#su == 1 and su[1]:sub(-#HINT) == HINT, "1: Shift up: a sidegrade is one line (got " .. table.concat(su, " / ") .. ")")
+  local hasSurv = false
+  for _, l in ipairs(sd) do if l:find("^Survival: ") then hasSurv = true end end
+  check(hasSurv, "1: Shift down: the survival line is back (got " .. table.concat(sd, " / ") .. ")")
 end
 
 -- ── 2. ordinal / weighted / upgrade rows ────────────────────────────────────
@@ -314,7 +330,7 @@ do
     { id = 9, verdict = "UNKNOWN", reason = "cannot classify: Enchanted: Weapon Damage +5" },
   }) do
     local a, b = render(row, "full", false), render(row, "full", true)
-    check(table.concat(a, "\n") == table.concat(b, "\n") and table.concat(a, "\n"):find("hold Shift", 1, true) == nil,
+    check(table.concat(a, "\n") == table.concat(b, "\n") and table.concat(a, "\n"):find("Shift: details", 1, true) == nil,
       "4: a row with no disclosure is the same with Shift up or down (" .. tostring(row.reason or row.weighted) .. ")")
   end
 end
@@ -332,8 +348,9 @@ ChestAdvisorDB.tooltip = { detail = "full" }
 local data = { hyperlink = LINK, lines = { { leftText = "Polished ZweiHander of Healing" }, { leftText = "+9 Intellect" } } }
 shift = false
 pcall(preCall, { }, data)
-check(#data.lines == 4 and plain(data.lines[4].leftText) == "Raid healing: an upgrade (low confidence; hold Shift for details)",
-  "5: the pre-call lands the short form with Shift up (got " .. tostring(data.lines[4] and plain(data.lines[4].leftText)) .. ")")
+check(#data.lines == 3 and plain(data.lines[3].leftText):sub(-#HINT) == HINT
+  and plain(data.lines[3].leftText):find("^Upgrade — raid") ~= nil,
+  "5: the pre-call lands the short form with Shift up (got " .. tostring(data.lines[3] and plain(data.lines[3].leftText)) .. ")")
 -- A cached rebuild (the same data table) with Shift held swaps to the full form.
 shift = true
 pcall(preCall, { }, data)
@@ -342,7 +359,7 @@ check(#data.lines == 5 and plain(data.lines[4].leftText) == RAID_REASON
   "5: a cached rebuild with Shift held swaps to the full form, one set of lines (got " .. #data.lines .. " lines)")
 shift = false
 pcall(preCall, { }, data)
-check(#data.lines == 4 and data.lines[1].leftText == "Polished ZweiHander of Healing"
+check(#data.lines == 3 and data.lines[1].leftText == "Polished ZweiHander of Healing"
   and data.lines[2].leftText == "+9 Intellect",
   "5: and back on release; the item's own lines untouched (got " .. #data.lines .. " lines)")
 -- The event: a fake GameTooltip that is showing that data.
@@ -401,11 +418,12 @@ if ADVISOR_SRC == nil then
     "6: the unmutated file must run through the leg command and report 0 failed. Output:\n" .. bout:sub(-400))
   local MUTANTS = {
     { "the fold ignores Shift", "\tif TOOLTIP_UI.shiftHeld() then return tail end\n", "" },
-    { "the fold never folds", "\treturn \" (\" .. TOOLTIP_UI.SHIFT_HINT .. \")\"\nend", "\treturn tail\nend" },
-    { "the short reason ignores Shift", "\tif TOOLTIP_UI.shiftHeld() then return reason end\n", "" },
-    { "the paragraph never shortened", "TOOLTIP_GREY .. TOOLTIP_UI.shortReason(reason, arb)", "TOOLTIP_GREY .. reason" },
-    { "the low-confidence caveat dropped", "\tif low then parts[#parts + 1] = TOOLTIP_UI.LOW_CONFIDENCE end\n", "" },
-    { "a marker with nothing hidden", "\tif not hidden and not low then return reason end\n", "" },
+    { "the fold never folds", "\treturn TOOLTIP_UI.shiftHint()\nend", "\treturn tail\nend" },
+    { "the marker not grey", "return \" \" .. TOOLTIP_GREY .. \"(\" .. TOOLTIP_UI.SHIFT_HINT .. \")\"",
+      "return \" (\" .. TOOLTIP_UI.SHIFT_HINT .. \")\"" },
+    { "the arbitrated row ignores Shift", "\tif not TOOLTIP_UI.shiftHeld() then\n\t\tout[1].text", "\tif false then\n\t\tout[1].text" },
+    { "the arbitrated row always short", "\tif not TOOLTIP_UI.shiftHeld() then\n\t\tout[1].text", "\tif true then\n\t\tout[1].text" },
+    { "the arbitrated marker dropped", "out[1].text = out[1].text .. TOOLTIP_UI.shiftHint() .. ", "out[1].text = out[1].text .. " },
     { "the upgrade branch not folded", "head = sentence .. TOOLTIP_UI.foldTail(clause)", "head = sentence .. clause" },
     { "the trade-off branch not folded", ".. \" — \" .. reason .. TOOLTIP_UI.foldTail(clause .. decline),",
       ".. \" — \" .. reason .. clause .. decline," },

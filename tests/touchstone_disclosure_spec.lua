@@ -333,9 +333,12 @@ check(lineRefusal:find("(judged", 1, true) == nil,
 -- (fk/tooltip-shift-details) Shift UP: the same lines carry one short marker in
 -- place of the clause, and the rest of the headline is unchanged.
 do
-  local HINT = " (hold Shift for details)"
+  local HINT = " (Shift: details)"
   for _, r in ipairs({ rowFwd, rowRev }) do
     local full, short = render(r), renderDefault(r)
+    check(short:sub(-#"|cff9d9d9d(Shift: details)") == "|cff9d9d9d(Shift: details)",
+      "Shift up: the marker is grey and ends the line (got: " .. short .. ")")
+    short = short:gsub("|c%x%x%x%x%x%x%x%x", "")
     local sentence, clause = ChestAdvisor._disclosureClause(full)
     check(clause ~= "" and short == sentence .. HINT,
       "Shift up folds the clause to the short marker, nothing else changes (got: " .. short .. ")")

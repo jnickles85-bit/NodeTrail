@@ -1714,10 +1714,14 @@ end
 -- ---- SHORT BY DEFAULT, FULL ON SHIFT (fk/tooltip-shift-details) ------------
 --
 -- The owner's ask (Nov 26, after testing ca8804f): a verdict's long DISCLOSURE —
--- the engine's "(judged, with …)" clause, the healer model's paragraph, a
--- "throughput not judged" decline — reads as a wall under the headline. By
--- default the tooltip now shows the headline plus ONE short caveat; the full
--- current text is shown, unchanged, while Shift is held.
+-- the engine's "(judged, with …)" clause, the healer model's paragraph and its
+-- confidence, a "throughput not judged" decline — reads as a wall under the
+-- headline. His follow-up: "the less info for the tooltip the better". By
+-- default the tooltip now shows the HEADLINE plus one small grey marker,
+-- "(Shift: details)", and only when Shift would show more; the full current
+-- text is shown, unchanged, while Shift is held. "low confidence" is part of
+-- that full text (the paragraph's "(confidence low: …)" and the Details line),
+-- so it moved behind Shift with the rest.
 --
 -- How this sits with the Tooltip detail setting (Full / Compact / Upgrades
 -- only): that setting is about the READ ARITHMETIC (the "+34 Healing, -1 Int"
@@ -1727,35 +1731,23 @@ end
 -- model's margin/band line, which was already behind Shift in EVERY mode; it
 -- now follows the same rule. Nothing is stored; no setting is added.
 --
--- The short wording is deliberately plain and is the owner's to approve:
--- SHIFT_HINT is the only new phrase, and LOW_CONFIDENCE the only caveat word.
-TOOLTIP_UI.SHIFT_HINT = "hold Shift for details"
-TOOLTIP_UI.LOW_CONFIDENCE = "low confidence"
+-- The marker's wording is deliberately plain and is the owner's to approve:
+-- SHIFT_HINT is the only new phrase.
+TOOLTIP_UI.SHIFT_HINT = "Shift: details"
+
+-- The marker as it is drawn: a space, then grey "(Shift: details)". It is the
+-- last thing on its line; the renderer closes every line with the reset.
+function TOOLTIP_UI.shiftHint()
+	return " " .. TOOLTIP_GREY .. "(" .. TOOLTIP_UI.SHIFT_HINT .. ")"
+end
 
 -- A disclosure tail (" (judged, with …)", a decline clause, or both) as the
--- tooltip shows it: whole while Shift is held, folded to one short marker
--- otherwise. "" stays "" — a row with nothing to disclose is byte-identical.
+-- tooltip shows it: whole while Shift is held, folded to the marker otherwise.
+-- "" stays "" — a row with nothing to disclose is byte-identical.
 function TOOLTIP_UI.foldTail(tail)
 	if type(tail) ~= "string" or tail == "" then return "" end
 	if TOOLTIP_UI.shiftHeld() then return tail end
-	return " (" .. TOOLTIP_UI.SHIFT_HINT .. ")"
-end
-
--- The healer model's paragraph, short: its lead ("Raid healing: an upgrade",
--- the text before the first " — "), the low-confidence caveat when the model
--- says so, and the Shift marker when anything was left out. Shift held: the
--- paragraph, whole.
-function TOOLTIP_UI.shortReason(reason, arb)
-	if type(reason) ~= "string" then return reason end
-	if TOOLTIP_UI.shiftHeld() then return reason end
-	local lead = reason:match("^(.-) — ") or reason
-	local low = type(arb) == "table" and arb.confidence == "low"
-	local hidden = lead ~= reason
-	if not hidden and not low then return reason end
-	local parts = {}
-	if low then parts[#parts + 1] = TOOLTIP_UI.LOW_CONFIDENCE end
-	if hidden then parts[#parts + 1] = TOOLTIP_UI.SHIFT_HINT end
-	return lead .. " (" .. table.concat(parts, "; ") .. ")"
+	return TOOLTIP_UI.shiftHint()
 end
 
 -- Shift pressed or released while one of OUR item tooltips is up: ask the
@@ -1983,10 +1975,17 @@ function TOOLTIP_UI.arbitratedLines(row, showDetail, note)
 		head = head .. ", decided by " .. TOOLTIP_UI.drivingPhrase(arb.driving)
 	end
 	out[1] = { text = esc .. head, colour = colour }
+	-- Shift up: the headline alone, with the marker (the model's paragraph is
+	-- always there to show). The partial-read note, a fact about the read, rides
+	-- the headline then, since it is the only line. Shift held: every line below,
+	-- exactly as before this change.
+	if not TOOLTIP_UI.shiftHeld() then
+		out[1].text = out[1].text .. TOOLTIP_UI.shiftHint() .. (type(note) == "string" and note or "")
+		return out
+	end
 	local reason = type(row.reason) == "string" and row.reason or "no reason recorded"
-	-- Short by default, the whole paragraph on Shift (see TOOLTIP_UI.shortReason).
-	out[2] = { text = TOOLTIP_GREY .. TOOLTIP_UI.shortReason(reason, arb)
-		.. (type(note) == "string" and note or ""), colour = "grey" }
+	out[2] = { text = TOOLTIP_GREY .. reason .. (type(note) == "string" and note or ""),
+		colour = "grey" }
 	local surv = TOOLTIP_UI.survivalLine(arb)
 	if surv ~= nil then out[#out + 1] = { text = TOOLTIP_GREY .. surv, colour = "grey" } end
 	if showDetail then
