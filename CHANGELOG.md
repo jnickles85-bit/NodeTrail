@@ -46,8 +46,9 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   key is added or removed. **Leveling rule reversed at the owner's request:** a healer named by
   the talent points now gets the healing evaluation in Leveling with Role clear (the round-1 rule
   asked for `/up role spell` first); a recorded Melee role still overrides, and the Role hint is
-  no longer shown when the talents name the healer. A Gear for healer pick, or a client that only
-  reports a healer role, keeps the round-1 rule and its hint. The talents are re-read on talent
+  no longer shown when the talents name the healer. A Gear for pick that matches the talents (Gear
+  for Holy on a Holy-talented paladin) counts as the talents; a Gear for healer pick the talents
+  do not back, or a client that only reports a healer role, keeps the round-1 rule and its hint. The talents are re-read on talent
   changes and on entering the world, so a read taken before they load at login does not stick. `tests/touchstone_talent_role_spec.lua` covers
   every class mapping and the fallbacks, with mutation legs.
 - The enchant read on the healer weapon path pins "Spell Damage +40" as healing-relevant, and a

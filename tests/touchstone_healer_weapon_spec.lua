@@ -582,7 +582,34 @@ do
     and V.healingContext(gspec) == false and arbCalls == 0 and not (type(gd) == "table" and gd.arbitration)
     and gv == "TRADE_OFF" and gr == PRE_SEAM_HEAD .. HINT .. PRE_CLAUSE,
     "AU: Gear-for Holy on Ret talents at Leveling: not healing, the hint (got " .. tostring(gv) .. " " .. tostring(gr) .. ")")
+  -- THE OWNER'S SAVED STATE (in-game test of 5e9ec81, Nov 26): Holy 27 / Prot 0
+  -- / Ret 0 (orderIndex 0..2), Gear-for Holy, Leveling. With Role Spell AND
+  -- with Role Auto, the Zweihander is an Upgrade and no hint is printed: the
+  -- Gear-for pick agrees with the tree, so the tree still counts.
+  talentClient({ 27, 0, 0 })
+  for _, role in ipairs({ "spell", false }) do
+    local label = "AU-owner (Gear-for Holy, Holy 27, Role " .. (role or "Auto") .. ", Leveling)"
+    setDB("holy", "leveling", role or nil)
+    local ov, orr, od, ospec = judge(TOTALS)
+    print(label .. ": " .. tostring(ov) .. "  " .. tostring(orr))
+    check(ospec.profileSource == "chosen" and ospec.weightsKey == "holy" and ospec.talentTree == "Holy",
+      label .. ": the chosen spec carries the agreeing tree (got " .. tostring(ospec.talentTree) .. ")")
+    check(V.healingContext(ospec) == true and V.healerRoleHint(ospec) == false, label .. ": healing, no hint")
+    check(ov == "UPGRADE" and type(orr) == "string" and orr:find("/up role spell", 1, true) == nil,
+      label .. ": the Zweihander is an Upgrade (got " .. tostring(ov) .. " " .. tostring(orr) .. ")")
+    decided(label, "leveling", ov, orr, od)
+  end
+  -- The same Gear-for Holy with a recorded Melee role: Melee still overrides.
+  setDB("holy", "leveling", "melee")
+  local mv2, _, md2, mspec2 = judge(TOTALS)
+  check(mspec2.talentTree == "Holy" and V.healingContext(mspec2) == false and arbCalls == 0
+    and not (type(md2) == "table" and md2.arbitration) and mv2 ~= "UPGRADE",
+    "AU-owner: Gear-for Holy + Holy talents + recorded Melee: Melee overrides (got " .. tostring(mv2) .. ")")
+  -- Gear-for Retribution on Holy talents: disagrees, no tree on the spec.
+  setDB("ret", "leveling", nil)
+  check(CA.buildSpec().talentTree == nil, "AU: Gear-for Ret on Holy talents does not carry the tree")
   -- Retribution points: melee, no healing evaluation.
+  talentClient({ 0, 5, 21 })
   setDB(nil, "leveling", nil)
   local rv, _, rd, rspec = judge(TOTALS)
   check(rspec.weightsKey == "ret" and arbCalls == 0 and not (type(rd) == "table" and rd.arbitration),
@@ -722,6 +749,10 @@ if os.getenv("TS_VERDICT_SRC") == nil and os.getenv("TS_ADVISOR_SRC") == nil the
     { "an agreeing role not carried", "\t\t\t\trecordedRole = recorded,\n", "\t\t\t\trecordedRole = nil,\n" },
     { "a recorded Melee role ignored by Auto", "local agrees = recorded ~= nil and auto ~= nil and auto.entry.orderWord == recorded",
       "local agrees = recorded ~= nil and auto ~= nil" },
+    { "an agreeing Gear-for pick drops the tree", "\t\t\ttalentTree = chosenTree,\n", "" },
+    { "a disagreeing Gear-for pick keeps the tree",
+      "local chosenTree = (agreeing and (agreeing.entry == entry\n\t\t\tor (agreeing.entry.name == entry.name and agreeing.entry.weightsKey == entry.weightsKey)))\n\t\t\tand agreeing.tree or nil",
+      "local chosenTree = agreeing and agreeing.tree or nil" },
     { "the tree pick not marked", "\t\t\t\ttalentTree = fromTree,\n", "" },
     { "a client name match marked as the tree", "\t\t\t\ttalentTree = fromTree,\n", "\t\t\t\ttalentTree = fromTree or talent.name,\n" },
     { "the fallback marked as the tree", "\t         profileSource = \"talents\",\n\t         context = contextWord(),",

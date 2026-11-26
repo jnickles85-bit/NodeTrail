@@ -530,6 +530,27 @@ check(label == "Auto (Holy: healer)", "G: the Auto box names what Auto picked (g
 check(host and host.roleClear:GetChecked() == true, "G: Auto is the checked box with no recorded role")
 local note = host and host.roleNote and host.roleNote:GetText()
 check(note == "Role selects the stat order. Auto follows your talents.", "G: the role note (got " .. tostring(note) .. ")")
+-- (owner test of 5e9ec81) ONE source of truth for the role: the Settings row and
+-- the /ts talents probe both read ChestAdvisorDB.role[token]. His saved state:
+-- Gear-for Holy, Role Spell, Holy talents.
+setDB("holy", "spell")
+host = settings()
+local function probeRole()
+  local r = call("talentsReport")
+  return type(r) == "string" and r:match("Role setting: ([^\n]+)") or nil
+end
+check(host and host.roleSpell:GetChecked() == true and host.roleClear:GetChecked() ~= true
+  and host.roleMelee:GetChecked() ~= true,
+  "G: a recorded Spell role: the Settings row checks Spell, not Auto")
+check(probeRole() == "Spell (overrides Auto)", "G: and the probe says Spell (got " .. tostring(probeRole()) .. ")")
+local clearClick = host and host.roleClear:GetScript("OnClick")
+check(type(clearClick) == "function", "G: the Auto box has its click")
+if type(clearClick) == "function" then pcall(clearClick, host.roleClear) end
+check(ChestAdvisorDB.role[CLASS[2]] == nil, "G: clicking Auto clears the recorded role")
+check(host and host.roleClear:GetChecked() == true and host.roleSpell:GetChecked() ~= true,
+  "G: after the click the row shows Auto")
+check(probeRole() == "Auto", "G: and the probe agrees: Auto (got " .. tostring(probeRole()) .. ")")
+setDB(nil, nil)
 uninstall()
 host = settings()
 label = host and host.roleClear and host.roleClear.label and host.roleClear.label:GetText()

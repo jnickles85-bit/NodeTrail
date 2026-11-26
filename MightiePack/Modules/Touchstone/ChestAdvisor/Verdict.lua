@@ -8581,12 +8581,13 @@ local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 -- to determine the actual role of the player ... the player wont have to go in
 -- and make sure its set correctly. Unless he has to."). This REVERSES the
 -- round-1 Leveling rule above for a spec named by the talent tree Touchstone
--- read (Auto: the spec carries `talentTree`, set only by that pick). Such a
--- spec is a healing evaluation in Leveling too, and gets no hint. A recorded
--- Melee role still overrides it — that is the questing healer who melees, now
--- the player's one switch. A Gear-for pick ("chosen") and the client-role
--- fallback (profileSource "talents" with no tree) do NOT count: they keep the
--- round-1 rule and its hint (Review round 1; the owner's brief was talents).
+-- read (the spec carries `talentTree`: Auto's pick, or a Gear-for / recorded
+-- role that AGREES with that pick). Such a spec is a healing evaluation in
+-- Leveling too, and gets no hint. A recorded Melee role still overrides it —
+-- that is the questing healer who melees, now the player's one switch. A
+-- Gear-for pick the talents do not back (Gear-for Holy on Retribution points)
+-- and the client-role fallback (profileSource "talents" with no tree) do NOT
+-- count: they keep the round-1 rule and its hint (Review round 1).
 local function levelingContext(spec)
 	local c = spec.context
 	return c == nil or c == "leveling"

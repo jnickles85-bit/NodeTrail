@@ -1520,8 +1520,9 @@ end
 -- TRAIT_CONFIG_LIST_UPDATED, CHARACTER_POINTS_CHANGED,
 -- ACTIVE_COMBAT_CONFIG_CHANGED) and on PLAYER_ENTERING_WORLD, and kept in memory.
 --
--- The spec built from the tree pick carries `talentTree` (the tree's name);
--- no other path sets it. Verdict.specNamesHealer reads it, so only the real
+-- The spec built from the tree pick carries `talentTree` (the tree's name), and
+-- so does a Gear-for or recorded-role spec that AGREES with the tree; no other
+-- spec carries it. Verdict.specNamesHealer reads it, so only the real
 -- tree pick decides a Leveling healer (not the client-role fallback, not a
 -- Gear-for pick).
 --
@@ -1762,6 +1763,14 @@ local function buildSpec()
 	if entry then
 		local order = (Verdict and Verdict.classRoleOrder)
 			and Verdict.classRoleOrder(token, entry.orderWord) or nil
+		-- (fk/talent-auto-role, owner test of 5e9ec81) a Gear-for pick that
+		-- AGREES with the talent tree (Gear-for Holy on a Holy-talented paladin)
+		-- is still the talents naming the spec: the tree counts. One that
+		-- disagrees (Gear-for Holy on Retribution talents) does not.
+		local agreeing = ChestAdvisor.autoTalentPick(token)
+		local chosenTree = (agreeing and (agreeing.entry == entry
+			or (agreeing.entry.name == entry.name and agreeing.entry.weightsKey == entry.weightsKey)))
+			and agreeing.tree or nil
 		return {
 			order = order,
 			role = entry.orderWord,
@@ -1785,6 +1794,8 @@ local function buildSpec()
 			-- melee-leaning setup and keeps weapon DPS and procs in play.
 			-- Read-only here; nothing new is stored.
 			recordedRole = playerRole(token),
+			-- set only when the talent tree names this same spec (see above)
+			talentTree = chosenTree,
 		}
 	end
 	-- Auto: when the player has not recorded `/up role`, match the

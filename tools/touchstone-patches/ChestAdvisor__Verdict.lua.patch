@@ -53,11 +53,12 @@
 # question), and the enchant table's pinned examples include "Spell Damage +40".
 #
 # (fk/talent-auto-role) TALENTS DECIDE: Verdict.specNamesHealer. A healer spec
-# named by Auto's talent tree pick (the spec's `talentTree`, set by no other
-# path) makes a Leveling row a healing evaluation (a recorded Melee role still
-# overrides), and the Role hint is not shown for it. This reverses the round-1
-# Leveling rule at the owner's request, for the tree pick only: a Gear-for pick
-# and the client-role fallback keep the round-1 rule and its hint.
+# named by the talent tree (the spec's `talentTree`: Auto's pick, or a Gear-for
+# or recorded role that agrees with it) makes a Leveling row a healing
+# evaluation (a recorded Melee role still overrides), and the Role hint is not
+# shown for it. This reverses the round-1 Leveling rule at the owner's request,
+# for the talents only: a Gear-for pick the talents do not back and the
+# client-role fallback keep the round-1 rule and its hint.
 --- a/ChestAdvisor/Verdict.lua
 +++ b/ChestAdvisor/Verdict.lua
 @@ -623,6 +623,37 @@
@@ -2509,7 +2510,7 @@
  	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
  	if sp then
  		local v = tonumber((sp:gsub(",", ".")))
-@@ -6502,6 +8549,250 @@
+@@ -6502,6 +8549,251 @@
  -- literal cannot silently drop it from the set.
  local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
  
@@ -2545,12 +2546,13 @@
 +-- to determine the actual role of the player ... the player wont have to go in
 +-- and make sure its set correctly. Unless he has to."). This REVERSES the
 +-- round-1 Leveling rule above for a spec named by the talent tree Touchstone
-+-- read (Auto: the spec carries `talentTree`, set only by that pick). Such a
-+-- spec is a healing evaluation in Leveling too, and gets no hint. A recorded
-+-- Melee role still overrides it — that is the questing healer who melees, now
-+-- the player's one switch. A Gear-for pick ("chosen") and the client-role
-+-- fallback (profileSource "talents" with no tree) do NOT count: they keep the
-+-- round-1 rule and its hint (Review round 1; the owner's brief was talents).
++-- read (the spec carries `talentTree`: Auto's pick, or a Gear-for / recorded
++-- role that AGREES with that pick). Such a spec is a healing evaluation in
++-- Leveling too, and gets no hint. A recorded Melee role still overrides it —
++-- that is the questing healer who melees, now the player's one switch. A
++-- Gear-for pick the talents do not back (Gear-for Holy on Retribution points)
++-- and the client-role fallback (profileSource "talents" with no tree) do NOT
++-- count: they keep the round-1 rule and its hint (Review round 1).
 +local function levelingContext(spec)
 +	local c = spec.context
 +	return c == nil or c == "leveling"
@@ -2760,7 +2762,7 @@
  function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide, ctx, totals)
  	local candNumbers = weaponNumbers(candLines)
  	local wornNumbers = weaponNumbers(wornLines)
-@@ -6690,6 +8981,146 @@
+@@ -6690,6 +8982,146 @@
  		end
  	end
  
@@ -2907,7 +2909,7 @@
  	local statLed = type(spec) == "table"
  		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
  		and type(spec.order) == "table"
-@@ -6862,6 +9293,7 @@
+@@ -6862,6 +9294,7 @@
  		outcome = Verdict.dominance(candStats, eqStats, order)
  	end
  
