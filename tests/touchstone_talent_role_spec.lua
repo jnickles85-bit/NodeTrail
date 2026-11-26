@@ -379,6 +379,34 @@ if onEvent then
   check(okE, "E: PLAYER_TALENT_UPDATE handled without error: " .. tostring(errE))
 end
 check(pickKey() == "holy", "E: PLAYER_TALENT_UPDATE re-reads the talents too")
+-- (Review round 1) TRAIT_CONFIG_LIST_UPDATED is registered (guarded) and re-reads.
+check(ev.TRAIT_CONFIG_LIST_UPDATED, "E: TRAIT_CONFIG_LIST_UPDATED is registered")
+local function pointsTo(pts)
+  C_Traits.GetGroupCurrencyInfo = function(_, ids)
+    local out = {}
+    for i, id in ipairs(ids) do out[i] = { traitNodeGroupID = id, currencyInfos = { { spent = pts[id - 100] } } } end
+    return out
+  end
+end
+pointsTo({ 0, 0, 25 })
+check(pickKey() == "holy", "E: (the good read is still cached)")
+if onEvent then pcall(onEvent, eventFrame, "TRAIT_CONFIG_LIST_UPDATED") end
+check(pickKey() == "ret", "E: TRAIT_CONFIG_LIST_UPDATED re-reads the talents (got " .. tostring(pickKey()) .. ")")
+-- (Review round 1) a 0-point read at login does not stay cached: entering the
+-- world re-reads.
+pointsTo({ 0, 0, 0 })
+if onEvent then pcall(onEvent, eventFrame, "TRAIT_CONFIG_UPDATED", 7) end
+check(pickKey() == nil, "E: a 0-point read (the login race) picks nothing")
+pointsTo({ 25, 0, 0 })
+check(pickKey() == nil, "E: (and that successful read is cached)")
+CA._lastInvalidation = nil
+if onEvent then
+  local okP, errP = pcall(onEvent, eventFrame, "PLAYER_ENTERING_WORLD")
+  check(okP, "E: PLAYER_ENTERING_WORLD handled without error: " .. tostring(errP))
+end
+check(pickKey() == "holy", "E: PLAYER_ENTERING_WORLD re-reads the talents (got " .. tostring(pickKey()) .. ")")
+check(type(CA._lastInvalidation) == "string" and CA._lastInvalidation:find("talents holy", 1, true) ~= nil,
+  "E: and re-judges, because the pick moved (got " .. tostring(CA._lastInvalidation) .. ")")
 
 -- ---- D. precedence ---------------------------------------------------------
 install({ names = EXPECT.PALADIN[2], points = { 25, 0, 0 } })
@@ -551,8 +579,15 @@ if not IN_LEG then
     { "the new events not registered", "\t\t\tpcall(frame.RegisterEvent, frame, tev)\n", "\t\t\tlocal _ = tev\n" },
     { "the new events unguarded", "\t\t\tpcall(frame.RegisterEvent, frame, tev)\n", "\t\t\tframe:RegisterEvent(tev)\n" },
     { "a talent event does not re-judge",
-      "\t\t\t\tor ev == \"ACTIVE_COMBAT_CONFIG_CHANGED\" then\n\t\t\t\tChestAdvisor._onTalentsChanged(ev)\n",
-      "\t\t\t\tor ev == \"ACTIVE_COMBAT_CONFIG_CHANGED\" then\n" },
+      "\t\t\t\tor ev == \"TRAIT_CONFIG_LIST_UPDATED\" or ev == \"ACTIVE_COMBAT_CONFIG_CHANGED\" then\n\t\t\t\tChestAdvisor._onTalentsChanged(ev)\n",
+      "\t\t\t\tor ev == \"TRAIT_CONFIG_LIST_UPDATED\" or ev == \"ACTIVE_COMBAT_CONFIG_CHANGED\" then\n" },
+    { "TRAIT_CONFIG_LIST_UPDATED not registered", "\"TRAIT_CONFIG_LIST_UPDATED\", \"ACTIVE_COMBAT_CONFIG_CHANGED\" }) do",
+      "\"ACTIVE_COMBAT_CONFIG_CHANGED\" }) do" },
+    { "TRAIT_CONFIG_LIST_UPDATED not handled", "or ev == \"TRAIT_CONFIG_LIST_UPDATED\" or ev == \"ACTIVE_COMBAT_CONFIG_CHANGED\" then",
+      "or ev == \"ACTIVE_COMBAT_CONFIG_CHANGED\" then" },
+    { "PLAYER_ENTERING_WORLD does not re-read",
+      "\t\t\t\tif ev == \"PLAYER_ENTERING_WORLD\" then\n\t\t\t\t\tChestAdvisor._onTalentsChanged(ev)\n",
+      "\t\t\t\tif false then\n\t\t\t\t\tChestAdvisor._onTalentsChanged(ev)\n" },
     { "PLAYER_TALENT_UPDATE does not re-read",
       "\t\t\t\tif ev == \"PLAYER_TALENT_UPDATE\" or ev == \"ACTIVE_TALENT_GROUP_CHANGED\" then\n\t\t\t\t\tChestAdvisor._onTalentsChanged(ev)\n",
       "\t\t\t\tif false then\n\t\t\t\t\tChestAdvisor._onTalentsChanged(ev)\n" },
@@ -560,7 +595,7 @@ if not IN_LEG then
     { "Feral reads as Bear", "alias = \"Feral\", key = \"feral_cat\"", "alias = \"Feral\", key = \"feral_bear\"" },
     { "the role word for a healer", "\tif r == \"HEALER\" then return \"healer\" end\n", "" },
     { "the role word for a tank", "\tif r == \"TANK\" then return \"tank\" end\n", "" },
-    { "Auto never consulted by buildSpec", "\t\tif talent == nil and auto ~= nil then talent = auto.entry end\n", "" },
+    { "Auto never consulted by buildSpec", "\t\tif talent == nil and auto ~= nil then talent, fromTree = auto.entry, auto.tree end\n", "" },
     { "the talents command missing", "elseif subword == \"talents\" then", "elseif subword == \"talents-off\" then" },
     { "diag without the talent read", "\tchatOut(ChestAdvisor.talentsReport())\n", "" },
     { "help without /up talents", "\t\t.. \"  /up talents    show the talent trees Touchstone reads and what Auto picked (read-only)\\n\"\n", "" },

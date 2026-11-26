@@ -8580,12 +8580,13 @@ local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 -- TALENTS DECIDE (fk/talent-auto-role, the owner's call Nov 26: "read talents
 -- to determine the actual role of the player ... the player wont have to go in
 -- and make sure its set correctly. Unless he has to."). This REVERSES the
--- round-1 Leveling rule above for a spec that itself names the healer: the
--- talent tree Touchstone read (profileSource "talents", Auto) or the player's
--- Gear-for pick ("chosen"). Such a spec is a healing evaluation in Leveling too,
--- and gets no hint. A recorded Melee role still overrides it — that is the
--- questing healer who melees, now the player's one switch. The hint remains for
--- a spec that names no healer itself (the client-role fallback path).
+-- round-1 Leveling rule above for a spec named by the talent tree Touchstone
+-- read (Auto: the spec carries `talentTree`, set only by that pick). Such a
+-- spec is a healing evaluation in Leveling too, and gets no hint. A recorded
+-- Melee role still overrides it — that is the questing healer who melees, now
+-- the player's one switch. A Gear-for pick ("chosen") and the client-role
+-- fallback (profileSource "talents" with no tree) do NOT count: they keep the
+-- round-1 rule and its hint (Review round 1; the owner's brief was talents).
 local function levelingContext(spec)
 	local c = spec.context
 	return c == nil or c == "leveling"
@@ -8595,9 +8596,9 @@ local function healerSpellSpec(spec)
 	return type(spec) == "table" and spec.clientRole == "HEALER" and spec.role == "spell"
 end
 
--- The spec itself says healer: Auto's talent tree, or the Gear-for pick.
+-- The spec was named by Auto's talent tree pick (and only that).
 function Verdict.specNamesHealer(spec)
-	return type(spec) == "table" and (spec.profileSource == "talents" or spec.profileSource == "chosen")
+	return type(spec) == "table" and type(spec.talentTree) == "string" and spec.talentTree ~= ""
 end
 
 function Verdict.healingContext(spec)

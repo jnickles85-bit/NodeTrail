@@ -629,7 +629,7 @@ local function getFrame()
 		-- (fk/talent-auto-role) talent points move the Auto role. Guarded: an
 		-- event this client does not know must not cost the frame its others.
 		for _, tev in ipairs({ "CHARACTER_POINTS_CHANGED", "TRAIT_CONFIG_UPDATED",
-			"ACTIVE_COMBAT_CONFIG_CHANGED" }) do
+			"TRAIT_CONFIG_LIST_UPDATED", "ACTIVE_COMBAT_CONFIG_CHANGED" }) do
 			pcall(frame.RegisterEvent, frame, tev)
 		end
 		frame:SetScript("OnEvent", function(self, ev, ...)
@@ -712,7 +712,7 @@ local function getFrame()
 				return
 			end
 			if ev == "CHARACTER_POINTS_CHANGED" or ev == "TRAIT_CONFIG_UPDATED"
-				or ev == "ACTIVE_COMBAT_CONFIG_CHANGED" then
+				or ev == "TRAIT_CONFIG_LIST_UPDATED" or ev == "ACTIVE_COMBAT_CONFIG_CHANGED" then
 				ChestAdvisor._onTalentsChanged(ev)
 				return
 			end
@@ -736,6 +736,12 @@ local function getFrame()
 				or ev == "BAG_UPDATE_DELAYED"
 				or ev == "PLAYER_EQUIPMENT_CHANGED"
 			then
+				-- (fk/talent-auto-role, Review round 1) a read taken before the
+				-- talent configs loaded (0 points at login) must not stay cached
+				-- until the next talent event: re-read on entering the world.
+				if ev == "PLAYER_ENTERING_WORLD" then
+					ChestAdvisor._onTalentsChanged(ev)
+				end
 				-- Some bag frames are created after login, so re-discover
 				-- any newly available frames here (the guards make every
 				-- re-entry idempotent — no hook is stacked).
@@ -1511,7 +1517,13 @@ end
 -- takes the tree's spec and carries the recorded word; one that disagrees
 -- (Melee on a Holy paladin) keeps the old path. Nothing is stored: the pick is
 -- re-read when the talents change (PLAYER_TALENT_UPDATE, TRAIT_CONFIG_UPDATED,
--- CHARACTER_POINTS_CHANGED, ACTIVE_COMBAT_CONFIG_CHANGED) and kept in memory.
+-- TRAIT_CONFIG_LIST_UPDATED, CHARACTER_POINTS_CHANGED,
+-- ACTIVE_COMBAT_CONFIG_CHANGED) and on PLAYER_ENTERING_WORLD, and kept in memory.
+--
+-- The spec built from the tree pick carries `talentTree` (the tree's name);
+-- no other path sets it. Verdict.specNamesHealer reads it, so only the real
+-- tree pick decides a Leveling healer (not the client-role fallback, not a
+-- Gear-for pick).
 --
 -- Druid Feral reads as Feral (Cat): talent points cannot tell Cat from Bear,
 -- and Bear stays a Gear-for pick.
@@ -1788,7 +1800,8 @@ local function buildSpec()
 	local agrees = recorded ~= nil and auto ~= nil and auto.entry.orderWord == recorded
 	if recorded == nil or agrees then
 		local talent = (not agrees) and ChestAdvisor.specFromTalents(token, si and si.name, si and si.role) or nil
-		if talent == nil and auto ~= nil then talent = auto.entry end
+		local fromTree = nil
+		if talent == nil and auto ~= nil then talent, fromTree = auto.entry, auto.tree end
 		if talent then
 			local torder = (Verdict and Verdict.classRoleOrder)
 				and Verdict.classRoleOrder(token, talent.orderWord) or nil
@@ -1810,6 +1823,9 @@ local function buildSpec()
 				context = contextWord(),
 				-- No role is recorded on this path, or one that agrees with the tree.
 				recordedRole = recorded,
+				-- (fk/talent-auto-role) set ONLY when the talent tree pick named
+				-- this spec; Verdict.specNamesHealer reads nothing else.
+				talentTree = fromTree,
 			}
 		end
 	end

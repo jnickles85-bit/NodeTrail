@@ -44,9 +44,11 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   pick, for example "Auto (Holy: healer)". `/ts talents` (also `/up talents`, and the end of
   `/up diag`) prints, read-only, each tree's name, order and points and what Auto picked. No saved
   key is added or removed. **Leveling rule reversed at the owner's request:** a healer named by
-  talents or by Gear for now gets the healing evaluation in Leveling with Role clear (the round-1
-  rule asked for `/up role spell` first); a recorded Melee role still overrides, and the Role hint
-  is no longer shown when talents name the healer. `tests/touchstone_talent_role_spec.lua` covers
+  the talent points now gets the healing evaluation in Leveling with Role clear (the round-1 rule
+  asked for `/up role spell` first); a recorded Melee role still overrides, and the Role hint is
+  no longer shown when the talents name the healer. A Gear for healer pick, or a client that only
+  reports a healer role, keeps the round-1 rule and its hint. The talents are re-read on talent
+  changes and on entering the world, so a read taken before they load at login does not stick. `tests/touchstone_talent_role_spec.lua` covers
   every class mapping and the fallbacks, with mutation legs.
 - The enchant read on the healer weapon path pins "Spell Damage +40" as healing-relevant, and a
   stale comment that said the enchant text is never read now says what it is read for.
