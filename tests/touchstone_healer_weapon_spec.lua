@@ -265,7 +265,11 @@ do
   local v, r, d = judge(TOTALS)
   local row = { id = 31141, lines = ZWEI, chestWornLines = WOLF, class = "PALADIN",
     role = "spell", verdict = v, reason = r, arbitration = d and d.arbitration or nil }
+  -- The full disclosure is the Shift view (fk/tooltip-shift-details).
+  local savedShift = IsShiftKeyDown
+  IsShiftKeyDown = function() return true end
   local lines = CA.tooltipLines(row)
+  IsShiftKeyDown = savedShift
   local function plain(t) return (tostring(t):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
   local all = {}
   for _, l in ipairs(type(lines) == "table" and lines or {}) do all[#all + 1] = plain(l.text) end
@@ -276,6 +280,15 @@ do
     "the engine's clause reaches the tooltip whole")
   local _, clause = CA._disclosureClause(r)
   check(clause == HEALER_CLAUSE, "ChestAdvisor's splitter takes the clause off as one parenthetical")
+  -- Shift UP (the default): the headline alone with the grey Shift marker
+  -- (fk/tooltip-shift-details); the paragraph and its confidence are Shift-only.
+  IsShiftKeyDown = function() return false end
+  local short = {}
+  for _, l in ipairs(CA.tooltipLines(row) or {}) do short[#short + 1] = plain(l.text) end
+  IsShiftKeyDown = savedShift
+  print("B. tooltip, Shift up: " .. table.concat(short, " / "))
+  check(short[1] == all[1] .. " (Shift: details)" and #short == 1,
+    "B: Shift up: the headline and the marker, one line (got " .. table.concat(short, " / ") .. ")")
 end
 
 -- ── C. a decline stays amber and says why ───────────────────────────────────
@@ -363,6 +376,8 @@ do
     "not asked — the hovered weapon's enchant, Spell Damage and Healing +12, may change healing,"
       .. " and enchants are never priced")
 end
+enchantCase("worn Spell Damage", HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Spell Damage +40" }),
+  "not asked — the equipped weapon's enchant, Spell Damage +40, may change healing, and enchants are never priced")
 enchantCase("worn unknown text", HEAL20, sword("Worn Mace", { "+10 Intellect", "Enchanted: Crusader" }),
   "not asked — the equipped weapon's enchant, Crusader, may change healing, and enchants are never priced")
 do
@@ -379,6 +394,7 @@ do
   local mayHeal = type(V.enchantMayHeal) == "function" and V.enchantMayHeal or function() return nil end
   check(mayHeal("Weapon Damage +5") == false and mayHeal("+15 Strength") == false
     and mayHeal("Healing Power +55") == true and mayHeal("+22 Intellect") == true
+    and mayHeal("Spell Damage +40") == true and mayHeal("Spell Power +30") == true
     and mayHeal("Brilliant Mana Oil") == true and mayHeal("") == true,
     "N: the enchant read is conservative: melee-only is out, anything that could heal is in")
 end

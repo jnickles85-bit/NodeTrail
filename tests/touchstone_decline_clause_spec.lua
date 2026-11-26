@@ -307,7 +307,18 @@ do
       "the row carries the ladder's cause key (got "
         .. (type(arb) == "table" and tostring(arb.cause) or type(arb)) .. ")")
 
+    -- (fk/tooltip-shift-details) the clause is full detail: shown with Shift held,
+    -- folded to the short marker with Shift up.
+    local savedShift = IsShiftKeyDown
+    IsShiftKeyDown = function() return false end
+    local shortLines = CA.tooltipLines(row)
+    local short = type(shortLines) == "table" and shortLines[1] and stripEscapes(shortLines[1].text) or nil
+    check(short ~= nil and short:find("throughput not judged", 1, true) == nil
+      and short:find("(Shift: details)", 1, true) ~= nil,
+      "Shift up: the decline clause folds to the short marker (got " .. tostring(short) .. ")")
+    IsShiftKeyDown = function() return true end
     local lines = CA.tooltipLines(row)
+    IsShiftKeyDown = savedShift
     local head = type(lines) == "table" and lines[1] and stripEscapes(lines[1].text) or nil
     print("D. tooltip line  " .. tostring(head))
     check(head ~= nil and head:find("the client did not give your mana numbers", 1, true) ~= nil,
