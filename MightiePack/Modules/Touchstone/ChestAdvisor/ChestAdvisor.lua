@@ -1711,6 +1711,83 @@ function TOOLTIP_UI.shiftHeld()
 	return type(IsShiftKeyDown) == "function" and IsShiftKeyDown() == true
 end
 
+-- ---- SHORT BY DEFAULT, FULL ON SHIFT (fk/tooltip-shift-details) ------------
+--
+-- The owner's ask (Nov 26, after testing ca8804f): a verdict's long DISCLOSURE —
+-- the engine's "(judged, with …)" clause, the healer model's paragraph, a
+-- "throughput not judged" decline — reads as a wall under the headline. By
+-- default the tooltip now shows the headline plus ONE short caveat; the full
+-- current text is shown, unchanged, while Shift is held.
+--
+-- How this sits with the Tooltip detail setting (Full / Compact / Upgrades
+-- only): that setting is about the READ ARITHMETIC (the "+34 Healing, -1 Int"
+-- numbers line) and is untouched — Full still always shows the numbers,
+-- Compact still shows them on Shift, Upgrades only still drops the two
+-- non-answers. The disclosure is a different class of detail, like the healer
+-- model's margin/band line, which was already behind Shift in EVERY mode; it
+-- now follows the same rule. Nothing is stored; no setting is added.
+--
+-- The short wording is deliberately plain and is the owner's to approve:
+-- SHIFT_HINT is the only new phrase, and LOW_CONFIDENCE the only caveat word.
+TOOLTIP_UI.SHIFT_HINT = "hold Shift for details"
+TOOLTIP_UI.LOW_CONFIDENCE = "low confidence"
+
+-- A disclosure tail (" (judged, with …)", a decline clause, or both) as the
+-- tooltip shows it: whole while Shift is held, folded to one short marker
+-- otherwise. "" stays "" — a row with nothing to disclose is byte-identical.
+function TOOLTIP_UI.foldTail(tail)
+	if type(tail) ~= "string" or tail == "" then return "" end
+	if TOOLTIP_UI.shiftHeld() then return tail end
+	return " (" .. TOOLTIP_UI.SHIFT_HINT .. ")"
+end
+
+-- The healer model's paragraph, short: its lead ("Raid healing: an upgrade",
+-- the text before the first " — "), the low-confidence caveat when the model
+-- says so, and the Shift marker when anything was left out. Shift held: the
+-- paragraph, whole.
+function TOOLTIP_UI.shortReason(reason, arb)
+	if type(reason) ~= "string" then return reason end
+	if TOOLTIP_UI.shiftHeld() then return reason end
+	local lead = reason:match("^(.-) — ") or reason
+	local low = type(arb) == "table" and arb.confidence == "low"
+	local hidden = lead ~= reason
+	if not hidden and not low then return reason end
+	local parts = {}
+	if low then parts[#parts + 1] = TOOLTIP_UI.LOW_CONFIDENCE end
+	if hidden then parts[#parts + 1] = TOOLTIP_UI.SHIFT_HINT end
+	return lead .. " (" .. table.concat(parts, "; ") .. ")"
+end
+
+-- Shift pressed or released while one of OUR item tooltips is up: ask the
+-- client to rebuild it on its next update, so the short and full forms swap
+-- without moving the mouse. Bag and merchant buttons already re-set their
+-- tooltip every TOOLTIP_UPDATE_TIME through the owner's UpdateTooltip
+-- (GameTooltip_OnUpdate); this covers tooltips whose owner does not, through the
+-- client's own RefreshDataNextUpdate (Blizzard_GameTooltip GameTooltip.lua:973 on
+-- 1.60.1.70205). Returns true when a refresh was asked for. Any other key, a
+-- hidden tooltip, a tooltip without our line, or a client without the method:
+-- nothing happens.
+function TOOLTIP_UI.onModifierChanged(key, tip)
+	if key ~= "LSHIFT" and key ~= "RSHIFT" then return false end
+	tip = tip or rawget(_G, "GameTooltip")
+	if type(tip) ~= "table" then return false end
+	local okShown, shown = pcall(function() return tip:IsShown() end)
+	if not okShown or shown ~= true then return false end
+	if type(tip.GetPrimaryTooltipData) ~= "function"
+		or type(tip.RefreshDataNextUpdate) ~= "function" then
+		return false
+	end
+	local okData, data = pcall(tip.GetPrimaryTooltipData, tip)
+	if not okData or type(data) ~= "table" or type(data.lines) ~= "table" then return false end
+	local ours = false
+	for i = 1, #data.lines do
+		local ld = data.lines[i]
+		if type(ld) == "table" and ld[TOOLTIP_UI.LINE_MARK] then ours = true; break end
+	end
+	if not ours then return false end
+	return (pcall(tip.RefreshDataNextUpdate, tip))
+end
+
 -- Does this row deserve a line under the "Upgrades" setting? Only the two
 -- non-answers are suppressed (the card's "no line on not-upgrades / can't-judge").
 function TOOLTIP_UI.worthALine(row)
@@ -1907,8 +1984,9 @@ function TOOLTIP_UI.arbitratedLines(row, showDetail, note)
 	end
 	out[1] = { text = esc .. head, colour = colour }
 	local reason = type(row.reason) == "string" and row.reason or "no reason recorded"
-	out[2] = { text = TOOLTIP_GREY .. reason .. (type(note) == "string" and note or ""),
-		colour = "grey" }
+	-- Short by default, the whole paragraph on Shift (see TOOLTIP_UI.shortReason).
+	out[2] = { text = TOOLTIP_GREY .. TOOLTIP_UI.shortReason(reason, arb)
+		.. (type(note) == "string" and note or ""), colour = "grey" }
 	local surv = TOOLTIP_UI.survivalLine(arb)
 	if surv ~= nil then out[#out + 1] = { text = TOOLTIP_GREY .. surv, colour = "grey" } end
 	if showDetail then
@@ -2865,7 +2943,8 @@ local function verdictLines(row, order)
 		-- byte-identical.
 		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
 		out[#out + 1] = {
-			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head .. clause .. decline,
+			text = esc .. TOOLTIP_PREFIX .. weighted.word .. " — " .. weighted.head
+				.. TOOLTIP_UI.foldTail(clause .. decline),
 			colour = colour,
 		}
 		if weighted.detail and showDetail then
@@ -2873,6 +2952,10 @@ local function verdictLines(row, order)
 		end
 	elseif row.verdict == "UPGRADE" then
 		local head, detail = describeUpgradeParts(row, order)
+		do
+			local sentence, clause = disclosureClause(head)
+			head = sentence .. TOOLTIP_UI.foldTail(clause)
+		end
 		out[#out + 1] = {
 			text = TOOLTIP_GREEN .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
 				.. " — " .. head,
@@ -2896,7 +2979,7 @@ local function verdictLines(row, order)
 		-- is the one being dropped, and the two are told apart by the helper.
 		local sentence, clause = disclosureClause(type(row.reason) == "string" and row.reason
 			or "better on some stats, worse on others")
-		local reason = sentence:gsub("^%s*trade%-off:%s*", ""):gsub("%s*%b()%s*$", "") .. clause
+		local reason = sentence:gsub("^%s*trade%-off:%s*", ""):gsub("%s*%b()%s*$", "")
 		local detail = nil
 		if type(row.chestWornLines) == "table" and #row.chestWornLines > 0
 			and Verdict and type(Verdict.statTable) == "function"
@@ -2921,7 +3004,7 @@ local function verdictLines(row, order)
 		local decline = showDetail and TOOLTIP_UI.declineClause(row) or ""
 		out[#out + 1] = {
 			text = TOOLTIP_AMBER .. TOOLTIP_PREFIX .. TOOLTIP_UI.word(row.verdict)
-				.. " — " .. reason .. decline,
+				.. " — " .. reason .. TOOLTIP_UI.foldTail(clause .. decline),
 			colour = "amber",
 		}
 		if detail and showDetail then
@@ -3074,6 +3157,7 @@ end
 -- and anchors a FRAME at the end), so the data list is the only supported
 -- insertion point. Nothing here reads or patches another addon's files.
 local TOOLTIP_LINE_MARK = "__touchstoneVerdict"
+TOOLTIP_UI.LINE_MARK = TOOLTIP_LINE_MARK
 
 -- A colour object for the client's line-data model: AddLineDataText does
 -- `leftColor:GetRGB()` (AddLineDataText -> GameTooltip_AddColoredLine), so this
@@ -3107,7 +3191,14 @@ local function tooltipPreCall(tip, data)
 	-- reuses a CACHED data table when the info carries no getter, so the guard has
 	-- to live in the data itself; a re-fetch hands us a fresh table and the line
 	-- is rebuilt from scratch. Either way: exactly one verdict line, always.
+	--
+	-- (fk/tooltip-shift-details) A cached table carries the lines built for the
+	-- PREVIOUS Shift state, so they are taken off and rebuilt rather than kept:
+	-- the Shift swap must reach a cached rebuild too. Ours are always the tail.
 	local lines = data.lines
+	while #lines > 0 and type(lines[#lines]) == "table" and lines[#lines][TOOLTIP_LINE_MARK] do
+		lines[#lines] = nil
+	end
 	local at = #lines
 	for i = 1, at do
 		local ld = lines[i]
@@ -3169,6 +3260,22 @@ end
 -- kept as the fallback for a client without AddTooltipPreCall, and it is
 -- registered INSTEAD of the pre-call, never both, so the line can never print
 -- twice.
+-- (fk/tooltip-shift-details) The Shift swap for tooltips whose owner does not
+-- re-set them on its own (see TOOLTIP_UI.onModifierChanged). Installed with the
+-- pre-call only: the post-call fallback appends, and its tooltip is not rebuilt
+-- in place.
+local function installShiftSwap()
+	if TOOLTIP_UI.modifierFrame ~= nil or type(CreateFrame) ~= "function" then return end
+	local ok, f = pcall(CreateFrame, "Frame")
+	if ok and type(f) == "table" and f.RegisterEvent and f.SetScript then
+		pcall(f.RegisterEvent, f, "MODIFIER_STATE_CHANGED")
+		pcall(f.SetScript, f, "OnEvent", function(_, _, key)
+			TOOLTIP_UI.onModifierChanged(key)
+		end)
+		TOOLTIP_UI.modifierFrame = f
+	end
+end
+
 local tooltipHooked = false
 local function installTooltipHook()
 	if tooltipHooked then return end
@@ -3179,6 +3286,7 @@ local function installTooltipHook()
 	if type(processor) == "table" and dataType ~= nil then
 		if type(processor.AddTooltipPreCall) == "function" then
 			processor.AddTooltipPreCall(dataType, tooltipPreCall)
+			installShiftSwap()
 			return
 		end
 		if type(processor.AddTooltipPostCall) == "function" then

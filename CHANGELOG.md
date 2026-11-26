@@ -24,6 +24,18 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
     new saved key is `ChestAdvisorDB.readyAnnounced`; nothing is removed.
   - Arrow animation capped at 30 placements a second; GearAPI v2 (every v1 field unchanged); the
     band wording says what it measured and what it could not (A9, A11).
+- **Tooltip: short by default, full details while Shift is held** (owner's request after testing
+  ca8804f). A verdict's long explanation no longer sits under every hover. The tooltip shows the
+  headline plus one short line, for example "Raid healing: an upgrade (low confidence; hold Shift
+  for details)" or "… decided by Healing Power [Holy (chosen)] (hold Shift for details)". Holding
+  Shift shows the full text exactly as before: the healer model's paragraph and its Details line,
+  the "(judged, with …)" note of what was not counted, and any "throughput not judged" note.
+  Pressing or releasing Shift swaps the line without moving the mouse. The Tooltip detail setting
+  is unchanged: Full still always shows the numbers line, Compact shows it on Shift, Upgrades only
+  still hides not-an-upgrade lines. The Upgrades tab rows are unchanged. No setting or saved key
+  is added. `tests/touchstone_tooltip_shift_spec.lua` pins both states, with mutation legs.
+- The enchant read on the healer weapon path pins "Spell Damage +40" as healing-relevant, and a
+  stale comment that said the enchant text is never read now says what it is read for.
 
 ### Fixed
 - **The Settings tab's About block stays inside the panel again.** The About text, the Commands

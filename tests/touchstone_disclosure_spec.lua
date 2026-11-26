@@ -230,11 +230,20 @@ end
 
 -- Render a row through the SHIPPED renderer and return its headline as plain
 -- text (colour escapes stripped — exactly what the player reads).
-local function render(row)
+--
+-- (fk/tooltip-shift-details) The clause is the FULL disclosure, shown while Shift
+-- is held; `render` holds Shift. `renderDefault` is the same line with Shift up,
+-- where the clause folds to one short marker (asserted after the clause checks).
+local function renderWith(row, shift)
+  local saved = IsShiftKeyDown
+  IsShiftKeyDown = function() return shift end
   local lines = ChestAdvisor.tooltipLines(row)
+  IsShiftKeyDown = saved
   if type(lines) ~= "table" or lines[1] == nil then return "" end
   return (tostring(lines[1].text):gsub("^|c%x%x%x%x%x%x%x%x", ""):gsub("|r$", ""))
 end
+local function render(row) return renderWith(row, true) end
+local function renderDefault(row) return renderWith(row, false) end
 
 local rowFwd = weaponRow(ZWEI, WOLF_DISCLOSED, ZWEI_LINK, WOLF_LINK)
 local rowRev = weaponRow(WOLF_DISCLOSED, ZWEI, WOLF_LINK, ZWEI_LINK)
@@ -320,6 +329,19 @@ refusalRow.reason = "cannot equip — requires level 60"
 local lineRefusal = render(refusalRow)
 check(lineRefusal:find("(judged", 1, true) == nil,
   "no refusal line carries a disclosure (got: " .. lineRefusal .. ")")
+
+-- (fk/tooltip-shift-details) Shift UP: the same lines carry one short marker in
+-- place of the clause, and the rest of the headline is unchanged.
+do
+  local HINT = " (hold Shift for details)"
+  for _, r in ipairs({ rowFwd, rowRev }) do
+    local full, short = render(r), renderDefault(r)
+    local sentence, clause = ChestAdvisor._disclosureClause(full)
+    check(clause ~= "" and short == sentence .. HINT,
+      "Shift up folds the clause to the short marker, nothing else changes (got: " .. short .. ")")
+    check(short:find("judged, with", 1, true) == nil, "Shift up: no clause text on the line")
+  end
+end
 
 print("")
 if failed > 0 then

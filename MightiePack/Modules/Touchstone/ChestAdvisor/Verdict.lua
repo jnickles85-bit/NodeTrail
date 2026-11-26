@@ -7912,12 +7912,20 @@ end
 --      nor reach the suppression channel.
 --   4. Does it SUPPRESS the pair? No. It is NAMED on the answer, with the side
 --      that carries it — "present but unpriced", the honest form of "we read it
---      and cannot price it", and the same shape as the on-hit clause.
+--      and cannot price it", and the same shape as the on-hit clause. (One
+--      later exception, still not a suppression: on the healer weapon seam an
+--      enchant that may change healing keeps the pair away from the healer
+--      model, and the verdict stays the stat-priority one with the cause
+--      printed — see Verdict.healingEnchant.)
 --
 -- The recogniser is the PREFIX, like the proc's: what follows "Enchanted:" varies
 -- per enchant (a stat, a weapon damage, a spell power) and no list of payloads
--- survives contact with real data. Only the prefix is contractual; the payload is
--- never read, which is what "never priced" means in one line of code.
+-- survives contact with real data. Only the prefix is contractual. The payload
+-- is never turned into a number — that is what "never priced" means — but since
+-- the healer weapon seam (Review round 2 on #63) it IS read for one yes/no
+-- question: could it change healing (Verdict.enchantMayHeal)? Anything that
+-- question cannot place counts as "could", so an unknown payload can only keep
+-- a pair amber, never turn it green.
 local function weaponEnchantLine(line)
 	if type(line) ~= "string" then return false end
 	-- Colour escapes and case are transparent, exactly as in the proc recogniser:
@@ -8667,6 +8675,12 @@ end
 -- positively recognises as melee-only (weapon damage, a melee stat, a slaying
 -- or elemental-damage enchant) keeps the earlier behaviour, excluded and
 -- disclosed.
+-- Examples pinned by tests/touchstone_healer_weapon_spec.lua: "Healing Power +30",
+-- "Spell Power +30", "Spell Damage +40" and "Spell Damage and Healing +12" are
+-- healing-relevant ("Spell Damage" is the generic caster enchant's own wording,
+-- and on this client the damage-only and damage-and-healing forms cannot be told
+-- apart from the payload alone, so it takes the cautious side); "Weapon Damage +5"
+-- and "+15 Strength" are melee-only.
 local ENCHANT_HEALS = { "heal", "spell", "mana", "intellect", "spirit", "mp5", "per 5" }
 local ENCHANT_MELEE_ONLY = { "damage", "strength", "agility", "stamina", "attack power",
 	"slay", "fiery", "icy" }
