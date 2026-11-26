@@ -626,6 +626,12 @@ local function getFrame()
 		frame:RegisterEvent("UNIT_AURA")                  -- buffs on/off (posBuff)
 		frame:RegisterEvent("PLAYER_TALENT_UPDATE")        -- talents (coef, mana break)
 		frame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED") -- the spec the model assumes
+		-- (fk/talent-auto-role) talent points move the Auto role. Guarded: an
+		-- event this client does not know must not cost the frame its others.
+		for _, tev in ipairs({ "CHARACTER_POINTS_CHANGED", "TRAIT_CONFIG_UPDATED",
+			"ACTIVE_COMBAT_CONFIG_CHANGED" }) do
+			pcall(frame.RegisterEvent, frame, tev)
+		end
 		frame:SetScript("OnEvent", function(self, ev, ...)
 			-- B11: the item-data pair. Handled FIRST and separately — these
 			-- must NOT run the equip/scan bookkeeping below (there is no
@@ -699,7 +705,15 @@ local function getFrame()
 			end
 			if ev == "SPELL_POWER_CHANGED" or ev == "COMBAT_RATING_UPDATE"
 				or ev == "PLAYER_TALENT_UPDATE" or ev == "ACTIVE_TALENT_GROUP_CHANGED" then
+				if ev == "PLAYER_TALENT_UPDATE" or ev == "ACTIVE_TALENT_GROUP_CHANGED" then
+					ChestAdvisor._onTalentsChanged(ev)
+				end
 				ChestAdvisor._invalidateTotals(ev)
+				return
+			end
+			if ev == "CHARACTER_POINTS_CHANGED" or ev == "TRAIT_CONFIG_UPDATED"
+				or ev == "ACTIVE_COMBAT_CONFIG_CHANGED" then
+				ChestAdvisor._onTalentsChanged(ev)
 				return
 			end
 			-- Card t_ee6dec52: the bank surface. Opening it adds the bank's
@@ -1462,6 +1476,268 @@ local function playerLevel()
 	return nil
 end
 
+-- ---- AUTO ROLE FROM TALENT POINTS (fk/talent-auto-role) ---------------------
+--
+-- The owner's ask (Nov 26): "read talents to determine the actual role of the
+-- player. Then the player wont have to go in and make sure its set correctly.
+-- Unless he has to."
+--
+-- WHY NOT THE SPEC READ ABOVE. On the Forever client (game type "camelot") every
+-- class has ONE specialization (spec IDs 1482-1491), so C_SpecializationInfo
+-- answers the class's own name ("name=Paladin ROLE=DAMAGER", the live probe
+-- Verdict.substantiated exists for) and specFromTalents never matches. The
+-- classic talent-tab functions (GetTalentTabInfo / GetNumTalentTabs) are not
+-- loaded on camelot either. The talents ARE readable the way the client's own
+-- talent window reads them (Blizzard_PlayerSpells/Camelot/ClassTalents): one
+-- trait tree whose three GROUPS are the three classic trees —
+--   C_ClassTalents.GetActiveConfigID()                 -> configID
+--   C_ClassTalents.GetTraitTreeForSpec(specID)         -> treeID
+--     (or C_Traits.GetConfigInfo(configID).treeIDs[1])
+--   C_Traits.GetGroupDisplayInfoByTreeID(treeID)       -> groupID, orderIndex, displayName
+--   C_Traits.GetGroupCurrencyInfo(configID, groupIDs)  -> currencyInfos[1].spent
+-- (the window's tree header prints exactly that `spent`).
+--
+-- THE PICK. The tree with the most points wins. Trees are mapped to the
+-- registry by POSITION (sorted by orderIndex: the classic tab order below),
+-- because displayName is localized; the name is a CROSS-CHECK only — a
+-- recognised name sitting at a different position means the order is not
+-- what this table assumes, and Auto picks nothing. No points, a tie, a tree
+-- count that is not the class's, a missing or failing call, or an unreadable
+-- value: Auto picks nothing and every reader behaves exactly as before.
+--
+-- PRECEDENCE (unchanged in shape): a chosen Gear-for spec, then a recorded
+-- `/up role` (Melee or Spell), then the talents. "Clear" is Auto. A recorded
+-- role that AGREES with the talent tree's order word (Spell on a Holy paladin)
+-- takes the tree's spec and carries the recorded word; one that disagrees
+-- (Melee on a Holy paladin) keeps the old path. Nothing is stored: the pick is
+-- re-read when the talents change (PLAYER_TALENT_UPDATE, TRAIT_CONFIG_UPDATED,
+-- CHARACTER_POINTS_CHANGED, ACTIVE_COMBAT_CONFIG_CHANGED) and kept in memory.
+--
+-- Druid Feral reads as Feral (Cat): talent points cannot tell Cat from Bear,
+-- and Bear stays a Gear-for pick.
+do
+ChestAdvisor.TALENT_TREES = {
+	WARRIOR = { { name = "Arms", key = "arms" }, { name = "Fury", key = "fury" },
+	            { name = "Protection", key = "prot" } },
+	PALADIN = { { name = "Holy", key = "holy" }, { name = "Protection", key = "prot" },
+	            { name = "Retribution", key = "ret" } },
+	HUNTER  = { { name = "Beast Mastery", key = "beast_mastery" }, { name = "Marksmanship", key = "marksmanship" },
+	            { name = "Survival", key = "survival" } },
+	ROGUE   = { { name = "Assassination", key = "assassination" }, { name = "Combat", key = "combat" },
+	            { name = "Subtlety", key = "subtlety" } },
+	PRIEST  = { { name = "Discipline", key = "disc" }, { name = "Holy", key = "holy" },
+	            { name = "Shadow", key = "shadow" } },
+	SHAMAN  = { { name = "Elemental", key = "elemental" }, { name = "Enhancement", key = "enhancement" },
+	            { name = "Restoration", key = "resto" } },
+	MAGE    = { { name = "Arcane", key = "arcane" }, { name = "Fire", key = "fire" },
+	            { name = "Frost", key = "frost" } },
+	WARLOCK = { { name = "Affliction", key = "affliction" }, { name = "Demonology", key = "demonology" },
+	            { name = "Destruction", key = "destruction" } },
+	DRUID   = { { name = "Balance", key = "balance" }, { name = "Feral Combat", alias = "Feral", key = "feral_cat" },
+	            { name = "Restoration", key = "resto" } },
+}
+
+local function foldTree(s)
+	if type(s) ~= "string" then return "" end
+	return (s:lower():gsub("[^%a]", ""))
+end
+
+-- The raw read. Every call is guarded; the caller wraps the whole thing in a
+-- pcall as well, so a client value that cannot be compared or converted (a
+-- secret number, a changed shape) costs the pick, never a scan.
+local function readTrees()
+	local CT, TR = rawget(_G, "C_ClassTalents"), rawget(_G, "C_Traits")
+	if type(CT) ~= "table" or type(TR) ~= "table"
+		or type(CT.GetActiveConfigID) ~= "function"
+		or type(TR.GetGroupDisplayInfoByTreeID) ~= "function"
+		or type(TR.GetGroupCurrencyInfo) ~= "function" then
+		return nil, "the talent API is not on this client"
+	end
+	local ok, configID = pcall(CT.GetActiveConfigID)
+	if not ok or type(configID) ~= "number" then return nil, "no active talent loadout" end
+	local treeID
+	local SI = rawget(_G, "C_SpecializationInfo")
+	if type(SI) == "table" and type(SI.GetSpecialization) == "function"
+		and type(SI.GetSpecializationInfo) == "function"
+		and type(CT.GetTraitTreeForSpec) == "function" then
+		local ok1, idx = pcall(SI.GetSpecialization)
+		if ok1 and type(idx) == "number" and idx > 0 then
+			local ok2, specID = pcall(SI.GetSpecializationInfo, idx)
+			if ok2 and type(specID) == "number" then
+				local ok3, t = pcall(CT.GetTraitTreeForSpec, specID)
+				if ok3 and type(t) == "number" then treeID = t end
+			end
+		end
+	end
+	if treeID == nil and type(TR.GetConfigInfo) == "function" then
+		local ok4, info = pcall(TR.GetConfigInfo, configID)
+		if ok4 and type(info) == "table" and type(info.treeIDs) == "table"
+			and type(info.treeIDs[1]) == "number" then
+			treeID = info.treeIDs[1]
+		end
+	end
+	if treeID == nil then return nil, "no talent tree" end
+	local ok5, displays = pcall(TR.GetGroupDisplayInfoByTreeID, treeID)
+	if not ok5 or type(displays) ~= "table" or #displays == 0 then return nil, "no talent trees listed" end
+	local ids, trees = {}, {}
+	for _, d in ipairs(displays) do
+		if type(d) ~= "table" or type(d.groupID) ~= "number" or type(d.orderIndex) ~= "number" then
+			return nil, "a talent tree could not be read"
+		end
+		ids[#ids + 1] = d.groupID
+		trees[#trees + 1] = { groupID = d.groupID, orderIndex = d.orderIndex,
+			name = (type(d.displayName) == "string" and d.displayName) or "?" }
+	end
+	local ok6, groups = pcall(TR.GetGroupCurrencyInfo, configID, ids)
+	if not ok6 or type(groups) ~= "table" or #groups == 0 then return nil, "no talent points read" end
+	local spentBy = {}
+	for _, g in ipairs(groups) do
+		if type(g) == "table" and type(g.traitNodeGroupID) == "number" and type(g.currencyInfos) == "table" then
+			local c = g.currencyInfos[1]
+			if type(c) == "table" and type(c.spent) == "number" then spentBy[g.traitNodeGroupID] = c.spent end
+		end
+	end
+	local any = false
+	for _, t in ipairs(trees) do
+		-- The client's own header prints 0 for a tree with no currency entry.
+		t.spent = spentBy[t.groupID] or 0
+		if spentBy[t.groupID] ~= nil then any = true end
+	end
+	if not any then return nil, "no talent points read" end
+	table.sort(trees, function(a, b) return a.orderIndex < b.orderIndex end)
+	return trees, nil
+end
+
+--- The talent trees as the client reports them, sorted by orderIndex, or nil
+--- and why. Read-only; never errors.
+function ChestAdvisor.readTalentTrees()
+	local ok, trees, why = pcall(readTrees)
+	if not ok then return nil, "the talent read failed" end
+	return trees, why
+end
+
+--- Which registry spec the trees point at: { entry, index, tree, points } or
+--- nil and why. Pure: it reads only its arguments and the two tables.
+function ChestAdvisor.pickTalentTree(token, trees)
+	local map = type(token) == "string" and ChestAdvisor.TALENT_TREES[token] or nil
+	if type(map) ~= "table" then return nil, "no talent tree map for this class" end
+	if type(trees) ~= "table" or #trees ~= #map then
+		return nil, ("expected %d talent trees, read %d"):format(#map, type(trees) == "table" and #trees or 0)
+	end
+	local best, bestN, tie, total = nil, -1, false, 0
+	for i, t in ipairs(trees) do
+		local n = type(t) == "table" and t.spent or nil
+		if type(n) ~= "number" or n < 0 then return nil, "unreadable talent points" end
+		local f = foldTree(t.name)
+		if f ~= "" then
+			for j, m in ipairs(map) do
+				if j ~= i and (f == foldTree(m.name) or f == foldTree(m.alias)) then
+					return nil, ("tree %d is %s, expected %s there"):format(i, tostring(t.name), map[i].name)
+				end
+			end
+		end
+		total = total + n
+		if n > bestN then
+			best, bestN, tie = i, n, false
+		elseif n == bestN then
+			tie = true
+		end
+	end
+	if total == 0 then return nil, "no talent points spent" end
+	if tie then return nil, "a tie between talent trees" end
+	local entry = ChestAdvisor.lookupSpec(token, map[best].key)
+	if not entry then return nil, "no spec entry for " .. map[best].key end
+	return { entry = entry, index = best, tree = trees[best].name ~= "?" and trees[best].name or map[best].name,
+		points = bestN }, nil
+end
+
+local cache = { dirty = true }
+
+--- The Auto pick for this character, kept in memory and re-read when the
+--- talents change (or until a read first succeeds). nil and why when Auto picks
+--- nothing.
+function ChestAdvisor.autoTalentPick(token)
+	if cache.dirty or cache.token ~= token then
+		local trees, why = ChestAdvisor.readTalentTrees()
+		local pick = nil
+		if trees ~= nil then
+			local ok, p, w = pcall(ChestAdvisor.pickTalentTree, token, trees)
+			if ok then pick, why = p, w else why = "the talent pick failed" end
+			cache.dirty = false
+		end
+		cache.pick, cache.why, cache.token = pick, why, token
+	end
+	return cache.pick, cache.why
+end
+
+--- A talent event: re-read, and re-judge only when the pick moved.
+function ChestAdvisor._onTalentsChanged(ev)
+	local before = cache.pick and cache.pick.entry.key or nil
+	cache.dirty = true
+	local pick = ChestAdvisor.autoTalentPick(classToken())
+	local after = pick and pick.entry.key or nil
+	if before == after then return false end
+	ChestAdvisor._invalidateJudgements("talents " .. tostring(after or "none") .. " (" .. tostring(ev) .. ")")
+	if type(ChestAdvisor.scan) == "function" then pcall(ChestAdvisor.scan) end
+	return true
+end
+
+--- The role word the Settings row shows beside the tree name. Neutral on
+--- purpose; the owner approves the wording.
+function ChestAdvisor.autoRoleWord(entry)
+	local r = type(entry) == "table" and entry.role or nil
+	if r == "HEALER" then return "healer" end
+	if r == "TANK" then return "tank" end
+	return "damage"
+end
+
+--- "Auto (Holy: healer)" when Auto picked a tree, "Auto" otherwise.
+function ChestAdvisor.autoRoleText(token)
+	local pick = ChestAdvisor.autoTalentPick(token or classToken())
+	if not pick then return "Auto" end
+	return "Auto (" .. tostring(pick.tree) .. ": " .. ChestAdvisor.autoRoleWord(pick.entry) .. ")"
+end
+
+--- `/ts talents` (and the tail of `/up diag`): what the client reports and what
+--- Auto made of it. A FRESH read, and read-only: nothing is stored or re-judged.
+function ChestAdvisor.talentsReport()
+	local token = classToken()
+	local lines = { "Touchstone talents (read-only):" }
+	local trees, why = ChestAdvisor.readTalentTrees()
+	if trees then
+		for i, t in ipairs(trees) do
+			lines[#lines + 1] = ("  tree %d: %s, orderIndex %s, %s points spent"):format(
+				i, tostring(t.name), tostring(t.orderIndex), tostring(t.spent))
+		end
+	else
+		lines[#lines + 1] = "  no talent trees read (" .. tostring(why) .. ")"
+	end
+	local pick
+	if trees then
+		local ok, p, w = pcall(ChestAdvisor.pickTalentTree, token, trees)
+		if ok then pick, why = p, w else why = "the talent pick failed" end
+	end
+	if pick then
+		lines[#lines + 1] = ("  Auto picked: %s (%s), gear for %s"):format(
+			tostring(pick.tree), ChestAdvisor.autoRoleWord(pick.entry), tostring(pick.entry.name))
+	else
+		lines[#lines + 1] = "  Auto picked: nothing (" .. tostring(why) .. "); Touchstone works as before"
+	end
+	local role = playerRole(token)
+	if role == "melee" or role == "spell" then
+		lines[#lines + 1] = "  Role setting: " .. (role == "melee" and "Melee" or "Spell") .. " (overrides Auto)"
+	else
+		lines[#lines + 1] = "  Role setting: Auto"
+	end
+	local chosen = ChestAdvisor.gearForKey()
+	local entry = chosen and ChestAdvisor.lookupSpec(token, chosen) or nil
+	if entry then
+		lines[#lines + 1] = "  Gear for: " .. tostring(entry.name) .. " (chosen; overrides Auto)"
+	end
+	return table.concat(lines, "\n")
+end
+end
+
 local function buildSpec()
 	local token = classToken()
 	local si    = readSpecIdentity()
@@ -1505,8 +1781,14 @@ local function buildSpec()
 	-- A recorded `/up role` still wins over the talent name, the way
 	-- it did before the picker existed.
 	local recorded = playerRole(token)
-	if recorded == nil then
-		local talent = ChestAdvisor.specFromTalents(token, si and si.name, si and si.role)
+	-- (fk/talent-auto-role) the talent points, when the client's spec read has
+	-- no real spec to offer (the Forever client never does). A recorded role
+	-- that agrees with the tree takes the tree's spec too; see the block above.
+	local auto = ChestAdvisor.autoTalentPick(token)
+	local agrees = recorded ~= nil and auto ~= nil and auto.entry.orderWord == recorded
+	if recorded == nil or agrees then
+		local talent = (not agrees) and ChestAdvisor.specFromTalents(token, si and si.name, si and si.role) or nil
+		if talent == nil and auto ~= nil then talent = auto.entry end
 		if talent then
 			local torder = (Verdict and Verdict.classRoleOrder)
 				and Verdict.classRoleOrder(token, talent.orderWord) or nil
@@ -1526,8 +1808,8 @@ local function buildSpec()
 				-- carry it; without it the model read every talents-path pair
 				-- as Leveling whatever the Context switch said.
 				context = contextWord(),
-				-- No role is recorded on this path (that is how it was reached).
-				recordedRole = nil,
+				-- No role is recorded on this path, or one that agrees with the tree.
+				recordedRole = recorded,
 			}
 		end
 	end
@@ -8728,6 +9010,7 @@ local function helpText()
 		.. "  /up role <r>   record the focus role for a hybrid class (melee|spell; the client spec read is used automatically when unset)\n"
 		.. "  /up role clear clear the recorded role for this class\n"
 		.. "  /up spec [key|name|auto]  which spec Touchstone scores gear for (overrides talents and /up role; auto follows talents)\n"
+		.. "  /up talents    show the talent trees Touchstone reads and what Auto picked (read-only)\n"
 		.. "  /up context <leveling|dungeon|raid>  what the advice is judged for (persisted per character; default leveling)\n"
 		.. "  /up probe      run the Phase D probes P0/P1/P2/P5 (read-only)\n"
 		.. "  /up toast <on|off>  turn the \"Upgrade found!\" toast on or off (persisted; default on)\n"
@@ -9455,6 +9738,8 @@ local function cmdDiag()
 	end
 	chatOut("AnchorLookupType(ContainerFrameUtil_GetItemButtonAndContainer)="
 		.. tostring(anchorLookupType) .. "\n" .. summary)
+	-- (fk/talent-auto-role) the talent read, printed with the diag (not stored).
+	chatOut(ChestAdvisor.talentsReport())
 	return true, summary
 end
 
@@ -9737,6 +10022,9 @@ local function dispatch(msg)
 		ok, out = cmdSpec(trimmed)
 	elseif subword == "probe" then
 		ok, out = cmdProbe()
+	elseif subword == "talents" then
+		-- (fk/talent-auto-role) read-only: the trees and the Auto pick.
+		ok, out = true, ChestAdvisor.talentsReport()
 	elseif subword == "toast" then
 		ok, out = cmdToast(trimmed)
 	elseif subword == "toasts" or subword == "testtoast" then

@@ -35,6 +35,19 @@ About and diagnostic lines; the Touchstone window header shows the pack version.
   is unchanged: Full still always shows the numbers line, Compact shows it on Shift, Upgrades only
   still hides not-an-upgrade lines. The Upgrades tab rows are unchanged. No setting or saved key
   is added. `tests/touchstone_tooltip_shift_spec.lua` pins both states, with mutation legs.
+- **Auto role from talents** (owner's request: "set up a way for touchstone to read talents to
+  determine the actual role of the player"). With Role and Gear for left clear, Touchstone reads
+  the three talent trees and uses the one with the most points spent: Holy, Protection or
+  Retribution for a paladin, Feral as Cat for a druid, and so on for every class. A tie, no points
+  spent, or a talent read that fails keeps the old behaviour. A manual Role or Gear for pick still
+  wins; clearing them returns to Auto. The Settings Role row's box is labelled Auto and shows the
+  pick, for example "Auto (Holy: healer)". `/ts talents` (also `/up talents`, and the end of
+  `/up diag`) prints, read-only, each tree's name, order and points and what Auto picked. No saved
+  key is added or removed. **Leveling rule reversed at the owner's request:** a healer named by
+  talents or by Gear for now gets the healing evaluation in Leveling with Role clear (the round-1
+  rule asked for `/up role spell` first); a recorded Melee role still overrides, and the Role hint
+  is no longer shown when talents name the healer. `tests/touchstone_talent_role_spec.lua` covers
+  every class mapping and the fallbacks, with mutation legs.
 - The enchant read on the healer weapon path pins "Spell Damage +40" as healing-relevant, and a
   stale comment that said the enchant text is never read now says what it is read for.
 
