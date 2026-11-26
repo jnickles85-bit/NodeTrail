@@ -51,6 +51,14 @@
 # (fk/tooltip-shift-details) Comment-only hunk: the enchant recogniser's note no
 # longer says the payload is never read (the healer seam reads it for one yes/no
 # question), and the enchant table's pinned examples include "Spell Damage +40".
+#
+# (fk/talent-auto-role) TALENTS DECIDE: Verdict.specNamesHealer. A healer spec
+# named by the talent tree (the spec's `talentTree`: Auto's pick, or a Gear-for
+# or recorded role that agrees with it) makes a Leveling row a healing
+# evaluation (a recorded Melee role still overrides), and the Role hint is not
+# shown for it. This reverses the round-1 Leveling rule at the owner's request,
+# for the talents only: a Gear-for pick the talents do not back and the
+# client-role fallback keep the round-1 rule and its hint.
 --- a/ChestAdvisor/Verdict.lua
 +++ b/ChestAdvisor/Verdict.lua
 @@ -623,6 +623,37 @@
@@ -2189,7 +2197,29 @@
  	end
  
 -	-- (card t_0bf5c207, Touchstone Step 1) THE ORDERED VERDICT.
--	--
++	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
++	-- every word this pair's own pack prices (proof). One list, built by one
++	-- function, read by the proof AND by the two loops that word its answer
++	-- below, so the term that decided a pair is always the term the reason
++	-- names. `specWeights` is gate 5b's resolution: the same table both sides
++	-- of this comparison were already priced against.
++	local terms = Verdict.proofTerms(order, specWeights)
++-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
++-- the profile's weighted total, in the threshold order the card spells out. The
++-- number (and the profile's own name) travel back to the caller as the third
++-- return value so a rendered line can quote them.
++--
++-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
++-- which is test instrumentation (it exists so a fixture can be run through both
++-- comparators in one VM and diffed). It is read here, so the switch really does
++-- switch: with it set, the weighted path is skipped and the old block runs.
++if not Verdict.LEGACY_DOMINANCE_DECIDES then
++	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
++	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
++	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
++	-- pair is the only thing this engine ever offers the model, and this is the
++	-- only place the shipped path hands one back.
+ 	--
 -	-- The cascade itself lives in ONE place — Verdict.rankedVerdict above — and
 -	-- takes the ORDER AS AN INPUT (`order`, this spec's resolved list). Nothing
 -	-- in it reads Verdict.ORDERS, so Step 2 can hand it a leveling or endgame
@@ -2286,29 +2316,6 @@
 -	-- predate the seam with no revert, which is why the gate is kept.
 -	local allowedV, allowedR = allow(verdict, reason)
 -	if state == "trade_off" and allowedV == verdict and type(totals) == "table" then
-+	-- (card t_da23ec75) THE PROOF'S TERM LIST — order first (wording), then
-+	-- every word this pair's own pack prices (proof). One list, built by one
-+	-- function, read by the proof AND by the two loops that word its answer
-+	-- below, so the term that decided a pair is always the term the reason
-+	-- names. `specWeights` is gate 5b's resolution: the same table both sides
-+	-- of this comparison were already priced against.
-+	local terms = Verdict.proofTerms(order, specWeights)
-+-- ⚠ THE WEIGHTED VERDICT (card t_3a744b4a). This is the shipped decision:
-+-- the profile's weighted total, in the threshold order the card spells out. The
-+-- number (and the profile's own name) travel back to the caller as the third
-+-- return value so a rendered line can quote them.
-+--
-+-- The direction count below is reachable ONLY through LEGACY_DOMINANCE_DECIDES,
-+-- which is test instrumentation (it exists so a fixture can be run through both
-+-- comparators in one VM and diffed). It is read here, so the switch really does
-+-- switch: with it set, the weighted path is skipped and the old block runs.
-+if not Verdict.LEGACY_DOMINANCE_DECIDES then
-+	local v, r, d = Verdict.weightedVerdict(candStats, eqStats, spec_, allow)
-+	-- ⚠ THE TRADE-OFF SEAM (upstream cards t_8e171c28 / t_ce1c4a4f; this cut,
-+	-- card t_58762500). The arbitration call belongs in THIS region: a trade-off
-+	-- pair is the only thing this engine ever offers the model, and this is the
-+	-- only place the shipped path hands one back.
-+	--
 +	-- WHY IT WAS MISSING, named so the next re-cut can look for it: the region
 +	-- was replaced WHOLE by the weighted layer (card t_3a744b4a), and the
 +	-- replacement did not carry the call across with it. The old side of that
@@ -2362,9 +2369,10 @@
 +				d = (type(d) == "table") and d or {}
 +				d.arbitration = aDetail
 +				return v, r, d
-+			end
-+		end
-+	end
+ 			end
+ 		end
+ 	end
+-	return allowedV, allowedR
 +	if v ~= nil then return v, r, d end
 +end
 +
@@ -2442,12 +2450,11 @@
 +			if c > e then
 +				return allow("UPGRADE", "upgrade: more " .. word .. " (" .. c .. " vs "
 +					.. e .. ") on an otherwise equal item")
- 			end
++			end
 +			return "NOT_UPGRADE", "less " .. word .. " (" .. c .. " vs "
 +				.. e .. ") on an otherwise equal item"
- 		end
- 	end
--	return allowedV, allowedR
++		end
++	end
 +	return "NOT_UPGRADE", "equal to what's equipped — not a strict improvement"
 +	end
  end
@@ -2503,7 +2510,7 @@
  	local sp = trimmed:lower():match("speed%s*:?%s*([%d]+[%.%,]?%d*)")
  	if sp then
  		local v = tonumber((sp:gsub(",", ".")))
-@@ -6502,6 +8549,233 @@
+@@ -6502,6 +8549,251 @@
  -- literal cannot silently drop it from the set.
  local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
  
@@ -2534,6 +2541,18 @@
 +-- judges it as a healer (Verdict.healerRoleHint). Dungeon and Raid with no
 +-- recorded role, and an explicit `/up role spell` in any context, are healing.
 +-- A spec with no context word reads as Leveling, the store's own default.
++--
++-- TALENTS DECIDE (fk/talent-auto-role, the owner's call Nov 26: "read talents
++-- to determine the actual role of the player ... the player wont have to go in
++-- and make sure its set correctly. Unless he has to."). This REVERSES the
++-- round-1 Leveling rule above for a spec named by the talent tree Touchstone
++-- read (the spec carries `talentTree`: Auto's pick, or a Gear-for / recorded
++-- role that AGREES with that pick). Such a spec is a healing evaluation in
++-- Leveling too, and gets no hint. A recorded Melee role still overrides it —
++-- that is the questing healer who melees, now the player's one switch. A
++-- Gear-for pick the talents do not back (Gear-for Holy on Retribution points)
++-- and the client-role fallback (profileSource "talents" with no tree) do NOT
++-- count: they keep the round-1 rule and its hint (Review round 1).
 +local function levelingContext(spec)
 +	local c = spec.context
 +	return c == nil or c == "leveling"
@@ -2543,9 +2562,15 @@
 +	return type(spec) == "table" and spec.clientRole == "HEALER" and spec.role == "spell"
 +end
 +
++-- The spec was named by Auto's talent tree pick (and only that).
++function Verdict.specNamesHealer(spec)
++	return type(spec) == "table" and type(spec.talentTree) == "string" and spec.talentTree ~= ""
++end
++
 +function Verdict.healingContext(spec)
 +	if not healerSpellSpec(spec) then return false end
 +	if spec.recordedRole == "melee" then return false end
++	if Verdict.specNamesHealer(spec) then return true end
 +	if spec.recordedRole ~= "spell" and levelingContext(spec) then return false end
 +	return true
 +end
@@ -2554,7 +2579,7 @@
 +-- weapon pair out of the healing evaluation (Leveling, Role clear).
 +function Verdict.healerRoleHint(spec)
 +	if not healerSpellSpec(spec) then return false end
-+	return spec.recordedRole == nil and levelingContext(spec)
++	return spec.recordedRole == nil and levelingContext(spec) and not Verdict.specNamesHealer(spec)
 +end
 +Verdict.HEALER_ROLE_HINT = "Set Role to Spell (/up role spell) to judge this as a healer"
 +
@@ -2737,7 +2762,7 @@
  function Verdict.compareWeapon(candLines, wornLines, wornSlotFilled, spec, canUse, apiBySide, ctx, totals)
  	local candNumbers = weaponNumbers(candLines)
  	local wornNumbers = weaponNumbers(wornLines)
-@@ -6690,6 +8964,146 @@
+@@ -6690,6 +8982,146 @@
  		end
  	end
  
@@ -2884,7 +2909,7 @@
  	local statLed = type(spec) == "table"
  		and Verdict.weaponStatLed(spec.class, spec.role, spec.clientRole)
  		and type(spec.order) == "table"
-@@ -6862,6 +9276,7 @@
+@@ -6862,6 +9294,7 @@
  		outcome = Verdict.dominance(candStats, eqStats, order)
  	end
  

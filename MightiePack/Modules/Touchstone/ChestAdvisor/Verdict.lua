@@ -8576,6 +8576,18 @@ local WEAPON_JUDGED = { UPGRADE = true, NOT_UPGRADE = true, [TRADE_OFF] = true }
 -- judges it as a healer (Verdict.healerRoleHint). Dungeon and Raid with no
 -- recorded role, and an explicit `/up role spell` in any context, are healing.
 -- A spec with no context word reads as Leveling, the store's own default.
+--
+-- TALENTS DECIDE (fk/talent-auto-role, the owner's call Nov 26: "read talents
+-- to determine the actual role of the player ... the player wont have to go in
+-- and make sure its set correctly. Unless he has to."). This REVERSES the
+-- round-1 Leveling rule above for a spec named by the talent tree Touchstone
+-- read (the spec carries `talentTree`: Auto's pick, or a Gear-for / recorded
+-- role that AGREES with that pick). Such a spec is a healing evaluation in
+-- Leveling too, and gets no hint. A recorded Melee role still overrides it —
+-- that is the questing healer who melees, now the player's one switch. A
+-- Gear-for pick the talents do not back (Gear-for Holy on Retribution points)
+-- and the client-role fallback (profileSource "talents" with no tree) do NOT
+-- count: they keep the round-1 rule and its hint (Review round 1).
 local function levelingContext(spec)
 	local c = spec.context
 	return c == nil or c == "leveling"
@@ -8585,9 +8597,15 @@ local function healerSpellSpec(spec)
 	return type(spec) == "table" and spec.clientRole == "HEALER" and spec.role == "spell"
 end
 
+-- The spec was named by Auto's talent tree pick (and only that).
+function Verdict.specNamesHealer(spec)
+	return type(spec) == "table" and type(spec.talentTree) == "string" and spec.talentTree ~= ""
+end
+
 function Verdict.healingContext(spec)
 	if not healerSpellSpec(spec) then return false end
 	if spec.recordedRole == "melee" then return false end
+	if Verdict.specNamesHealer(spec) then return true end
 	if spec.recordedRole ~= "spell" and levelingContext(spec) then return false end
 	return true
 end
@@ -8596,7 +8614,7 @@ end
 -- weapon pair out of the healing evaluation (Leveling, Role clear).
 function Verdict.healerRoleHint(spec)
 	if not healerSpellSpec(spec) then return false end
-	return spec.recordedRole == nil and levelingContext(spec)
+	return spec.recordedRole == nil and levelingContext(spec) and not Verdict.specNamesHealer(spec)
 end
 Verdict.HEALER_ROLE_HINT = "Set Role to Spell (/up role spell) to judge this as a healer"
 

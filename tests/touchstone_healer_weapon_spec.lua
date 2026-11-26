@@ -36,6 +36,13 @@
 --      word is melee never reach the model.
 --   T. THE TALENTS PATH carries the Context switch (Raid reads Raid); THE
 --      FALLBACK PATH carries the recorded role (`/up role spell`, no gear-for).
+--   AU. AUTO (fk/talent-auto-role): with Role and Gear for clear, the talent
+--      tree with the most points names the spec. A Holy tree pick is a healing
+--      evaluation in Leveling too (the round-1 rule reversed at the owner's
+--      request, for the tree pick ONLY); a recorded Melee role still overrides.
+--   FB. THE CLIENT-ROLE FALLBACK (Review round 1 on #65): a HEALER client role
+--      whose name matches no spec, no talent API, no role, Leveling — reached
+--      through the real buildSpec — keeps the round-1 rule: not healing, hint.
 --   M. MODEL OFF: Arbitration.ENABLED = false gives the pre-seam bytes.
 --   E. No totals: the model is not asked and the bytes are the pre-seam ones.
 --   F. SavedVariables (context, role and gearFor included, and any table, even an
@@ -239,6 +246,10 @@ do
   check(v == "TRADE_OFF" and r == PRE_SEAM_HEAD .. HINT .. PRE_CLAUSE,
     "L: the pre-seam verdict and reason, plus only the role hint (got " .. tostring(r) .. ")")
   check(not (type(d) == "table" and d.arbitration), "L: no model table")
+  -- (fk/talent-auto-role, Review round 1) a Gear-for pick is not the talent
+  -- tree: it keeps the round-1 rule; only Auto's tree pick reverses it.
+  check(spec.talentTree == nil and V.specNamesHealer(spec) == false and V.healerRoleHint(spec) == true,
+    "L: a Gear-for Holy pick does not count as talents naming the healer")
 end
 
 -- The healing view itself.
@@ -488,6 +499,7 @@ do
   local v, r, d, spec = judge(TOTALS)
   print("T. talents:  " .. tostring(v) .. "  " .. tostring(r))
   check(spec.profileSource == "talents" and spec.weightsKey == "holy", "T: the talents path resolved Holy")
+  check(spec.talentTree == nil, "T: the client's spec-name match is not the talent tree pick (no talentTree)")
   check(spec.context == "raid", "T: the talents-path spec carries the Context switch (got "
     .. tostring(spec.context) .. ")")
   check(arbCalls == 1 and type(d) == "table" and type(d.arbitration) == "table"
@@ -505,6 +517,140 @@ do
   check(arbCalls == 1 and type(fd) == "table" and type(fd.arbitration) == "table"
     and fd.arbitration.context == "leveling",
     "T: Leveling with /up role spell on the fallback path is judged by the model (asked " .. arbCalls .. ")")
+  C_SpecializationInfo = nil
+end
+
+-- ── AU. Auto: the talent points decide (fk/talent-auto-role) ─────────────────
+-- The Forever client's shape: one class-wide spec ("Paladin", DAMAGER, id 1486),
+-- and the three classic trees as trait groups with points spent.
+local function talentClient(points, names)
+  names = names or { "Holy", "Protection", "Retribution" }
+  C_SpecializationInfo = {
+    GetSpecialization = function() return 1 end,
+    GetSpecializationInfo = function() return 1486, "Paladin", "", 0, "DAMAGER" end,
+  }
+  C_ClassTalents = {
+    GetActiveConfigID = function() return 7 end,
+    GetTraitTreeForSpec = function(id) return id == 1486 and 860 or nil end,
+  }
+  C_Traits = {
+    GetGroupDisplayInfoByTreeID = function(t)
+      local out = {}
+      for i, n in ipairs(names) do out[i] = { groupID = 100 + i, treeID = t, orderIndex = i - 1, displayName = n } end
+      return out
+    end,
+    GetGroupCurrencyInfo = function(_, ids)
+      local out = {}
+      for i, id in ipairs(ids) do out[i] = { traitNodeGroupID = id, currencyInfos = { { spent = points[id - 100] } } } end
+      return out
+    end,
+  }
+  CA._onTalentsChanged("spec")
+end
+do
+  talentClient({ 21, 5, 0 })
+  setDB(nil, "leveling", nil)
+  local v, r, d, spec = judge(TOTALS)
+  print("AU. Auto Holy, Leveling, Role Auto: " .. tostring(v) .. "  " .. tostring(r))
+  check(spec.profileSource == "talents" and spec.weightsKey == "holy" and spec.clientRole == "HEALER"
+    and spec.role == "spell" and spec.recordedRole == nil,
+    "AU: Auto read Holy from the talent points (got " .. tostring(spec.weightsKey) .. "/" .. tostring(spec.clientRole) .. ")")
+  check(spec.talentTree == "Holy" and V.specNamesHealer(spec) == true and V.healerRoleHint(spec) == false,
+    "AU: the tree pick names the healer (talentTree " .. tostring(spec.talentTree) .. "), no hint")
+  check(v == "UPGRADE", "AU: Leveling + Auto Holy: the Zweihander is an Upgrade without touching Role (got " .. tostring(v) .. ")")
+  decided("leveling / Auto Holy", "leveling", v, r, d)
+  -- A recorded Melee role still wins: the questing healer who melees.
+  setDB(nil, "leveling", "melee")
+  local mv, _, md, mspec = judge(TOTALS)
+  check(mspec.recordedRole == "melee" and mspec.weightsKey ~= "holy" and arbCalls == 0
+    and not (type(md) == "table" and md.arbitration) and mv ~= "UPGRADE",
+    "AU: a recorded Melee role overrides Auto (got " .. tostring(mv) .. ")")
+  -- A recorded Spell role that agrees with the tree takes the tree's spec.
+  setDB(nil, "leveling", "spell")
+  local _, _, _, sspec = judge(TOTALS)
+  check(sspec.weightsKey == "holy" and sspec.recordedRole == "spell" and sspec.clientRole == "HEALER",
+    "AU: Spell agrees with Holy: the tree's spec, carrying the recorded word")
+  -- A Gear-for pick still wins over Auto.
+  setDB("ret", "leveling", nil)
+  check(CA.buildSpec().weightsKey == "ret", "AU: a Gear-for pick overrides Auto")
+  -- Gear-for Holy on Retribution talents: the chosen spec, and Leveling keeps
+  -- the round-1 rule (only the tree pick names the healer; Review round 1).
+  talentClient({ 0, 5, 21 })
+  setDB("holy", "leveling", nil)
+  local gv, gr, gd, gspec = judge(TOTALS)
+  check(gspec.weightsKey == "holy" and gspec.profileSource == "chosen" and gspec.talentTree == nil
+    and V.healingContext(gspec) == false and arbCalls == 0 and not (type(gd) == "table" and gd.arbitration)
+    and gv == "TRADE_OFF" and gr == PRE_SEAM_HEAD .. HINT .. PRE_CLAUSE,
+    "AU: Gear-for Holy on Ret talents at Leveling: not healing, the hint (got " .. tostring(gv) .. " " .. tostring(gr) .. ")")
+  -- THE OWNER'S SAVED STATE (in-game test of 5e9ec81, Nov 26): Holy 27 / Prot 0
+  -- / Ret 0 (orderIndex 0..2), Gear-for Holy, Leveling. With Role Spell AND
+  -- with Role Auto, the Zweihander is an Upgrade and no hint is printed: the
+  -- Gear-for pick agrees with the tree, so the tree still counts.
+  talentClient({ 27, 0, 0 })
+  for _, role in ipairs({ "spell", false }) do
+    local label = "AU-owner (Gear-for Holy, Holy 27, Role " .. (role or "Auto") .. ", Leveling)"
+    setDB("holy", "leveling", role or nil)
+    local ov, orr, od, ospec = judge(TOTALS)
+    print(label .. ": " .. tostring(ov) .. "  " .. tostring(orr))
+    check(ospec.profileSource == "chosen" and ospec.weightsKey == "holy" and ospec.talentTree == "Holy",
+      label .. ": the chosen spec carries the agreeing tree (got " .. tostring(ospec.talentTree) .. ")")
+    check(V.healingContext(ospec) == true and V.healerRoleHint(ospec) == false, label .. ": healing, no hint")
+    check(ov == "UPGRADE" and type(orr) == "string" and orr:find("/up role spell", 1, true) == nil,
+      label .. ": the Zweihander is an Upgrade (got " .. tostring(ov) .. " " .. tostring(orr) .. ")")
+    decided(label, "leveling", ov, orr, od)
+  end
+  -- The same Gear-for Holy with a recorded Melee role: Melee still overrides.
+  setDB("holy", "leveling", "melee")
+  local mv2, _, md2, mspec2 = judge(TOTALS)
+  check(mspec2.talentTree == "Holy" and V.healingContext(mspec2) == false and arbCalls == 0
+    and not (type(md2) == "table" and md2.arbitration) and mv2 ~= "UPGRADE",
+    "AU-owner: Gear-for Holy + Holy talents + recorded Melee: Melee overrides (got " .. tostring(mv2) .. ")")
+  -- Gear-for Retribution on Holy talents: disagrees, no tree on the spec.
+  setDB("ret", "leveling", nil)
+  check(CA.buildSpec().talentTree == nil, "AU: Gear-for Ret on Holy talents does not carry the tree")
+  -- Retribution points: melee, no healing evaluation.
+  talentClient({ 0, 5, 21 })
+  setDB(nil, "leveling", nil)
+  local rv, _, rd, rspec = judge(TOTALS)
+  check(rspec.weightsKey == "ret" and arbCalls == 0 and not (type(rd) == "table" and rd.arbitration),
+    "AU: Auto Retribution is not a healing evaluation (got " .. tostring(rspec.weightsKey) .. ", " .. tostring(rv) .. ")")
+  -- No API: today's behaviour (the fallback path, no Auto).
+  C_ClassTalents, C_Traits, C_SpecializationInfo = nil, nil, nil
+  CA._onTalentsChanged("spec")
+  local nspec = CA.buildSpec()
+  check(nspec.weightsKey == nil and CA.autoTalentPick("PALADIN") == nil,
+    "AU: no talent API: Auto picks nothing, the old fallback path (got " .. tostring(nspec.weightsKey) .. ")")
+end
+
+-- ── FB. the client-role fallback keeps the round-1 rule ─────────────────────
+-- Review round 1 on #65: buildSpec's fallback sets profileSource "talents" too.
+-- A HEALER client role whose name matches no registry spec (a localized
+-- "Lichtbringer"), no talent API, no recorded role, no Gear-for, Leveling:
+-- reached through the REAL buildSpec, it is not a healing evaluation and the
+-- /up role spell hint is shown.
+do
+  C_ClassTalents, C_Traits = nil, nil
+  C_SpecializationInfo = {
+    GetSpecialization = function() return 1 end,
+    GetSpecializationInfo = function() return 1, "Lichtbringer", "", 0, "HEALER" end,
+  }
+  CA._onTalentsChanged("spec")
+  setDB(nil, "leveling", nil)
+  local v, r, d, spec = judge(TOTALS)
+  print("FB. fallback, Leveling, Role clear: " .. tostring(v) .. "  " .. tostring(r))
+  check(spec.profileSource == "talents" and spec.weightsKey == nil and spec.clientRole == "HEALER"
+    and spec.role == "spell" and spec.recordedRole == nil and spec.talentTree == nil,
+    "FB: buildSpec took the client-role fallback (HEALER, spell, no weights key, no tree)")
+  check(V.specNamesHealer(spec) == false, "FB: the fallback does not name the healer")
+  check(V.healingContext(spec) == false, "FB: the fallback in Leveling with Role clear is not healing")
+  check(arbCalls == 0 and not (type(d) == "table" and d.arbitration), "FB: the model is not asked (asked " .. arbCalls .. ")")
+  check(V.healerRoleHint(spec) == true, "FB: the hint rule says yes")
+  check(v == "TRADE_OFF" and type(r) == "string" and r:find(HINT, 1, true) ~= nil,
+    "FB: Trade-off, and the reason carries the /up role spell hint (got " .. tostring(r) .. ")")
+  -- Dungeon on the same fallback is still healing (round-1 rule unchanged).
+  setDB(nil, "dungeon", nil)
+  local _, _, _, dspec = judge(TOTALS)
+  check(V.healingContext(dspec) == true, "FB: the fallback in Dungeon is healing, as before")
   C_SpecializationInfo = nil
 end
 
@@ -586,11 +732,31 @@ if os.getenv("TS_VERDICT_SRC") == nil and os.getenv("TS_ADVISOR_SRC") == nil the
       "return c == \"leveling\"" },
     { "the possessive reads twice", "lose[#lose + 1] = (enchant.worn ~= \"\") and (enchant.worn .. \" enchant\") or \"enchant\"",
       "lose[#lose + 1] = (enchant.worn ~= \"\") and (\"its \" .. enchant.worn .. \" enchant\") or \"its enchant\"" },
+    { "the spec-names-healer rule dropped", "\tif Verdict.specNamesHealer(spec) then return true end\n", "" },
+    { "the hint shown where the tree names the healer", " and not Verdict.specNamesHealer(spec)", "" },
+    { "the fallback names the healer (profileSource talents)",
+      "return type(spec) == \"table\" and type(spec.talentTree) == \"string\" and spec.talentTree ~= \"\"",
+      "return type(spec) == \"table\" and (spec.profileSource == \"talents\" or (type(spec.talentTree) == \"string\" and spec.talentTree ~= \"\"))" },
+    { "a Gear-for pick names the healer",
+      "return type(spec) == \"table\" and type(spec.talentTree) == \"string\" and spec.talentTree ~= \"\"",
+      "return type(spec) == \"table\" and (spec.profileSource == \"chosen\" or (type(spec.talentTree) == \"string\" and spec.talentTree ~= \"\"))" },
     { "the Leveling/no-role gate dropped",
       "\tif spec.recordedRole ~= \"spell\" and levelingContext(spec) then return false end\n", "" },
   }
   -- ChestAdvisor.lua mutants (the spec's own buildSpec paths).
   local ADVISOR_MUTANTS = {
+    { "Auto's tree never consulted", "\t\tif talent == nil and auto ~= nil then talent, fromTree = auto.entry, auto.tree end\n", "" },
+    { "an agreeing role not carried", "\t\t\t\trecordedRole = recorded,\n", "\t\t\t\trecordedRole = nil,\n" },
+    { "a recorded Melee role ignored by Auto", "local agrees = recorded ~= nil and auto ~= nil and auto.entry.orderWord == recorded",
+      "local agrees = recorded ~= nil and auto ~= nil" },
+    { "an agreeing Gear-for pick drops the tree", "\t\t\ttalentTree = chosenTree,\n", "" },
+    { "a disagreeing Gear-for pick keeps the tree",
+      "local chosenTree = (agreeing and (agreeing.entry == entry\n\t\t\tor (agreeing.entry.name == entry.name and agreeing.entry.weightsKey == entry.weightsKey)))\n\t\t\tand agreeing.tree or nil",
+      "local chosenTree = agreeing and agreeing.tree or nil" },
+    { "the tree pick not marked", "\t\t\t\ttalentTree = fromTree,\n", "" },
+    { "a client name match marked as the tree", "\t\t\t\ttalentTree = fromTree,\n", "\t\t\t\ttalentTree = fromTree or talent.name,\n" },
+    { "the fallback marked as the tree", "\t         profileSource = \"talents\",\n\t         context = contextWord(),",
+      "\t         profileSource = \"talents\", talentTree = (si and si.name) or nil,\n\t         context = contextWord()," },
     { "the fallback path's recordedRole removed",
       "\t         context = contextWord(),\n\t         -- the recorded `/up role` word, read only (healer weapon seam)\n"
         .. "\t         recordedRole = playerRole(token) }",

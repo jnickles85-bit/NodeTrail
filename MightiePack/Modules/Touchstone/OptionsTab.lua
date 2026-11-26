@@ -70,6 +70,17 @@ local function recordedRole(token)
   return nil
 end
 
+-- (fk/talent-auto-role) what the Auto box says: "Auto (Holy: healer)" when the
+-- advisor read a talent tree, "Auto" otherwise. The wording is the owner's.
+local function autoRoleText(token)
+  local advisor = rawget(_G, "ChestAdvisor")
+  if type(advisor) == "table" and type(advisor.autoRoleText) == "function" then
+    local ok, t = pcall(advisor.autoRoleText, token)
+    if ok and type(t) == "string" and t ~= "" then return t end
+  end
+  return "Auto"
+end
+
 local function currentDetail()
   local advisor = rawget(_G, "ChestAdvisor")
   local ui = type(advisor) == "table" and advisor.tooltipUI or nil
@@ -142,7 +153,7 @@ local function syncShown(host)
   end
   if host.roleNote then
     if hybrid then
-      host.roleNote:SetText("Role selects the stat order. Leave it clear to use the spec.")
+      host.roleNote:SetText("Role selects the stat order. Auto follows your talents.")
     else
       host.roleNote:SetText("This class has one stat order.")
     end
@@ -154,6 +165,9 @@ local function syncShown(host)
   if host.roleMelee then host.roleMelee:SetChecked(role == "melee") end
   if host.roleSpell then host.roleSpell:SetChecked(role == "spell") end
   if host.roleClear then host.roleClear:SetChecked(role == nil) end
+  if host.roleClear and host.roleClear.label then
+    host.roleClear.label:SetText(autoRoleText(token))
+  end
 
   -- Card t_1c9d5a17: exactly one context box is checked, always. The stored word
   -- is the truth and a click only ASKS the slash handler to change it, so a
@@ -466,7 +480,8 @@ local function build(host)
   roleMelee:SetPoint("TOPLEFT", roleRow, "TOPLEFT", 0, 0)
   local roleSpell = labelledCheck(roleRow, "TouchstoneOptRoleSpell", "Spell")
   roleSpell:SetPoint("TOPLEFT", roleMelee, "TOPLEFT", 160, 0)
-  local roleClear = labelledCheck(roleRow, "TouchstoneOptRoleClear", "Clear")
+  -- (fk/talent-auto-role) "Clear" is Auto: no recorded role, the talents decide.
+  local roleClear = labelledCheck(roleRow, "TouchstoneOptRoleClear", "Auto")
   roleClear:SetPoint("TOPLEFT", roleMelee, "TOPLEFT", 320, 0)
   roleMelee:SetScript("OnClick", function()
     advisorSlash("role melee")
